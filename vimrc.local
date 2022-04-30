@@ -1,0 +1,17 @@
+let g:skip_defaults_vim = 1
+
+set t_u7=
+set vb t_vb=
+set mouse-=a
+set background=dark
+syntax on
+
+set nohlsearch
+set cursorcolumn
+set cursorline
+
+set shiftwidth=4 tabstop=4 expandtab
+set softtabstop=4
+
+set list listchars=tab:>-,trail:@,precedes:<,extends:>
+set ignorecase smartcase

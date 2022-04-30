@@ -1,0 +1,23 @@
+# Useful gitconifg options
+# You can install this file to /etc/gitconfig, ...,etc.
+# See Also: man git-config
+
+[core]
+editor = vim
+
+[diff]
+algorithm = histogram
+
+[credential]
+helper = cache --timeout 259200
+
+[alias]
+co = checkout
+br = branch
+st = status -uno
+pullr = pull --rebase
+diffw = diff --color-words
+diffc = diff --cached
+diffcw = diff --cached --color-words
+log1 = log --oneline
+graph = log --all --graph --decorate=short --format='%C(red)%h %C(green)%d %C(reset)%s %C(yellow)<%an> %C(blue)%ci (%cr)'
