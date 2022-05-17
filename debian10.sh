@@ -64,7 +64,8 @@ copy()
 run sed -i ~/.bashrc \
     -e '/export\ LS_OPTIONS/s/^\ *#*\ *//' \
     -e '/eval\ \"\`dircolor/s/^\ *#*\ *//' \
-    -e '/alias\ ls=/s/^\ *#*\ *//'
+    -e '/alias\ ls=/s/^\ *#*\ *//' \
+    -e '/^alias\ ls=/s/ls\ \$LS_OPTIONS/ls\ --group-directories-first\ \$LS_OPTIONS/'
 
 copy gitconfig /etc/gitconfig
 copy inputrc ~/.inputrc
