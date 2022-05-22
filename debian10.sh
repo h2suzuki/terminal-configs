@@ -67,7 +67,7 @@ run sed -i ~/.bashrc \
     -e '/alias\ ls=/s/^\ *#*\ *//' \
     -e '/^alias\ ls=/s/ls\ \$LS_OPTIONS/ls\ --group-directories-first\ \$LS_OPTIONS/' \
     -e '/alias\ tree=/d'
-run echo "alias tree=\\'tree --charset ascii\\'" '>>' ~/.bashrc
+run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
 
 
 copy gitconfig /etc/gitconfig
