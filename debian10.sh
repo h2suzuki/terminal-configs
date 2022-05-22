@@ -65,7 +65,10 @@ run sed -i ~/.bashrc \
     -e '/export\ LS_OPTIONS/s/^\ *#*\ *//' \
     -e '/eval\ \"\`dircolor/s/^\ *#*\ *//' \
     -e '/alias\ ls=/s/^\ *#*\ *//' \
-    -e '/^alias\ ls=/s/ls\ \$LS_OPTIONS/ls\ --group-directories-first\ \$LS_OPTIONS/'
+    -e '/^alias\ ls=/s/ls\ \$LS_OPTIONS/ls\ --group-directories-first\ \$LS_OPTIONS/' \
+    -e '/alias\ tree=/d'
+run echo "alias tree=\\'tree --charset ascii\\'" '>>' ~/.bashrc
+
 
 copy gitconfig /etc/gitconfig
 copy inputrc ~/.inputrc
