@@ -16,26 +16,26 @@ if tty -s >/dev/null; then
     COLOR_CLEAR="\033[0m"
     COLOR_RED="\033[31m"
     COLOR_GREEN="\033[32m"
+    COLOR_YELLOW="\033[33m"
 else
     COLOR_CLEAR=
     COLOR_RED=
     COLOR_GREEN=
+    COLOR_YELLOW=
 fi
 
 run()
 {
     local RETVAL
 
-    echo '--------------------------------'
-    echo "${@}"
+    echo -e "=> ${COLOR_YELLOW}${@}${COLOR_CLEAR}"
     eval "${@}"
     RETVAL=$?
-    echo '--------------------------------'
 
     if [ $RETVAL -eq 0 ]; then
-        echo -e "[ ${COLOR_GREEN}OK${COLOR_CLEAR} ]"
+        echo -e "[ ${COLOR_GREEN}OK${COLOR_CLEAR} ]\n"
     else
-        echo -e "[ ${COLOR_RED}ERROR($RETVAL)${COLOR_CLEAR} ]"
+        echo -e "[ ${COLOR_RED}ERROR($RETVAL)${COLOR_CLEAR} ]\n"
         exit $RETVAL
     fi
 }
@@ -48,7 +48,7 @@ copy()
 
     if [ -e "$DST" ]; then
         if cmp -s "$TOP_DIR/$FNAME" "$DST"; then
-            echo "$FNAME is already copied"
+            echo -e "=> ${COLOR_YELLOW}$FNAME is already copied${COLOR_CLEAR}\n"
         else
             [ -e "$DST.org" ] || run cp "$DST" "$DST.org"
             run cp "$TOP_DIR/$FNAME" "$DST"
