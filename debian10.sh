@@ -73,7 +73,7 @@ run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
 copy gitconfig /etc/gitconfig
 copy inputrc ~/.inputrc
 
-run apt-get update '&&' apt-get install --no-install-recommends vim git git-lfs
+run apt-get update '&&' apt-get install -y --no-install-recommends vim git git-lfs
 copy vimrc.local /etc/vim/vimrc.local
 
 run git lfs install
