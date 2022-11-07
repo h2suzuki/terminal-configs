@@ -80,6 +80,12 @@ copy vimrc.local /etc/vim/vimrc.local
 
 run git lfs install --skip-repo
 
+
+# mDNS to resolve ubuntu2204-wsl.local from Windows host
+run apt-get install -y --no-install-recommends \
+avahi-utils avahi-daemon avahi-autoipd libnss-mdns
+
+
 # Set the hostname and enable systemd
 cat > /etc/wsl.conf <<EOF
 # See Also: https://learn.microsoft.com/en-us/windows/wsl/wsl-config
