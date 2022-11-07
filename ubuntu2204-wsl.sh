@@ -74,7 +74,7 @@ copy gitconfig /etc/gitconfig
 copy inputrc ~/.inputrc
 
 run apt-get update '&&' apt-get install -y --no-install-recommends \
-vim git git-lfs libsixel-bin
+vim git git-lfs
 
 copy vimrc.local /etc/vim/vimrc.local
 
@@ -84,6 +84,14 @@ run git lfs install --skip-repo
 # mDNS to resolve ubuntu2204-wsl.local from Windows host
 run apt-get install -y --no-install-recommends \
 avahi-utils avahi-daemon avahi-autoipd libnss-mdns
+
+# OpenSSH and libsixel-bin for img2sixel
+run apt-get install -y --no-install-recommends \
+openssh-server openssh-client libsixel-bin
+
+# Wezterm for its multiplexing client running on the remote side
+run curl -o wezterm.deb -sL https://github.com/wez/wezterm/releases/download/20220905-102802-7d4b8249/wezterm-20220905-102802-7d4b8249.Ubuntu22.04.deb
+run [ -s wezterm.deb ] '&&' apt-get install -y ./wezterm.deb
 
 
 # Set the hostname and enable systemd
