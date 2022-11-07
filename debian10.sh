@@ -79,3 +79,11 @@ vim git git-lfs libsixel-bin
 copy vimrc.local /etc/vim/vimrc.local
 
 run git lfs install --skip-repo
+
+
+# Wezterm for its multiplexing client running on the remote side
+run curl -o wezterm.deb -fsSL https://github.com/wez/wezterm/releases/download/20220905-102802-7d4b8249/wezterm-20220905-102802-7d4b8249.Debian10.deb
+run apt install -y ./wezterm.deb
+
+
+# END
