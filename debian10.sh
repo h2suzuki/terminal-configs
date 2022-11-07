@@ -76,4 +76,4 @@ copy inputrc ~/.inputrc
 run apt-get update '&&' apt-get install -y --no-install-recommends vim git git-lfs
 copy vimrc.local /etc/vim/vimrc.local
 
-run git lfs install
+run git lfs install --skip-repo
