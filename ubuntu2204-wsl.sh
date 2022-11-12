@@ -94,6 +94,14 @@ run curl -o wezterm.deb -fsSL https://github.com/wez/wezterm/releases/download/2
 run apt install -y ./wezterm.deb
 
 
+# Resolve mDNS .local addresses by Windows host's DNS
+NSSWITCH="/etc/nsswitch.conf"
+[ -s "${NSSWITCH}.org" ] ||
+run cp -f "${NSSWITCH}" "${NSSWITCH}.org"
+
+run "sed -i -e '/^hosts:/s/mdns4_minimal .*dns/dns mdns4_minimal/' $NSSWITCH"
+
+
 # Set the hostname and enable systemd
 cat > /etc/wsl.conf <<EOF
 # See Also: https://learn.microsoft.com/en-us/windows/wsl/wsl-config
