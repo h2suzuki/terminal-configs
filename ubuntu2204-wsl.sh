@@ -84,13 +84,17 @@ copy vimrc.local /etc/vim/vimrc.local
 run git lfs install --skip-repo
 
 
+# img2sixel
+run apt-get install -y --no-install-recommends \
+libsixel-bin
+
 # mDNS to resolve ubuntu2204-wsl.local from Windows host
 run apt-get install -y --no-install-recommends \
 avahi-utils avahi-daemon avahi-autoipd libnss-mdns
 
 # OpenSSH and libsixel-bin for img2sixel
 run apt-get install -y --no-install-recommends \
-openssh-server openssh-client libsixel-bin
+openssh-server openssh-client
 
 # Wezterm for its multiplexing client running on the remote side
 [ -s wezterm.deb ] ||

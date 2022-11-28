@@ -73,15 +73,23 @@ run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
 copy gitconfig /etc/gitconfig
 copy inputrc ~/.inputrc
 
-run apt-get update '&&' apt-get install -y --no-install-recommends \
-vim git git-lfs libsixel-bin
+
+# Vim, Git and Git-LFS
+run apt-get update
+run apt-get install -y --no-install-recommends \
+vim git git-lfs
 
 copy vimrc.local /etc/vim/vimrc.local
 
 run git lfs install --skip-repo
 
 
+# img2sixel
+run apt-get install -y --no-install-recommends \
+libsixel-bin
+
 # Wezterm for its multiplexing client running on the remote side
+[ -s wezterm.deb ] ||
 run curl -o wezterm.deb -fsSL https://github.com/wez/wezterm/releases/download/20220905-102802-7d4b8249/wezterm-20220905-102802-7d4b8249.Debian10.deb
 run apt install -y ./wezterm.deb
 
