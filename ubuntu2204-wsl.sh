@@ -101,6 +101,14 @@ openssh-server openssh-client
 run curl -o wezterm.deb -fsSL https://github.com/wez/wezterm/releases/download/20220905-102802-7d4b8249/wezterm-20220905-102802-7d4b8249.Ubuntu22.04.deb
 run apt install -y ./wezterm.deb
 
+# Change the color of the prompt for the login user: green(32m) -> purple(35m)
+LOGIN_USER="$(logname)"
+[ -s "$LOGIN_USER" ] || {
+    BASHRC="~$LOGIN_USER/.bashrc"
+    run [ -s $BASHRC ]
+    run sed -i -e '"/^ *PS1=/s/\[01;32m/[01;35m/"' $BASHRC
+}
+
 
 # AWS CLI
 run apt-get install -y --no-install-recommends \
