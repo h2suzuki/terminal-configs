@@ -97,6 +97,7 @@ run apt-get install -y --no-install-recommends \
 openssh-server openssh-client
 
 # Wezterm for its multiplexing client running on the remote side
+#   https://wezfurlong.org/wezterm/install/linux.html
 [ -s wezterm.deb ] ||
 run curl -o wezterm.deb -fsSL https://github.com/wez/wezterm/releases/download/20220905-102802-7d4b8249/wezterm-20220905-102802-7d4b8249.Ubuntu22.04.deb
 run apt install -y ./wezterm.deb
