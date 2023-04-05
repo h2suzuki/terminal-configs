@@ -1,6 +1,7 @@
-# terminal-configs
+# Terminal Configs
 
-This small set of configuration files and scripts lets you setup the terminal environment quickly.
+This is a small set of configuration files and scripts that lets you setup the terminal environment quickly.
+
 
 ## How to Use
 
@@ -10,3 +11,5 @@ Run the script that matches the environment.
 
 That's all.
 
+----
+[![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#<your-repository-url>)
