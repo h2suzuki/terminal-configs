@@ -43,7 +43,7 @@ run()
 
 copy()
 {
-    FNAME="$1"
+    FNAME="files/$1"
     DST="$2"
 
     if [ -e "$DST" ]; then
