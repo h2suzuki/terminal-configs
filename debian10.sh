@@ -84,8 +84,9 @@ run sed -i ~/.bashrc \
 run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
 
 
-copy gitconfig  /etc/gitconfig
+[ -d /etc/sudoers.d ] &&
 copy sudoers    /etc/sudoers.d/nopasswd
+copy gitconfig  /etc/gitconfig
 copy inputrc    ~/.inputrc
 
 
