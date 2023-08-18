@@ -14,6 +14,10 @@ fgrep -qs "Ubuntu 22.04" /etc/lsb-release || {
     echo "This environment does not look like Ubuntu 22.04"
     exit 1
 }
+[ "$EUID" = 0 ] || {
+    echo "Please run as root"
+    exit 1
+}
 
 
 

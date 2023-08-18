@@ -10,6 +10,10 @@ fgrep -qs "Debian GNU/Linux 10 " /etc/issue || {
     echo "This environment does not look like Debian 10"
     exit 1
 }
+[ "$EUID" = 0 ] || {
+    echo "Please run as root"
+    exit 1
+}
 
 
 
