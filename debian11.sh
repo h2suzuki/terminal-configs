@@ -1,6 +1,16 @@
 #!/bin/bash
 
-# This script sets up a Debian 10 environment
+# This script sets up a Debian 11 environment
+
+which fgrep >/dev/null || {
+    echo "Cannot find grep"
+    exit 1
+}
+fgrep -qs "Debian GNU/Linux 11 " /etc/issue || {
+    echo "This environment does not look like Debian 11"
+    exit 1
+}
+
 
 
 which tty       >/dev/null || { echo "Cannot find tty";         exit 1; }
@@ -43,7 +53,7 @@ run()
 
 copy()
 {
-    FNAME="$1"
+    FNAME="files/$1"
     DST="$2"
 
     if [ -e "$DST" ]; then
@@ -70,8 +80,9 @@ run sed -i ~/.bashrc \
 run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
 
 
-copy gitconfig /etc/gitconfig
-copy inputrc ~/.inputrc
+copy gitconfig  /etc/gitconfig
+copy sudoers    /etc/sudoers.d/nopasswd
+copy inputrc    ~/.inputrc
 
 
 # Vim, Git and Git-LFS
