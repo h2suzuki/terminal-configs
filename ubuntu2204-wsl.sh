@@ -70,8 +70,9 @@ run sed -i ~/.bashrc \
 run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
 
 
-copy gitconfig /etc/gitconfig
-copy inputrc ~/.inputrc
+copy gitconfig  /etc/gitconfig
+copy sudoers    /etc/sudoers.d/nopasswd
+copy inputrc    ~/.inputrc
 
 
 # Vim, Git and Git-LFS
