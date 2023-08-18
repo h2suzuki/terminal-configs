@@ -2,6 +2,20 @@
 
 # This script sets up a Ubuntu 22.04 on WSL2 environment
 
+which fgrep >/dev/null || {
+    echo "Cannot find grep"
+    exit 1
+}
+fgrep -qs WSL /proc/version || {
+    echo "This environment does not look like WSL"
+    exit 1
+}
+fgrep -qs "Ubuntu 22.04" /etc/lsb-release || {
+    echo "This environment does not look like Ubuntu 22.04"
+    exit 1
+}
+
+
 
 which tty       >/dev/null || { echo "Cannot find tty";         exit 1; }
 which readlink  >/dev/null || { echo "Cannot find readlink";    exit 1; }
