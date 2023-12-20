@@ -104,4 +104,9 @@ run git lfs install --skip-repo
 run apt-get install -y --no-install-recommends \
 libsixel-bin
 
+
+# X window small programs
+run apt-get install -y --no-install-recommends \
+x11-apps
+
 # END

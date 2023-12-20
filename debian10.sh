@@ -104,6 +104,12 @@ run git lfs install --skip-repo
 run apt-get install -y --no-install-recommends \
 libsixel-bin
 
+
+# X window small programs
+run apt-get install -y --no-install-recommends \
+x11-apps
+
+
 # Wezterm for its multiplexing client running on the remote side
 [ -s wezterm.deb ] ||
 run curl -o wezterm.deb -fsSL https://github.com/wez/wezterm/releases/download/20220905-102802-7d4b8249/wezterm-20220905-102802-7d4b8249.Debian10.deb

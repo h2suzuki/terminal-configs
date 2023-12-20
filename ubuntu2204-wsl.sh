@@ -108,6 +108,12 @@ run git lfs install --skip-repo
 run apt-get install -y --no-install-recommends \
 libsixel-bin
 
+
+# X window small programs
+run apt-get install -y --no-install-recommends \
+x11-apps
+
+
 # mDNS to resolve ubuntu2204-wsl.local from Windows host
 run apt-get install -y --no-install-recommends \
 avahi-utils avahi-daemon avahi-autoipd libnss-mdns

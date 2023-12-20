@@ -104,6 +104,12 @@ run git lfs install --skip-repo
 run apt-get install -y --no-install-recommends \
 libsixel-bin
 
+
+# X window small programs
+run apt-get install -y --no-install-recommends \
+x11-apps
+
+
 # OpenSSH and libsixel-bin for img2sixel
 run apt-get install -y --no-install-recommends \
 openssh-server openssh-client
