@@ -109,4 +109,10 @@ libsixel-bin
 run apt-get install -y --no-install-recommends \
 x11-apps
 
+
+# git-delta   ref. https://github.com/dandavison/delta/releases
+[ -s git-delta.deb ] ||
+run curl -o git-delta.deb -fsSL https://github.com/dandavison/delta/releases/download/0.16.5/git-delta_0.16.5_amd64.deb
+run apt install -y ./git-delta.deb
+
 # END
