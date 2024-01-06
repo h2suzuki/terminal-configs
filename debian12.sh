@@ -80,8 +80,10 @@ run sed -i ~/.bashrc \
     -e '/eval\ \"\`dircolor/s/^\ *#*\ *//' \
     -e '/alias\ ls=/s/^\ *#*\ *//' \
     -e '/^alias\ ls=/s/ls\ \$LS_OPTIONS/ls\ --group-directories-first\ \$LS_OPTIONS/' \
-    -e '/alias\ tree=/d'
+    -e '/alias\ tree=/d' \
+    -e '/alias\ diffy=/d'
 run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
+run echo "alias diffy=\\'git diff --no-index\\'" '>>' ~/.bashrc
 
 
 [ -d /etc/sudoers.d ] &&
