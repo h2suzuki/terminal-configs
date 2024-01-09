@@ -111,7 +111,7 @@ libsixel-bin
 
 # X window forwarding and some small programs for testing
 run apt-get install -y --no-install-recommends \
-xauth x11-apps
+xauth xxd x11-apps
 
 run xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)     # Generate ~/.Xauthority
 
