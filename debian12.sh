@@ -113,10 +113,25 @@ libsixel-bin
 run apt-get install -y --no-install-recommends \
 xauth x11-apps
 
+run xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)     # Generate ~/.Xauthority
+
 
 # git-delta   ref. https://github.com/dandavison/delta/releases
 [ -s git-delta.deb ] ||
 run curl -o git-delta.deb -fsSL https://github.com/dandavison/delta/releases/download/0.16.5/git-delta_0.16.5_amd64.deb
 run apt install -y ./git-delta.deb
+
+
+# Login user settings
+#  1. Set ~/.Xauthority
+LOGIN_USER="$(logname)"
+[ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
+if [ -n "$LOGIN_USER" ]; then
+    run sudo -u "$LOGIN_USER" xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)    # Generate ~/.Xauthority
+else
+    echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
+    echo ""
+fi
+
 
 # END
