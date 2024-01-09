@@ -84,8 +84,12 @@ run sed -i ~/.bashrc \
     -e '/eval\ \"\`dircolor/s/^\ *#*\ *//' \
     -e '/alias\ ls=/s/^\ *#*\ *//' \
     -e '/^alias\ ls=/s/ls\ \$LS_OPTIONS/ls\ --group-directories-first\ \$LS_OPTIONS/' \
-    -e '/alias\ tree=/d'
+    -e '/alias\ tree=/d' \
+    -e '/alias\ diffy=/d' \
+    -e '/grip\(\)\ /d'
 run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
+run echo "alias diffy=\\'git diff --no-index\\'" '>>' ~/.bashrc
+run echo 'grip\(\) \{ rg --json -C 2 \"\$@\" \| delta\; \}' '>>' ~/.bashrc
 
 
 [ -d /etc/sudoers.d ] &&
@@ -109,32 +113,44 @@ run apt-get install -y --no-install-recommends \
 libsixel-bin
 
 
-# X window small programs
+# X window forwarding and some small programs for testing
 run apt-get install -y --no-install-recommends \
-x11-apps
+xauth x11-apps
+
+run xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)     # Generate ~/.Xauthority
+
+
+# git-delta   ref. https://github.com/dandavison/delta/releases
+[ -s git-delta.deb ] ||
+run curl -o git-delta.deb -fsSL https://github.com/dandavison/delta/releases/download/0.16.5/git-delta_0.16.5_amd64.deb
+run apt install -y ./git-delta.deb
 
 
 # mDNS to resolve ubuntu2204-wsl.local from Windows host
 run apt-get install -y --no-install-recommends \
 avahi-utils avahi-daemon avahi-autoipd libnss-mdns
 
+
 # OpenSSH and libsixel-bin for img2sixel
 run apt-get install -y --no-install-recommends \
 openssh-server openssh-client
 
-# Wezterm for its multiplexing client running on the remote side
-#   https://wezfurlong.org/wezterm/install/linux.html
-[ -s wezterm.deb ] ||
-run curl -o wezterm.deb -fsSL https://github.com/wez/wezterm/releases/download/20220905-102802-7d4b8249/wezterm-20220905-102802-7d4b8249.Ubuntu22.04.deb
-run apt install -y ./wezterm.deb
 
-# Change the color of the prompt for the login user: green(32m) -> purple(35m)
+# Login user settings
+#  1. Change the color of the prompt for the login user: green(32m) -> purple(35m)
+#  2. Set ~/.Xauthority
 LOGIN_USER="$(logname)"
-[ -s "$LOGIN_USER" ] || {
+[ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
+if [ -n "$LOGIN_USER" ]; then
     BASHRC="~$LOGIN_USER/.bashrc"
     run [ -s $BASHRC ]
     run sed -i -e '"/^ *PS1=/s/\[01;32m/[01;35m/"' $BASHRC
-}
+
+    run sudo -u "$LOGIN_USER" xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)    # Generate ~/.Xauthority
+else
+    echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
+    echo ""
+fi
 
 
 # AWS CLI
