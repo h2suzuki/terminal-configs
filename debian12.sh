@@ -109,9 +109,9 @@ run apt-get install -y --no-install-recommends \
 libsixel-bin
 
 
-# X window small programs
+# X window forwarding and some small programs for testing
 run apt-get install -y --no-install-recommends \
-x11-apps
+xauth x11-apps
 
 
 # git-delta   ref. https://github.com/dandavison/delta/releases
