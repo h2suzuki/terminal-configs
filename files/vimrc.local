@@ -10,7 +10,7 @@ set nohlsearch
 set cursorcolumn
 set cursorline
 
-highlight CursorLine term=reverse cterm=bold ctermbg=242 gui=bold guibg=DarkGray
+highlight CursorLine term=bold cterm=bold guibg=Grey40
 
 set shiftwidth=4 tabstop=4 expandtab
 set softtabstop=4
