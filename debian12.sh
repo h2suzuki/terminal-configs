@@ -114,6 +114,11 @@ libsixel-bin
 run apt-get install -y --no-install-recommends \
 xauth xxd x11-apps
 
+if [ -z "${DISPLAY}" ]; then
+    echo -e "${COLOR_RED}\$DISPLAY is empty.  Please relogin from an SSH client to complete the process. ${COLOR_CLEAR}"
+fi
+rm -f ~/.Xauthority
+install --mode 0600 /dev/null ~/.Xauthority
 run xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)     # Generate ~/.Xauthority
 
 
@@ -129,6 +134,8 @@ LOGIN_USER="$(logname)"
 [ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
 if [ -n "$LOGIN_USER" ]; then
     # Generate ~/.Xauthority
+    rm -f ~$LOGIN_USER/.Xauthority
+    run install --mode 0600 --owner $LOGIN_USER /dev/null ~$LOGIN_USER/.Xauthority
     run sudo -u "$LOGIN_USER" xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)
     # Refer ~/.Xauthority from this account
     run echo "export XAUTHORITY=$(getent passwd "${LOGIN_USER}" | cut -d : -f 6)/.Xauthority" '>>' ~/.bashrc
