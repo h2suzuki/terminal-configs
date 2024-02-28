@@ -161,6 +161,18 @@ run curl -o awscli2.zip -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_
 rm -rf ./aws/
 run unzip -q awscli2.zip
 run ./aws/install --update
+rm -rf ./aws/
+
+
+
+# Install Miniconda
+run mkdir -p ~/miniconda3
+run curl -o ~/miniconda3/miniconda.sh https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+run chmod +x ~/miniconda3/miniconda.sh
+rm -rf /opt/miniconda3
+run ~/miniconda3/miniconda.sh -b -u -p /opt/miniconda3
+run /opt/miniconda3/bin/conda init bash
+rm -rf ~/miniconda3
 
 
 
