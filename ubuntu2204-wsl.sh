@@ -171,8 +171,13 @@ run curl -o ~/miniconda3/miniconda.sh https://repo.anaconda.com/miniconda/Minico
 run chmod +x ~/miniconda3/miniconda.sh
 rm -rf /opt/miniconda3
 run ~/miniconda3/miniconda.sh -b -u -p /opt/miniconda3
-run /opt/miniconda3/bin/conda init bash
 rm -rf ~/miniconda3
+
+# Link Miniconda with the login shell
+run /opt/miniconda3/bin/conda init bash
+if [ -n "$LOGIN_USER" ]; then
+    run sudo -u "$LOGIN_USER" -i /opt/miniconda3/bin/conda init bash
+fi
 
 
 
