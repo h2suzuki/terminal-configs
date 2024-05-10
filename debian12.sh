@@ -123,6 +123,7 @@ xauth xxd x11-apps
 
 if [ -z "${DISPLAY}" ]; then
     echo -e "${COLOR_RED}\$DISPLAY is empty.  Please relogin from an SSH client to complete the process. ${COLOR_CLEAR}"
+    exit 0
 fi
 rm -f ~/.Xauthority
 install --mode 0600 /dev/null ~/.Xauthority
