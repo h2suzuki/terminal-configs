@@ -136,6 +136,15 @@ run curl -o /tmp/git-delta.deb -fsSL https://github.com/dandavison/delta/release
 run apt install -y /tmp/git-delta.deb
 
 
+# Google Chrome     `google-chrome --disable-gpu` to start the browser
+[ -s google-chrome.deb ] ||
+run curl -o /tmp/google-chrome.deb -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+run apt install -y --fix-missing /tmp/google-chrome.deb
+run apt install -y upower 'fonts-ipafont-nonfree*' 'fonts-ipaexfont*'
+
+run systemctl enable upower
+run systemctl start upower
+run fc-cache -fv
 
 
 # Login user settings
