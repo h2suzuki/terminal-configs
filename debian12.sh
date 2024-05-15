@@ -112,8 +112,8 @@ libsixel-bin
 
 # Rye package manager for Python3
 export RYE_INSTALL_OPTION="--yes"
-run curl -o rye-get.sh -fsSL https://rye-up.com/get
-run bash ./rye-get.sh
+run curl -o /tmp/rye-get.sh -fsSL https://rye-up.com/get
+run bash /tmp/rye-get.sh
 run rye self completion '>' /usr/share/bash-completion/completions/rye
 
 
@@ -132,8 +132,10 @@ run xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)     # Generate ~/.Xautho
 
 # git-delta   ref. https://github.com/dandavison/delta/releases
 [ -s git-delta.deb ] ||
-run curl -o git-delta.deb -fsSL https://github.com/dandavison/delta/releases/download/0.16.5/git-delta_0.16.5_amd64.deb
-run apt install -y ./git-delta.deb
+run curl -o /tmp/git-delta.deb -fsSL https://github.com/dandavison/delta/releases/download/0.16.5/git-delta_0.16.5_amd64.deb
+run apt install -y /tmp/git-delta.deb
+
+
 
 
 # Login user settings
