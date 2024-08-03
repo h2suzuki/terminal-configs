@@ -202,8 +202,6 @@ cat > /etc/wsl.conf <<EOF
 systemd = true
 
 [network]
-generateHosts = true
-generateResolvConf = true
 hostname = ubuntu2204-wsl
 EOF
 
