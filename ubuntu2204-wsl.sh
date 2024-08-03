@@ -98,10 +98,10 @@ copy gitconfig  /etc/gitconfig
 copy inputrc    ~/.inputrc
 
 
-# Vim, Git and Git-LFS
+# Vim, Git / Git-LFS, tree, ripgrep
 run apt-get update
 run apt-get install -y --no-install-recommends \
-vim git git-lfs
+vim git git-lfs tree ripgrep
 
 copy vimrc.local /etc/vim/vimrc.local
 
