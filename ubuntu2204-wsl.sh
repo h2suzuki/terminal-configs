@@ -182,16 +182,21 @@ fi
 
 
 # Resolve mDNS .local addresses by Windows host's DNS
+# Note that this is required for networkingMode=NAT
+# --------
 NSSWITCH="/etc/nsswitch.conf"
 [ -s "${NSSWITCH}.org" ] ||
 run cp -f "${NSSWITCH}" "${NSSWITCH}.org"
 
 run "sed -i -e '/^hosts:/s/mdns4_minimal .*dns/dns mdns4_minimal/' $NSSWITCH"
+# --------
 
 
 # Set the hostname and enable systemd
 cat > /etc/wsl.conf <<EOF
-# See Also: https://learn.microsoft.com/en-us/windows/wsl/wsl-config
+# See Also:
+#  https://learn.microsoft.com/en-us/windows/wsl/wsl-config
+#  On Windows, %UserProfile%\.wslconfig
 
 [boot]
 systemd = true
