@@ -126,7 +126,7 @@ run curl -o git-delta.deb -fsSL https://github.com/dandavison/delta/releases/dow
 run apt install -y ./git-delta.deb
 
 
-# mDNS to resolve ubuntu2204-wsl.local from Windows host
+# mDNS to resolve mDNS .local from Windows host
 run apt-get install -y --no-install-recommends \
 avahi-utils avahi-daemon avahi-autoipd libnss-mdns
 
