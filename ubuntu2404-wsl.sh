@@ -122,7 +122,7 @@ run xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)     # Generate ~/.Xautho
 
 # git-delta   ref. https://github.com/dandavison/delta/releases
 [ -s git-delta.deb ] ||
-run curl -o git-delta.deb -fsSL https://github.com/dandavison/delta/releases/download/0.16.5/git-delta_0.16.5_amd64.deb
+run curl -o git-delta.deb -fsSL https://github.com/dandavison/delta/releases/download/0.18.2/git-delta_0.18.2_amd64.deb
 run apt install -y ./git-delta.deb
 
 
