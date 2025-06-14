@@ -136,6 +136,12 @@ run apt-get install -y --no-install-recommends \
 openssh-server openssh-client
 
 
+# Chrome
+[ -s google-chrome.deb ] ||
+run curl -o google-chrome.deb -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+run apt install -y ./google-chrome.deb
+
+
 # Login user settings
 #  1. Change the color of the prompt for the login user: green(32m) -> purple(35m)
 #  2. Set ~/.Xauthority
