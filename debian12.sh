@@ -141,11 +141,11 @@ run apt install -y ./git-delta.deb
 [ -s google-chrome.deb ] ||
 run curl -o google-chrome.deb -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
 run apt install -y --fix-missing ./google-chrome.deb
-run apt install -y upower 'fonts-ipafont-nonfree*' 'fonts-ipaexfont*'
+run apt install -y upower # 'fonts-ipafont-nonfree*' 'fonts-ipaexfont*'
 
 run systemctl enable upower
 run systemctl start upower
-run fc-cache -fv
+# run fc-cache -fv
 
 
 # Login user settings
