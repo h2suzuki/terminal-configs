@@ -115,7 +115,7 @@ libsixel-bin
 
 # X window forwarding and some small programs for testing
 run apt-get install -y --no-install-recommends \
-xauth xxd x11-apps
+xauth xxd x11-apps mesa-utils
 
 run xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)     # Generate ~/.Xauthority
 
@@ -139,7 +139,12 @@ openssh-server openssh-client
 # Chrome
 [ -s google-chrome.deb ] ||
 run curl -o google-chrome.deb -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-run apt install -y ./google-chrome.deb
+run apt install -y --fix-missing ./google-chrome.deb
+run apt install -y upower 'fonts-ipafont*' 'fonts-ipaexfont*'
+
+run systemctl enable upower
+run systemctl start upower
+run fc-cache -fv
 
 
 # Login user settings
@@ -152,7 +157,12 @@ if [ -n "$LOGIN_USER" ]; then
     run [ -s $BASHRC ]
     run sed -i -e '"/^ *PS1=/s/\[01;32m/[01;35m/"' $BASHRC
 
-    run sudo -u "$LOGIN_USER" xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)    # Generate ~/.Xauthority
+    # Generate ~/.Xauthority
+    rm -f ~$LOGIN_USER/.Xauthority
+    run install --mode 0600 --owner $LOGIN_USER /dev/null ~$LOGIN_USER/.Xauthority
+    run sudo -u "$LOGIN_USER" xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)
+    # Refer ~/.Xauthority from the login user
+    run echo "export XAUTHORITY=$(getent passwd "${LOGIN_USER}" | cut -d : -f 6)/.Xauthority" '>>' ~/.bashrc
 else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
     echo ""

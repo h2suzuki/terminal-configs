@@ -95,10 +95,10 @@ copy gitconfig  /etc/gitconfig
 copy inputrc    ~/.inputrc
 
 
-# Vim, Git and Git-LFS
+# Vim, Git / Git-LFS, tree, ripgrep
 run apt-get update
 run apt-get install -y --no-install-recommends \
-vim git git-lfs
+vim git git-lfs tree ripgrep
 
 copy vimrc.local /etc/vim/vimrc.local
 
@@ -120,7 +120,7 @@ run rye self completion '>' /usr/share/bash-completion/completions/rye
 
 # X window forwarding and some small programs for testing
 run apt-get install -y --no-install-recommends \
-xauth xxd x11-apps
+xauth xxd x11-apps mesa-utils
 
 if [ -z "${DISPLAY}" ]; then
     echo -e "${COLOR_RED}\$DISPLAY is empty.  Please relogin from an SSH client to complete the process. ${COLOR_CLEAR}"
@@ -133,31 +133,36 @@ run xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)     # Generate ~/.Xautho
 
 # git-delta   ref. https://github.com/dandavison/delta/releases
 [ -s git-delta.deb ] ||
-run curl -o git-delta.deb -fsSL https://github.com/dandavison/delta/releases/download/0.16.5/git-delta_0.16.5_amd64.deb
+run curl -o git-delta.deb -fsSL https://github.com/dandavison/delta/releases/download/0.18.2/git-delta_0.18.2_amd64.deb
 run apt install -y ./git-delta.deb
 
 
-# Google Chrome     `google-chrome --disable-gpu` to start the browser
+# Chrome
 [ -s google-chrome.deb ] ||
 run curl -o google-chrome.deb -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
 run apt install -y --fix-missing ./google-chrome.deb
-run apt install -y upower # 'fonts-ipafont-nonfree*' 'fonts-ipaexfont*'
+run apt install -y upower 'fonts-ipafont*' 'fonts-ipaexfont*'
 
 run systemctl enable upower
 run systemctl start upower
-# run fc-cache -fv
+run fc-cache -fv
 
 
 # Login user settings
-#  1. Set ~/.Xauthority
+#  1. Change the color of the prompt for the login user: green(32m) -> purple(35m)
+#  2. Set ~/.Xauthority
 LOGIN_USER="$(logname)"
 [ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
 if [ -n "$LOGIN_USER" ]; then
+    BASHRC="~$LOGIN_USER/.bashrc"
+    run [ -s $BASHRC ]
+    run sed -i -e '"/^ *PS1=/s/\[01;32m/[01;35m/"' $BASHRC
+
     # Generate ~/.Xauthority
     rm -f ~$LOGIN_USER/.Xauthority
     run install --mode 0600 --owner $LOGIN_USER /dev/null ~$LOGIN_USER/.Xauthority
     run sudo -u "$LOGIN_USER" xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)
-    # Refer ~/.Xauthority from this account
+    # Refer ~/.Xauthority from the login user
     run echo "export XAUTHORITY=$(getent passwd "${LOGIN_USER}" | cut -d : -f 6)/.Xauthority" '>>' ~/.bashrc
 else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
