@@ -141,7 +141,7 @@ openssh-server openssh-client
 [ -s google-chrome.deb ] ||
 run curl -o google-chrome.deb -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
 run apt install -y --fix-missing ./google-chrome.deb
-run apt install -y upower 'fonts-ipafont*' 'fonts-ipaexfont*'
+run apt install -y upower 'fonts-ipafont*' 'fonts-ipaexfont*' 'fonts-noto-color-emoji'
 
 run systemctl enable upower
 run systemctl start upower
