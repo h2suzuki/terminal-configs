@@ -86,7 +86,8 @@ run sed -i ~/.bashrc \
     -e '/^alias\ ls=/s/ls\ \$LS_OPTIONS/ls\ --group-directories-first\ \$LS_OPTIONS/' \
     -e '/alias\ tree=/d' \
     -e '/alias\ diffy=/d' \
-    -e '/grip\(\)\ /d'
+    -e '/grip\(\)\ /d' \
+    -e '/export\ XAUTHORITY=/d'
 run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
 run echo "alias diffy=\\'git diff --no-index\\'" '>>' ~/.bashrc
 run echo 'grip\(\) \{ rg --json -C 2 \"\$@\" \| delta\; \}' '>>' ~/.bashrc
