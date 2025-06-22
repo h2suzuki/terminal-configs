@@ -100,8 +100,8 @@ copy inputrc    ~/.inputrc
 
 
 # Vim, Git / Git-LFS, tree, ripgrep
-run apt-get update
-run apt-get install -y --no-install-recommends \
+run apt update
+run apt install -y --no-install-recommends \
 vim git git-lfs tree ripgrep
 
 copy vimrc.local /etc/vim/vimrc.local
@@ -110,12 +110,12 @@ run git lfs install --skip-repo
 
 
 # img2sixel
-run apt-get install -y --no-install-recommends \
+run apt install -y --no-install-recommends \
 libsixel-bin
 
 
 # X window forwarding and some small programs for testing
-run apt-get install -y --no-install-recommends \
+run apt install -y --no-install-recommends \
 xauth xxd x11-apps mesa-utils
 
 run xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)     # Generate ~/.Xauthority
@@ -128,12 +128,12 @@ run apt install -y ./git-delta.deb
 
 
 # mDNS to resolve mDNS .local from Windows host
-run apt-get install -y --no-install-recommends \
+run apt install -y --no-install-recommends \
 avahi-utils avahi-daemon avahi-autoipd libnss-mdns
 
 
 # OpenSSH and libsixel-bin for img2sixel
-run apt-get install -y --no-install-recommends \
+run apt install -y --no-install-recommends \
 openssh-server openssh-client
 
 
@@ -149,7 +149,7 @@ run fc-cache -fv
 
 
 # AWS CLI
-run apt-get install -y --no-install-recommends \
+run apt install -y --no-install-recommends \
 unzip
 [ -s awscli2.zip ] ||
 run curl -o awscli2.zip -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
