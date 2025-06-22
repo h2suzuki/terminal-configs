@@ -159,6 +159,22 @@ run ./aws/install --update
 rm -rf ./aws/
 
 
+# GitHub CLI
+[ -s githubcli.gpg ] ||
+run curl -o githubcli.gpg -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg
+[ -d /etc/apt/keyrings ] ||
+run install --mode 0755 --directory /etc/apt/keyrings/
+run install --mode 0644 githubcli.gpg /etc/apt/keyrings/
+
+cat > /etc/apt/sources.list.d/githubcli.list <<EOF
+deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli.gpg] \
+https://cli.github.com/packages stable main
+EOF
+
+run apt update
+run apt install -y gh
+
+
 # Claude Code
 [ -s nvm.sh ] ||
 run curl -o nvm.sh -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh
