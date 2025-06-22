@@ -186,6 +186,7 @@ run nvm current
 run node -v
 run npm -v
 run npm install -g @anthropic-ai/claude-code
+run npm install -g ccusage
 
 
 # Login user settings
@@ -220,6 +221,7 @@ EOF
 
     run sudo -u $LOGIN_USER bash -i -c '"nvm install --lts"'    # nvm is a shell function.
     run sudo -u $LOGIN_USER bash -i -c '"npm install -g @anthropic-ai/claude-code"'
+    run sudo -u $LOGIN_USER bash -i -c '"npm install -g ccusage"'
 
 else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
