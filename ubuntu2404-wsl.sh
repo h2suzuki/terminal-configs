@@ -148,6 +148,17 @@ run systemctl start upower
 run fc-cache -fv
 
 
+# AWS CLI
+run apt-get install -y --no-install-recommends \
+unzip
+[ -s awscli2.zip ] ||
+run curl -o awscli2.zip -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
+rm -rf ./aws/
+run unzip -q awscli2.zip
+run ./aws/install --update
+rm -rf ./aws/
+
+
 # Login user settings
 #  1. Change the color of the prompt for the login user: green(32m) -> purple(35m)
 #  2. Set ~/.Xauthority
@@ -168,17 +179,6 @@ else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
     echo ""
 fi
-
-
-# AWS CLI
-run apt-get install -y --no-install-recommends \
-unzip
-[ -s awscli2.zip ] ||
-run curl -o awscli2.zip -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
-rm -rf ./aws/
-run unzip -q awscli2.zip
-run ./aws/install --update
-rm -rf ./aws/
 
 
 # Resolve mDNS .local addresses by Windows host's DNS
