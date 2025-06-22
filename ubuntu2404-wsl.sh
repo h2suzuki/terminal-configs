@@ -173,7 +173,7 @@ if [ -n "$LOGIN_USER" ]; then
     rm -f ~$LOGIN_USER/.Xauthority
     run install --mode 0600 --owner $LOGIN_USER /dev/null ~$LOGIN_USER/.Xauthority
     run sudo -u "$LOGIN_USER" xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)
-    # Refer ~/.Xauthority from the login user
+    # Refer ~/.Xauthority of the login user
     run echo "export XAUTHORITY=$(getent passwd "${LOGIN_USER}" | cut -d : -f 6)/.Xauthority" '>>' ~/.bashrc
 else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
