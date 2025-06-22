@@ -159,15 +159,31 @@ run ./aws/install --update
 rm -rf ./aws/
 
 
+# Claude Code
+[ -s nvm.sh ] ||
+run curl -o nvm.sh -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh
+run bash ./nvm.sh
+
+. $HOME/.nvm/nvm.sh
+run nvm install --lts
+run nvm current
+run node -v
+run npm -v
+run npm install -g @anthropic-ai/claude-code
+
+
 # Login user settings
 #  1. Change the color of the prompt for the login user: green(32m) -> purple(35m)
 #  2. Set ~/.Xauthority
+#  3. Autoload ~/.nvm/nvm.sh
 LOGIN_USER="$(logname)"
 [ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
 if [ -n "$LOGIN_USER" ]; then
     BASHRC="~$LOGIN_USER/.bashrc"
     run [ -s $BASHRC ]
-    run sed -i -e '"/^ *PS1=/s/\[01;32m/[01;35m/"' $BASHRC
+    run sed -i $BASHRC \
+            -e '"/^ *PS1=/s/\[01;32m/[01;35m/"' \
+            -e '/NVM_DIR/d'
 
     # Generate ~/.Xauthority
     rm -f ~$LOGIN_USER/.Xauthority
@@ -175,8 +191,23 @@ if [ -n "$LOGIN_USER" ]; then
     run sudo -u "$LOGIN_USER" xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)
     # Refer ~/.Xauthority of the login user
     run echo "export XAUTHORITY=$(getent passwd "${LOGIN_USER}" | cut -d : -f 6)/.Xauthority" '>>' ~/.bashrc
+
+    run install --mode 0755 --owner $LOGIN_USER --directory ~$LOGIN_USER/.nvm
+    run install --mode 0644 --owner $LOGIN_USER "$HOME/.nvm/nvm.sh" ~$LOGIN_USER/.nvm/nvm.sh
+
+    # Append auto-loading of nvm.sh
+    run cat ">>" $BASHRC <<"EOF"
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+EOF
+
+    run sudo -u $LOGIN_USER bash -i -c '"nvm install --lts"'    # nvm is a shell function.
+    run sudo -u $LOGIN_USER bash -i -c '"npm install -g @anthropic-ai/claude-code"'
+
 else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
+    echo -e "${COLOR_RED}No login user found... omitting to include ~/.nvm/nvm.sh${COLOR_CLEAR}"
     echo ""
 fi
 
