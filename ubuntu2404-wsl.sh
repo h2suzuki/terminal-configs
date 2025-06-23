@@ -87,6 +87,7 @@ run sed -i ~/.bashrc \
     -e '/alias\ tree=/d' \
     -e '/alias\ diffy=/d' \
     -e '/grip\(\)\ /d' \
+    -e '/export\ BROWSER=/d' \
     -e '/export\ XAUTHORITY=/d'
 run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
 run echo "alias diffy=\\'git diff --no-index\\'" '>>' ~/.bashrc
@@ -200,7 +201,8 @@ if [ -n "$LOGIN_USER" ]; then
     run [ -s $BASHRC ]
     run sed -i $BASHRC \
             -e '"/^ *PS1=/s/\[01;32m/[01;35m/"' \
-            -e '/NVM_DIR/d'
+            -e '"/export BROWSER=/d"' \
+            -e '"/NVM_DIR/d"'
 
     # Generate ~/.Xauthority
     rm -f ~$LOGIN_USER/.Xauthority
@@ -208,6 +210,10 @@ if [ -n "$LOGIN_USER" ]; then
     run sudo -u "$LOGIN_USER" xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)
     # Refer ~/.Xauthority of the login user
     run echo "export XAUTHORITY=$(getent passwd "${LOGIN_USER}" | cut -d : -f 6)/.Xauthority" '>>' ~/.bashrc
+
+    BROWSER="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe start"
+    run echo 'export BROWSER=\"$BROWSER\"' '>>' ~/.bashrc
+    run echo 'export BROWSER=\"$BROWSER\"' '>>' $BASHRC
 
     run install --mode 0755 --owner $LOGIN_USER --directory ~$LOGIN_USER/.nvm
     run install --mode 0644 --owner $LOGIN_USER "$HOME/.nvm/nvm.sh" ~$LOGIN_USER/.nvm/nvm.sh
