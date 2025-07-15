@@ -83,6 +83,8 @@ run sed -i ~/.bashrc \
     -e '/alias\ tree=/d' \
     -e '/alias\ diffy=/d' \
     -e '/grip\(\)\ /d' \
+    -e '/export\ EDITOR=/d' \
+    -e '/export\ VISUAL=/d' \
     -e '/export\ XAUTHORITY=/d'
 run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
 run echo "alias diffy=\\'git diff --no-index\\'" '>>' ~/.bashrc
@@ -98,7 +100,7 @@ copy inputrc    ~/.inputrc
 # Vim, Git / Git-LFS, tree, ripgrep
 run apt update
 run apt install -y --no-install-recommends \
-vim git git-lfs tree ripgrep
+neovim git git-lfs tree ripgrep
 
 copy vimrc.local /etc/vim/vimrc.local
 
@@ -141,7 +143,7 @@ run apt install -y ./git-delta.deb
 [ -s google-chrome.deb ] ||
 run curl -o google-chrome.deb -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
 run apt install -y --fix-missing ./google-chrome.deb
-run apt install -y upower 'fonts-ipafont*' 'fonts-ipaexfont*'
+run apt install -y upower 'fonts-ipafont*' 'fonts-ipaexfont*' 'fonts-noto-color-emoji'
 
 run systemctl enable upower
 run systemctl start upower
@@ -178,10 +180,18 @@ run npm install -g @anthropic-ai/claude-code
 run npm install -g ccusage
 
 
+# The current user settings
+EDITOR="/usr/bin/nvim"
+run echo 'export EDITOR=\"$EDITOR\"' '>>' ~/.bashrc
+run echo 'export VISUAL=\"$EDITOR\"' '>>' ~/.bashrc
+
+
+
 # Login user settings
 #  1. Change the color of the prompt for the login user: green(32m) -> purple(35m)
 #  2. Set ~/.Xauthority
-#  3. Autoload ~/.nvm/nvm.sh
+#  3. Set EDITOR and VISUAL environment variables
+#  4. Autoload ~/.nvm/nvm.sh
 LOGIN_USER="$(logname)"
 [ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
 if [ -n "$LOGIN_USER" ]; then
@@ -189,6 +199,8 @@ if [ -n "$LOGIN_USER" ]; then
     run [ -s $BASHRC ]
     run sed -i $BASHRC \
             -e '"/^ *PS1=/s/\[01;32m/[01;35m/"' \
+            -e '"/export EDITOR=/d"' \
+            -e '"/export VISUAL=/d"' \
             -e '"/NVM_DIR/d"'
 
     if [ -n "${DISPLAY}" ]; then
@@ -201,6 +213,10 @@ if [ -n "$LOGIN_USER" ]; then
     else
         echo -e "${COLOR_RED}\$DISPLAY is empty... omitting to generate ~$LOGIN_USER/.Xauthority${COLOR_CLEAR}"
     fi
+
+    # Set the default editor as neovim
+    run echo 'export EDITOR=\"$EDITOR\"' '>>' $BASHRC
+    run echo 'export VISUAL=\"$EDITOR\"' '>>' $BASHRC
 
     run install --mode 0755 --owner $LOGIN_USER --directory ~$LOGIN_USER/.nvm
     run install --mode 0644 --owner $LOGIN_USER "$HOME/.nvm/nvm.sh" ~$LOGIN_USER/.nvm/nvm.sh
@@ -218,6 +234,7 @@ EOF
 
 else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
+    echo -e "${COLOR_RED}No login user found... omitting to include ~/.nvm/nvm.sh${COLOR_CLEAR}"
     echo ""
 fi
 
