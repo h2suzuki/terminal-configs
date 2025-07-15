@@ -87,6 +87,8 @@ run sed -i ~/.bashrc \
     -e '/alias\ tree=/d' \
     -e '/alias\ diffy=/d' \
     -e '/grip\(\)\ /d' \
+    -e '/export\ EDITOR=/d' \
+    -e '/export\ VISUAL=/d' \
     -e '/export\ BROWSER=/d' \
     -e '/export\ XAUTHORITY=/d'
 run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
@@ -103,7 +105,7 @@ copy inputrc    ~/.inputrc
 # Vim, Git / Git-LFS, tree, ripgrep
 run apt update
 run apt install -y --no-install-recommends \
-vim git git-lfs tree ripgrep
+neovim git git-lfs tree ripgrep
 
 copy vimrc.local /etc/vim/vimrc.local
 
@@ -190,10 +192,21 @@ run npm install -g @anthropic-ai/claude-code
 run npm install -g ccusage
 
 
+# The current user settings
+EDITOR="/usr/bin/nvim"
+run echo 'export EDITOR=\"$EDITOR\"' '>>' ~/.bashrc
+run echo 'export VISUAL=\"$EDITOR\"' '>>' ~/.bashrc
+
+BROWSER="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe start"
+run echo 'export BROWSER=\"$BROWSER\"' '>>' ~/.bashrc
+
+
+
 # Login user settings
 #  1. Change the color of the prompt for the login user: green(32m) -> purple(35m)
 #  2. Set ~/.Xauthority
-#  3. Autoload ~/.nvm/nvm.sh
+#  3. Set EDITOR, VISUAL, and BROWSER environment variables
+#  4. Autoload ~/.nvm/nvm.sh
 LOGIN_USER="$(logname)"
 [ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
 if [ -n "$LOGIN_USER" ]; then
@@ -201,6 +214,8 @@ if [ -n "$LOGIN_USER" ]; then
     run [ -s $BASHRC ]
     run sed -i $BASHRC \
             -e '"/^ *PS1=/s/\[01;32m/[01;35m/"' \
+            -e '"/export EDITOR=/d"' \
+            -e '"/export VISUAL=/d"' \
             -e '"/export BROWSER=/d"' \
             -e '"/NVM_DIR/d"'
 
@@ -211,8 +226,11 @@ if [ -n "$LOGIN_USER" ]; then
     # Refer ~/.Xauthority of the login user
     run echo "export XAUTHORITY=$(getent passwd "${LOGIN_USER}" | cut -d : -f 6)/.Xauthority" '>>' ~/.bashrc
 
-    BROWSER="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe start"
-    run echo 'export BROWSER=\"$BROWSER\"' '>>' ~/.bashrc
+    # Set the default editor as neovim
+    run echo 'export EDITOR=\"$EDITOR\"' '>>' $BASHRC
+    run echo 'export VISUAL=\"$EDITOR\"' '>>' $BASHRC
+
+    # Set the default browser as the one on the Windows host
     run echo 'export BROWSER=\"$BROWSER\"' '>>' $BASHRC
 
     run install --mode 0755 --owner $LOGIN_USER --directory ~$LOGIN_USER/.nvm
