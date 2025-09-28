@@ -202,6 +202,9 @@ if [ -n "$LOGIN_USER" ]; then
     run [ -s $BASHRC ]
     run sed -i $BASHRC \
             -e '"/^ *PS1=/s/\[01;32m/[01;35m/"' \
+            -e '"/alias\ tree=/d"' \
+            -e '"/alias\ diffy=/d"' \
+            -e '"/grip\(\)\ /d"' \
             -e '"/export EDITOR=/d"' \
             -e '"/export VISUAL=/d"' \
             -e '"/NVM_DIR/d"'
@@ -216,6 +219,12 @@ if [ -n "$LOGIN_USER" ]; then
     else
         echo -e "${COLOR_RED}\$DISPLAY is empty... omitting to generate ~$LOGIN_USER/.Xauthority${COLOR_CLEAR}"
     fi
+
+    # Handy aliases
+    run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' $BASHRC
+    run echo "alias diffy=\\'git diff --no-index\\'" '>>' $BASHRC
+    run echo "alias rg=\\'rg --sort path\\'" '>>' $BASHRC
+    run echo 'grip\(\) \{ rg --sort path --json -C 2 \"\$@\" \| delta\; \}' '>>' $BASHRC
 
     # Set the default editor as neovim
     run echo 'export EDITOR=\"$EDITOR\"' '>>' $BASHRC
