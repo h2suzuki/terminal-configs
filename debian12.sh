@@ -119,6 +119,7 @@ export RYE_INSTALL_OPTION="--yes"
 [ -s rye-get.sh ] ||
 run curl -o rye-get.sh -fsSL https://rye-up.com/get
 run bash ./rye-get.sh
+source "$HOME/.rye/env"
 run rye self completion '>' /usr/share/bash-completion/completions/rye
 
 
