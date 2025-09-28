@@ -93,7 +93,8 @@ run sed -i ~/.bashrc \
     -e '/export\ XAUTHORITY=/d'
 run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
 run echo "alias diffy=\\'git diff --no-index\\'" '>>' ~/.bashrc
-run echo 'grip\(\) \{ rg --json -C 2 \"\$@\" \| delta\; \}' '>>' ~/.bashrc
+run echo "alias rg=\\'rg --sort path\\'" '>>' ~/.bashrc
+run echo 'grip\(\) \{ rg --sort path --json -C 2 \"\$@\" \| delta\; \}' '>>' ~/.bashrc
 
 
 [ -d /etc/sudoers.d ] &&
