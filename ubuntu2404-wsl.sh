@@ -215,6 +215,9 @@ if [ -n "$LOGIN_USER" ]; then
     run [ -s $BASHRC ]
     run sed -i $BASHRC \
             -e '"/^ *PS1=/s/\[01;32m/[01;35m/"' \
+            -e '"/alias\ tree=/d"' \
+            -e '"/alias\ diffy=/d"' \
+            -e '"/grip\(\)\ /d"' \
             -e '"/export EDITOR=/d"' \
             -e '"/export VISUAL=/d"' \
             -e '"/export BROWSER=/d"' \
@@ -226,6 +229,12 @@ if [ -n "$LOGIN_USER" ]; then
     run sudo -u "$LOGIN_USER" xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)
     # Refer ~/.Xauthority of the login user
     run echo "export XAUTHORITY=$(getent passwd "${LOGIN_USER}" | cut -d : -f 6)/.Xauthority" '>>' ~/.bashrc
+
+    # Handy aliases
+    run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' $BASHRC
+    run echo "alias diffy=\\'git diff --no-index\\'" '>>' $BASHRC
+    run echo "alias rg=\\'rg --sort path\\'" '>>' $BASHRC
+    run echo 'grip\(\) \{ rg --sort path --json -C 2 \"\$@\" \| delta\; \}' '>>' $BASHRC
 
     # Set the default editor as neovim
     run echo 'export EDITOR=\"$EDITOR\"' '>>' $BASHRC
