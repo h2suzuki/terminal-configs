@@ -86,6 +86,7 @@ run sed -i ~/.bashrc \
     -e '/^alias\ ls=/s/ls\ \$LS_OPTIONS/ls\ --group-directories-first\ \$LS_OPTIONS/' \
     -e '/alias\ tree=/d' \
     -e '/alias\ diffy=/d' \
+    -e '/alias\ rg=/d' \
     -e '/grip\(\)\ /d' \
     -e '/export\ EDITOR=/d' \
     -e '/export\ VISUAL=/d' \
