@@ -121,9 +121,8 @@ libsixel-bin
 
 # X window forwarding and some small programs for testing
 run apt install -y --no-install-recommends \
-xauth xxd x11-apps mesa-utils
-
-run xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)     # Generate ~/.Xauthority
+x11-apps mesa-utils vulkan-tools wayland-utils \
+vdpau-driver-all va-driver-all
 
 
 # git-delta   ref. https://github.com/dandavison/delta/releases
@@ -206,9 +205,8 @@ run echo 'export BROWSER=\"$BROWSER\"' '>>' ~/.bashrc
 
 # Login user settings
 #  1. Change the color of the prompt for the login user: green(32m) -> purple(35m)
-#  2. Set ~/.Xauthority
-#  3. Set EDITOR, VISUAL, and BROWSER environment variables
-#  4. Autoload ~/.nvm/nvm.sh
+#  2. Set EDITOR, VISUAL, and BROWSER environment variables
+#  3. Autoload ~/.nvm/nvm.sh
 LOGIN_USER="$(logname)"
 [ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
 if [ -n "$LOGIN_USER" ]; then
@@ -223,13 +221,6 @@ if [ -n "$LOGIN_USER" ]; then
             -e '"/export VISUAL=/d"' \
             -e '"/export BROWSER=/d"' \
             -e '"/NVM_DIR/d"'
-
-    # Generate ~/.Xauthority
-    rm -f ~$LOGIN_USER/.Xauthority
-    run install --mode 0600 --owner $LOGIN_USER /dev/null ~$LOGIN_USER/.Xauthority
-    run sudo -u "$LOGIN_USER" xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)
-    # Refer ~/.Xauthority of the login user
-    run echo "export XAUTHORITY=$(getent passwd "${LOGIN_USER}" | cut -d : -f 6)/.Xauthority" '>>' ~/.bashrc
 
     # Handy aliases
     run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' $BASHRC
