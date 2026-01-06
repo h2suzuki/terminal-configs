@@ -126,7 +126,7 @@ run rye self completion '>' /usr/share/bash-completion/completions/rye
 
 # X window forwarding and some small programs for testing
 run apt install -y --no-install-recommends \
-xauth x11-apps mesa-utils vulkan-tools wayland-utils \
+xauth jq x11-apps mesa-utils vulkan-tools wayland-utils \
 vdpau-driver-all va-driver-all
 
 
@@ -232,7 +232,7 @@ else
     echo ""
 fi
 
-run echo ". ~/.share_ssh_x11forwarding" '>>' ~/.bashrc
+run echo "~/.share_ssh_x11forwarding" '>>' ~/.bashrc
 
 
 # END
