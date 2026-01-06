@@ -89,8 +89,8 @@ run sed -i ~/.bashrc \
     -e '/share_ssh_x11forwarding/d'
 run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
 run echo "alias diffy=\\'git diff --no-index\\'" '>>' ~/.bashrc
-run echo "alias rg=\\'rg --sort path\\'" '>>' ~/.bashrc
-run echo 'grip\(\) \{ rg --sort path --json -C 2 \"\$@\" \| delta\; \}' '>>' ~/.bashrc
+run echo "alias rg=\\'rg --sort path --smart-case\\'" '>>' ~/.bashrc
+run echo 'grip\(\) \{ rg --sort path --smart-case --json -C 2 \"\$@\" \| delta\; \}' '>>' ~/.bashrc
 
 
 [ -d /etc/sudoers.d ] &&
@@ -205,8 +205,8 @@ if [ -n "$LOGIN_USER" ]; then
     # Handy aliases
     run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' $BASHRC
     run echo "alias diffy=\\'git diff --no-index\\'" '>>' $BASHRC
-    run echo "alias rg=\\'rg --sort path\\'" '>>' $BASHRC
-    run echo 'grip\(\) \{ rg --sort path --json -C 2 \"\$@\" \| delta\; \}' '>>' $BASHRC
+    run echo "alias rg=\\'rg --sort path --smart-case\\'" '>>' $BASHRC
+    run echo 'grip\(\) \{ rg --sort path --smart-case --json -C 2 \"\$@\" \| delta\; \}' '>>' $BASHRC
 
     # Set the default editor as neovim
     run echo 'export EDITOR=\"$EDITOR\"' '>>' $BASHRC
