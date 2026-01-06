@@ -91,7 +91,7 @@ run sed -i ~/.bashrc \
     -e '/export\ EDITOR=/d' \
     -e '/export\ VISUAL=/d' \
     -e '/export\ BROWSER=/d' \
-    -e '/export\ XAUTHORITY=/d'
+    -e '/share_ssh_x11forwarding/d'
 run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
 run echo "alias diffy=\\'git diff --no-index\\'" '>>' ~/.bashrc
 run echo "alias rg=\\'rg --sort path\\'" '>>' ~/.bashrc
@@ -102,6 +102,7 @@ run echo 'grip\(\) \{ rg --sort path --json -C 2 \"\$@\" \| delta\; \}' '>>' ~/.
 copy sudoers    /etc/sudoers.d/nopasswd
 copy gitconfig  /etc/gitconfig
 copy inputrc    ~/.inputrc
+copy share_ssh_x11forwarding  ~/.share_ssh_x11forwarding
 
 
 # Vim, Git / Git-LFS, tree, ripgrep
@@ -121,7 +122,7 @@ libsixel-bin
 
 # X window forwarding and some small programs for testing
 run apt install -y --no-install-recommends \
-x11-apps mesa-utils vulkan-tools wayland-utils \
+xauth x11-apps mesa-utils vulkan-tools wayland-utils \
 vdpau-driver-all va-driver-all
 
 
@@ -255,6 +256,7 @@ else
     echo ""
 fi
 
+run echo ". ~/.share_ssh_x11forwarding" '>>' ~/.bashrc
 
 # Resolve mDNS .local addresses by Windows host's DNS
 # Note that this is required for networkingMode=NAT

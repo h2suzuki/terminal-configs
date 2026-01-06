@@ -86,7 +86,7 @@ run sed -i ~/.bashrc \
     -e '/grip\(\)\ /d' \
     -e '/export\ EDITOR=/d' \
     -e '/export\ VISUAL=/d' \
-    -e '/export\ XAUTHORITY=/d'
+    -e '/share_ssh_x11forwarding/d'
 run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
 run echo "alias diffy=\\'git diff --no-index\\'" '>>' ~/.bashrc
 run echo "alias rg=\\'rg --sort path\\'" '>>' ~/.bashrc
@@ -97,6 +97,7 @@ run echo 'grip\(\) \{ rg --sort path --json -C 2 \"\$@\" \| delta\; \}' '>>' ~/.
 copy sudoers    /etc/sudoers.d/nopasswd
 copy gitconfig  /etc/gitconfig
 copy inputrc    ~/.inputrc
+copy share_ssh_x11forwarding  ~/.share_ssh_x11forwarding
 
 
 # Vim, Git / Git-LFS, tree, ripgrep
@@ -125,15 +126,8 @@ run rye self completion '>' /usr/share/bash-completion/completions/rye
 
 # X window forwarding and some small programs for testing
 run apt install -y --no-install-recommends \
-xauth xxd x11-apps mesa-utils
-
-if [ -n "${DISPLAY}" ]; then
-    rm -f ~/.Xauthority
-    install --mode 0600 /dev/null ~/.Xauthority
-    run xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)     # Generate ~/.Xauthority
-else
-    echo -e "${COLOR_RED}\$DISPLAY is empty... omitting to generate ~/.Xauthority${COLOR_CLEAR}"
-fi
+xauth x11-apps mesa-utils vulkan-tools wayland-utils \
+vdpau-driver-all va-driver-all
 
 
 # git-delta   ref. https://github.com/dandavison/delta/releases
@@ -192,9 +186,8 @@ run echo 'export VISUAL=\"$EDITOR\"' '>>' ~/.bashrc
 
 # Login user settings
 #  1. Change the color of the prompt for the login user: green(32m) -> purple(35m)
-#  2. Set ~/.Xauthority
-#  3. Set EDITOR and VISUAL environment variables
-#  4. Autoload ~/.nvm/nvm.sh
+#  2. Set EDITOR and VISUAL environment variables
+#  3. Autoload ~/.nvm/nvm.sh
 LOGIN_USER="$(logname)"
 [ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
 if [ -n "$LOGIN_USER" ]; then
@@ -208,17 +201,6 @@ if [ -n "$LOGIN_USER" ]; then
             -e '"/export EDITOR=/d"' \
             -e '"/export VISUAL=/d"' \
             -e '"/NVM_DIR/d"'
-
-    if [ -n "${DISPLAY}" ]; then
-        # Generate ~/.Xauthority
-        rm -f ~$LOGIN_USER/.Xauthority
-        run install --mode 0600 --owner $LOGIN_USER /dev/null ~$LOGIN_USER/.Xauthority
-        run sudo -u "$LOGIN_USER" xauth add ${DISPLAY} . $(xxd -l 16 -p /dev/urandom)
-        # Refer ~/.Xauthority of the login user
-        run echo "export XAUTHORITY=$(getent passwd "${LOGIN_USER}" | cut -d : -f 6)/.Xauthority" '>>' ~/.bashrc
-    else
-        echo -e "${COLOR_RED}\$DISPLAY is empty... omitting to generate ~$LOGIN_USER/.Xauthority${COLOR_CLEAR}"
-    fi
 
     # Handy aliases
     run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' $BASHRC
@@ -249,6 +231,8 @@ else
     echo -e "${COLOR_RED}No login user found... omitting to include ~/.nvm/nvm.sh${COLOR_CLEAR}"
     echo ""
 fi
+
+run echo ". ~/.share_ssh_x11forwarding" '>>' ~/.bashrc
 
 
 # END

@@ -1,0 +1,45 @@
+#!/bin/bash -e
+
+# Populate ~/.Xauthority to share the display with this user
+# when X11forwarding is available
+
+command -v xauth >/dev/null || exit 0
+command -v jq    >/dev/null || exit 0
+
+[ -n "$DISPLAY" ] || exit 0
+
+[ -n "$LOGNAME" ] || exit 0                 # The current user after sudo
+[ -n "$SUDO_USER" ] || exit 0               # The user who invoked sudo
+[ "$LOGNAME" != "$SUDO_USER" ] || exit 0
+
+LOGIN_USER=$(logname)                       # The real user who has logged in
+[ "$SUDO_USER" = "$LOGIN_USER" ] || exit 0
+
+LOGIN_HOME=$(getent passwd "${LOGIN_USER}" | cut -d : -f 6)
+[ -n "$LOGIN_HOME" ] || exit 0
+
+LOGIN_XAUTHORITY="$LOGIN_HOME/.Xauthority"
+[ -r "$LOGIN_XAUTHORITY" ] || exit 0
+
+read CLIENT PROTO HEXKEY ELSE <<< $(xauth -n -f "$LOGIN_XAUTHORITY" list "$DISPLAY")
+[ -n "$CLIENT" ] || exit 0
+[ -n "$PROTO"  ] || exit 0
+[ -n "$HEXKEY" ] || exit 0
+
+MY_XAUTHORITY=$(realpath -m ${XAUTHORITY:-~/.Xauthority})
+if [ "$MY_XAUTHORITY" = "$LOGIN_XAUTHORITY" ]; then
+    echo "XAUTHORITY seems derived from the login user: $MY_XAUTHORITY"
+    exit 0
+fi
+
+rm -f "$MY_XAUTHORITY"
+install --mode 0600 /dev/null "$MY_XAUTHORITY"
+xauth add "$DISPLAY" "$PROTO" "$HEXKEY"
+
+if [ -r /etc/docker/daemon.json ]; then
+    DOCKER0_IPV4=$(jq -r .bip /etc/docker/daemon.json)
+    DOCKER0_IPV4=${DOCKER0_IPV4%/*}
+    if [ -n "$DOCKER0_IPV4" ]; then
+        xauth add "${DOCKER0_IPV4}:${DISPLAY##*:}" $PROTO $HEXKEY
+    fi
+fi
