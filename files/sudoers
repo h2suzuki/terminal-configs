@@ -8,6 +8,9 @@
 # "sudo scp" or "sudo rsync" should be able to use your SSH agent.
 Defaults:%sudo env_keep += "SSH_AGENT_PID SSH_AUTH_SOCK"
 
+# PulseAudio server; WSLg provides it at least.
+Defaults:%sudo env_keep += "PULSE_SERVER"
+
 # Allow members of group sudo to execute anything without pass
 %sudo	ALL=(ALL:ALL) NOPASSWD:ALL
 
