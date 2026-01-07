@@ -127,7 +127,8 @@ run rye self completion '>' /usr/share/bash-completion/completions/rye
 # X window forwarding and some small programs for testing
 run apt install -y --no-install-recommends \
 xauth jq x11-apps mesa-utils vulkan-tools wayland-utils \
-vdpau-driver-all va-driver-all
+vdpau-driver-all va-driver-all \
+pulseaudio-utils
 
 
 # git-delta   ref. https://github.com/dandavison/delta/releases
