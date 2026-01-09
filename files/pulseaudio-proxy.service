@@ -1,0 +1,10 @@
+[Unit]
+Description=PulseAudio Global Proxy Service
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/pulseaudio -n -F /etc/pulse/proxy.pa --system --disallow-module-loading --disable-shm --disallow-exit --exit-idle-time=-1
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

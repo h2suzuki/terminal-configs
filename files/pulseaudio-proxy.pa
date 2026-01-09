@@ -1,0 +1,9 @@
+# Listen 24713 and forward audio to WSLg's PulseAudio server
+
+.fail
+
+load-module module-native-protocol-tcp auth-anonymous=1 port=24713
+
+load-module module-dbus-protocol
+
+load-module module-tunnel-sink-new server=unix:/mnt/wslg/PulseServer sink_name=wslg_proxy_out

@@ -127,8 +127,34 @@ libsixel-bin
 # X window forwarding and some small programs for testing
 run apt install -y --no-install-recommends \
 xauth jq x11-apps mesa-utils vulkan-tools wayland-utils \
-vdpau-driver-all va-driver-all \
-pulseaudio-utils
+vdpau-driver-all va-driver-all
+
+
+# PulseAudio server to proxy audio streaming
+# from 24713/tcp to WSLg's PulseAudio server
+run apt install -y --no-install-recommends \
+pulseaudio pulseaudio-utils alsa-utils
+
+copy --nobackup pulseaudio-proxy.pa         /etc/pulse/proxy.pa
+copy --nobackup pulseaudio-proxy.service    /etc/systemd/system/pulseaudio-proxy.service
+
+# HomeDir is hard-coded in PulseAudio (a kind of bug IMHO)
+run usermod -d /var/run/pulse pulse
+
+run systemctl daemon-reload
+run systemctl start pulseaudio-proxy.service
+run systemctl enable pulseaudio-proxy.service
+
+# To test the audio facility, set either
+#
+#   PULSE_SERVER=unix:/mnt/wslg/PulseServer   for WSLg
+# or
+#   PULSE_SERVER=tcp:localhost:24713          for 24713/tcp
+#
+# then
+#   paplay /usr/share/sounds/alsa/Front_Center.wav
+
+
 
 
 # git-delta   ref. https://github.com/dandavison/delta/releases
