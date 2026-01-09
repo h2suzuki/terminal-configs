@@ -2,7 +2,7 @@ let g:skip_defaults_vim = 1
 
 set t_u7=
 set vb t_vb=
-set mouse-=a
+set mouse=""
 set background=dark
 syntax on
 

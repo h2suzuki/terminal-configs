@@ -61,18 +61,22 @@ run()
 
 copy()
 {
+    BACKUP=1
+    [ "$1" = "--nobackup" ] && { BACKUP=0; shift; }
+
     FNAME="files/$1"
     DST="$2"
+    shift 2
 
     if [ -e "$DST" ]; then
         if cmp -s "$TOP_DIR/$FNAME" "$DST"; then
             echo -e "=> ${COLOR_YELLOW}$FNAME is already copied${COLOR_CLEAR}\n"
         else
-            [ -e "$DST.org" ] || run cp "$DST" "$DST.org"
-            run cp "$TOP_DIR/$FNAME" "$DST"
+            [ $BACKUP -eq 0 -o -e "$DST.org" ] || run install $@ "$DST" "$DST.org"
+            run install $@ "$TOP_DIR/$FNAME" "$DST"
         fi
     else
-        run cp "$TOP_DIR/$FNAME" "$DST"
+        run install -D $@ "$TOP_DIR/$FNAME" "$DST"
     fi
 }
 
@@ -110,7 +114,7 @@ run apt update
 run apt install -y --no-install-recommends \
 neovim git git-lfs tree ripgrep
 
-copy vimrc.local /etc/vim/vimrc.local
+copy --nobackup vimrc.local /etc/xdg/nvim/sysinit.vim
 
 run git lfs install --skip-repo
 
