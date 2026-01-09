@@ -269,7 +269,7 @@ run echo "~/.share_ssh_x11forwarding" '>>' ~/.bashrc
 # --------
 NSSWITCH="/etc/nsswitch.conf"
 [ -s "${NSSWITCH}.org" ] ||
-run cp -f "${NSSWITCH}" "${NSSWITCH}.org"
+run install "${NSSWITCH}" "${NSSWITCH}.org"
 
 run "sed -i -e '/^hosts:/s/mdns4_minimal .*dns/dns mdns4_minimal/' $NSSWITCH"
 # --------
