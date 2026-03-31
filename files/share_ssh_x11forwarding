@@ -32,8 +32,11 @@ if [ "$MY_XAUTHORITY" = "$LOGIN_XAUTHORITY" ]; then
     exit 0
 fi
 
-rm -f "$MY_XAUTHORITY"
-install --mode 0600 /dev/null "$MY_XAUTHORITY"
+if [ ! -r "$MY_XAUTHORITY" ]; then
+    rm -f "$MY_XAUTHORITY"
+    install --mode 0600 /dev/null "$MY_XAUTHORITY"
+fi
+
 xauth add "$DISPLAY" "$PROTO" "$HEXKEY"
 
 if [ -r /etc/docker/daemon.json ]; then
