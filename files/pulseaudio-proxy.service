@@ -3,8 +3,10 @@ Description=PulseAudio Global Proxy Service
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/pulseaudio -n -F /etc/pulse/proxy.pa --system --disallow-module-loading --disable-shm --disallow-exit --exit-idle-time=-1
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do [ -S /mnt/wslg/PulseServer ] && pactl -s unix:/mnt/wslg/PulseServer info >/dev/null 2>&1 && exit 0; sleep 1; done; echo "WSLg PulseAudio not ready after 30s"; exit 1'
+ExecStart=/usr/bin/pulseaudio -n -F /etc/pulse/proxy.pa --system --disable-shm --disallow-exit --exit-idle-time=-1
 Restart=on-failure
+RestartSec=3s
 
 [Install]
 WantedBy=multi-user.target
