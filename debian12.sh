@@ -195,13 +195,14 @@ if [ -n "$LOGIN_USER" ]; then
     BASHRC="~$LOGIN_USER/.bashrc"
     run [ -s $BASHRC ]
     run sed -i $BASHRC \
-            -e '"/^ *PS1=/s/\[01;32m/[01;35m/"' \
-            -e '"/alias\ tree=/d"' \
-            -e '"/alias\ diffy=/d"' \
-            -e '"/grip\(\)\ /d"' \
-            -e '"/export EDITOR=/d"' \
-            -e '"/export VISUAL=/d"' \
-            -e '"/NVM_DIR/d"'
+            -e '/^\ *PS1=/s/32m/35m/' \
+            -e '/alias\ tree=/d' \
+            -e '/alias\ diffy=/d' \
+            -e '/alias\ rg=/d' \
+            -e '/grip\(\)\ /d' \
+            -e '/export\ EDITOR=/d' \
+            -e '/export\ VISUAL=/d' \
+            -e '/NVM_DIR/d'
 
     # Handy aliases
     run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' $BASHRC
