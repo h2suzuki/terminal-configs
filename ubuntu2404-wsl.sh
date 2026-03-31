@@ -168,7 +168,7 @@ run apt install -y --no-install-recommends \
 avahi-utils avahi-daemon avahi-autoipd libnss-mdns
 
 
-# OpenSSH and libsixel-bin for img2sixel
+# OpenSSH
 run apt install -y --no-install-recommends \
 openssh-server openssh-client
 
