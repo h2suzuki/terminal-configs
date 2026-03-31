@@ -184,17 +184,6 @@ run systemctl start upower
 run fc-cache -fv
 
 
-# AWS CLI
-run apt install -y --no-install-recommends \
-unzip
-[ -s awscli2.zip ] ||
-run curl -o awscli2.zip -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
-rm -rf ./aws/
-run unzip -q awscli2.zip
-run ./aws/install --update
-rm -rf ./aws/
-
-
 # GitHub CLI
 [ -s githubcli.gpg ] ||
 run curl -o githubcli.gpg -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg
