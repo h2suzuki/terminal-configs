@@ -119,15 +119,6 @@ run apt install -y --no-install-recommends \
 libsixel-bin
 
 
-# Rye package manager for Python3
-export RYE_INSTALL_OPTION="--yes"
-[ -s rye-get.sh ] ||
-run curl -o rye-get.sh -fsSL https://rye-up.com/get
-run bash ./rye-get.sh
-source "$HOME/.rye/env"
-run rye self completion '>' /usr/share/bash-completion/completions/rye
-
-
 # X window forwarding and some small programs for testing
 run apt install -y --no-install-recommends \
 xauth jq x11-apps mesa-utils vulkan-tools wayland-utils \
