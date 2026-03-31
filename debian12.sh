@@ -127,15 +127,17 @@ pulseaudio-utils
 
 
 # git-delta   ref. https://github.com/dandavison/delta/releases
-[ -s git-delta.deb ] ||
-run curl -o git-delta.deb -fsSL https://github.com/dandavison/delta/releases/download/0.18.2/git-delta_0.18.2_amd64.deb
-run apt install -y ./git-delta.deb
+[ -s /tmp/git-delta.deb ] ||
+run curl -o /tmp/git-delta.deb \
+  -fsSL https://github.com/dandavison/delta/releases/download/0.18.2/git-delta_0.18.2_amd64.deb
+run apt install -y /tmp/git-delta.deb
 
 
 # Chrome
-[ -s google-chrome.deb ] ||
-run curl -o google-chrome.deb -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-run apt install -y --fix-missing ./google-chrome.deb
+[ -s /tmp/google-chrome.deb ] ||
+run curl -o /tmp/google-chrome.deb \
+  -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+run apt install -y --fix-missing /tmp/google-chrome.deb
 run apt install -y upower 'fonts-ipafont*' 'fonts-ipaexfont*' 'fonts-noto-color-emoji'
 
 run systemctl enable upower
@@ -144,11 +146,12 @@ run fc-cache -fv
 
 
 # GitHub CLI
-[ -s githubcli.gpg ] ||
-run curl -o githubcli.gpg -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg
+[ -s /tmp/githubcli.gpg ] ||
+run curl -o /tmp/githubcli.gpg \
+  -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg
 [ -d /etc/apt/keyrings ] ||
 run install --mode 0755 --directory /etc/apt/keyrings/
-run install --mode 0644 githubcli.gpg /etc/apt/keyrings/
+run install --mode 0644 /tmp/githubcli.gpg /etc/apt/keyrings/
 
 cat > /etc/apt/sources.list.d/githubcli.list <<EOF
 deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli.gpg] \
@@ -160,9 +163,10 @@ run apt install -y gh
 
 
 # Claude Code
-[ -s nvm.sh ] ||
-run curl -o nvm.sh -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh
-run bash ./nvm.sh
+[ -s /tmp/nvm.sh ] ||
+run curl -o /tmp/nvm.sh \
+  -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh
+run bash /tmp/nvm.sh
 
 . $HOME/.nvm/nvm.sh
 run nvm install --lts
