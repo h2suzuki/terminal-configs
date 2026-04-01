@@ -95,11 +95,14 @@ run sed -i ~/.bashrc \
     -e '/export\ EDITOR=/d' \
     -e '/export\ VISUAL=/d' \
     -e '/export\ BROWSER=/d' \
+    -e '/export\ PATH=.*\.local.bin:\$PATH/d' \
     -e '/share_ssh_x11forwarding/d'
+
 run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
 run echo "alias diffy=\\'git diff --no-index\\'" '>>' ~/.bashrc
 run echo "alias rg=\\'rg --sort path --smart-case\\'" '>>' ~/.bashrc
 run echo 'grip\(\) \{ rg --sort path --smart-case --json -C 2 \"\$@\" \| delta\; \}' '>>' ~/.bashrc
+run echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' '>>' ~/.bashrc
 
 
 [ -d /etc/sudoers.d ] &&
@@ -203,18 +206,30 @@ run apt update
 run apt install -y gh
 
 
-# Claude Code
-[ -s /tmp/nvm.sh ] ||
-run curl -o /tmp/nvm.sh \
+# Node.js
+[ -s /tmp/nvm_install.sh ] ||
+run curl -o /tmp/nvm_install.sh \
   -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh
-run bash /tmp/nvm.sh
+run bash /tmp/nvm_install.sh
 
 . $HOME/.nvm/nvm.sh
 run nvm install --lts
 run nvm current
 run node -v
 run npm -v
-run npm install -g @anthropic-ai/claude-code
+
+
+# Claude Code
+npm uninstall -g @anthropic-ai/claude-code || true  # Old one
+run apt install -y --no-install-recommends \
+bubblewrap socat    # For Sandbox
+
+[ -s /tmp/claude_install.sh ] ||
+run curl -o /tmp/claude_install.sh \
+  -fsSL https://claude.ai/install.sh
+chmod u-s,o+r /tmp/claude_install.sh
+run bash /tmp/claude_install.sh
+
 run npm install -g ccusage
 
 
@@ -246,6 +261,7 @@ if [ -n "$LOGIN_USER" ]; then
             -e '/export\ EDITOR=/d' \
             -e '/export\ VISUAL=/d' \
             -e '/export\ BROWSER=/d' \
+            -e '/export\ PATH=.*\.local.bin:\$PATH/d' \
             -e '/NVM_DIR/d'
 
     # Handy aliases
@@ -271,8 +287,11 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
 EOF
 
+    run echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' '>>' $BASHRC
+
     run sudo -u $LOGIN_USER bash -i -c '"nvm install --lts"'    # nvm is a shell function.
-    run sudo -u $LOGIN_USER bash -i -c '"npm install -g @anthropic-ai/claude-code"'
+    run sudo -u $LOGIN_USER bash -i -c '"npm uninstall -g @anthropic-ai/claude-code || true"'
+    run sudo -u $LOGIN_USER bash -i -c '"bash /tmp/claude_install.sh"'
     run sudo -u $LOGIN_USER bash -i -c '"npm install -g ccusage"'
 
 else
