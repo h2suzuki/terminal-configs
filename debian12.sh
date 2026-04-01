@@ -105,6 +105,8 @@ copy sudoers    /etc/sudoers.d/nopasswd
 copy gitconfig  /etc/gitconfig
 copy inputrc    ~/.inputrc
 copy share_ssh_x11forwarding  ~/.share_ssh_x11forwarding
+copy pulseaudio-forwarding.sh  /etc/profile.d/pulseaudio-forwarding.sh
+run chmod 0644 /etc/profile.d/pulseaudio-forwarding.sh
 
 
 # Vim, Git / Git-LFS, tree, ripgrep
