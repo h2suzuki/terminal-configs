@@ -1,0 +1,670 @@
+#!/usr/bin/env python3
+"""
+VOICEVOX Core で音声合成し、PulseAudio (pasimple) で再生するスクリプト。
+
+■ 前提条件
+
+  1. VOICEVOX Core のダウンローダーで依存ファイルを取得:
+       curl -sSfL https://github.com/VOICEVOX/voicevox_core/releases/latest/download/download-linux-x64 -o download
+       chmod +x download
+       sudo ./download -o /usr/lib/voicevox-core --exclude c-api
+
+  2. Python パッケージのインストール (バージョンは適宜変更):
+       pip install https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.0/voicevox_core-0.16.0+cpu-cp310-abi3-linux_x86_64.whl
+       pip install pasimple
+
+  3. libpulse がインストールされていること:
+       sudo apt install libpulse0
+
+■ ボイスカタログ
+
+  https://voicevox.hiroshiba.jp/
+
+"""
+
+# Python 3.10+ required (type union syntax: X | Y)
+
+import argparse
+import hashlib
+import io
+import multiprocessing
+import os
+import re
+import signal
+import sys
+import tempfile
+import time
+import wave
+from pathlib import Path
+
+from voicevox_core import AccelerationMode
+from voicevox_core.blocking import Onnxruntime, OpenJtalk, Synthesizer, VoiceModelFile
+
+# ============================================================
+# モジュール定数
+# ============================================================
+
+PREFIX = Path("/usr/lib/voicevox-core")  # --voicevox-dir の既定値
+PULSE_TIMEOUT_MARGIN = 10.0              # PulseAudio タイムアウト余裕 (秒)
+
+BOLD = "\033[1m"                         # ANSI bold (isatty チェックは使用箇所で行う)
+RESET = "\033[0m"                        # ANSI reset
+CLEAR_LINE = "\r\033[K"                  # 行頭に戻りクリア
+
+
+# ============================================================
+# 診断出力 (--verbose)
+#   args はモジュール末尾で定義されるグローバル変数 (argparse.Namespace)。
+# ============================================================
+
+def _vprint(*args_v, t0=time.monotonic(), **kwargs) -> None:
+    """--verbose 時のみ stderr に経過時間付きで出力する。"""
+    if args.verbose:
+        elapsed = time.monotonic() - t0
+        print(f"[{elapsed:8.3f}s]", *args_v, file=sys.stderr, **kwargs)
+
+
+# ============================================================
+# WAV キャッシュ
+# ============================================================
+
+class WavCache:
+    """合成結果の WAV ファイルキャッシュ。
+
+    公開 API は get() と put() のみ。ファイル名の生成、ハッシュ計算、
+    古いファイルの削除はすべて内部で行う。
+    """
+
+    CACHE_LIMIT = 100   # この数を超えたら削除を開始
+    CACHE_RETAIN = 80   # 削除後に残すファイル数
+
+    def __init__(self, cache_dir: Path):
+        self._dir = cache_dir
+        self._dir.mkdir(parents=True, exist_ok=True)
+        self._table: set[str] = set()
+        self._scan_and_evict()
+
+    def _scan_and_evict(self) -> None:
+        """キャッシュディレクトリをスキャンし、古いファイルを削除する。"""
+        # 前回の異常終了で残った一時ファイルを掃除 (60秒以上前のものだけ)
+        # 正常な write→rename は数ms で完了するため、他プロセスの作業中
+        # ファイルを誤って削除することはない
+        now = time.time()
+        for tmp in self._dir.glob("*.tmp"):
+            try:
+                if now - tmp.stat().st_mtime > 60:
+                    tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        wav_files = list(self._dir.glob("*.wav"))
+        _vprint(f"cache: dir={self._dir}, files={len(wav_files)}")
+
+        if len(wav_files) > self.CACHE_LIMIT:
+            wav_files.sort(key=lambda p: p.stat().st_atime)
+            n = len(wav_files) - self.CACHE_RETAIN
+            _vprint(f"cache: evicting {n} old files")
+            for f in wav_files[:n]:
+                f.unlink(missing_ok=True)
+            wav_files = wav_files[n:]
+
+        self._table = {f.name for f in wav_files}
+
+    def _make_filename(self, opts: dict) -> str:
+        """合成パラメータから決定的なキャッシュファイル名を生成する。"""
+        # 全パラメータ (text, style_id 含む) を直列化
+        params_str = ""
+        for k in sorted(opts):
+            params_str += f"\0{opts[k]}"
+
+        # SHA-256 → 16 個の 16-bit チャンクに分割 → 全チャンクを XOR → 4桁 hex
+        # 合成は決定的なので、入力パラメータのハッシュ = WAV データのハッシュと等価
+        digest = hashlib.sha256(params_str.encode("utf-8")).digest()
+        h = 0
+        for i in range(16):
+            h ^= int.from_bytes(digest[i * 2:(i + 1) * 2], "big")
+
+        # テキスト先頭32文字をファイル名に使える形に整形
+        prefix = re.sub(r"[^\w\-]", "_", opts["text"][:32], flags=re.UNICODE)
+        prefix = re.sub(r"_+", "_", prefix).strip("_") or "empty"
+
+        return f"{prefix}_{h:04x}.wav"
+
+    def get(self, opts: dict) -> bytes | None:
+        """キャッシュされた WAV データを返す。ミス時は None。"""
+        filename = self._make_filename(opts)
+        if filename in self._table:
+            try:
+                data = (self._dir / filename).read_bytes()
+            except OSError:
+                self._table.discard(filename)
+                _vprint(f"cache miss (read error): {filename}")
+                return None
+            if len(data) < 44 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+                self._table.discard(filename)
+                (self._dir / filename).unlink(missing_ok=True)
+                _vprint(f"cache miss (corrupt): {filename}")
+                return None
+            _vprint(f"cache hit: {filename}")
+            return data
+        _vprint(f"cache miss: {filename}")
+        return None
+
+    def put(self, wav_data: bytes, opts: dict) -> None:
+        """WAV データをキャッシュに保存する (アトミック書き込み)。
+
+        同一ディレクトリに一時ファイルを作成し、書き込み完了後に
+        os.replace() でアトミックにリネームする。
+        """
+        filename = self._make_filename(opts)
+        path = self._dir / filename
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=self._dir, suffix=".tmp", delete=False,
+            ) as tmp:
+                tmp_path = tmp.name
+                tmp.write(wav_data)
+                tmp.flush()
+                os.fdatasync(tmp.fileno())
+            os.replace(tmp_path, path)
+            self._table.add(filename)
+            _vprint(f"cache saved: {filename}")
+        except OSError as e:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+            _vprint(f"cache save failed: {e}")
+
+
+# ============================================================
+# PulseAudio 再生 (pasimple)
+# ============================================================
+
+def play_wav_pulse(wav_bytes: bytes, timeout_margin: float = PULSE_TIMEOUT_MARGIN) -> None:
+    """WAV バイナリデータを PulseAudio (pasimple) で再生する。
+
+    timeout_margin: 音声の長さに加算するタイムアウト余裕 (秒)。
+                    接続失敗や応答なしの場合にストールを防ぐ。
+    """
+    import pasimple
+
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+        fmt = pasimple.width2format(wf.getsampwidth())
+        channels = wf.getnchannels()
+        rate = wf.getframerate()
+        n_frames = wf.getnframes()
+        sample_width = wf.getsampwidth()
+        pcm = wf.readframes(n_frames)
+
+    duration = n_frames / rate if rate > 0 else 0
+    _vprint(
+        f"PulseAudio playback: "
+        f"{channels}ch, {rate}Hz, {sample_width * 8}bit, "
+        f"{n_frames} frames ({duration:.2f}s), "
+        f"pcm={len(pcm):,} bytes"
+    )
+    _vprint(f"  PULSE_SERVER={os.environ.get('PULSE_SERVER', '(unset)')}")
+
+    timeout_sec = duration + timeout_margin
+
+    def _on_timeout(signum, frame):
+        raise TimeoutError(
+            f"PulseAudio timed out after {timeout_sec:.1f}s "
+            f"(PULSE_SERVER={os.environ.get('PULSE_SERVER', '(unset)')})"
+        )
+
+    old_handler = signal.signal(signal.SIGALRM, _on_timeout)
+    signal.setitimer(signal.ITIMER_REAL, timeout_sec)
+    _vprint(f"  timeout set: {timeout_sec:.1f}s")
+    drained = False
+    try:
+        with pasimple.PaSimple(
+            pasimple.PA_STREAM_PLAYBACK, fmt, channels, rate,
+            app_name="voicevox",
+        ) as pa:
+            _vprint("  pa_simple_new done, writing")
+            pa.write(pcm)
+            _vprint("  write done, draining")
+            pa.drain()
+            drained = True
+            _vprint("  drain done")
+    except TimeoutError as e:
+        if not drained:
+            print(f"error: {e}", file=sys.stderr)
+            sys.exit(1)
+        _vprint("  timeout after drain, ignoring")
+    finally:
+        remaining, _ = signal.getitimer(signal.ITIMER_REAL)
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old_handler)
+        _vprint(f"  timeout cleared (remaining: {remaining:.1f}s)")
+
+
+# ============================================================
+# VOICEVOX Core
+# ============================================================
+
+class VoicevoxSynth:
+    """VOICEVOX Core の初期化・モデル読み込み・音声合成をカプセル化する。
+
+    __init__ では VVM のメタデータのみ読み取る (高速)。
+    ONNX モデルの実ロードは synthesize() の初回呼び出し時に遅延実行する。
+    """
+
+    def __init__(self, onnxruntime: str, dict_dir: Path, device: AccelerationMode,
+                 vvm_dir: Path, patterns: list[str]):
+        cpu_num_threads = max(multiprocessing.cpu_count(), 2)
+
+        _vprint(f"Onnxruntime.load_once: {onnxruntime}")
+        ort = Onnxruntime.load_once(filename=onnxruntime)
+        devs = ort.supported_devices()
+        _vprint("  supported_devices: " + ", ".join(
+            k for k in ("cpu", "cuda", "dml") if getattr(devs, k)
+        ))
+
+        _vprint(f"Synthesizer init: device={device}, dict_dir={dict_dir}, "
+                f"cpu_num_threads={cpu_num_threads}")
+        self._synth = Synthesizer(
+            ort,
+            OpenJtalk(dict_dir),
+            acceleration_mode=device,
+            cpu_num_threads=cpu_num_threads,
+        )
+        _vprint(f"  is_gpu_mode={self._synth.is_gpu_mode}")
+
+        self._vvm_tree = self._scan_model_meta(vvm_dir, patterns)
+        _vprint(f"{len(self._vvm_tree)} model(s) scanned")
+
+        self._style_labels: dict[int, str] = {}
+        self._style_to_vvm: dict[int, Path] = {}
+        for vvm_path, speakers in self._vvm_tree:
+            for sp in speakers:
+                for style in sp.styles:
+                    self._style_labels[style.id] = f"{sp.name} ({style.name})"
+                    self._style_to_vvm[style.id] = vvm_path
+
+        self._loaded_vvms: set[Path] = set()
+
+    def _scan_model_meta(self, vvm_dir: Path,
+                     patterns: list[str]) -> list[tuple[Path, list]]:
+        """VVM ファイルのメタデータだけ読み取る (ONNX ロードは行わない)。"""
+        # パターンを展開して重複を除く
+        seen: set[Path] = set()
+        vvm_files: list[Path] = []
+        for pat in patterns:
+            for p in sorted(vvm_dir.glob(pat)):
+                if p not in seen:
+                    seen.add(p)
+                    vvm_files.append(p)
+
+        _vprint(f"VVM search: dir={vvm_dir}, patterns={patterns}, "
+                f"found={len(vvm_files)}")
+
+        if not vvm_files:
+            raise FileNotFoundError(
+                f"no .vvm files matching {patterns} in {vvm_dir}"
+            )
+
+        vvm_tree: list[tuple[Path, list]] = []
+        for vvm_path in vvm_files:
+            _vprint(f"  scanning meta: {vvm_path.name}")
+            with VoiceModelFile.open(vvm_path) as model:
+                metas = list(model.metas)
+            vvm_tree.append((vvm_path, metas))
+
+        return vvm_tree
+
+    def _ensure_loaded(self, style_id: int) -> None:
+        """指定 style_id を含む VVM が未ロードなら ONNX モデルをロードする。"""
+        vvm_path = self._style_to_vvm[style_id]
+        if vvm_path in self._loaded_vvms:
+            return
+        _vprint(f"  lazy loading: {vvm_path.name}")
+        with VoiceModelFile.open(vvm_path) as model:
+            self._synth.load_voice_model(model)
+        self._loaded_vvms.add(vvm_path)
+        _vprint(f"  loaded: {vvm_path.name}")
+
+    @property
+    def min_style_id(self) -> int:
+        """読み込み済みモデルの中で最小の style_id を返す。"""
+        return min(self._style_labels)
+
+    def list_speakers(self, selected_style_id: int | None = None) -> None:
+        """VVM → 話者 → スタイル のツリーを表示する。"""
+        if not self._vvm_tree:
+            print("no models loaded", file=sys.stderr)
+            return
+
+        bold, reset = (BOLD, RESET) if sys.stdout.isatty() else ("", "")
+
+        for vi, (vvm_path, speakers) in enumerate(self._vvm_tree):
+            is_last_vvm = vi == len(self._vvm_tree) - 1
+            print(vvm_path.name)
+            for si, speaker in enumerate(speakers):
+                is_last_speaker = si == len(speakers) - 1
+                branch_s = "└── " if is_last_speaker else "├── "
+                prefix_s = "    " if is_last_speaker else "│   "
+                print(f"{branch_s}{speaker.name}")
+
+                styles = sorted(speaker.styles, key=lambda s: s.id)
+                for ti, style in enumerate(styles):
+                    is_last_style = ti == len(styles) - 1
+                    branch_t = "└── " if is_last_style else "├── "
+                    if style.id == selected_style_id:
+                        print(f"{bold}{prefix_s}{branch_t}{style.name}  "
+                              f"(style-id: {style.id}) ◀{reset}")
+                    else:
+                        print(f"{prefix_s}{branch_t}{style.name}  "
+                              f"(style-id: {style.id})")
+
+            if not is_last_vvm:
+                print()
+
+    def dump_styles(self, selected_style_id: int | None = None) -> None:
+        """スタイル一覧を stderr に出力する。"""
+        bold, reset = (BOLD, RESET) if sys.stderr.isatty() else ("", "")
+        for vvm_path, speakers in self._vvm_tree:
+            for sp in speakers:
+                for style in sorted(sp.styles, key=lambda s: s.id):
+                    if style.id == selected_style_id:
+                        print(f"{bold}  {vvm_path.name}: style-id: {style.id}: "
+                              f"{sp.name} ({style.name}) ◀{reset}",
+                              file=sys.stderr)
+                    else:
+                        print(f"  {vvm_path.name}: style-id: {style.id}: "
+                              f"{sp.name} ({style.name})", file=sys.stderr)
+
+    def validate_style_id(self, style_id: int) -> str | None:
+        """style_id が有効なら None、無効ならエラーメッセージを返す。"""
+        if style_id in self._style_labels:
+            return None
+        lines = [f"style-id {style_id} not found in loaded models. available:"]
+        for sid in sorted(self._style_labels):
+            lines.append(f"  {sid}: {self._style_labels[sid]}")
+        return "\n".join(lines)
+
+    def synthesize(self, **opts) -> bytes:
+        """テキストを音声合成し、WAV バイナリを返す。"""
+        text = opts["text"]
+        style_id = opts["style_id"]
+        self._ensure_loaded(style_id)
+        label = self._style_labels.get(style_id, "?")
+        _vprint(f'create_audio_query: style-id: {style_id} "{label}"')
+        audio_query = self._synth.create_audio_query(text, style_id)
+
+        audio_query.speed_scale = opts.get("speed", 1.0)
+        audio_query.pitch_scale = opts.get("pitch", 0.0)
+        audio_query.intonation_scale = opts.get("intonation", 1.0)
+        audio_query.volume_scale = opts.get("volume", 1.0)
+        if opts.get("pre_silence") is not None:
+            audio_query.pre_phoneme_length = opts["pre_silence"]
+        if opts.get("post_silence") is not None:
+            audio_query.post_phoneme_length = opts["post_silence"]
+
+        _vprint(f"synthesis: {opts}")
+        wav = self._synth.synthesis(audio_query, style_id)
+        _vprint(f"  synthesis done: {len(wav):,} bytes")
+        return wav
+
+
+# ============================================================
+# Command Line 処理
+# ============================================================
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="VOICEVOX で音声合成し PulseAudio で再生する",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+使用例:
+  %(prog)s "こんにちは"                     基本的な読み上げ
+  %(prog)s --speed 1.5 "速く読む"          話速変更
+  %(prog)s --style-id 1 "ずんだもん"       話者変更
+  %(prog)s --vvm 0.vvm 1.vvm "テスト"      複数モデル読み込み
+  %(prog)s --vvm '*.vvm' --list-speakers   全モデルの話者一覧
+  %(prog)s --out out.wav "保存する"        WAV ファイルに保存 (再生なし)
+  echo "文章" | %(prog)s                   標準入力から読み上げ
+  %(prog)s -v "デバッグ"                   診断情報を表示
+"""
+    )
+
+    # --- 入力 ---
+    parser.add_argument(
+        "text", nargs="?", default=None,
+        help="読み上げるテキスト (省略時: 標準入力から読み取り)",
+    )
+
+    # --- 音声パラメータ ---
+    audio = parser.add_argument_group("音声パラメータ")
+    audio.add_argument(
+        "--style-id", type=int, default=-1,
+        metavar="ID",
+        help="話者・スタイルの指定 (--list-speakers で確認, 既定値: 最小 ID)",
+    )
+    audio.add_argument(
+        "--speed", type=float, default=1.0,
+        metavar="VALUE",
+        help="話速 (既定値: 1.0, 大きいほど速い)",
+    )
+    audio.add_argument(
+        "--pitch", type=float, default=0.0,
+        metavar="VALUE",
+        help="ピッチ (既定値: 0.0)",
+    )
+    audio.add_argument(
+        "--intonation", type=float, default=1.0,
+        metavar="VALUE",
+        help="抑揚 (既定値: 1.0)",
+    )
+    audio.add_argument(
+        "--volume", type=float, default=1.0,
+        metavar="VALUE",
+        help="音量 (既定値: 1.0)",
+    )
+    audio.add_argument(
+        "--pre-silence", type=float, default=None,
+        metavar="SEC",
+        help="発話前の無音 (秒)",
+    )
+    audio.add_argument(
+        "--post-silence", type=float, default=None,
+        metavar="SEC",
+        help="発話後の無音 (秒)",
+    )
+
+    # --- パス設定 ---
+    paths = parser.add_argument_group("パス設定")
+    paths.add_argument(
+        "--voicevox-dir", type=Path, default=PREFIX,
+        metavar="PREFIX",
+        help=f"VOICEVOX Coreディレクトリ (既定値: {PREFIX})",
+    )
+    paths.add_argument(
+        "--onnxruntime", default=None,
+        metavar="FILE",
+        help="ONNX Runtime (既定値: PREFIX/onnxruntime/lib/" \
+             "{Onnxruntime.LIB_VERSIONED_FILENAME})",
+    )
+    paths.add_argument(
+        "--dict-dir", type=Path, default=None,
+        metavar="DIR",
+        help="Open JTalk辞書ディレクトリ (既定値: PREFIX/dict)",
+    )
+    paths.add_argument(
+        "--vvm-dir", type=Path, default=None,
+        metavar="DIR",
+        help="VVMモデルディレクトリ (既定値: PREFIX/models/vvms)",
+    )
+    paths.add_argument(
+        "--vvm", type=str, nargs="+", action="extend", default=None,
+        dest="vmms", metavar="GLOB_PAT",
+        help="読み込むVVMファイル名パターン (既定値: 0.vvm)",
+    )
+    paths.add_argument(
+        "--cache-dir", type=Path, default=None,
+        metavar="DIR",
+        help="WAV用キャッシュディレクトリ (既定値: ~/.cache/voicevox)",
+    )
+
+    # --- デバイス選択 ---
+    engine = parser.add_argument_group("デバイス選択")
+    engine.add_argument(
+        "--device", default="CPU",
+        choices=("AUTO", "CPU", "GPU"),
+        help="演算デバイス (既定値: CPU)",
+    )
+
+    # --- 出力制御 ---
+    output = parser.add_argument_group("出力制御")
+    output.add_argument(
+        "--out", type=Path, default=None,
+        dest="outfile", metavar="FILE",
+        help="WAV ファイルに保存して終了 (再生なし)",
+    )
+    output.add_argument(
+        "--list-speakers", action="store_true",
+        help="利用可能な話者スタイルの一覧を表示して終了",
+    )
+    output.add_argument(
+        "--verbose", "-v", action="store_true",
+        help="主要な動作の前後で診断情報を表示する",
+    )
+
+    return parser
+
+
+# コマンドライン引数のパース (モジュールロード時に実行)
+parser = build_parser()
+args = parser.parse_args()
+
+
+# ============================================================
+# メイン処理
+# ============================================================
+
+def main() -> None:
+
+    # --- 既定値の解決 (未指定の引数を voicevox_dir から導出) ---
+    if not args.onnxruntime:
+        args.onnxruntime = str(
+            args.voicevox_dir / "onnxruntime" / "lib" / Onnxruntime.LIB_VERSIONED_FILENAME
+        )
+    if not args.dict_dir:
+        args.dict_dir = args.voicevox_dir / "dict" / "open_jtalk_dic_utf_8-1.11"
+    if not args.vvm_dir:
+        args.vvm_dir = args.voicevox_dir / "models" / "vvms"
+    if not args.vmms:
+        args.vmms = ["0.vvm"]
+    if not args.cache_dir:
+        # XDG_CACHE_HOME が定義されていればその配下、なければ ~/.cache/voicevox
+        if os.environ.get("XDG_CACHE_HOME"):
+            args.cache_dir = Path(os.environ["XDG_CACHE_HOME"]) / "voicevox"
+        else:
+            args.cache_dir = Path.home() / ".cache" / "voicevox"
+
+    # --- パスの存在チェック ---
+    if not Path(args.onnxruntime).exists():
+        parser.error(f"ONNX Runtime not found: {args.onnxruntime}")
+    if not args.dict_dir.is_dir():
+        parser.error(f"Open JTalk dict directory not found: {args.dict_dir}")
+    if not args.vvm_dir.is_dir():
+        parser.error(f"VVM model directory not found: {args.vvm_dir}")
+
+    # --- 引数・環境の表示 ---
+    _vprint("--- args ---")
+    _vprint(f"  style-id       = {args.style_id}")
+    _vprint(f"  speed          = {args.speed}")
+    _vprint(f"  pitch          = {args.pitch}")
+    _vprint(f"  intonation     = {args.intonation}")
+    _vprint(f"  volume         = {args.volume}")
+    _vprint(f"  pre_silence    = {args.pre_silence}")
+    _vprint(f"  post_silence   = {args.post_silence}")
+    _vprint(f"  device         = {args.device}")
+    _vprint(f"  voicevox_dir   = {args.voicevox_dir}")
+    _vprint(f"  onnxruntime    = {args.onnxruntime}")
+    _vprint(f"  dict_dir       = {args.dict_dir}")
+    _vprint(f"  vvm_dir        = {args.vvm_dir}")
+    _vprint(f"  vmms           = {args.vmms}")
+    _vprint(f"  cache_dir      = {args.cache_dir}")
+    _vprint(f"  outfile        = {args.outfile}")
+    _vprint(f"  list_speakers  = {args.list_speakers}")
+    _vprint("--- env ---")
+    _vprint(f"  PULSE_SERVER   = {os.environ.get('PULSE_SERVER', '(unset)')}")
+    _vprint(f"  PULSE_COOKIE   = {os.environ.get('PULSE_COOKIE', '(unset)')}")
+    _vprint(f"  XDG_RUNTIME_DIR= {os.environ.get('XDG_RUNTIME_DIR', '(unset)')}")
+    _vprint(f"  XDG_CACHE_HOME = {os.environ.get('XDG_CACHE_HOME', '(unset)')}")
+    _vprint(f"  Python         = {sys.version}")
+    _vprint(f"  cpu_count      = {multiprocessing.cpu_count()}")
+
+    # --- 初期化 ---
+    synth = VoicevoxSynth(
+        args.onnxruntime, args.dict_dir, args.device, args.vvm_dir, args.vmms,
+    )
+
+    # --- style-id の解決と検証 ---
+    if args.style_id < 0:
+        args.style_id = synth.min_style_id
+        _vprint(f"style-id resolved to {args.style_id}")
+    else:
+        err = synth.validate_style_id(args.style_id)
+        if err:
+            parser.error(err)
+
+    # --- 話者一覧モード ---
+    if args.list_speakers:
+        synth.list_speakers(args.style_id)
+        return
+
+    # --- スタイル一覧表示 ---
+    if args.verbose:
+        synth.dump_styles(args.style_id)
+
+    # --- テキスト取得 ---
+    if args.text:
+        text = args.text.strip()
+    else:
+        text = sys.stdin.read().strip()
+    if not text:
+        parser.error("text is empty")
+
+    if args.verbose:
+        _vprint("target text:")
+        for line in text.split("\n")[:5]:
+            print(f"  {line[:80]}", file=sys.stderr)
+        if text.count("\n") >= 5:
+            print("  ...", file=sys.stderr)
+
+    # synthesize() と WavCache で共有する合成パラメータ
+    synth_opts = dict(
+        text=text,
+        style_id=args.style_id,
+        speed=args.speed,
+        pitch=args.pitch,
+        intonation=args.intonation,
+        volume=args.volume,
+        pre_silence=args.pre_silence,
+        post_silence=args.post_silence,
+    )
+
+    # --- WavCache にある生成済み音声を再利用 ---
+    cache = WavCache(args.cache_dir)
+    wav_data = cache.get(synth_opts)
+    if wav_data is None:
+        # キャッシュになかった → 音声合成
+        wav_data = synth.synthesize(**synth_opts)
+        cache.put(wav_data, synth_opts)
+
+    # --- 出力 ---
+    if args.outfile:
+        args.outfile.write_bytes(wav_data)
+        _vprint(f"saved: {args.outfile}")
+    else:
+        play_wav_pulse(wav_data)
+
+
+if __name__ == "__main__":
+    main()

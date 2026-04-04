@@ -130,7 +130,7 @@ libsixel-bin
 # X window forwarding and some small programs for testing
 run apt install -y --no-install-recommends \
 xauth jq x11-apps mesa-utils vulkan-tools wayland-utils \
-vdpau-driver-all va-driver-all
+vdpau-driver-all va-driver-all expect
 
 
 # PulseAudio server to proxy audio streaming
@@ -158,6 +158,14 @@ run systemctl enable pulseaudio-proxy.service
 #   paplay /usr/share/sounds/alsa/Front_Center.wav
 
 
+
+# UV python package manager
+[ -s /tmp/uv_install.sh ] ||
+run curl -o /tmp/uv_install.sh \
+  -fsSL https://astral.sh/uv/install.sh
+chmod u-s,o+r /tmp/uv_install.sh
+run bash /tmp/uv_install.sh
+run uv self update
 
 
 # git-delta   ref. https://github.com/dandavison/delta/releases
@@ -204,6 +212,48 @@ EOF
 
 run apt update
 run apt install -y gh
+
+
+# Voicevox Core and Pasimple for PulseAudio Python binding
+VV_VER=0.16.4
+VV_BIN_DIR=/usr/local/bin
+VV_LIB_DIR=/usr/lib/voicevox-core
+
+run uv pip install --system --break-system-packages pasimple
+run uv pip install --system --break-system-packages \
+  https://github.com/VOICEVOX/voicevox_core/releases/download/${VV_VER}/voicevox_core-${VV_VER}-cp310-abi3-manylinux_2_34_x86_64.whl
+
+[ -s /tmp/voicevox_install.sh ] ||
+run curl -o /tmp/voicevox_install.sh \
+  -fsSL https://github.com/VOICEVOX/voicevox_core/releases/download/$VV_VER/download-linux-x64
+chmod u-s,u+x /tmp/voicevox_install.sh
+
+rm -rf $VV_LIB_DIR
+expect -c '
+# GitHub login can relax the ratelimit restriction posed by this downloader
+set env(GH_TOKEN) '"$(gh auth token)"'
+set timeout 120
+
+spawn /tmp/voicevox_install.sh --output '"$VV_LIB_DIR"' --exclude c-api --models-pattern {[0-9]*.vvm}
+
+expect {
+    "*qを押してください*" {
+        send "q"
+        expect "*\[y,n,r\]*"
+        send "y\r"
+    }
+    "*\[y,n,r\]*" {
+        send "y\r"
+    }
+}
+expect eof
+'
+
+run [ -s $VV_LIB_DIR/dict/open_jtalk_dic_utf*/sys.dic ]
+run [ -s $VV_LIB_DIR/models/vvms/0.vvm ]
+run [ -s $VV_LIB_DIR/onnxruntime/lib//libvoicevox_onnxruntime.so* ]
+
+copy --nobackup voicevox_paplay ${VV_BIN_DIR}/voicevox_paplay
 
 
 # Node.js
