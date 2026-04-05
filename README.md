@@ -5,9 +5,9 @@ This is a small set of configuration files and scripts that lets you setup the t
 
 ## How to Use
 
-Run the script that matches the environment.
+Run the script that matches the environment as root.
 
-    ./debian10.sh
+    # ./debian12.sh
 
 That's all.
 
