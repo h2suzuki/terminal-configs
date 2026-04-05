@@ -312,6 +312,10 @@ class VoicevoxSynth:
             _vprint(f"  scanning meta: {vvm_path.name}")
             with VoiceModelFile.open(vvm_path) as model:
                 metas = list(model.metas)
+            # ツリー表示用: styles[] を style_id でソートし、話者を安定ソート
+            for sp in metas:
+                sp.styles = sorted(sp.styles, key=lambda s: s.id)
+            metas.sort(key=lambda sp: sp.styles[0].id)
             vvm_tree.append((vvm_path, metas))
 
         return vvm_tree
@@ -349,9 +353,8 @@ class VoicevoxSynth:
                 prefix_s = "    " if is_last_speaker else "│   "
                 print(f"{branch_s}{speaker.name}")
 
-                styles = sorted(speaker.styles, key=lambda s: s.id)
-                for ti, style in enumerate(styles):
-                    is_last_style = ti == len(styles) - 1
+                for ti, style in enumerate(speaker.styles):
+                    is_last_style = ti == len(speaker.styles) - 1
                     branch_t = "└── " if is_last_style else "├── "
                     if style.id == selected_style_id:
                         print(f"{bold}{prefix_s}{branch_t}{style.name}  "
@@ -368,7 +371,7 @@ class VoicevoxSynth:
         bold, reset = (BOLD, RESET) if sys.stderr.isatty() else ("", "")
         for vvm_path, speakers in self._vvm_tree:
             for sp in speakers:
-                for style in sorted(sp.styles, key=lambda s: s.id):
+                for style in sp.styles:
                     if style.id == selected_style_id:
                         print(f"{bold}  {vvm_path.name}: style-id: {style.id}: "
                               f"{sp.name} ({style.name}) ◀{reset}",
