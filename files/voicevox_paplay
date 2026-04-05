@@ -206,7 +206,6 @@ def play_wav_pulse(wav_bytes: bytes, timeout_margin: float = PULSE_TIMEOUT_MARGI
         f"{n_frames} frames ({duration:.2f}s), "
         f"pcm={len(pcm):,} bytes"
     )
-    _vprint(f"  PULSE_SERVER={os.environ.get('PULSE_SERVER', '(unset)')}")
 
     timeout_sec = duration + timeout_margin
 
