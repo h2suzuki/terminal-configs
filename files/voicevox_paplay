@@ -507,7 +507,8 @@ def build_parser() -> argparse.ArgumentParser:
     paths.add_argument(
         "--cache-dir", type=Path, default=None,
         metavar="DIR",
-        help="WAV用キャッシュディレクトリ (既定値: ~/.cache/voicevox)",
+        help="WAV用キャッシュディレクトリ "
+             "(既定値: $XDG_CACHE_HOME/%(prog)s または ~/.cache/%(prog)s)",
     )
 
     # --- デバイス選択 ---
@@ -560,11 +561,11 @@ def main() -> None:
     if not args.vmms:
         args.vmms = ["0.vvm"]
     if not args.cache_dir:
-        # XDG_CACHE_HOME が定義されていればその配下、なければ ~/.cache/voicevox
+        # XDG_CACHE_HOME が定義されていればその配下、なければ ~/.cache/$prog
         if os.environ.get("XDG_CACHE_HOME"):
-            args.cache_dir = Path(os.environ["XDG_CACHE_HOME"]) / "voicevox"
+            args.cache_dir = Path(os.environ["XDG_CACHE_HOME"]) / parser.prog
         else:
-            args.cache_dir = Path.home() / ".cache" / "voicevox"
+            args.cache_dir = Path.home() / ".cache" / parser.prog
 
     # --- パスの存在チェック ---
     if not Path(args.onnxruntime).exists():
