@@ -405,7 +405,7 @@ class VoicevoxSynth:
         if opts.get("post_silence") is not None:
             audio_query.post_phoneme_length = opts["post_silence"]
 
-        _vprint(f"synthesis: {opts}")
+        _vprint(f"synthesis: { {k: v for k, v in opts.items() if k != 'text'} }")
         wav = self._synth.synthesis(audio_query, style_id)
         _vprint(f"  synthesis done: {len(wav):,} bytes")
         return wav
