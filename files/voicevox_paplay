@@ -527,6 +527,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="WAV ファイルに保存して終了 (再生なし)",
     )
     output.add_argument(
+        "--no-cache", action="store_true", dest="no_cache",
+        help="WAV キャッシュを参照・保存せず、毎回合成する",
+    )
+    output.add_argument(
         "--list-speakers", action="store_true",
         help="利用可能な話者スタイルの一覧を表示して終了",
     )
@@ -566,6 +570,8 @@ def main() -> None:
             args.cache_dir = Path(os.environ["XDG_CACHE_HOME"]) / parser.prog
         else:
             args.cache_dir = Path.home() / ".cache" / parser.prog
+    elif args.no_cache:
+        _vprint("warning: --cache-dir is ignored because --no-cache is set")
 
     # --- パスの存在チェック ---
     if not Path(args.onnxruntime).exists():
@@ -590,7 +596,10 @@ def main() -> None:
     _vprint(f"  dict_dir       = {args.dict_dir}")
     _vprint(f"  vvm_dir        = {args.vvm_dir}")
     _vprint(f"  vmms           = {args.vmms}")
-    _vprint(f"  cache_dir      = {args.cache_dir}")
+    if args.no_cache:
+        _vprint(f"  cache_dir      = {args.cache_dir} (bypassed due to --no-cache)")
+    else:
+        _vprint(f"  cache_dir      = {args.cache_dir}")
     _vprint(f"  outfile        = {args.outfile}")
     _vprint(f"  list_speakers  = {args.list_speakers}")
     _vprint("--- env ---")
@@ -652,12 +661,16 @@ def main() -> None:
     )
 
     # --- WavCache にある生成済み音声を再利用 ---
-    cache = WavCache(args.cache_dir)
-    wav_data = cache.get(synth_opts)
-    if wav_data is None:
-        # キャッシュになかった → 音声合成
+    if args.no_cache:
+        _vprint("cache bypassed (--no-cache)")
         wav_data = synth.synthesize(**synth_opts)
-        cache.put(wav_data, synth_opts)
+    else:
+        cache = WavCache(args.cache_dir)
+        wav_data = cache.get(synth_opts)
+        if wav_data is None:
+            # キャッシュになかった → 音声合成
+            wav_data = synth.synthesize(**synth_opts)
+            cache.put(wav_data, synth_opts)
 
     # --- 出力 ---
     if args.outfile:
