@@ -278,12 +278,12 @@ class VoicevoxSynth:
         self._vvm_tree = self._scan_model_meta(vvm_dir, patterns)
         _vprint(f"{len(self._vvm_tree)} model(s) scanned")
 
-        self._style_labels: dict[int, str] = {}
+        self._style_detail: dict[int, tuple[str, str]] = {}
         self._style_to_vvm: dict[int, Path] = {}
         for vvm_path, speakers in self._vvm_tree:
             for sp in speakers:
                 for style in sp.styles:
-                    self._style_labels[style.id] = f"{sp.name} ({style.name})"
+                    self._style_detail[style.id] = (sp.name, style.name)
                     self._style_to_vvm[style.id] = vvm_path
 
         self._loaded_vvms: set[Path] = set()
@@ -335,7 +335,7 @@ class VoicevoxSynth:
     @property
     def min_style_id(self) -> int:
         """読み込み済みモデルの中で最小の style_id を返す。"""
-        return min(self._style_labels)
+        return min(self._style_detail)
 
     def list_speakers(self, selected_style_id: int | None = None) -> None:
         """VVM → 話者 → スタイル のツリーを表示する。"""
@@ -393,11 +393,12 @@ class VoicevoxSynth:
 
     def validate_style_id(self, style_id: int) -> str | None:
         """style_id が有効なら None、無効ならエラーメッセージを返す。"""
-        if style_id in self._style_labels:
+        if style_id in self._style_detail:
             return None
         lines = [f"style-id {style_id} not found in loaded models. available:"]
-        for sid in sorted(self._style_labels):
-            lines.append(f"  {sid}: {self._style_labels[sid]}")
+        for sid in sorted(self._style_detail):
+            sp_name, st_name = self._style_detail[sid]
+            lines.append(f"  {sp_name}  {st_name}  (style-id: {sid})")
         return "\n".join(lines)
 
     def synthesize(self, **opts) -> bytes:
@@ -405,8 +406,8 @@ class VoicevoxSynth:
         text = opts["text"]
         style_id = opts["style_id"]
         self._ensure_loaded(style_id)
-        label = self._style_labels.get(style_id, "?")
-        _vprint(f'create_audio_query: style-id: {style_id} "{label}"')
+        sp, st = self._style_detail.get(style_id, ("?", "?"))
+        _vprint(f'create_audio_query: style-id: {style_id} "{sp} ({st})"')
         audio_query = self._synth.create_audio_query(text, style_id)
 
         audio_query.speed_scale = opts.get("speed", 1.0)
@@ -560,6 +561,12 @@ parser = build_parser()
 args = parser.parse_args()
 
 
+def _die(msg: str) -> None:
+    """エラーメッセージを表示して終了する (usage は表示しない)。"""
+    print(f"error: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
 # ============================================================
 # メイン処理
 # ============================================================
@@ -588,11 +595,11 @@ def main() -> None:
 
     # --- パスの存在チェック ---
     if not Path(args.onnxruntime).exists():
-        parser.error(f"ONNX Runtime not found: {args.onnxruntime}")
+        _die(f"ONNX Runtime not found: {args.onnxruntime}")
     if not args.dict_dir.is_dir():
-        parser.error(f"Open JTalk dict directory not found: {args.dict_dir}")
+        _die(f"Open JTalk dict directory not found: {args.dict_dir}")
     if not args.vvm_dir.is_dir():
-        parser.error(f"VVM model directory not found: {args.vvm_dir}")
+        _die(f"VVM model directory not found: {args.vvm_dir}")
 
     # --- 引数・環境の表示 ---
     _vprint("--- args ---")
@@ -635,7 +642,7 @@ def main() -> None:
     else:
         err = synth.validate_style_id(args.style_id)
         if err:
-            parser.error(err)
+            _die(err)
 
     # --- 話者一覧モード ---
     if args.list_speakers:
@@ -652,7 +659,7 @@ def main() -> None:
     else:
         text = sys.stdin.read().strip()
     if not text:
-        parser.error("text is empty")
+        _die("text is empty")
 
     if args.verbose:
         _vprint("target text:")
