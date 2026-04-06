@@ -403,12 +403,10 @@ class VoicevoxSynth:
 
     def synthesize(self, **opts) -> bytes:
         """テキストを音声合成し、WAV バイナリを返す。"""
-        text = opts["text"]
-        style_id = opts["style_id"]
-        self._ensure_loaded(style_id)
-        sp, st = self._style_detail.get(style_id, ("?", "?"))
-        _vprint(f'create_audio_query: style-id: {style_id} "{sp} ({st})"')
-        audio_query = self._synth.create_audio_query(text, style_id)
+        self._ensure_loaded(opts["style_id"])
+        speaker, style = self._style_detail.get(opts["style_id"], ("?", "?"))
+        _vprint(f'create_audio_query: style-id: {opts["style_id"]} "{speaker} ({style})"')
+        audio_query = self._synth.create_audio_query(opts["text"], opts["style_id"])
 
         audio_query.speed_scale = opts.get("speed", 1.0)
         audio_query.pitch_scale = opts.get("pitch", 0.0)
@@ -420,7 +418,7 @@ class VoicevoxSynth:
             audio_query.post_phoneme_length = opts["post_silence"]
 
         _vprint(f"synthesis: { {k: v for k, v in opts.items() if k != 'text'} }")
-        wav = self._synth.synthesis(audio_query, style_id)
+        wav = self._synth.synthesis(audio_query, opts["style_id"])
         _vprint(f"  synthesis done: {len(wav):,} bytes")
         return wav
 
