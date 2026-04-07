@@ -442,7 +442,8 @@ def build_parser() -> argparse.ArgumentParser:
   %(prog)s "こんにちは"                     基本的な読み上げ
   %(prog)s --speed 1.5 "速く読む"          話速変更
   %(prog)s --style-id 1 "ずんだもん"       話者変更
-  %(prog)s --vvm 0.vvm 1.vvm "テスト"      複数モデル読み込み
+  %(prog)s --vvm 0.vvm --vvm 1.vvm "テスト" 複数モデル読み込み (繰り返し)
+  %(prog)s --vvm '[01].vvm' "テスト"       複数モデル読み込み (glob)
   %(prog)s --vvm '*.vvm' --list-speakers   全モデルの話者一覧
   %(prog)s --out out.wav "保存する"        WAV ファイルに保存 (再生なし)
   echo "文章" | %(prog)s                   標準入力から読み上げ
@@ -523,9 +524,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="VVMモデルディレクトリ (既定値: PREFIX/models/vvms)",
     )
     paths.add_argument(
-        "--vvm", type=str, nargs="+", action="extend", default=None,
+        "--vvm", type=str, action="append", default=None,
         dest="vmms", metavar="GLOB_PAT",
-        help="読み込むVVMファイル名パターン (既定値: 0.vvm)",
+        help="読み込むVVMファイル名パターン (複数回指定可, 既定値: 0.vvm)",
     )
 
     # --- デバイス選択 ---
