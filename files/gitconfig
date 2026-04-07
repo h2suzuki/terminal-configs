@@ -36,5 +36,5 @@ br = branch
 st = status -uno
 pullr = pull --rebase
 diffc = diff --cached
-log1 = log --oneline
+log1 = log --format='%C(auto)%h%C(auto)%d%Creset %s %C(green)[%an] %C(cyan)%(trailers:key=Co-authored-by,valueonly,separator=%%x2C )%Creset'
 graph = log --all --graph --decorate=short --format='%C(red)%h %C(green)%d %C(reset)%s %C(yellow)<%an> %C(blue)%ci (%cr)'
