@@ -48,16 +48,15 @@ from voicevox_core.blocking import Onnxruntime, OpenJtalk, Synthesizer, VoiceMod
 PREFIX = Path("/usr/lib/voicevox-core")  # --voicevox-dir の既定値
 PULSE_TIMEOUT_MARGIN = 10.0              # PulseAudio タイムアウト余裕 (秒)
 
+class NotGiven:
+    __repr__ = lambda self: "NOT_GIVEN"
+
+NOT_GIVEN = NotGiven()
+
 BOLD = "\033[1m"                         # ANSI bold (isatty チェックは使用箇所で行う)
 RESET = "\033[0m"                        # ANSI reset
 CLEAR_LINE = "\r\033[K"                  # 行頭に戻りクリア
 
-
-class NotGiven:
-    """argparse の nargs="?" で引数省略時を示すセンチネル。"""
-    __repr__ = lambda self: "NOT_GIVEN"
-
-NOT_GIVEN = NotGiven()
 
 
 # ============================================================
@@ -498,6 +497,11 @@ def build_parser() -> argparse.ArgumentParser:
     # --- パス設定 ---
     paths = parser.add_argument_group("パス設定")
     paths.add_argument(
+        "--cache-dir", type=Path, default=NOT_GIVEN,
+        dest="cache_dir", metavar="DIR",
+        help="WAV キャッシュを有効にし、指定ディレクトリを使う",
+    )
+    paths.add_argument(
         "--voicevox-dir", type=Path, default=PREFIX,
         metavar="PREFIX",
         help=f"VOICEVOX Coreディレクトリ (既定値: {PREFIX})",
@@ -541,13 +545,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     output.add_argument(
         "--cache", action="store_true",
-        help="WAV キャッシュを有効にする "
-             "(既定のキャッシュディレクトリを使用)",
-    )
-    output.add_argument(
-        "--cache-dir", type=Path, default=NOT_GIVEN,
-        dest="cache_dir", metavar="DIR",
-        help="WAV キャッシュを有効にし、指定ディレクトリを使う",
+        help="WAV キャッシュを有効にする ",
     )
     output.add_argument(
         "--list-speakers", action="store_true",
