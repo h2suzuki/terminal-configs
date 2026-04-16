@@ -283,9 +283,9 @@ run bash /tmp/claude_install.sh
 
 run npm install -g ccusage
 
-copy CLAUDE.md  ~/.claude/CLAUDE.md
-copy claude_settings.json  ~/.claude/settings.json
-copy claude_keybindings.json  ~/.claude/keybindings.json
+copy claude_CLAUDE.md           ~/.claude/CLAUDE.md
+copy claude_settings.json       ~/.claude/settings.json
+copy claude_keybindings.json    ~/.claude/keybindings.json
 
 
 # The current user settings
