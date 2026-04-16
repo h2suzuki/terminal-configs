@@ -282,6 +282,8 @@ run bash /tmp/claude_install.sh
 
 run npm install -g ccusage
 
+copy claude_keybindings.json  ~/.claude/keybindings.json
+
 
 # The current user settings
 EDITOR="/usr/bin/nvim"
