@@ -114,10 +114,11 @@ copy share_ssh_x11forwarding  ~/.share_ssh_x11forwarding
 
 # Vim, Git / Git-LFS, tree, ripgrep
 run apt update
+run apt remove -f vim
 run apt install -y --no-install-recommends \
 neovim git git-lfs tree ripgrep
 
-copy --nobackup vimrc.local /etc/xdg/nvim/sysinit.vim
+copy --nobackup vimrc.local /etc/xdg/nvim/sysinit.vim   # Neovim system-wide init file
 
 run git lfs install --skip-repo
 
