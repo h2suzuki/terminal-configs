@@ -118,7 +118,7 @@ run apt remove -f vim
 run apt install -y --no-install-recommends \
 neovim git git-lfs tree ripgrep
 
-copy --nobackup vimrc.local /etc/xdg/nvim/sysinit.vim   # Neovim system-wide init file
+copy --nobackup sysinit.vim /etc/xdg/nvim/sysinit.vim   # Neovim system-wide init file
 
 run git lfs install --skip-repo
 
@@ -283,6 +283,8 @@ run bash /tmp/claude_install.sh
 
 run npm install -g ccusage
 
+copy CLAUDE.md  ~/.claude/CLAUDE.md
+copy claude_settings.json  ~/.claude/settings.json
 copy claude_keybindings.json  ~/.claude/keybindings.json
 
 
