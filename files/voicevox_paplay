@@ -47,6 +47,7 @@ from voicevox_core.blocking import Onnxruntime, OpenJtalk, Synthesizer, VoiceMod
 
 PREFIX = Path("/usr/lib/voicevox-core")  # --voicevox-dir の既定値
 PULSE_TIMEOUT_MARGIN = 10.0              # PulseAudio タイムアウト余裕 (秒)
+PULSE_TAIL_MARGIN_SEC = 0.5              # 書き込み完了後の server buffer 排出余裕 (秒)
 
 class NotGiven:
     __repr__ = lambda self: "NOT_GIVEN"
@@ -202,13 +203,14 @@ def _set_shutdown(signum, frame) -> None:
 def play_wav_pulse(wav_bytes: bytes, timeout_margin: float = PULSE_TIMEOUT_MARGIN) -> None:
     """WAV バイナリデータを PulseAudio (pasimple) で再生する。
 
-    drain は呼ばず、get_latency() でサーバ側バッファの残量を監視し、
-    0 になるまで待機して close する。中断時は flush で残バッファを
-    明示破棄してから切断するため、drain 契約による sink-input 詰まり
-    (WSLg pulseaudio の既知の失敗モード) を発生させない。
+    drain は呼ばず、書き終わったあと duration + TAIL_MARGIN だけ
+    Python 側で待機して server 側バッファを自然排出させてから close。
+    中断時は flush で残バッファを明示破棄してから切断するため、
+    drain 契約による sink-input 詰まり (WSLg pulseaudio の既知の
+    失敗モード) を発生させない。
 
     timeout_margin: 音声の長さに加算する実時間の上限 (秒)。
-                    サーバが hung したとき無限待機を防ぐ。
+                    サーバが hung して pa.write が進まないとき脱出するため。
     """
     import pasimple
 
@@ -262,17 +264,12 @@ def play_wav_pulse(wav_bytes: bytes, timeout_margin: float = PULSE_TIMEOUT_MARGI
             )
 
             # drain せずに server 側バッファが自然に空になるのを待つ。
-            # get_latency() で残量を直接観測する (固定 sleep より正確)。
-            # サーバが hung なら latency が減らないが deadline で脱出する。
-            if offset >= len(pcm) and not _shutdown:
-                while not _shutdown and time.monotonic() < deadline:
-                    try:
-                        latency_us = pa.get_latency()
-                    except Exception as e:
-                        _vprint(f"  get_latency failed: {e}"); break
-                    if latency_us <= 0:
-                        break
-                    time.sleep(0.01)
+            # 壁時計で「書き開始から duration 経過」を待つ方式。
+            # get_latency() ベースは tunnel/RDP chain の常駐レイテンシで
+            # 0 に収束しない環境があるため採用しない。
+            tail_end = play_start + duration + PULSE_TAIL_MARGIN_SEC
+            while time.monotonic() < tail_end and not _shutdown:
+                time.sleep(0.01)
 
             # 中断 or 未完: server 側に残データがあれば明示破棄。
             # 正常完了時は buffer が空なので flush する必要がない。
