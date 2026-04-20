@@ -48,6 +48,7 @@ from voicevox_core.blocking import Onnxruntime, OpenJtalk, Synthesizer, VoiceMod
 PREFIX = Path("/usr/lib/voicevox-core")  # --voicevox-dir の既定値
 PULSE_TIMEOUT_MARGIN = 10.0              # PulseAudio タイムアウト余裕 (秒)
 PULSE_TAIL_MARGIN_SEC = 0.5              # 書き込み完了後の server buffer 排出余裕 (秒)
+PULSE_LOOPBACK_PORT = 24713              # --loopback で使う PulseAudio proxy の TCP ポート
 
 class NotGiven:
     __repr__ = lambda self: "NOT_GIVEN"
@@ -480,6 +481,7 @@ def build_parser() -> argparse.ArgumentParser:
   %(prog)s --out out.wav "保存する"        WAV ファイルに保存 (再生なし)
   echo "文章" | %(prog)s                   標準入力から読み上げ
   %(prog)s -v "デバッグ"                   診断情報を表示
+  %(prog)s --loopback "ループバック"       distro proxy 経由で再生 (SSH 対応)
 """
     )
 
@@ -581,6 +583,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="WAV キャッシュを有効にする ",
     )
     output.add_argument(
+        "--loopback", action="store_true",
+        help=f"PULSE_SERVER を tcp:localhost:{PULSE_LOOPBACK_PORT} に固定 "
+             "(distro 内 proxy 経由で WSLg direct の不安定性を回避、"
+             "SSH port-forward でも利用可能)",
+    )
+    output.add_argument(
         "--list-speakers", action="store_true",
         help="利用可能な話者スタイルの一覧を表示して終了",
     )
@@ -656,6 +664,12 @@ def main() -> None:
     _vprint(f"  cache_dir      = {args.cache_dir}")
     _vprint(f"  outfile        = {args.outfile}")
     _vprint(f"  list_speakers  = {args.list_speakers}")
+    _vprint(f"  loopback       = {args.loopback}")
+
+    # --- --loopback: PULSE_SERVER を override して distro proxy 経由にする ---
+    if args.loopback:
+        os.environ["PULSE_SERVER"] = f"tcp:localhost:{PULSE_LOOPBACK_PORT}"
+
     _vprint("--- env ---")
     _vprint(f"  PULSE_SERVER   = {os.environ.get('PULSE_SERVER', '(unset)')}")
     _vprint(f"  PULSE_COOKIE   = {os.environ.get('PULSE_COOKIE', '(unset)')}")
