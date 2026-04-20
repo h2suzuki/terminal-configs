@@ -190,63 +190,105 @@ class WavCache:
 # PulseAudio 再生 (pasimple)
 # ============================================================
 
+# SIGINT/SIGTERM/SIGHUP 中断フラグ。
+# _set_shutdown は play_wav_pulse が設置するハンドラ。
+_shutdown = False
+
+def _set_shutdown(signum, frame) -> None:
+    global _shutdown
+    _shutdown = True
+
+
 def play_wav_pulse(wav_bytes: bytes, timeout_margin: float = PULSE_TIMEOUT_MARGIN) -> None:
     """WAV バイナリデータを PulseAudio (pasimple) で再生する。
 
-    timeout_margin: 音声の長さに加算するタイムアウト余裕 (秒)。
-                    接続失敗や応答なしの場合にストールを防ぐ。
+    drain は呼ばず、get_latency() でサーバ側バッファの残量を監視し、
+    0 になるまで待機して close する。中断時は flush で残バッファを
+    明示破棄してから切断するため、drain 契約による sink-input 詰まり
+    (WSLg pulseaudio の既知の失敗モード) を発生させない。
+
+    timeout_margin: 音声の長さに加算する実時間の上限 (秒)。
+                    サーバが hung したとき無限待機を防ぐ。
     """
     import pasimple
 
     with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
-        fmt = pasimple.width2format(wf.getsampwidth())
-        channels = wf.getnchannels()
-        rate = wf.getframerate()
-        n_frames = wf.getnframes()
+        channels     = wf.getnchannels()
+        rate         = wf.getframerate()
+        n_frames     = wf.getnframes()
         sample_width = wf.getsampwidth()
-        pcm = wf.readframes(n_frames)
+        pcm          = wf.readframes(n_frames)
 
-    duration = n_frames / rate if rate > 0 else 0
+    duration    = n_frames / rate if rate > 0 else 0
+    frame_size  = channels * sample_width
+    chunk_bytes = (rate * 3 // 10) * frame_size      # ~300ms, frame-aligned
+    deadline    = time.monotonic() + duration + timeout_margin
+
     _vprint(
         f"PulseAudio playback: "
         f"{channels}ch, {rate}Hz, {sample_width * 8}bit, "
         f"{n_frames} frames ({duration:.2f}s), "
-        f"pcm={len(pcm):,} bytes"
+        f"pcm={len(pcm):,} bytes, chunk={chunk_bytes:,} bytes"
     )
 
-    timeout_sec = duration + timeout_margin
+    global _shutdown
+    _shutdown = False
+    old_handlers = {
+        sig: signal.signal(sig, _set_shutdown)
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    }
 
-    def _on_timeout(signum, frame):
-        raise TimeoutError(
-            f"PulseAudio timed out after {timeout_sec:.1f}s "
-            f"(PULSE_SERVER={os.environ.get('PULSE_SERVER', '(unset)')})"
-        )
-
-    old_handler = signal.signal(signal.SIGALRM, _on_timeout)
-    signal.setitimer(signal.ITIMER_REAL, timeout_sec)
-    _vprint(f"  timeout set: {timeout_sec:.1f}s")
-    drained = False
     try:
         with pasimple.PaSimple(
-            pasimple.PA_STREAM_PLAYBACK, fmt, channels, rate,
+            pasimple.PA_STREAM_PLAYBACK,
+            pasimple.width2format(sample_width), channels, rate,
             app_name="voicevox",
         ) as pa:
-            _vprint("  pa_simple_new done, writing")
-            pa.write(pcm)
-            _vprint("  write done, draining")
-            pa.drain()
-            drained = True
-            _vprint("  drain done")
-    except TimeoutError as e:
-        if not drained:
-            print(f"error: {e}", file=sys.stderr)
-            sys.exit(1)
-        _vprint("  timeout after drain, ignoring")
+            _vprint("  stream opened")
+            play_start = time.monotonic()
+
+            offset = 0
+            while offset < len(pcm):
+                if _shutdown:
+                    _vprint("  shutdown during write"); break
+                if time.monotonic() > deadline:
+                    _vprint("  deadline exceeded during write"); break
+                pa.write(pcm[offset : offset + chunk_bytes])
+                offset += chunk_bytes
+
+            _vprint(
+                f"  wrote {min(offset, len(pcm)):,}/{len(pcm):,} bytes "
+                f"in {time.monotonic() - play_start:.2f}s"
+            )
+
+            # drain せずに server 側バッファが自然に空になるのを待つ。
+            # get_latency() で残量を直接観測する (固定 sleep より正確)。
+            # サーバが hung なら latency が減らないが deadline で脱出する。
+            if offset >= len(pcm) and not _shutdown:
+                while not _shutdown and time.monotonic() < deadline:
+                    try:
+                        latency_us = pa.get_latency()
+                    except Exception as e:
+                        _vprint(f"  get_latency failed: {e}"); break
+                    if latency_us <= 0:
+                        break
+                    time.sleep(0.01)
+
+            # 中断 or 未完: server 側に残データがあれば明示破棄。
+            # 正常完了時は buffer が空なので flush する必要がない。
+            if _shutdown or offset < len(pcm):
+                try:
+                    pa.flush()
+                    _vprint("  flushed server buffer")
+                except Exception as e:
+                    _vprint(f"  flush failed: {e}")
+        # __exit__ → pa_simple_free は drain しない純粋な切断
     finally:
-        remaining, _ = signal.getitimer(signal.ITIMER_REAL)
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, old_handler)
-        _vprint(f"  timeout cleared (remaining: {remaining:.1f}s)")
+        for sig, handler in old_handlers.items():
+            signal.signal(sig, handler)
+
+    if _shutdown:
+        sys.exit(130)
 
 
 # ============================================================
