@@ -203,11 +203,10 @@ def _set_shutdown(signum, frame) -> None:
 def play_wav_pulse(wav_bytes: bytes, timeout_margin: float = PULSE_TIMEOUT_MARGIN) -> None:
     """WAV バイナリデータを PulseAudio (pasimple) で再生する。
 
-    drain は呼ばず、書き終わったあと duration + TAIL_MARGIN だけ
-    Python 側で待機して server 側バッファを自然排出させてから close。
-    中断時は flush で残バッファを明示破棄してから切断するため、
-    drain 契約による sink-input 詰まり (WSLg pulseaudio の既知の
-    失敗モード) を発生させない。
+    drain も flush も呼ばず、pa_simple_free (context manager の __exit__)
+    の切断だけでクリーンアップする。drain 契約のない stream は切断時に
+    server 側で sink-input 破棄 + バッファ discard される。明示 flush は
+    WSLg tunnel で遅延/詰まりを誘発するので呼ばない。
 
     timeout_margin: 音声の長さに加算する実時間の上限 (秒)。
                     サーバが hung して pa.write が進まないとき脱出するため。
@@ -270,16 +269,10 @@ def play_wav_pulse(wav_bytes: bytes, timeout_margin: float = PULSE_TIMEOUT_MARGI
             tail_end = play_start + duration + PULSE_TAIL_MARGIN_SEC
             while time.monotonic() < tail_end and not _shutdown:
                 time.sleep(0.01)
-
-            # 中断 or 未完: server 側に残データがあれば明示破棄。
-            # 正常完了時は buffer が空なので flush する必要がない。
-            if _shutdown or offset < len(pcm):
-                try:
-                    pa.flush()
-                    _vprint("  flushed server buffer")
-                except Exception as e:
-                    _vprint(f"  flush failed: {e}")
-        # __exit__ → pa_simple_free は drain しない純粋な切断
+        # __exit__ → pa_simple_free は drain なしで即切断。
+        # 中断 / 未完でも pa.flush() は呼ばない (WSLg で詰まる)。
+        # drain 契約がない stream は切断で server が即 sink-input 破棄 +
+        # バッファ discard するので、明示 flush は不要かつ有害。
     finally:
         for sig, handler in old_handlers.items():
             signal.signal(sig, handler)
