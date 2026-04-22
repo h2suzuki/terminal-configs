@@ -241,10 +241,16 @@ def play_wav_pulse(wav_bytes: bytes, timeout_margin: float = PULSE_TIMEOUT_MARGI
     }
 
     try:
+        # prebuf=0: 書き込み即座に再生を開始させる。既定値 (-1 → 約 2 秒分) では
+        # PCM 全長が prebuf 閾値に満たないストリーム (1.62s の音声等) が
+        # distro proxy (module-tunnel-sink-new) で永久に再生されないまま
+        # クローズされてしまう (WSLg direct では閾値未満でも再生される)。
+        # tlength 等は既定 (-1) のまま残すことで、pa.write の rate-limit 動作は保つ。
         with pasimple.PaSimple(
             pasimple.PA_STREAM_PLAYBACK,
             pasimple.width2format(sample_width), channels, rate,
             app_name="voicevox",
+            prebuf=0,
         ) as pa:
             _vprint("  stream opened")
             play_start = time.monotonic()
