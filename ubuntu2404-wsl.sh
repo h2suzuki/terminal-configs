@@ -291,7 +291,7 @@ run curl -o /tmp/claude_install.sh \
 chmod u-s,o+r /tmp/claude_install.sh
 run bash /tmp/claude_install.sh
 
-run npm install -g ccusage
+run uv tool install --force claude-monitor #--system --break-system-packages pasimple
 
 copy claude_CLAUDE.md           ~/.claude/CLAUDE.md
 copy claude_settings.json       ~/.claude/settings.json
@@ -356,7 +356,6 @@ EOF
     run sudo -u $LOGIN_USER bash -i -c '"nvm install --lts"'    # nvm is a shell function.
     run sudo -u $LOGIN_USER bash -i -c '"npm uninstall -g @anthropic-ai/claude-code || true"'
     run sudo -u $LOGIN_USER bash -i -c '"bash /tmp/claude_install.sh"'
-    run sudo -u $LOGIN_USER bash -i -c '"npm install -g ccusage"'
 
 else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
