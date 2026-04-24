@@ -248,6 +248,14 @@ expect {
     "*\[y,n,r\]*" {
         send "y\r"
     }
+    timeout {
+        puts "タイムアウトしました"
+        exit 1 ;
+    }
+    eof {
+        puts "接続が切れました"
+        exit 1 ;
+    }
 }
 expect eof
 '
