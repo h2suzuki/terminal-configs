@@ -47,6 +47,7 @@
 - No speculative features or "you might also want..."
 - Read the file before modifying it. Never edit blind.
 - No error handling for scenarios that cannot happen.
+- No temporary variables if the values are only referenced once.  Remember the elegance of functional programming.
 
 ### 9. Debugging
 - Never speculate about a bug without reading the relevant code first.
