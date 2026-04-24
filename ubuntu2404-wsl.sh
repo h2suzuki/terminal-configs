@@ -293,9 +293,9 @@ run bash /tmp/claude_install.sh
 
 run uv tool install --force claude-monitor #--system --break-system-packages pasimple
 
-copy claude_CLAUDE.md           /etc/claude-code/CLAUDE.md
-copy claude_statusline.sh       /etc/claude-code/statusline.sh -m 0755
-copy claude_settings.json       ~/.claude/settings.json
+copy --nobackup claude_CLAUDE.md        /etc/claude-code/CLAUDE.md
+copy --nobackup claude_statusline.sh    /etc/claude-code/statusline.sh -m 0755
+copy --nobackup claude_settings.json    ~/.claude/settings.json
 
 
 # The current user settings
@@ -357,6 +357,7 @@ EOF
     run sudo -u $LOGIN_USER bash -i -c '"nvm install --lts"'    # nvm is a shell function.
     run sudo -u $LOGIN_USER bash -i -c '"npm uninstall -g @anthropic-ai/claude-code || true"'
     run sudo -u $LOGIN_USER bash -i -c '"bash /tmp/claude_install.sh"'
+    copy --nobackup claude_settings.json ~$LOGIN_USER/.claude/settings.json --owner $LOGIN_USER
 
 else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
