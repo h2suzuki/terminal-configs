@@ -73,10 +73,10 @@ copy()
             echo -e "=> ${COLOR_YELLOW}$FNAME is already copied${COLOR_CLEAR}\n"
         else
             [ $BACKUP -eq 0 -o -e "$DST.org" ] || run install $@ "$DST" "$DST.org"
-            run install $@ "$TOP_DIR/$FNAME" "$DST"
+            run install "$@" "$TOP_DIR/$FNAME" "$DST"
         fi
     else
-        run install -D $@ "$TOP_DIR/$FNAME" "$DST"
+        run install -D "$@" "$TOP_DIR/$FNAME" "$DST"
     fi
 }
 
