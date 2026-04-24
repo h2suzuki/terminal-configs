@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "defaultMode": "auto"
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "/etc/claude-code/statusline.sh",
+    "padding": 0,
+    "refreshInterval": 10
+  },
+  "tui": "fullscreen"
+}
