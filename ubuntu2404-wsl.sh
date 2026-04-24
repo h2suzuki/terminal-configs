@@ -165,6 +165,8 @@ run systemctl enable pulseaudio-proxy.service
 run curl -o /tmp/uv_install.sh \
   -fsSL https://astral.sh/uv/install.sh
 chmod u-s,o+r /tmp/uv_install.sh
+
+export UV_INSTALL_DIR=/usr/local/bin
 run bash /tmp/uv_install.sh
 run uv self update
 
