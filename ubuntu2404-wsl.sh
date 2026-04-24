@@ -295,7 +295,7 @@ run uv tool install --force claude-monitor #--system --break-system-packages pas
 
 copy claude_CLAUDE.md           /etc/claude-code/CLAUDE.md
 copy claude_statusline.sh       /etc/claude-code/statusline.sh -m 0755
-#copy claude_settings.json       ~/.claude/settings.json
+copy claude_settings.json       ~/.claude/settings.json
 
 
 # The current user settings
