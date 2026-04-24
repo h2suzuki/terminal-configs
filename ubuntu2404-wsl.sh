@@ -293,7 +293,7 @@ run bash /tmp/claude_install.sh
 
 run uv tool install --force claude-monitor #--system --break-system-packages pasimple
 
-copy claude_CLAUDE.md           ~/.claude/CLAUDE.md
+copy claude_CLAUDE.md           /etc/claude-code/CLAUDE.md
 copy claude_settings.json       ~/.claude/settings.json
 
 
