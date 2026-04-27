@@ -8,7 +8,9 @@
     "padding": 0,
     "refreshInterval": 10
   },
+  "effortLevel": "xhigh",
   "tui": "fullscreen",
+  "skipAutoPermissionPrompt": true,
   "spinnerVerbs": {
     "mode": "replace",
     "verbs": [
