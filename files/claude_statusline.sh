@@ -1,6 +1,6 @@
 #!/bin/bash
 # Claude Code statusline
-#   [Model effort]  Context[████░░░░░░](42%)  5H [██░░░░░░░░](27%)→00:16    Weekly [██████░░░░](61%)→04/29 23:16                        YYYY/mm/dd HH:MM
+#   🏠 project ❯ Model [effort]  Context [████░░░░░░](42%)  5H [██░░░░░░░░](27%)→00:16  1W [██████░░░░](61%)→23:16 Wednesday          YYYY/mm/dd HH:MM
 #
 # stdin JSON fields used:
 #   .model.display_name
@@ -8,6 +8,7 @@
 #   .context_window.used_percentage
 #   .rate_limits.five_hour.{used_percentage,resets_at}   (Pro/Max only)
 #   .rate_limits.seven_day.{used_percentage,resets_at}   (Pro/Max only)
+#   .workspace.project_dir   (falls back to .cwd)
 
 set -o pipefail
 
@@ -61,9 +62,9 @@ fi
 wk_pct="$(get '.rate_limits.seven_day.used_percentage')"
 wk_at="$(get  '.rate_limits.seven_day.resets_at')"
 if [ -n "$wk_at" ]; then
-    wk="$(seg 'Weekly' "$wk_pct" "$(date -d "@$wk_at" '+%H:%M %A')")"
+    wk="$(seg '1W' "$wk_pct" "$(date -d "@$wk_at" '+%H:%M %A')")"
 else
-    wk="Weekly ${empty_bar}   —"
+    wk="1W ${empty_bar}   —"
 fi
 
 # -- Model + Effort (color by level) --
@@ -88,15 +89,44 @@ case "$effort" in
 esac
 
 if [ -n "$effort" ]; then
-    head="[${model} ${COLOR}${effort}${RESET}]"
+    head="${model} [${COLOR}${effort}${RESET}]"
 else
-    head="[${model}]"
+    head="${model}"
+fi
+
+# -- Project (workspace) --
+HOME_DIR="${HOME:-/home/$(id -un)}"
+proj_dir="$(get '.workspace.project_dir')"
+[ -z "$proj_dir" ] && proj_dir="$(get '.cwd')"
+
+PROJ_MAX=20
+truncate_str() {
+    # Char-based truncation (relies on UTF-8 locale for ${#str} / substring).
+    local str="$1" max="$2"
+    if (( ${#str} > max )); then
+        printf '%s…' "${str:0:$((max-1))}"
+    else
+        printf '%s' "$str"
+    fi
+}
+
+DIM=$'\033[2;38;5;240m'
+if [ -n "$proj_dir" ] && [ "$proj_dir" != "$HOME_DIR" ]; then
+    proj_base="$(basename "$proj_dir")"
+    proj_name="$(truncate_str "$proj_base" "$PROJ_MAX")"
+    proj_color="$(printf '%s' "$proj_base" | cksum | awk '{
+        n = split("42 51 75 141 207 215 186", c, " ")
+        printf "\033[1;38;5;%dm", c[($1 % n) + 1]
+    }')"
+    proj_seg="🏠 ${proj_color}${proj_name}${RESET} ${DIM}❯${RESET}"
+else
+    proj_seg="🏠  ${DIM}❯${RESET}"
 fi
 
 # -- Clock --
 now="$(date '+%Y/%m/%d %H:%M')"
 
-left="${head}  ${ctx}    ${h5}    ${wk}"
+left="${proj_seg}  ${head}  ${ctx}  ${h5}  ${wk}"
 
 # Terminal width: COLUMNS > stty > tput > default 200.
 # Suppress the whole group's stderr so a missing controlling tty stays silent.
@@ -110,7 +140,7 @@ cols="${COLUMNS:-}"
 # some terminals (East-Asian ambiguous = wide). Count them and compensate.
 left_visible="$(printf '%s' "$left" | sed $'s/\033\\[[0-9;]*m//g')"
 left_chars="$(printf '%s' "$left_visible" | wc -m)"
-amb_extra="$(printf '%s' "$left_visible" | grep -oE '→' | wc -l)"
+amb_extra="$(printf '%s' "$left_visible" | grep -oE '→|🏠' | wc -l)"
 # Reserve a small margin for any TUI chrome at the right edge.
 safety=2
 pad=$(( cols - left_chars - ${#now} - amb_extra - safety ))
