@@ -30,18 +30,31 @@ Stop hooks whose last sentence is already ≤30 characters bypass Haiku entirely
 and speak the sentence directly (saving the ~6 s cold-start latency); they also
 skip the cache because the input is unbounded.
 
-To capture what was spoken and the raw hook payloads (for debugging), set
+To capture what was spoken and the raw hook payloads (for debugging), enable
+`CLAUDE_NOTIFY_DEBUG=1` in either of these ways:
 
-    export CLAUDE_NOTIFY_DEBUG=1
+- **One-shot (shell)** — only the next Claude Code session sees it:
 
-before launching Claude Code. With this on, two append-only files appear under
-`~/.claude/hooks/`:
+      export CLAUDE_NOTIFY_DEBUG=1
+
+- **Persistent (settings.json)** — applied automatically every session. Add an
+  `env` block to `~/.claude/settings.json` (the file installed by this repo):
+
+      {
+        "env": {
+          "CLAUDE_NOTIFY_DEBUG": "1"
+        },
+        ...other existing keys...
+      }
+
+  Remove the entry (or set it to `"0"`) to return to the silent default.
+
+With debug on, two append-only files appear under `~/.claude/hooks/`:
 
 - `dump.jsonl` — every hook payload as line-delimited JSON
 - `spoken.log` — TSV of `<timestamp>\t<event>\t<spoken-text>` per utterance
 
-Both grow unbounded; truncate or delete when no longer needed. Unsetting the
-variable (or removing it from `settings.json` `env`) restores the silent default.
+Both grow unbounded; truncate or delete when no longer needed.
 
 After debugging, the following items under `~/.claude/hooks/` are safe to remove:
 
