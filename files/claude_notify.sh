@@ -156,12 +156,18 @@ $LAST_SENTENCE"
         #   "Claude Code needs your attention"     → AskUserQuestion 等
         #   "Claude needs your permission to use *" → Bash 等のツール許可
         # それ以外の未知パターンは silent（誤発話より沈黙を優先）。
+        # 発話した場合のみ SPOKE_MARKER を touch（沈黙時は idle 抑制も不要）。
         PMSG=$(printf '%s' "$INPUT" | jq -r '.message // ""')
         case "$PMSG" in
-          *"needs your attention"*)  speak_cached "質問がありました。" ;;
-          *"needs your permission"*) speak_cached "権限が必要でした。" ;;
+          *"needs your attention"*)
+            speak_cached "質問がありました。"
+            touch "$SPOKE_MARKER"
+            ;;
+          *"needs your permission"*)
+            speak_cached "権限が必要でした。"
+            touch "$SPOKE_MARKER"
+            ;;
         esac
-        touch "$SPOKE_MARKER"
         ;;
     esac
     ;;
