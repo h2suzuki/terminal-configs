@@ -194,13 +194,36 @@ else
   SPOKEN_LOG=""
 fi
 
+# Ensure each system-wide lock file exists with mode 0666 so any UID can take
+# flock on it. The umask=0 subshell overrides the caller's typical 0022 mask
+# so the new file is mode 0666 (open(O_CREAT) is atomic, so a parallel race
+# resolves to a single inode).
+ensure_lock() {
+  [ -e "$1" ] || ( umask 0; : > "$1" ) 2>/dev/null
+}
+
+# CLI flag: --serialize makes the `say` subcommand take VVOX_LOCK so the CLI
+# utterance won't overlap with concurrent hook-driven ones. Hook mode locks
+# unconditionally (the flock calls are wired into the speak_* helpers
+# below), so this flag only has effect on the CLI path.
+SERIALIZE=0
+if [ "${1:-}" = "--serialize" ]; then
+  SERIALIZE=1
+  shift
+fi
+
 # ---------------------------------------------------------------------------
 # CLI subcommands (handled before stdin is touched, so they don't block).
 # ---------------------------------------------------------------------------
 usage() {
   cat <<EOF
-Usage: $PROG_NAME SUBCOMMAND        # interactive CLI use
-       $PROG_NAME [EVENT_NAME]      # hook mode (for Claude Code, JSON on stdin)
+Usage: $PROG_NAME [--serialize] SUBCOMMAND   # interactive CLI use
+       $PROG_NAME [EVENT_NAME]               # hook mode (for Claude Code, JSON on stdin)
+
+Options (CLI mode only):
+  --serialize      Acquire VVOX_LOCK before speaking so this CLI utterance
+                   does not overlap with concurrent hook-driven ones. Only
+                   meaningful with \`say\`; hook mode serializes implicitly.
 
 Subcommands:
   events           List the hook events this script understands.
@@ -230,10 +253,11 @@ Locations:
   Haiku flock (system-wide):      $HAIKU_LOCK
 
 Examples:
-  $PROG_NAME say "進めますか"             # speak arbitrary text
-  $PROG_NAME say Stop                     # preview the Stop event's audio
-  $PROG_NAME log 50                       # tail the last 50 utterances
-  $PROG_NAME events                       # list supported hook events
+  $PROG_NAME say "進めますか"               # speak arbitrary text
+  $PROG_NAME say Stop                       # preview the Stop event's audio
+  $PROG_NAME --serialize say Stop           # same, queued behind any active hook
+  $PROG_NAME log 50                         # tail the last 50 utterances
+  $PROG_NAME events                         # list supported hook events
 EOF
 }
 
@@ -258,13 +282,18 @@ case "${1:-}" in
     ;;
   say|--say)
     if [ -z "${2:-}" ]; then
-      echo "Usage: $PROG_NAME say TEXT|EVENT_NAME" >&2
+      echo "Usage: $PROG_NAME [--serialize] say TEXT|EVENT_NAME" >&2
       exit 2
     fi
     # If $2 names a hook event, speak its characteristic phrase (same
     # text the runtime handler would use). Otherwise treat $2 as raw text.
     text="${EVENT_PHRASES[$2]:-$2}"
-    exec voicevox_paplay --loopback $VVOX_OPTS "$text"
+    if [ "$SERIALIZE" = "1" ]; then
+      ensure_lock "$VVOX_LOCK"
+      exec flock "$VVOX_LOCK" voicevox_paplay --loopback $VVOX_OPTS "$text"
+    else
+      exec voicevox_paplay --loopback $VVOX_OPTS "$text"
+    fi
     ;;
 esac
 
@@ -283,15 +312,8 @@ mkdir -p "$RUNTIME_DIR"
 chmod 0700 "$RUNTIME_DIR" 2>/dev/null
 [ -n "$DUMP_LOG" ] && mkdir -p "$STATE_DIR"
 
-# Ensure each system-wide lock file exists with mode 0666 so any UID can
-# take flock on it. Race-safe: on parallel first-time invocation, both
-# processes' open(O_CREAT) resolve to the same inode (the kernel guarantees
-# that), so subsequent flock(2) calls serialize as expected. The umask=0
-# subshell overrides the caller's typical 0022 umask so the new file is
-# mode 0666 (otherwise it would be 0644 and other UIDs could not lock it).
-for lock in "$VVOX_LOCK" "$HAIKU_LOCK"; do
-  [ -e "$lock" ] || ( umask 0; : > "$lock" ) 2>/dev/null
-done
+ensure_lock "$VVOX_LOCK"
+ensure_lock "$HAIKU_LOCK"
 
 # Stale per-session markers accumulate when XDG_RUNTIME_DIR is persistent
 # (e.g. some non-systemd setups). 1h is well past any meaningful suppression
