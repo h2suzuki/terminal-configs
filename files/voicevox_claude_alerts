@@ -165,7 +165,7 @@ fi
 #   haiku.lock     — parallel claude -p invocations contend internally
 #                    (we observed timeouts when 3 fired simultaneously);
 #                    serialize defensively across the whole system.
-PLAY_LOCK="/tmp/$PROG_NAME.voicevox.lock"
+VVOX_LOCK="/tmp/$PROG_NAME.voicevox.lock"
 HAIKU_LOCK="/tmp/$PROG_NAME.haiku.lock"
 
 if [ "${CLAUDE_NOTIFY_DEBUG:-0}" = "1" ]; then
@@ -181,16 +181,19 @@ fi
 # ---------------------------------------------------------------------------
 usage() {
   cat <<EOF
-Usage: $PROG_NAME [SUBCOMMAND | EVENT_NAME]
+Usage: $PROG_NAME SUBCOMMAND
 
-Hook mode (invoked by Claude Code with EVENT_NAME and a JSON payload on stdin):
-  $PROG_NAME EVENT_NAME
-
-CLI subcommands:
+Subcommands:
   events           List the hook events this script understands.
   log [N]          Show the last N (default 20) spoken-log entries.
   say TEXT         Speak TEXT via voicevox_paplay (no caching).
   help             Show this help.
+
+Hook mode:
+  Invoked by Claude Code via the hooks block in settings.json. The JSON
+  payload arrives on stdin; the event name is taken from argv[1] (set in
+  the configured command string) or the payload's hook_event_name field.
+  The script always exits 0 and produces no stdout/stderr.
 
 Env:
   CLAUDE_NOTIFY_DEBUG=1   Enable dump.jsonl and spoken.log under
@@ -199,7 +202,7 @@ Env:
 Locations:
   Debug logs (per-user, opt-in):  $STATE_DIR
   Session markers (per-user):     $RUNTIME_DIR
-  Voicevox flock (system-wide):   $PLAY_LOCK
+  Voicevox flock (system-wide):   $VVOX_LOCK
   Haiku flock (system-wide):      $HAIKU_LOCK
 EOF
 }
@@ -214,13 +217,13 @@ case "${1:-}" in
     exit 0
     ;;
   log|--show-log)
-    log_path="$STATE_DIR/spoken.log"
-    if [ ! -f "$log_path" ]; then
-      echo "$PROG_NAME: no spoken log at $log_path" >&2
+    LOG_PATH="$STATE_DIR/spoken.log"
+    if [ ! -f "$LOG_PATH" ]; then
+      echo "$PROG_NAME: no spoken log at $LOG_PATH" >&2
       echo "Set CLAUDE_NOTIFY_DEBUG=1 and trigger a hook to create it." >&2
       exit 1
     fi
-    tail -n "${2:-20}" "$log_path"
+    tail -n "${2:-20}" "$LOG_PATH"
     exit 0
     ;;
   say|--say)
@@ -253,7 +256,7 @@ chmod 0700 "$RUNTIME_DIR" 2>/dev/null
 # that), so subsequent flock(2) calls serialize as expected. The umask=0
 # subshell overrides the caller's typical 0022 umask so the new file is
 # mode 0666 (otherwise it would be 0644 and other UIDs could not lock it).
-for lock in "$PLAY_LOCK" "$HAIKU_LOCK"; do
+for lock in "$VVOX_LOCK" "$HAIKU_LOCK"; do
   [ -e "$lock" ] || ( umask 0; : > "$lock" ) 2>/dev/null
 done
 
@@ -297,12 +300,12 @@ speak_cached() {
   local text="$1"
   setsid -f bash -c '
     text=$1
-    play_lock=$2
+    vvox_lock=$2
     event=$3
     log=$4
     [ -n "$log" ] && printf "%s\t%s\t%s\n" "$(date -Iseconds)" "$event" "$text" >> "$log"
-    flock "$play_lock" timeout "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS --cache "$text"
-  ' _ "$text" "$PLAY_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
+    flock "$vvox_lock" timeout "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS --cache "$text"
+  ' _ "$text" "$VVOX_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
 }
 
 # Async: speak the given text directly (no Haiku, no cache). Hook returns first.
@@ -310,12 +313,12 @@ speak_text_async() {
   local text="$1"
   setsid -f bash -c '
     text=$1
-    play_lock=$2
+    vvox_lock=$2
     event=$3
     log=$4
     [ -n "$log" ] && printf "%s\t%s\t%s\n" "$(date -Iseconds)" "$event" "$text" >> "$log"
-    flock "$play_lock" timeout "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS "$text"
-  ' _ "$text" "$PLAY_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
+    flock "$vvox_lock" timeout "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS "$text"
+  ' _ "$text" "$VVOX_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
 }
 
 # Async: Haiku summarizes → voicevox speaks. Hook returns before either runs.
@@ -325,7 +328,7 @@ speak_summary_async() {
   setsid -f bash -c '
     prompt=$1
     fallback=$2
-    play_lock=$3
+    vvox_lock=$3
     haiku_lock=$4
     event=$5
     log=$6
@@ -340,8 +343,8 @@ speak_summary_async() {
               | tr -d "\r\n" | head -c 120)
     [ -z "$summary" ] && summary=$fallback
     [ -n "$log" ] && printf "%s\t%s\t%s\n" "$(date -Iseconds)" "$event" "$summary" >> "$log"
-    flock "$play_lock" timeout "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS "$summary"
-  ' _ "$prompt" "$fallback" "$PLAY_LOCK" "$HAIKU_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
+    flock "$vvox_lock" timeout "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS "$summary"
+  ' _ "$prompt" "$fallback" "$VVOX_LOCK" "$HAIKU_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
 }
 
 age_of() {
