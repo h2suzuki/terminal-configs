@@ -120,6 +120,19 @@ export HAIKU_TIMEOUT=45
 # Haiku model used for Stop / SubagentStop summarization.
 export HAIKU_MODEL="claude-haiku-4-5"
 
+# Hook events accepted by the dispatcher; also surfaced via the `events` CLI.
+# Listed explicitly (rather than derived from EVENT_PHRASES keys) so the
+# output order is stable and predictable.
+HOOK_EVENTS=(
+  Stop
+  Notification
+  SubagentStart
+  SubagentStop
+  ConfigChange
+  PreCompact
+  WorktreeCreate
+)
+
 # Per-event default / fallback phrase. Single source of truth shared by the
 # runtime handlers (used as the cached fixed phrase or the Haiku fallback)
 # and the `say <EVENT>` CLI shortcut. Notification is multi-modal (idle vs
@@ -134,19 +147,6 @@ declare -A EVENT_PHRASES=(
   [ConfigChange]="設定をリロードしたよ。"
   [PreCompact]="コンテキストを圧縮します。"
   [WorktreeCreate]="ワークツリーを作成します。"
-)
-
-# Hook events accepted by the dispatcher; also surfaced via the `events` CLI.
-# Listed explicitly (rather than derived from EVENT_PHRASES keys) so the
-# output order is stable and predictable.
-HOOK_EVENTS=(
-  Stop
-  Notification
-  SubagentStart
-  SubagentStop
-  ConfigChange
-  PreCompact
-  WorktreeCreate
 )
 
 # Derive the program name from $0 so renaming the script also moves its
@@ -327,8 +327,16 @@ fi
 SPOKE_MARKER="$RUNTIME_DIR/spoke-recently-$SESSION_ID"
 SUBAGENT_MARKER="$RUNTIME_DIR/subagent-start-$SESSION_ID"
 
-# voicevox_paplay's --cache stores WAVs at $XDG_CACHE_HOME/voicevox_paplay
-# (or ~/.cache/voicevox_paplay). We let it manage that location itself.
+# All three speak_* helpers detach via `setsid -f` (the parent script
+# returns to Claude Code immediately) and serialize voicevox playback
+# through VVOX_LOCK so utterances never overlap. They differ only in what
+# they ultimately voice:
+#
+#   speak_cached(text)         fixed phrase via voicevox_paplay --cache
+#                              (cache is at $XDG_CACHE_HOME/voicevox_paplay)
+#   speak_text(text)           arbitrary text, no cache
+#   speak_summary(prompt, fb)  Haiku summarizes prompt under HAIKU_LOCK,
+#                              falling back to fb on timeout / parse failure
 speak_cached() {
   local text="$1"
   setsid -f bash -c '
@@ -341,8 +349,7 @@ speak_cached() {
   ' _ "$text" "$VVOX_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
 }
 
-# Async: speak the given text directly (no Haiku, no cache). Hook returns first.
-speak_text_async() {
+speak_text() {
   local text="$1"
   setsid -f bash -c '
     text=$1
@@ -354,8 +361,7 @@ speak_text_async() {
   ' _ "$text" "$VVOX_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
 }
 
-# Async: Haiku summarizes → voicevox speaks. Hook returns before either runs.
-speak_summary_async() {
+speak_summary() {
   local prompt="$1"
   local fallback="$2"
   setsid -f bash -c '
@@ -421,9 +427,9 @@ case "$EVENT" in
       [ -z "$LAST_SENTENCE" ] && LAST_SENTENCE="$LAST_MSG"
       # Already ≤30 chars: skip the ~6s Haiku cold-start and speak as-is.
       if [ "${#LAST_SENTENCE}" -le 30 ]; then
-        speak_text_async "$LAST_SENTENCE"
+        speak_text "$LAST_SENTENCE"
       else
-        speak_summary_async "次の一文を、意図と意味を保ったまま 30 文字以下の自然な日本語に短縮してください。
+        speak_summary "次の一文を、意図と意味を保ったまま 30 文字以下の自然な日本語に短縮してください。
 出力は短縮した一文のみ。装飾・引用符・改行・前置きなし。
 
 文:
@@ -470,7 +476,7 @@ $LAST_SENTENCE" "${EVENT_PHRASES[Stop]}"
   SubagentStop)
     is_internal_subagent && exit 0
     LAST_MSG=$(printf '%s' "$INPUT" | jq -r '.last_assistant_message // ""')
-    speak_summary_async "以下は AI サブエージェントが最後に出力したテキストです。
+    speak_summary "以下は AI サブエージェントが最後に出力したテキストです。
 このサブエージェントが何を完了・報告したかを、30文字以下の自然な日本語で簡潔に。
 出力は要約のみ。装飾・引用符・改行・前置きなし。
 
