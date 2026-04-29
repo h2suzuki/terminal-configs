@@ -323,7 +323,7 @@ ensure_lock "$HAIKU_LOCK"
 
 # Stale per-session markers accumulate when XDG_RUNTIME_DIR is persistent
 # (e.g. some non-systemd setups). 1h is well past any meaningful suppression
-# window (idle = 60s, subagent inhibition = 30s).
+# window (idle = 90s, subagent inhibition = 30s).
 find "$RUNTIME_DIR" -type f \( -name 'spoke-recently-*' -o -name 'subagent-start-*' \) \
   -mmin +60 -delete 2>/dev/null
 
