@@ -247,11 +247,14 @@ mkdir -p "$RUNTIME_DIR"
 chmod 0700 "$RUNTIME_DIR" 2>/dev/null
 [ -n "$DUMP_LOG" ] && mkdir -p "$STATE_DIR"
 
-# Ensure system-wide lock files exist with mode 0666 so any UID can flock
-# them. install(1) is atomic via rename; if another user wins the race we
-# just observe the file already present.
+# Ensure each system-wide lock file exists with mode 0666 so any UID can
+# take flock on it. Race-safe: on parallel first-time invocation, both
+# processes' open(O_CREAT) resolve to the same inode (the kernel guarantees
+# that), so subsequent flock(2) calls serialize as expected. The umask=0
+# subshell overrides the caller's typical 0022 umask so the new file is
+# mode 0666 (otherwise it would be 0644 and other UIDs could not lock it).
 for lock in "$PLAY_LOCK" "$HAIKU_LOCK"; do
-  [ -e "$lock" ] || install -m 0666 /dev/null "$lock" 2>/dev/null
+  [ -e "$lock" ] || ( umask 0; : > "$lock" ) 2>/dev/null
 done
 
 # Stale per-session markers accumulate when XDG_RUNTIME_DIR is persistent
