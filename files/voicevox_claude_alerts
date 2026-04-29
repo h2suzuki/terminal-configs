@@ -264,21 +264,26 @@ find "$RUNTIME_DIR" -type f \( -name 'spoke-recently-*' -o -name 'subagent-start
   -mmin +60 -delete 2>/dev/null
 
 INPUT="$(cat)"
+
+# Bail out silently on a malformed payload. Doing this once up-front means
+# every subsequent jq invocation can assume valid JSON (no need to scatter
+# `2>/dev/null` across every read), and any parse error never reaches the
+# transcript Claude Code captures from stderr.
+printf '%s' "$INPUT" | jq -e . >/dev/null 2>&1 || exit 0
+
 NOW="$(date +%s)"
 TS="$(date -Iseconds)"
-SESSION_ID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)"
+SESSION_ID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty')"
 SESSION_ID="${SESSION_ID:-unknown}"
 
 # Event name: prefer argv (legacy / explicit), else fall back to stdin's
 # hook_event_name field so a single settings.json command can serve every
 # hook entry. Empty result → silently exit (nothing to dispatch).
 EVENT="${1:-}"
-if [ -z "$EVENT" ]; then
-  EVENT=$(printf '%s' "$INPUT" | jq -r '.hook_event_name // ""' 2>/dev/null)
-fi
+[ -n "$EVENT" ] || EVENT=$(printf '%s' "$INPUT" | jq -r '.hook_event_name // empty')
 [ -n "$EVENT" ] || exit 0
 
-if [ -n "$DUMP_LOG" ] && printf '%s' "$INPUT" | jq -e . >/dev/null 2>&1; then
+if [ -n "$DUMP_LOG" ]; then
   jq -n --arg event "$EVENT" --arg ts "$TS" --argjson payload "$INPUT" \
     '{event: $event, ts: $ts, payload: $payload}' >> "$DUMP_LOG"
 fi
