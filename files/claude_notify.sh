@@ -152,7 +152,15 @@ $LAST_SENTENCE"
         fi
         ;;
       permission_prompt)
-        speak_cached "権限が必要です。"
+        # message の文言で 2 パターンに分岐（実観測ベース、Claude Code 2.1.123）:
+        #   "Claude Code needs your attention"     → AskUserQuestion 等
+        #   "Claude needs your permission to use *" → Bash 等のツール許可
+        # それ以外の未知パターンは silent（誤発話より沈黙を優先）。
+        PMSG=$(printf '%s' "$INPUT" | jq -r '.message // ""')
+        case "$PMSG" in
+          *"needs your attention"*)  speak_cached "質問がありました。" ;;
+          *"needs your permission"*) speak_cached "権限が必要でした。" ;;
+        esac
         touch "$SPOKE_MARKER"
         ;;
     esac
