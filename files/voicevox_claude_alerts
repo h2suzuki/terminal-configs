@@ -23,21 +23,16 @@
 #       (a) argv[1] when settings.json supplies it (e.g. ".../alerts Stop"),
 #       (b) stdin's `hook_event_name` field as the canonical fallback.
 #
-#   - stdin = full hook payload as JSON. Fields per event (only those we
-#     actually read are listed; many more are present):
-#       common            session_id, hook_event_name, transcript_path,
-#                         cwd, permission_mode
-#       Stop              + last_assistant_message, stop_hook_active
-#       SubagentStop      + last_assistant_message, agent_type, agent_id,
-#                           agent_transcript_path, stop_hook_active
-#       SubagentStart     + agent_type, agent_id, agent_name
+#   - stdin = full hook payload as JSON. Fields this script actually reads
+#     (the docs list many more, all ignored here):
+#       common            session_id, hook_event_name
+#       Stop              + last_assistant_message
+#       SubagentStop      + last_assistant_message, agent_type
+#       SubagentStart     + agent_type
 #       Notification      + notification_type, message
-#                         (notification_type ∈ permission_prompt,
-#                          idle_prompt, auth_success, elicitation_dialog,
-#                          elicitation_complete, elicitation_response)
-#       PreCompact        + trigger ("manual" | "auto")
-#       ConfigChange      + source, file_path
-#       WorktreeCreate    + worktree_path
+#     For Notification, notification_type ∈ permission_prompt, idle_prompt,
+#     auth_success, elicitation_dialog, elicitation_complete,
+#     elicitation_response — only the first two are handled below.
 #
 #   - Exit code semantics:
 #       0           Proceed. stdout (if non-empty) is parsed as a JSON
@@ -54,22 +49,27 @@
 #
 # Env vars:
 #   CLAUDE_NOTIFY_DEBUG=1   Append every payload to dump.jsonl and every
-#                           utterance to spoken.log under HOOK_DIR. Default
+#                           utterance to spoken.log under STATE_DIR. Default
 #                           off — no log files written.
-#   XDG_STATE_HOME          Base for HOOK_DIR. Falls back to ~/.local/state.
+#   XDG_STATE_HOME          Base for STATE_DIR; falls back to ~/.local/state.
+#   XDG_RUNTIME_DIR         Base for RUNTIME_DIR; falls back to /tmp/<prog>-<uid>.
+#   LC_ALL                  Forced to C.UTF-8 internally so ${#var} character
+#                           counts work in the Stop branch (any caller-set
+#                           value is overridden).
 #
 # File layout (split by scope and XDG category; <prog> = basename($0)):
 #
-#   /tmp/<prog>.voicevox.lock          — system-wide (mode 0666)
-#   /tmp/<prog>.haiku.lock               flock targets shared across UIDs.
-#                                        voicevox_paplay itself happily runs
-#                                        in parallel — audio just overlaps —
-#                                        but THIS script wants notifications
-#                                        from any concurrent Claude Code
-#                                        session NOT to overlap. Haiku
-#                                        invocations are also serialized
-#                                        because parallel claude -p calls
-#                                        contend with each other.
+#   /tmp/<prog>.voicevox.lock          — system-wide flock targets (mode 0666),
+#   /tmp/<prog>.haiku.lock               shared across all UIDs.
+#                                        voicevox_paplay itself runs fine in
+#                                        parallel — audio just overlaps. The
+#                                        serialization here is a UX
+#                                        requirement of THIS script:
+#                                        notifications from any concurrent
+#                                        Claude Code session must NOT stomp
+#                                        on each other. Haiku invocations are
+#                                        also serialized because parallel
+#                                        claude -p calls contend internally.
 #
 #   $XDG_RUNTIME_DIR/<prog>/                       — per-user RUNTIME_DIR
 #       (fallback: /tmp/<prog>-<uid>, mode 0700)
@@ -266,7 +266,8 @@ find "$RUNTIME_DIR" -type f \( -name 'spoke-recently-*' -o -name 'subagent-start
 INPUT="$(cat)"
 NOW="$(date +%s)"
 TS="$(date -Iseconds)"
-SESSION_ID="$(printf '%s' "$INPUT" | jq -r '.session_id // "unknown"' 2>/dev/null)"
+SESSION_ID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)"
+SESSION_ID="${SESSION_ID:-unknown}"
 
 # Event name: prefer argv (legacy / explicit), else fall back to stdin's
 # hook_event_name field so a single settings.json command can serve every
