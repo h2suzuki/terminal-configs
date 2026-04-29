@@ -181,29 +181,41 @@ fi
 # ---------------------------------------------------------------------------
 usage() {
   cat <<EOF
-Usage: $PROG_NAME SUBCOMMAND
+Usage: $PROG_NAME SUBCOMMAND        # interactive CLI use
+       $PROG_NAME [EVENT_NAME]      # hook mode (for Claude Code, JSON on stdin)
 
 Subcommands:
   events           List the hook events this script understands.
   log [N]          Show the last N (default 20) spoken-log entries.
-  say TEXT         Speak TEXT via voicevox_paplay (no caching).
+  say TEXT         Speak TEXT in the configured voice. If TEXT happens to
+                   be one of the supported event names (Stop, Notification,
+                   SubagentStart, ...), plays that event's characteristic
+                   phrase instead — useful for previewing notifications.
   help             Show this help.
 
 Hook mode:
-  Invoked by Claude Code via the hooks block in settings.json. The JSON
+  Claude Code runs this script via settings.json's hooks block. The JSON
   payload arrives on stdin; the event name is taken from argv[1] (set in
-  the configured command string) or the payload's hook_event_name field.
-  The script always exits 0 and produces no stdout/stderr.
+  the configured command) or the payload's hook_event_name field. Any
+  argv that is not a subcommand falls through to this mode, so a stray
+  CLI invocation like '$PROG_NAME Stop' from a terminal is rejected with
+  a usage hint instead of hanging on stdin. Always exits 0; no stdout.
 
-Env:
-  CLAUDE_NOTIFY_DEBUG=1   Enable dump.jsonl and spoken.log under
-                          $STATE_DIR.
+Environment Variables:
+  CLAUDE_NOTIFY_DEBUG=1   Append every payload to dump.jsonl and every
+                          utterance to spoken.log under STATE_DIR.
 
 Locations:
   Debug logs (per-user, opt-in):  $STATE_DIR
   Session markers (per-user):     $RUNTIME_DIR
   Voicevox flock (system-wide):   $VVOX_LOCK
   Haiku flock (system-wide):      $HAIKU_LOCK
+
+Examples:
+  $PROG_NAME say "進めますか"             # speak arbitrary text
+  $PROG_NAME say Stop                     # preview the Stop event's audio
+  $PROG_NAME log 50                       # tail the last 50 utterances
+  $PROG_NAME events                       # list supported hook events
 EOF
 }
 
@@ -228,10 +240,23 @@ case "${1:-}" in
     ;;
   say|--say)
     if [ -z "${2:-}" ]; then
-      echo "Usage: $PROG_NAME say TEXT" >&2
+      echo "Usage: $PROG_NAME say TEXT|EVENT_NAME" >&2
       exit 2
     fi
-    exec voicevox_paplay --loopback $VVOX_OPTS "$2"
+    # Shortcut: passing a known event name plays that event's
+    # characteristic phrase (the same one a real hook would speak in the
+    # fallback / fixed-text branch).
+    case "$2" in
+      Stop)           text="ご返答をお願いします" ;;
+      Notification)   text="作業が終わりました。" ;;
+      SubagentStart)  text="サブエージェントを起動しています。" ;;
+      SubagentStop)   text="サブエージェントから戻りました" ;;
+      ConfigChange)   text="設定をリロードしたよ。" ;;
+      PreCompact)     text="コンテキストを圧縮します。" ;;
+      WorktreeCreate) text="ワークツリーを作成します。" ;;
+      *)              text="$2" ;;
+    esac
+    exec voicevox_paplay --loopback $VVOX_OPTS "$text"
     ;;
 esac
 
