@@ -61,11 +61,15 @@
 # File layout (split by scope and XDG category; <prog> = basename($0)):
 #
 #   /tmp/<prog>.voicevox.lock          — system-wide (mode 0666)
-#   /tmp/<prog>.haiku.lock               flock targets that must serialize
-#                                        across all UIDs: voicevox_paplay
-#                                        outputs to a single audio device
-#                                        and claude -p contends with itself
-#                                        regardless of who runs it.
+#   /tmp/<prog>.haiku.lock               flock targets shared across UIDs.
+#                                        voicevox_paplay itself happily runs
+#                                        in parallel — audio just overlaps —
+#                                        but THIS script wants notifications
+#                                        from any concurrent Claude Code
+#                                        session NOT to overlap. Haiku
+#                                        invocations are also serialized
+#                                        because parallel claude -p calls
+#                                        contend with each other.
 #
 #   $XDG_RUNTIME_DIR/<prog>/                       — per-user RUNTIME_DIR
 #       (fallback: /tmp/<prog>-<uid>, mode 0700)
@@ -105,9 +109,11 @@ export LC_ALL=C.UTF-8
 # ---------------------------------------------------------------------------
 # Tunables (exported so detached subshells inherit them)
 # ---------------------------------------------------------------------------
-# Voice options applied to every utterance. Add --style-id / --pitch /
-# --intonation here when adjusting the voice.
-export VOICEVOX_VOICE_OPTS="--loopback --speed 1.5"
+# User-tunable voice options. Add --style-id / --pitch / --intonation here
+# when adjusting the voice. Note: --loopback is intentionally NOT here — it
+# is an implementation detail (audio routing) wired into each
+# voicevox_paplay call site so it cannot be accidentally removed.
+export VOICEVOX_VOICE_OPTS="--speed 1.5"
 # Hard caps on subprocess durations (seconds).
 export VOICEVOX_TIMEOUT=30
 export HAIKU_TIMEOUT=45
@@ -148,10 +154,17 @@ else
   RUNTIME_DIR="/tmp/$PROG_NAME-$(id -u)"
 fi
 
-# System-wide flock targets. voicevox_paplay drives a single shared audio
-# device, so concurrent playback from any UID would collide; claude -p
-# likewise contends with itself across users. We keep these locks in /tmp
-# (universally writable on Unix) with mode 0666 so any UID can take them.
+# System-wide flock targets, kept in /tmp (universally writable) with mode
+# 0666 so any UID can take them.
+#
+#   voicevox.lock  — voicevox_paplay itself is fine running in parallel
+#                    (audio just overlaps). Serializing here is a
+#                    voicevox_claude_alerts UX requirement: notifications
+#                    from multiple concurrent Claude Code sessions must
+#                    not stomp on each other.
+#   haiku.lock     — parallel claude -p invocations contend internally
+#                    (we observed timeouts when 3 fired simultaneously);
+#                    serialize defensively across the whole system.
 PLAY_LOCK="/tmp/$PROG_NAME.voicevox.lock"
 HAIKU_LOCK="/tmp/$PROG_NAME.haiku.lock"
 
@@ -215,7 +228,7 @@ case "${1:-}" in
       echo "Usage: $PROG_NAME say TEXT" >&2
       exit 2
     fi
-    exec voicevox_paplay $VOICEVOX_VOICE_OPTS "$2"
+    exec voicevox_paplay --loopback $VOICEVOX_VOICE_OPTS "$2"
     ;;
 esac
 
@@ -279,7 +292,7 @@ speak_cached() {
     event=$3
     log=$4
     [ -n "$log" ] && printf "%s\t%s\t%s\n" "$(date -Iseconds)" "$event" "$text" >> "$log"
-    flock "$play_lock" timeout "$VOICEVOX_TIMEOUT" voicevox_paplay $VOICEVOX_VOICE_OPTS --cache "$text"
+    flock "$play_lock" timeout "$VOICEVOX_TIMEOUT" voicevox_paplay --loopback $VOICEVOX_VOICE_OPTS --cache "$text"
   ' _ "$text" "$PLAY_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
 }
 
@@ -292,7 +305,7 @@ speak_text_async() {
     event=$3
     log=$4
     [ -n "$log" ] && printf "%s\t%s\t%s\n" "$(date -Iseconds)" "$event" "$text" >> "$log"
-    flock "$play_lock" timeout "$VOICEVOX_TIMEOUT" voicevox_paplay $VOICEVOX_VOICE_OPTS "$text"
+    flock "$play_lock" timeout "$VOICEVOX_TIMEOUT" voicevox_paplay --loopback $VOICEVOX_VOICE_OPTS "$text"
   ' _ "$text" "$PLAY_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
 }
 
@@ -318,7 +331,7 @@ speak_summary_async() {
               | tr -d "\r\n" | head -c 120)
     [ -z "$summary" ] && summary=$fallback
     [ -n "$log" ] && printf "%s\t%s\t%s\n" "$(date -Iseconds)" "$event" "$summary" >> "$log"
-    flock "$play_lock" timeout "$VOICEVOX_TIMEOUT" voicevox_paplay $VOICEVOX_VOICE_OPTS "$summary"
+    flock "$play_lock" timeout "$VOICEVOX_TIMEOUT" voicevox_paplay --loopback $VOICEVOX_VOICE_OPTS "$summary"
   ' _ "$prompt" "$fallback" "$PLAY_LOCK" "$HAIKU_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
 }
 
