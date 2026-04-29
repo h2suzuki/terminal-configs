@@ -173,16 +173,20 @@ else
 fi
 
 # System-wide flock targets, kept in /tmp (universally writable) with mode
-# 0666 so any UID can take them.
+# 0666 so any UID can take them. The two locks have different semantics:
 #
 #   voicevox.lock  — voicevox_paplay itself is fine running in parallel
-#                    (audio just overlaps). Serializing here is a
-#                    voicevox_claude_alerts UX requirement: notifications
-#                    from multiple concurrent Claude Code sessions must
-#                    not stomp on each other.
-#   haiku.lock     — parallel claude -p invocations contend internally
-#                    (we observed timeouts when 3 fired simultaneously);
-#                    serialize defensively across the whole system.
+#                    (audio just overlaps). Serializing it here is a UX
+#                    choice for THIS script: notifications from concurrent
+#                    Claude Code sessions must not stomp on each other.
+#                    Taken unconditionally in hook mode; CLI takes it only
+#                    when invoked with --serialize.
+#   haiku.lock     — taken unconditionally whenever speak_summary runs a
+#                    `claude -p` call. Parallel claude -p invocations
+#                    contend internally (observed: 3 simultaneous fires
+#                    produced one 15 s timeout), so without this lock the
+#                    summarizer breaks. The CLI never reaches this lock
+#                    because the CLI path doesn't invoke claude.
 VVOX_LOCK="/tmp/$PROG_NAME.voicevox.lock"
 HAIKU_LOCK="/tmp/$PROG_NAME.haiku.lock"
 
@@ -203,9 +207,11 @@ ensure_lock() {
 }
 
 # CLI flag: --serialize makes the `say` subcommand take VVOX_LOCK so the CLI
-# utterance won't overlap with concurrent hook-driven ones. Hook mode locks
-# unconditionally (the flock calls are wired into the speak_* helpers
-# below), so this flag only has effect on the CLI path.
+# utterance won't overlap with concurrent hook-driven ones. Hook mode takes
+# VVOX_LOCK unconditionally (wired into the speak_* helpers below), so this
+# flag only has effect on the CLI path. HAIKU_LOCK is unrelated to this
+# flag — it is always taken whenever speak_summary calls claude -p, never
+# from the CLI path.
 SERIALIZE=0
 if [ "${1:-}" = "--serialize" ]; then
   SERIALIZE=1
