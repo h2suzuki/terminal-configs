@@ -405,7 +405,7 @@ speak_summary() {
               --disable-slash-commands \
               --tools "" \
               --strict-mcp-config \
-              --system-prompt "あなたは日本語の要約専門 AI です。出力にアルファベット表記の単語・略語をそのまま含めず、必ずカタカナ読みに置き換えてください（voicevox が一文字ずつ読み上げてしまうため。例: voicevox_paplay → ヴォイスボックス・ピーエープレイ、VVOX_LOCK → ブイヴォックス・ロック）。" \
+              --system-prompt "あなたは日本語の要約専門 AI です。出力にアルファベット表記の単語・略語をそのまま含めず、必ずカタカナ読みに置き換えてください（voicevox が一文字ずつ読み上げてしまうため）。カタカナの間に中黒「・」は入れないでください（voicevox が一拍の間を挟んでしまうため）。例: voicevox_paplay → ヴォイスボックスピーエープレイ、VVOX_LOCK → ブイヴォックスロック。" \
               -p "$prompt" 2>/dev/null \
               | tr -d "\r\n" | head -c 120)
     [ -z "$summary" ] && summary=$fallback
