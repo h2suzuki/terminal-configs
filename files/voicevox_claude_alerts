@@ -1,0 +1,414 @@
+#!/bin/bash
+# voicevox_claude_alerts — voicevox-based audio notifications for Claude Code.
+#
+# This script has two operating modes:
+#
+# 1. Hook mode (invoked by Claude Code from settings.json's hooks block):
+#    Receives the hook payload on stdin and dispatches to the matching
+#    speech path. All audio playback is detached via `setsid -f`, so the
+#    harness observes the script return immediately. The script always
+#    exits 0 in hook mode.
+#
+# 2. CLI mode (interactive use):
+#    Subcommands `events`, `log`, `say`, `help`. See `help` for details.
+#    Useful for listing supported events, inspecting the spoken-log,
+#    or smoke-testing voicevox_paplay end-to-end.
+#
+# Claude Code calling convention
+# (verified against docs.claude.com hooks reference, 2026-04-30):
+#
+#   - The command string from settings.json is run as a shell command.
+#     Its first word is the program; anything after is argv. Claude Code
+#     does NOT auto-append the event name. We rely on:
+#       (a) argv[1] when settings.json supplies it (e.g. ".../alerts Stop"),
+#       (b) stdin's `hook_event_name` field as the canonical fallback.
+#
+#   - stdin = full hook payload as JSON. Fields per event (only those we
+#     actually read are listed; many more are present):
+#       common            session_id, hook_event_name, transcript_path,
+#                         cwd, permission_mode
+#       Stop              + last_assistant_message, stop_hook_active
+#       SubagentStop      + last_assistant_message, agent_type, agent_id,
+#                           agent_transcript_path, stop_hook_active
+#       SubagentStart     + agent_type, agent_id, agent_name
+#       Notification      + notification_type, message
+#                         (notification_type ∈ permission_prompt,
+#                          idle_prompt, auth_success, elicitation_dialog,
+#                          elicitation_complete, elicitation_response)
+#       PreCompact        + trigger ("manual" | "auto")
+#       ConfigChange      + source, file_path
+#       WorktreeCreate    + worktree_path
+#
+#   - Exit code semantics:
+#       0           Proceed. stdout (if non-empty) is parsed as a JSON
+#                   decision; otherwise it is injected as additionalContext.
+#       2           Block (PreToolUse / Stop / etc.). Stderr is shown.
+#       other       Non-blocking error; first stderr line surfaces in the
+#                   transcript.
+#     We always exit 0 and keep stdout/stderr empty (subprocess output is
+#     redirected to /dev/null). The script never blocks Claude Code.
+#
+#   - Async behaviour: Claude Code waits synchronously for the hook to
+#     exit (default timeout 600 s). We return promptly after detaching
+#     the audio worker via `setsid -f`, so the wait is effectively zero.
+#
+# Env vars:
+#   CLAUDE_NOTIFY_DEBUG=1   Append every payload to dump.jsonl and every
+#                           utterance to spoken.log under HOOK_DIR. Default
+#                           off — no log files written.
+#   XDG_STATE_HOME          Base for HOOK_DIR. Falls back to ~/.local/state.
+#
+# File layout (split by XDG category; <prog> = basename($0)):
+#
+#   $XDG_RUNTIME_DIR/<prog>/                       — RUNTIME_DIR
+#       (fallback: /tmp/<prog>-<uid>, mode 0700)
+#       voicevox.lock                  flock for serialized voicevox playback
+#       haiku.lock                     flock for serialized claude -p calls
+#       spoke-recently-<session_id>    marker: idle_prompt is silenced for
+#                                      ~90 s after Stop / permission_prompt
+#       subagent-start-<session_id>    marker: SubagentStart suppressed for
+#                                      ~30 s after the previous one
+#
+#   $XDG_STATE_HOME/<prog>/                        — STATE_DIR
+#       (fallback: $HOME/.local/state/<prog>)
+#       dump.jsonl                     debug log: every payload as JSONL,
+#                                      written only when CLAUDE_NOTIFY_DEBUG=1
+#       spoken.log                     debug log: TSV of every utterance,
+#                                      written only when CLAUDE_NOTIFY_DEBUG=1
+#
+#   $XDG_CACHE_HOME/voicevox_paplay/               (managed by voicevox_paplay,
+#       (fallback: $HOME/.cache/voicevox_paplay)    not by this script)
+#       <text>_<hash>.wav              cached synthesis of fixed phrases
+#
+# All paths use <prog> = basename($0), so renaming the script also renames
+# its state directories. The script's installation location (/usr/local/bin,
+# /usr/bin, ~/.local/bin, ...) does not affect these paths.
+#
+# Internal-subagent heuristic:
+#   The official docs (as of 2026-04-30) do not document Claude Code's
+#   own background subagents (auto-dream / memory consolidation). We
+#   filter them out by `agent_type == ""`, which is observation-based;
+#   see is_internal_subagent() for the caveat.
+
+set -u
+
+# Force UTF-8 locale so ${#var} counts characters (not bytes) — affects the
+# Haiku-skip threshold in the Stop branch.
+export LC_ALL=C.UTF-8
+
+# ---------------------------------------------------------------------------
+# Tunables (exported so detached subshells inherit them)
+# ---------------------------------------------------------------------------
+# Voice options applied to every utterance. Add --style-id / --pitch /
+# --intonation here when adjusting the voice.
+export VOICEVOX_VOICE_OPTS="--loopback --speed 1.5"
+# Hard caps on subprocess durations (seconds).
+export VOICEVOX_TIMEOUT=30
+export HAIKU_TIMEOUT=45
+# Haiku model used for Stop / SubagentStop summarization.
+export HAIKU_MODEL="claude-haiku-4-5"
+
+# Hook events accepted by the dispatcher; also surfaced via the `events` CLI.
+HOOK_EVENTS=(
+  Stop
+  Notification
+  SubagentStart
+  SubagentStop
+  ConfigChange
+  PreCompact
+  WorktreeCreate
+)
+
+# Derive the program name from $0 so renaming the script also moves its
+# state directories accordingly.
+PROG_NAME="$(basename "$0")"
+
+# Persistent state (debug logs only). XDG_STATE_HOME is the canonical home
+# for "state that should persist across sessions" per the XDG Base Dir spec
+# (https://specifications.freedesktop.org/basedir-spec/).
+if [ -n "${XDG_STATE_HOME:-}" ]; then
+  STATE_DIR="${XDG_STATE_HOME%/}/$PROG_NAME"
+else
+  STATE_DIR="$HOME/.local/state/$PROG_NAME"
+fi
+
+# Ephemeral runtime state (locks, per-session markers). XDG_RUNTIME_DIR is
+# wiped at logout and is mode 0700 per spec, which is exactly what we want
+# for locks and short-lived markers. Falls back to a uid-suffixed /tmp dir
+# when XDG_RUNTIME_DIR is unset (e.g. minimal containers); we chmod 0700
+# below to match the spec's privacy guarantee.
+if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+  RUNTIME_DIR="${XDG_RUNTIME_DIR%/}/$PROG_NAME"
+else
+  RUNTIME_DIR="/tmp/$PROG_NAME-$(id -u)"
+fi
+
+if [ "${CLAUDE_NOTIFY_DEBUG:-0}" = "1" ]; then
+  DUMP_LOG="$STATE_DIR/dump.jsonl"
+  SPOKEN_LOG="$STATE_DIR/spoken.log"
+else
+  DUMP_LOG=""
+  SPOKEN_LOG=""
+fi
+
+# ---------------------------------------------------------------------------
+# CLI subcommands (handled before stdin is touched, so they don't block).
+# ---------------------------------------------------------------------------
+usage() {
+  cat <<EOF
+Usage: $PROG_NAME [SUBCOMMAND | EVENT_NAME]
+
+Hook mode (invoked by Claude Code with EVENT_NAME and a JSON payload on stdin):
+  $PROG_NAME EVENT_NAME
+
+CLI subcommands:
+  events           List the hook events this script understands.
+  log [N]          Show the last N (default 20) spoken-log entries.
+  say TEXT         Speak TEXT via voicevox_paplay (no caching).
+  help             Show this help.
+
+Env:
+  CLAUDE_NOTIFY_DEBUG=1   Enable dump.jsonl and spoken.log under
+                          $STATE_DIR.
+
+Locations:
+  STATE_DIR    $STATE_DIR
+  RUNTIME_DIR  $RUNTIME_DIR
+EOF
+}
+
+case "${1:-}" in
+  -h|--help|help)
+    usage
+    exit 0
+    ;;
+  events|--list-events)
+    printf '%s\n' "${HOOK_EVENTS[@]}"
+    exit 0
+    ;;
+  log|--show-log)
+    log_path="$STATE_DIR/spoken.log"
+    if [ ! -f "$log_path" ]; then
+      echo "$PROG_NAME: no spoken log at $log_path" >&2
+      echo "Set CLAUDE_NOTIFY_DEBUG=1 and trigger a hook to create it." >&2
+      exit 1
+    fi
+    tail -n "${2:-20}" "$log_path"
+    exit 0
+    ;;
+  say|--say)
+    if [ -z "${2:-}" ]; then
+      echo "Usage: $PROG_NAME say TEXT" >&2
+      exit 2
+    fi
+    exec voicevox_paplay $VOICEVOX_VOICE_OPTS "$2"
+    ;;
+esac
+
+# Past this point we are in hook mode. If stdin is a terminal the user is
+# probably running us by mistake — show usage instead of blocking on `cat`.
+if [ -t 0 ]; then
+  echo "$PROG_NAME: hook mode requires JSON on stdin." >&2
+  echo "Run '$PROG_NAME help' for the CLI subcommands." >&2
+  exit 2
+fi
+
+# ---------------------------------------------------------------------------
+# Hook mode
+# ---------------------------------------------------------------------------
+mkdir -p "$RUNTIME_DIR"
+chmod 0700 "$RUNTIME_DIR" 2>/dev/null
+[ -n "$DUMP_LOG" ] && mkdir -p "$STATE_DIR"
+
+# Stale per-session markers accumulate when XDG_RUNTIME_DIR is persistent
+# (e.g. some non-systemd setups). 1h is well past any meaningful suppression
+# window (idle = 60s, subagent inhibition = 30s).
+find "$RUNTIME_DIR" -type f \( -name 'spoke-recently-*' -o -name 'subagent-start-*' \) \
+  -mmin +60 -delete 2>/dev/null
+
+INPUT="$(cat)"
+NOW="$(date +%s)"
+TS="$(date -Iseconds)"
+SESSION_ID="$(printf '%s' "$INPUT" | jq -r '.session_id // "unknown"' 2>/dev/null)"
+
+# Event name: prefer argv (legacy / explicit), else fall back to stdin's
+# hook_event_name field so a single settings.json command can serve every
+# hook entry. Empty result → silently exit (nothing to dispatch).
+EVENT="${1:-}"
+if [ -z "$EVENT" ]; then
+  EVENT=$(printf '%s' "$INPUT" | jq -r '.hook_event_name // ""' 2>/dev/null)
+fi
+[ -n "$EVENT" ] || exit 0
+
+if [ -n "$DUMP_LOG" ] && printf '%s' "$INPUT" | jq -e . >/dev/null 2>&1; then
+  jq -n --arg event "$EVENT" --arg ts "$TS" --argjson payload "$INPUT" \
+    '{event: $event, ts: $ts, payload: $payload}' >> "$DUMP_LOG"
+fi
+
+SPOKE_MARKER="$RUNTIME_DIR/spoke-recently-$SESSION_ID"
+SUBAGENT_MARKER="$RUNTIME_DIR/subagent-start-$SESSION_ID"
+PLAY_LOCK="$RUNTIME_DIR/voicevox.lock"
+HAIKU_LOCK="$RUNTIME_DIR/haiku.lock"
+
+# voicevox_paplay's --cache stores WAVs at $XDG_CACHE_HOME/voicevox_paplay
+# (or ~/.cache/voicevox_paplay). We let it manage that location itself.
+speak_cached() {
+  local text="$1"
+  setsid -f bash -c '
+    text=$1
+    play_lock=$2
+    event=$3
+    log=$4
+    [ -n "$log" ] && printf "%s\t%s\t%s\n" "$(date -Iseconds)" "$event" "$text" >> "$log"
+    flock "$play_lock" timeout "$VOICEVOX_TIMEOUT" voicevox_paplay $VOICEVOX_VOICE_OPTS --cache "$text"
+  ' _ "$text" "$PLAY_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
+}
+
+# Async: speak the given text directly (no Haiku, no cache). Hook returns first.
+speak_text_async() {
+  local text="$1"
+  setsid -f bash -c '
+    text=$1
+    play_lock=$2
+    event=$3
+    log=$4
+    [ -n "$log" ] && printf "%s\t%s\t%s\n" "$(date -Iseconds)" "$event" "$text" >> "$log"
+    flock "$play_lock" timeout "$VOICEVOX_TIMEOUT" voicevox_paplay $VOICEVOX_VOICE_OPTS "$text"
+  ' _ "$text" "$PLAY_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
+}
+
+# Async: Haiku summarizes → voicevox speaks. Hook returns before either runs.
+speak_summary_async() {
+  local prompt="$1"
+  local fallback="$2"
+  setsid -f bash -c '
+    prompt=$1
+    fallback=$2
+    play_lock=$3
+    haiku_lock=$4
+    event=$5
+    log=$6
+    summary=$(cd /tmp && flock "$haiku_lock" timeout "$HAIKU_TIMEOUT" claude \
+              --model "$HAIKU_MODEL" \
+              --no-session-persistence \
+              --disable-slash-commands \
+              --tools "" \
+              --strict-mcp-config \
+              --system-prompt "あなたは日本語の要約専門 AI です。" \
+              -p "$prompt" 2>/dev/null \
+              | tr -d "\r\n" | head -c 120)
+    [ -z "$summary" ] && summary=$fallback
+    [ -n "$log" ] && printf "%s\t%s\t%s\n" "$(date -Iseconds)" "$event" "$summary" >> "$log"
+    flock "$play_lock" timeout "$VOICEVOX_TIMEOUT" voicevox_paplay $VOICEVOX_VOICE_OPTS "$summary"
+  ' _ "$prompt" "$fallback" "$PLAY_LOCK" "$HAIKU_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
+}
+
+age_of() {
+  local f="$1"
+  if [ ! -f "$f" ]; then
+    # Sentinel: never observed → infinitely old, so any age comparison passes.
+    echo 999999
+    return
+  fi
+  echo $(( NOW - $(stat -c %Y "$f") ))
+}
+
+# Distinguish user-spawned subagents from Claude Code's internal ones
+# (auto-dream etc.). Heuristic from observed payloads (Claude Code 2.1.123,
+# 2026-04-30):
+#   - User-spawned: agent_type="general-purpose" 等、Start/Stop の対で発火
+#   - Internal:     agent_type=""、SubagentStop のみ発火（Start は来ない）
+# 仕様は API 安定保証なし。動作変化を見つけたら dump.jsonl の payload 構造を再確認。
+is_internal_subagent() {
+  local at
+  at=$(printf '%s' "$INPUT" | jq -r '.agent_type // ""' 2>/dev/null)
+  [ -z "$at" ]
+}
+
+# True when last_assistant_message ends in `？` or `?` (heuristic for "the
+# user is being asked something at the end of this turn").
+detect_question() {
+  printf '%s' "$INPUT" \
+    | jq -r '.last_assistant_message // ""' \
+    | sed 's/[[:space:]]*$//' \
+    | awk 'NF{l=$0} END{print l}' \
+    | grep -qE '[？?]$'
+}
+
+case "$EVENT" in
+  Stop)
+    if detect_question; then
+      LAST_MSG=$(printf '%s' "$INPUT" | jq -r '.last_assistant_message // ""')
+      LAST_SENTENCE=$(printf '%s' "$LAST_MSG" | tr '\n' ' ' \
+        | grep -oE '[^。？！.?!]*[。？！.?!]' | tail -1 | sed 's/^[[:space:]]*//')
+      [ -z "$LAST_SENTENCE" ] && LAST_SENTENCE="$LAST_MSG"
+      # Already ≤30 chars: skip the ~6s Haiku cold-start and speak as-is.
+      if [ "${#LAST_SENTENCE}" -le 30 ]; then
+        speak_text_async "$LAST_SENTENCE"
+      else
+        speak_summary_async "次の一文を、意図と意味を保ったまま 30 文字以下の自然な日本語に短縮してください。
+出力は短縮した一文のみ。装飾・引用符・改行・前置きなし。
+
+文:
+$LAST_SENTENCE" "ご返答をお願いします"
+      fi
+      touch "$SPOKE_MARKER"
+    fi
+    ;;
+  Notification)
+    NOTIF_TYPE=$(printf '%s' "$INPUT" | jq -r '.notification_type // ""')
+    case "$NOTIF_TYPE" in
+      idle_prompt)
+        if [ "$(age_of "$SPOKE_MARKER")" -ge 90 ]; then
+          speak_cached "作業が終わりました。"
+        fi
+        ;;
+      permission_prompt)
+        # message の文言で 2 パターンに分岐（実観測ベース、Claude Code 2.1.123）:
+        #   "Claude Code needs your attention"     → AskUserQuestion 等
+        #   "Claude needs your permission to use *" → Bash 等のツール許可
+        # それ以外の未知パターンは silent（誤発話より沈黙を優先）。
+        # 発話した場合のみ SPOKE_MARKER を touch（沈黙時は idle 抑制も不要）。
+        NOTIF_MSG=$(printf '%s' "$INPUT" | jq -r '.message // ""')
+        case "$NOTIF_MSG" in
+          *"needs your attention"*)
+            speak_cached "質問がありました。"
+            touch "$SPOKE_MARKER"
+            ;;
+          *"needs your permission"*)
+            speak_cached "権限が必要でした。"
+            touch "$SPOKE_MARKER"
+            ;;
+        esac
+        ;;
+    esac
+    ;;
+  SubagentStart)
+    is_internal_subagent && exit 0
+    if [ "$(age_of "$SUBAGENT_MARKER")" -ge 30 ]; then
+      speak_cached "サブエージェントを起動しています。"
+      touch "$SUBAGENT_MARKER"
+    fi
+    ;;
+  SubagentStop)
+    is_internal_subagent && exit 0
+    LAST_MSG=$(printf '%s' "$INPUT" | jq -r '.last_assistant_message // ""')
+    speak_summary_async "以下は AI サブエージェントが最後に出力したテキストです。
+このサブエージェントが何を完了・報告したかを、30文字以下の自然な日本語で簡潔に。
+出力は要約のみ。装飾・引用符・改行・前置きなし。
+
+応答:
+$LAST_MSG" "サブエージェントから戻りました"
+    ;;
+  ConfigChange)
+    speak_cached "設定をリロードしたよ。"
+    ;;
+  PreCompact)
+    speak_cached "コンテキストを圧縮します。"
+    ;;
+  WorktreeCreate)
+    speak_cached "ワークツリーを作成します。"
+    ;;
+esac
+
+exit 0

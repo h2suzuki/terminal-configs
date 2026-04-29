@@ -13,8 +13,13 @@ Run the script that matches your environment as root.
 ## Claude Code Notification Hook
 
 Voicevox-based audio notifications for Claude Code events install to
-`/etc/claude-code/notify.sh`. By default the hook produces no logs (only the
-WAV cache and runtime locks under `~/.claude/hooks/`).
+`/usr/local/bin/voicevox_claude_alerts`. By default the hook produces no logs
+(only the WAV cache, managed by `voicevox_paplay`, and ephemeral runtime
+files under `$XDG_RUNTIME_DIR/voicevox_claude_alerts/`).
+
+The script also exposes a small CLI: `voicevox_claude_alerts help` for the
+full list, `events` to list supported hooks, `log` to view recent
+utterances, `say TEXT` to speak text via voicevox.
 
 The hook invokes `voicevox_paplay` in two modes:
 
@@ -56,19 +61,30 @@ With debug on, two append-only files appear under `~/.claude/hooks/`:
 
 Both grow unbounded; truncate or delete when no longer needed.
 
-After debugging, the following items under `~/.claude/hooks/` are safe to remove:
+Files are split between persistent state and ephemeral runtime (per the XDG
+Base Directory spec):
 
-| Path | Effect of deletion |
-|---|---|
-| `dump.jsonl` | Removes the hook-payload log; recreated on next debug run. |
-| `spoken.log` | Removes the spoken-text log; recreated on next debug run. |
-| `voicevox-cache/*.wav` | First playback of each fixed phrase re-synthesizes (~1s extra latency); subsequent plays are fast again. |
-| `state/spoke-recently-*` | Resets idle_prompt suppression for that session id (next idle warning will sound again, even if Stop or permission_prompt just spoke). |
-| `state/subagent-start-*` | Resets the 30-second SubagentStart inhibition. |
-| `state/voicevox.lock`, `state/haiku.lock` | Empty flock files; recreated on next hook fire. |
+```
+$XDG_STATE_HOME/voicevox_claude_alerts/      (or ~/.local/state/...)
+├── dump.jsonl                  every payload as JSONL (debug only)
+└── spoken.log                  TSV of every utterance (debug only)
 
-The `~/.claude/hooks/` directory itself can be removed entirely; the script
-recreates the layout on the next hook invocation.
+$XDG_RUNTIME_DIR/voicevox_claude_alerts/     (or /tmp/...-<uid>, mode 0700)
+├── voicevox.lock               flock for serialized voicevox playback
+├── haiku.lock                  flock for serialized claude -p calls
+├── spoke-recently-<sid>        idle_prompt suppression marker
+└── subagent-start-<sid>        30 s SubagentStart inhibition marker
+
+$XDG_CACHE_HOME/voicevox_paplay/             (or ~/.cache/voicevox_paplay)
+└── <text>_<hash>.wav           cached fixed-phrase synthesis (managed by
+                                voicevox_paplay itself)
+```
+
+Anything under `STATE_DIR` and `RUNTIME_DIR` is safe to delete; the script
+recreates whatever it needs on the next invocation. Removing `*_<sid>` markers
+just resets the corresponding suppression / inhibition for that Claude Code
+session. Removing the WAV cache costs you one re-synthesis per fixed phrase
+on first play.
 
 ----
 [![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/h2suzuki/terminal-configs.git)

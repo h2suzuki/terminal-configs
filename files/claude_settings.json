@@ -13,25 +13,25 @@
   "skipAutoPermissionPrompt": true,
   "hooks": {
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/notify.sh Stop" } ] }
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/voicevox_claude_alerts Stop" } ] }
     ],
     "Notification": [
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/notify.sh Notification" } ] }
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/voicevox_claude_alerts Notification" } ] }
     ],
     "SubagentStart": [
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/notify.sh SubagentStart" } ] }
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/voicevox_claude_alerts SubagentStart" } ] }
     ],
     "SubagentStop": [
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/notify.sh SubagentStop" } ] }
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/voicevox_claude_alerts SubagentStop" } ] }
     ],
     "ConfigChange": [
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/notify.sh ConfigChange" } ] }
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/voicevox_claude_alerts ConfigChange" } ] }
     ],
     "PreCompact": [
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/notify.sh PreCompact" } ] }
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/voicevox_claude_alerts PreCompact" } ] }
     ],
     "WorktreeCreate": [
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/notify.sh WorktreeCreate" } ] }
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/voicevox_claude_alerts WorktreeCreate" } ] }
     ]
   },
   "spinnerVerbs": {
