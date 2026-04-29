@@ -197,10 +197,10 @@ Env:
                           $STATE_DIR.
 
 Locations:
-  STATE_DIR    $STATE_DIR        (per-user, debug logs)
-  RUNTIME_DIR  $RUNTIME_DIR        (per-user, session markers)
-  PLAY_LOCK    $PLAY_LOCK   (system-wide)
-  HAIKU_LOCK   $HAIKU_LOCK   (system-wide)
+  Debug logs (per-user, opt-in):  $STATE_DIR
+  Session markers (per-user):     $RUNTIME_DIR
+  Voicevox flock (system-wide):   $PLAY_LOCK
+  Haiku flock (system-wide):      $HAIKU_LOCK
 EOF
 }
 
