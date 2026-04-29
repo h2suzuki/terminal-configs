@@ -11,6 +11,29 @@
   "effortLevel": "xhigh",
   "tui": "fullscreen",
   "skipAutoPermissionPrompt": true,
+  "hooks": {
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/notify.sh Stop" } ] }
+    ],
+    "Notification": [
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/notify.sh Notification" } ] }
+    ],
+    "SubagentStart": [
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/notify.sh SubagentStart" } ] }
+    ],
+    "SubagentStop": [
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/notify.sh SubagentStop" } ] }
+    ],
+    "ConfigChange": [
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/notify.sh ConfigChange" } ] }
+    ],
+    "PreCompact": [
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/notify.sh PreCompact" } ] }
+    ],
+    "WorktreeCreate": [
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/notify.sh WorktreeCreate" } ] }
+    ]
+  },
   "spinnerVerbs": {
     "mode": "replace",
     "verbs": [

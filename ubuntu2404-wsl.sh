@@ -295,6 +295,7 @@ run uv tool install --force claude-monitor #--system --break-system-packages pas
 
 copy --nobackup claude_CLAUDE.md        /etc/claude-code/CLAUDE.md
 copy --nobackup claude_statusline.sh    /etc/claude-code/statusline.sh -m 0755
+copy --nobackup claude_notify.sh        /etc/claude-code/notify.sh -m 0755
 copy --nobackup claude_settings.json    ~/.claude/settings.json
 
 
