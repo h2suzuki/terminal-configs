@@ -140,10 +140,10 @@ HOOK_EVENTS=(
 # while the permission-prompt sub-phrases live next to that branch's
 # matcher logic where they belong.
 declare -A EVENT_PHRASES=(
-  [Stop]="ご返答をお願いします"
+  [Stop]="ご返答をお願いします。"
   [Notification]="作業が終わりました。"
   [SubagentStart]="サブエージェントを起動しています。"
-  [SubagentStop]="サブエージェントから戻りました"
+  [SubagentStop]="サブエージェントから戻りました。"
   [ConfigChange]="設定をリロードしたよ。"
   [PreCompact]="コンテキストを圧縮します。"
   [WorktreeCreate]="ワークツリーを作成します。"
