@@ -120,7 +120,25 @@ export HAIKU_TIMEOUT=45
 # Haiku model used for Stop / SubagentStop summarization.
 export HAIKU_MODEL="claude-haiku-4-5"
 
+# Per-event default / fallback phrase. Single source of truth shared by the
+# runtime handlers (used as the cached fixed phrase or the Haiku fallback)
+# and the `say <EVENT>` CLI shortcut. Notification is multi-modal (idle vs
+# permission); the idle phrase is the default representative entry here,
+# while the permission-prompt sub-phrases live next to that branch's
+# matcher logic where they belong.
+declare -A EVENT_PHRASES=(
+  [Stop]="ご返答をお願いします"
+  [Notification]="作業が終わりました。"
+  [SubagentStart]="サブエージェントを起動しています。"
+  [SubagentStop]="サブエージェントから戻りました"
+  [ConfigChange]="設定をリロードしたよ。"
+  [PreCompact]="コンテキストを圧縮します。"
+  [WorktreeCreate]="ワークツリーを作成します。"
+)
+
 # Hook events accepted by the dispatcher; also surfaced via the `events` CLI.
+# Listed explicitly (rather than derived from EVENT_PHRASES keys) so the
+# output order is stable and predictable.
 HOOK_EVENTS=(
   Stop
   Notification
@@ -243,19 +261,9 @@ case "${1:-}" in
       echo "Usage: $PROG_NAME say TEXT|EVENT_NAME" >&2
       exit 2
     fi
-    # Shortcut: passing a known event name plays that event's
-    # characteristic phrase (the same one a real hook would speak in the
-    # fallback / fixed-text branch).
-    case "$2" in
-      Stop)           text="ご返答をお願いします" ;;
-      Notification)   text="作業が終わりました。" ;;
-      SubagentStart)  text="サブエージェントを起動しています。" ;;
-      SubagentStop)   text="サブエージェントから戻りました" ;;
-      ConfigChange)   text="設定をリロードしたよ。" ;;
-      PreCompact)     text="コンテキストを圧縮します。" ;;
-      WorktreeCreate) text="ワークツリーを作成します。" ;;
-      *)              text="$2" ;;
-    esac
+    # If $2 names a hook event, speak its characteristic phrase (same
+    # text the runtime handler would use). Otherwise treat $2 as raw text.
+    text="${EVENT_PHRASES[$2]:-$2}"
     exec voicevox_paplay --loopback $VVOX_OPTS "$text"
     ;;
 esac
@@ -419,7 +427,7 @@ case "$EVENT" in
 出力は短縮した一文のみ。装飾・引用符・改行・前置きなし。
 
 文:
-$LAST_SENTENCE" "ご返答をお願いします"
+$LAST_SENTENCE" "${EVENT_PHRASES[Stop]}"
       fi
       touch "$SPOKE_MARKER"
     fi
@@ -429,7 +437,7 @@ $LAST_SENTENCE" "ご返答をお願いします"
     case "$NOTIF_TYPE" in
       idle_prompt)
         if [ "$(age_of "$SPOKE_MARKER")" -ge 90 ]; then
-          speak_cached "作業が終わりました。"
+          speak_cached "${EVENT_PHRASES[Notification]}"
         fi
         ;;
       permission_prompt)
@@ -455,7 +463,7 @@ $LAST_SENTENCE" "ご返答をお願いします"
   SubagentStart)
     is_internal_subagent && exit 0
     if [ "$(age_of "$SUBAGENT_MARKER")" -ge 30 ]; then
-      speak_cached "サブエージェントを起動しています。"
+      speak_cached "${EVENT_PHRASES[SubagentStart]}"
       touch "$SUBAGENT_MARKER"
     fi
     ;;
@@ -467,16 +475,16 @@ $LAST_SENTENCE" "ご返答をお願いします"
 出力は要約のみ。装飾・引用符・改行・前置きなし。
 
 応答:
-$LAST_MSG" "サブエージェントから戻りました"
+$LAST_MSG" "${EVENT_PHRASES[SubagentStop]}"
     ;;
   ConfigChange)
-    speak_cached "設定をリロードしたよ。"
+    speak_cached "${EVENT_PHRASES[ConfigChange]}"
     ;;
   PreCompact)
-    speak_cached "コンテキストを圧縮します。"
+    speak_cached "${EVENT_PHRASES[PreCompact]}"
     ;;
   WorktreeCreate)
-    speak_cached "ワークツリーを作成します。"
+    speak_cached "${EVENT_PHRASES[WorktreeCreate]}"
     ;;
 esac
 
