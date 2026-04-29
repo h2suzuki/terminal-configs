@@ -58,18 +58,23 @@
 #                           off — no log files written.
 #   XDG_STATE_HOME          Base for HOOK_DIR. Falls back to ~/.local/state.
 #
-# File layout (split by XDG category; <prog> = basename($0)):
+# File layout (split by scope and XDG category; <prog> = basename($0)):
 #
-#   $XDG_RUNTIME_DIR/<prog>/                       — RUNTIME_DIR
+#   /tmp/<prog>.voicevox.lock          — system-wide (mode 0666)
+#   /tmp/<prog>.haiku.lock               flock targets that must serialize
+#                                        across all UIDs: voicevox_paplay
+#                                        outputs to a single audio device
+#                                        and claude -p contends with itself
+#                                        regardless of who runs it.
+#
+#   $XDG_RUNTIME_DIR/<prog>/                       — per-user RUNTIME_DIR
 #       (fallback: /tmp/<prog>-<uid>, mode 0700)
-#       voicevox.lock                  flock for serialized voicevox playback
-#       haiku.lock                     flock for serialized claude -p calls
 #       spoke-recently-<session_id>    marker: idle_prompt is silenced for
 #                                      ~90 s after Stop / permission_prompt
 #       subagent-start-<session_id>    marker: SubagentStart suppressed for
 #                                      ~30 s after the previous one
 #
-#   $XDG_STATE_HOME/<prog>/                        — STATE_DIR
+#   $XDG_STATE_HOME/<prog>/                        — per-user STATE_DIR
 #       (fallback: $HOME/.local/state/<prog>)
 #       dump.jsonl                     debug log: every payload as JSONL,
 #                                      written only when CLAUDE_NOTIFY_DEBUG=1
@@ -80,9 +85,10 @@
 #       (fallback: $HOME/.cache/voicevox_paplay)    not by this script)
 #       <text>_<hash>.wav              cached synthesis of fixed phrases
 #
-# All paths use <prog> = basename($0), so renaming the script also renames
-# its state directories. The script's installation location (/usr/local/bin,
-# /usr/bin, ~/.local/bin, ...) does not affect these paths.
+# All <prog>-suffixed paths use basename($0), so renaming the script renames
+# its directories and locks. The binary's installation location
+# (/usr/local/bin, /usr/bin, ~/.local/bin, ...) does not affect any of
+# these paths.
 #
 # Internal-subagent heuristic:
 #   The official docs (as of 2026-04-30) do not document Claude Code's
@@ -132,16 +138,22 @@ else
   STATE_DIR="$HOME/.local/state/$PROG_NAME"
 fi
 
-# Ephemeral runtime state (locks, per-session markers). XDG_RUNTIME_DIR is
-# wiped at logout and is mode 0700 per spec, which is exactly what we want
-# for locks and short-lived markers. Falls back to a uid-suffixed /tmp dir
-# when XDG_RUNTIME_DIR is unset (e.g. minimal containers); we chmod 0700
-# below to match the spec's privacy guarantee.
+# Per-user ephemeral runtime dir for session markers. XDG_RUNTIME_DIR is
+# wiped at logout and is mode 0700 per spec, ideal for short-lived per-user
+# state. Falls back to a uid-suffixed /tmp dir on systems without XDG_RUNTIME_DIR
+# (e.g. minimal containers); we chmod 0700 below to match the spec's privacy.
 if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
   RUNTIME_DIR="${XDG_RUNTIME_DIR%/}/$PROG_NAME"
 else
   RUNTIME_DIR="/tmp/$PROG_NAME-$(id -u)"
 fi
+
+# System-wide flock targets. voicevox_paplay drives a single shared audio
+# device, so concurrent playback from any UID would collide; claude -p
+# likewise contends with itself across users. We keep these locks in /tmp
+# (universally writable on Unix) with mode 0666 so any UID can take them.
+PLAY_LOCK="/tmp/$PROG_NAME.voicevox.lock"
+HAIKU_LOCK="/tmp/$PROG_NAME.haiku.lock"
 
 if [ "${CLAUDE_NOTIFY_DEBUG:-0}" = "1" ]; then
   DUMP_LOG="$STATE_DIR/dump.jsonl"
@@ -172,8 +184,10 @@ Env:
                           $STATE_DIR.
 
 Locations:
-  STATE_DIR    $STATE_DIR
-  RUNTIME_DIR  $RUNTIME_DIR
+  STATE_DIR    $STATE_DIR        (per-user, debug logs)
+  RUNTIME_DIR  $RUNTIME_DIR        (per-user, session markers)
+  PLAY_LOCK    $PLAY_LOCK   (system-wide)
+  HAIKU_LOCK   $HAIKU_LOCK   (system-wide)
 EOF
 }
 
@@ -220,6 +234,13 @@ mkdir -p "$RUNTIME_DIR"
 chmod 0700 "$RUNTIME_DIR" 2>/dev/null
 [ -n "$DUMP_LOG" ] && mkdir -p "$STATE_DIR"
 
+# Ensure system-wide lock files exist with mode 0666 so any UID can flock
+# them. install(1) is atomic via rename; if another user wins the race we
+# just observe the file already present.
+for lock in "$PLAY_LOCK" "$HAIKU_LOCK"; do
+  [ -e "$lock" ] || install -m 0666 /dev/null "$lock" 2>/dev/null
+done
+
 # Stale per-session markers accumulate when XDG_RUNTIME_DIR is persistent
 # (e.g. some non-systemd setups). 1h is well past any meaningful suppression
 # window (idle = 60s, subagent inhibition = 30s).
@@ -247,8 +268,6 @@ fi
 
 SPOKE_MARKER="$RUNTIME_DIR/spoke-recently-$SESSION_ID"
 SUBAGENT_MARKER="$RUNTIME_DIR/subagent-start-$SESSION_ID"
-PLAY_LOCK="$RUNTIME_DIR/voicevox.lock"
-HAIKU_LOCK="$RUNTIME_DIR/haiku.lock"
 
 # voicevox_paplay's --cache stores WAVs at $XDG_CACHE_HOME/voicevox_paplay
 # (or ~/.cache/voicevox_paplay). We let it manage that location itself.

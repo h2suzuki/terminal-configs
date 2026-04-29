@@ -61,30 +61,36 @@ With debug on, two append-only files appear under `~/.claude/hooks/`:
 
 Both grow unbounded; truncate or delete when no longer needed.
 
-Files are split between persistent state and ephemeral runtime (per the XDG
-Base Directory spec):
+Files are split by scope so locks serialize across all UIDs (audio is a
+shared device) while per-session and per-user state stay isolated:
 
 ```
-$XDG_STATE_HOME/voicevox_claude_alerts/      (or ~/.local/state/...)
-├── dump.jsonl                  every payload as JSONL (debug only)
-└── spoken.log                  TSV of every utterance (debug only)
+/tmp/voicevox_claude_alerts.voicevox.lock    ← system-wide (mode 0666)
+/tmp/voicevox_claude_alerts.haiku.lock         flock targets for serialized
+                                               voicevox / claude -p calls
 
-$XDG_RUNTIME_DIR/voicevox_claude_alerts/     (or /tmp/...-<uid>, mode 0700)
-├── voicevox.lock               flock for serialized voicevox playback
-├── haiku.lock                  flock for serialized claude -p calls
+$XDG_RUNTIME_DIR/voicevox_claude_alerts/     ← per-user
+    (fallback: /tmp/voicevox_claude_alerts-<uid>, mode 0700)
 ├── spoke-recently-<sid>        idle_prompt suppression marker
 └── subagent-start-<sid>        30 s SubagentStart inhibition marker
 
-$XDG_CACHE_HOME/voicevox_paplay/             (or ~/.cache/voicevox_paplay)
-└── <text>_<hash>.wav           cached fixed-phrase synthesis (managed by
-                                voicevox_paplay itself)
+$XDG_STATE_HOME/voicevox_claude_alerts/      ← per-user
+    (fallback: ~/.local/state/voicevox_claude_alerts/)
+├── dump.jsonl                  every payload as JSONL (debug only)
+└── spoken.log                  TSV of every utterance (debug only)
+
+$XDG_CACHE_HOME/voicevox_paplay/             ← per-user, shared with the
+    (fallback: ~/.cache/voicevox_paplay/)      voicevox_paplay binary
+└── <text>_<hash>.wav           cached synthesis of fixed phrases
+                                (managed by voicevox_paplay itself)
 ```
 
-Anything under `STATE_DIR` and `RUNTIME_DIR` is safe to delete; the script
-recreates whatever it needs on the next invocation. Removing `*_<sid>` markers
-just resets the corresponding suppression / inhibition for that Claude Code
-session. Removing the WAV cache costs you one re-synthesis per fixed phrase
-on first play.
+Anything in those locations is safe to delete; the script recreates whatever
+it needs on the next invocation. Removing `*_<sid>` markers just resets the
+corresponding suppression or inhibition for that Claude Code session.
+Removing the WAV cache costs one re-synthesis per fixed phrase on first
+play. The system-wide lock files are zero-byte; they regenerate on demand
+with mode 0666.
 
 ----
 [![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/h2suzuki/terminal-configs.git)
