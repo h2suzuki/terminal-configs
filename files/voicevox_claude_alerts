@@ -407,7 +407,12 @@ speak_summary() {
               --strict-mcp-config \
               --system-prompt "あなたは日本語の要約専門 AI です。出力にアルファベット表記を残さず、意訳せず発音をそのままカタカナにしてください。カタカナの間に中黒「・」は入れないでください。例: voicevox_paplay → ヴォイスボックスピーエープレイ、VVOX_LOCK → ブイヴォックスロック、ConfigChange → コンフィグチェンジ。" \
               -p "$prompt" 2>/dev/null \
-              | tr -d "\r\n" | head -c 120)
+              | tr -d "\r\n")
+    # Safety cap: the prompt asks for ≤30 chars but Haiku occasionally
+    # overshoots; allow up to 40 then chop. Bash substring is character-
+    # aware (not byte-based) under LC_ALL=C.UTF-8, so this never splits
+    # a multi-byte sequence mid-codepoint.
+    summary=${summary:0:40}
     [ -z "$summary" ] && summary=$fallback
     [ -n "$log" ] && printf "%s\t%s\t%s\n" "$(date -Iseconds)" "$event" "$summary" >> "$log"
     flock "$vvox_lock" timeout "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS "$summary"
