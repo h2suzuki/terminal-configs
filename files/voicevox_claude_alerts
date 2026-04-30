@@ -360,7 +360,7 @@ EVENT="${1:-}"
 [ -n "$EVENT" ] || exit 0
 
 if [ -n "$DUMP_LOG" ]; then
-  jq -n --arg event "$EVENT" --arg ts "$TS" --argjson payload "$INPUT" \
+  jq -cn --arg event "$EVENT" --arg ts "$TS" --argjson payload "$INPUT" \
     '{event: $event, ts: $ts, payload: $payload}' >> "$DUMP_LOG"
 fi
 
