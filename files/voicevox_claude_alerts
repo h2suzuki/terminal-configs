@@ -467,10 +467,17 @@ detect_question() {
 case "$EVENT" in
   Stop)
     if detect_question; then
-      LAST_MSG=$(printf '%s' "$INPUT" | jq -r '.last_assistant_message // ""')
-      LAST_SENTENCE=$(printf '%s' "$LAST_MSG" | tr '\n' ' ' \
+      # Anchor on the same "last non-empty line" detect_question used, then
+      # extract the last sentence within it. Earlier we flattened the whole
+      # message with `tr '\n' ' '` and ran the sentence regex over that —
+      # but in list-formatted answers the period after "1.", "2." gets
+      # treated as a sentence delimiter, so the trailing question gets
+      # prefixed with the last list item (e.g. "あれ  どれにしますか？").
+      LAST_LINE=$(printf '%s' "$INPUT" | jq -r '.last_assistant_message // ""' \
+        | sed 's/[[:space:]]*$//' | awk 'NF{l=$0} END{print l}')
+      LAST_SENTENCE=$(printf '%s' "$LAST_LINE" \
         | grep -oE '[^。？！.?!]*[。？！.?!]' | tail -1 | sed 's/^[[:space:]]*//')
-      [ -z "$LAST_SENTENCE" ] && LAST_SENTENCE="$LAST_MSG"
+      [ -z "$LAST_SENTENCE" ] && LAST_SENTENCE="$LAST_LINE"
       # Already ≤30 chars: skip the ~6s Haiku cold-start and speak as-is.
       if [ "${#LAST_SENTENCE}" -le 30 ]; then
         speak_text "$LAST_SENTENCE"
