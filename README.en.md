@@ -19,15 +19,17 @@ or
 
 The main pieces are:
 
-### 1. Bash environment (root and login user)
+### 1. Bash environment
+
+Configures both the login user and root.
 
 - Prompt color tweak (login user green → purple)
 - Bash aliases tuned and extended (`ls`, `tree`, `diffy`, `grip`, ...)
 - Git aliases (`git st`, `git diffc`, `git log1`, `git graph`, ...)
 - Suppress the terminal bell (`inputrc`)
 - Grant the login user passwordless sudo
-- Set the default editor to Neovim
-- Set the default browser to `powershell.exe start` [WSL2 only]
+- Default editor: Neovim
+- Default browser: `powershell.exe start` [WSL2 only]
 
 
 ### 2. Sharing the X display server
@@ -38,9 +40,9 @@ The main pieces are:
 
 ### 3. SSH adjustments
 
-- Forward audio from SSH sessions to the Windows host
-  - PulseAudio listens on 24713/tcp (local proxy → WSLg) [WSL2 only]
-  - Login auto-sets `PULSE_SERVER=tcp:localhost:24713` [non-WSL2]
+- Forward audio from SSH sessions to the Windows host [WSL2 only]
+  - PulseAudio listens on 24713/tcp and forwards to WSLg (local proxy)
+  - Login auto-sets `PULSE_SERVER=tcp:localhost:24713`
 - Preserve `PULSE_SERVER` across `sudo -i`
 
 
