@@ -51,6 +51,10 @@
 #   CLAUDE_NOTIFY_DEBUG=1   Append every payload to dump.jsonl and every
 #                           utterance to spoken.log under STATE_DIR. Default
 #                           off — no log files written.
+#   CLAUDE_NOTIFY_NESTED=1  Internal recursion guard. Set by speak_summary
+#                           when it spawns `claude -p`; the re-entered hook
+#                           returns immediately (see "Recursion guard"
+#                           below). Users should never set this manually.
 #   XDG_STATE_HOME          Base for STATE_DIR; falls back to ~/.local/state.
 #   XDG_RUNTIME_DIR         Base for RUNTIME_DIR; falls back to /tmp/<prog>-<uid>.
 #   LC_ALL                  Forced to C.UTF-8 internally so ${#var} character
@@ -311,6 +315,14 @@ if [ -t 0 ]; then
   exit 2
 fi
 
+# Recursion guard. speak_summary spawns `claude -p` for Haiku; that claude
+# session fires its own Stop / Notification etc. hooks when it exits, which
+# would re-enter this script and produce duplicate utterances (or, worse,
+# kick off a second Haiku call to summarize the first summary). The marker
+# is set inline on the claude invocation in speak_summary, so it propagates
+# only down that subtree — interactive sessions never inherit it.
+[ -n "${CLAUDE_NOTIFY_NESTED:-}" ] && exit 0
+
 # ---------------------------------------------------------------------------
 # Hook mode
 # ---------------------------------------------------------------------------
@@ -399,7 +411,8 @@ speak_summary() {
     haiku_lock=$4
     event=$5
     log=$6
-    summary=$(cd /tmp && flock "$haiku_lock" timeout "$HAIKU_TIMEOUT" claude \
+    summary=$(cd /tmp && CLAUDE_NOTIFY_NESTED=1 \
+              flock "$haiku_lock" timeout "$HAIKU_TIMEOUT" claude \
               --model "$HAIKU_MODEL" \
               --no-session-persistence \
               --disable-slash-commands \
