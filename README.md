@@ -1,96 +1,99 @@
+[[en]](README.en.md) [jp]
+
 # Terminal Configs
 
-A small set of configuration files and scripts that lets you setup the terminal environment quickly.
+ターミナル環境を素早くセットアップするための、ささやかな設定ファイルとスクリプト群です。
 
 
-## How to Use
+## 使い方
 
-Run the script that matches your environment as root.
+環境に合うスクリプトを root で実行してください。
 
     # ./debian12.sh
 
 
-## Claude Code Notification Hook
+## Claude Code 通知フック
 
-Voicevox-based audio notifications for Claude Code events install to
-`/usr/local/bin/voicevox_claude_alerts`. By default the hook produces no logs
-(only the WAV cache, managed by `voicevox_paplay`, and ephemeral runtime
-files under `$XDG_RUNTIME_DIR/voicevox_claude_alerts/`).
+Claude Code のイベントを Voicevox で読み上げる通知スクリプトは
+`/usr/local/bin/voicevox_claude_alerts` にインストールされます。既定では
+ログ出力は行いません（WAV キャッシュは `voicevox_paplay` が管理し、揮発的な
+ランタイムファイルは `$XDG_RUNTIME_DIR/voicevox_claude_alerts/` 配下に置かれます）。
 
-The script also exposes a small CLI: `voicevox_claude_alerts help` for the
-full list, `events` to list supported hooks, `log` to view recent
-utterances, `say TEXT` to speak text via voicevox.
+スクリプトは小さな CLI も提供します。`voicevox_claude_alerts help` で全一覧、
+`events` で対応フックの一覧、`log` で直近の発話履歴、`say TEXT` で
+Voicevox を介したテキスト読み上げが可能です。
 
-The hook invokes `voicevox_paplay` in two modes:
+フックは `voicevox_paplay` を 2 つのモードで呼び出します:
 
-- **`--cache` for fixed phrases** (idle warning, permission prompt, subagent
-  start/stop fallback, ConfigChange / PreCompact / WorktreeCreate). Each unique
-  phrase is synthesized once and stored under `~/.claude/hooks/voicevox-cache/`,
-  so subsequent plays are instant.
-- **No cache for dynamic Haiku summaries** (Stop with a question whose last
-  sentence exceeds 30 chars; SubagentStop). Each summary is unique, so caching
-  it would just bloat the directory; the cost is one fresh synthesis per play.
+- **固定フレーズには `--cache`**（アイドル警告、許可プロンプト、サブエージェント
+  開始/停止のフォールバック、ConfigChange / PreCompact / WorktreeCreate）。
+  ユニークなフレーズごとに 1 度だけ合成され、`~/.claude/hooks/voicevox-cache/`
+  に保存されます。以後の再生は瞬時に行われます。
+- **動的な Haiku 要約にはキャッシュなし**（最終文が 30 文字を超える質問付きの
+  Stop、および SubagentStop）。要約はその都度ユニークなのでキャッシュしても
+  ディレクトリが肥大化するだけです。再生のたびに新規合成のコストがかかります。
 
-Stop hooks whose last sentence is already ≤30 characters bypass Haiku entirely
-and speak the sentence directly (saving the ~6 s cold-start latency); they also
-skip the cache because the input is unbounded.
+最終文がすでに 30 文字以下の Stop フックは、Haiku を完全にバイパスして
+その文をそのまま読み上げます（コールドスタート約 6 秒のレイテンシを節約）。
+入力長に上限がないため、こちらもキャッシュは行いません。
 
-To capture what was spoken and the raw hook payloads (for debugging), enable
-`CLAUDE_NOTIFY_DEBUG=1` in either of these ways:
+発話内容と生のフック payload を記録したい場合（デバッグ用途）、
+`CLAUDE_NOTIFY_DEBUG=1` を以下のいずれかの方法で有効化します:
 
-- **One-shot (shell)** — only the next Claude Code session sees it:
+- **一時的（シェル）** — 直後の Claude Code セッションのみ有効:
 
       export CLAUDE_NOTIFY_DEBUG=1
 
-- **Persistent (settings.json)** — applied automatically every session. Add an
-  `env` block to `~/.claude/settings.json` (the file installed by this repo):
+- **永続化（settings.json）** — すべてのセッションに自動適用。本リポジトリが
+  インストールする `~/.claude/settings.json` に `env` ブロックを追加します:
 
       {
         "env": {
           "CLAUDE_NOTIFY_DEBUG": "1"
         },
-        ...other existing keys...
+        ...既存の他のキー...
       }
 
-  Remove the entry (or set it to `"0"`) to return to the silent default.
+  この項目を削除する（あるいは `"0"` にする）と既定の無音状態に戻ります。
 
-With debug on, two append-only files appear under `~/.claude/hooks/`:
+デバッグを有効にすると、`~/.claude/hooks/` 配下に追記専用の 2 ファイルが現れます:
 
-- `dump.jsonl` — every hook payload as line-delimited JSON
-- `spoken.log` — TSV of `<timestamp>\t<event>\t<spoken-text>` per utterance
+- `dump.jsonl` — すべてのフック payload を行区切り JSON で記録
+- `spoken.log` — 発話ごとの `<タイムスタンプ>\t<イベント>\t<発話テキスト>` を TSV で記録
 
-Both grow unbounded; truncate or delete when no longer needed.
+いずれも無制限に増えていくので、不要になったら truncate または削除してください。
 
-Files are split by scope so locks serialize across all UIDs (audio is a
-shared device) while per-session and per-user state stay isolated:
+ロックを全 UID 間で直列化しつつ（オーディオは共有デバイスのため）、
+セッション単位・ユーザー単位の状態は分離するため、ファイルはスコープごとに
+分けて配置されます:
 
 ```
-/tmp/voicevox_claude_alerts.voicevox.lock    ← system-wide (mode 0666)
-/tmp/voicevox_claude_alerts.haiku.lock         flock targets for serialized
-                                               voicevox / claude -p calls
+/tmp/voicevox_claude_alerts.voicevox.lock    ← システム全体共有 (mode 0666)
+/tmp/voicevox_claude_alerts.haiku.lock         voicevox / claude -p 呼び出しを
+                                               直列化するための flock 対象
 
-$XDG_RUNTIME_DIR/voicevox_claude_alerts/     ← per-user
+$XDG_RUNTIME_DIR/voicevox_claude_alerts/     ← ユーザーごと
     (fallback: /tmp/voicevox_claude_alerts-<uid>, mode 0700)
-├── spoke-recently-<sid>        idle_prompt suppression marker
-└── subagent-start-<sid>        30 s SubagentStart inhibition marker
+├── spoke-recently-<sid>        idle_prompt 抑止マーカー
+└── subagent-start-<sid>        SubagentStart の 30 秒抑止マーカー
 
-$XDG_STATE_HOME/voicevox_claude_alerts/      ← per-user
+$XDG_STATE_HOME/voicevox_claude_alerts/      ← ユーザーごと
     (fallback: ~/.local/state/voicevox_claude_alerts/)
-├── dump.jsonl                  every payload as JSONL (debug only)
-└── spoken.log                  TSV of every utterance (debug only)
+├── dump.jsonl                  全 payload を JSONL で記録（デバッグ時のみ）
+└── spoken.log                  全発話の TSV ログ（デバッグ時のみ）
 
-$XDG_CACHE_HOME/voicevox_paplay/             ← per-user, shared with the
-    (fallback: ~/.cache/voicevox_paplay/)      voicevox_paplay binary
-└── <text>_<hash>.wav           cached synthesis of fixed phrases
-                                (managed by voicevox_paplay itself)
+$XDG_CACHE_HOME/voicevox_paplay/             ← ユーザーごと、voicevox_paplay
+    (fallback: ~/.cache/voicevox_paplay/)      バイナリと共有
+└── <text>_<hash>.wav           固定フレーズの合成結果キャッシュ
+                                （voicevox_paplay 自身が管理）
 ```
 
-Anything in those locations is safe to delete; the script recreates whatever
-it needs on the next invocation. Removing `*_<sid>` markers just resets the
-corresponding suppression or inhibition for that Claude Code session.
-Removing the WAV cache costs one re-synthesis per fixed phrase on first
-play. The system-wide lock files are zero-byte; they regenerate on demand
-with mode 0666.
+これらのファイルはどれも削除して構いません。スクリプトは次回起動時に必要な
+ものを再生成します。`*_<sid>` マーカーを消すと、その Claude Code セッションの
+対応する抑止状態がリセットされるだけです。WAV キャッシュを削除すると、
+固定フレーズごとに初回再生時に 1 回再合成のコストがかかります。
+システム全体共有のロックファイルは 0 バイトで、必要に応じて mode 0666 で
+自動再生成されます。
 
 ----
 [![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/h2suzuki/terminal-configs.git)
