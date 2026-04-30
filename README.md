@@ -41,7 +41,7 @@
 ### 3. SSH 調整
 
 - SSH ログイン後の音声出力を Windows ホストへ転送 [WSL2のみ]
-  - PulseAudio 接続を 24713/tcp で待ち受け（ローカルプロキシ → WSLg）
+  - PulseAudio 接続を 24713/tcp で待ち受けて WSLg へ転送（ローカルプロキシ）
   - ログイン時に `PULSE_SERVER=tcp:localhost:24713` を自動設定
 - `sudo -i` 時に `PULSE_SERVER` 環境変数を引き継ぎ
 
