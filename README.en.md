@@ -9,10 +9,13 @@ A small set of configuration files and scripts that lets you setup the terminal 
 
 Run the script that matches your environment as root.
 
+    # ./ubuntu2404-wsl.sh
+
+or
+
     # ./debian12.sh
 
-It performs the following setup.
-
+The main pieces are:
 
 ## 1. Bash environment (root and login user)
 
@@ -39,24 +42,40 @@ It performs the following setup.
 - Preserve `PULSE_SERVER` across `sudo -i`
 
 
-## 4. Claude Code settings
+## 4. Core tool installation
 
-- Display Japanese translations for Spinner Verbs
-- Status line shows project name / model / context usage / rate limit / current time
+- neovim, tree, ssh
+- git, git-lfs, GitHub CLI
+- ripgrep, bat, delta
+- AVAHI: avahi, libnss-mdns
+- SIXEL: img2sixel
+- UV python package manager: uv
+- Node.js LTS: nvm, node
+- Chrome: google-chrome, fonts-ipafont, fonts-noto-color-emoji, upower
+- VoiceVox
+- Claude Code
 
 
-## 5. Claude Code MCP / CLI
+## 5. Claude Code settings
+
+- Japanese translations for Spinner Verbs
+- Status line: project / model / context usage / rate limit / current time
+- System-wide rules: `/etc/claude-code/CLAUDE.md`
+- Notification hook (see below)
+
+
+## 6. Claude Code MCP / CLI
 
 (TODO)
 
 
-## 6. Claude Code Notification Hook
+## 7. Claude Code Notification Hook
 
-Installs `voicevox_claude_alerts` to `/usr/local/bin/` — a notification
-script that speaks Claude Code events through Voicevox. It covers idle
-warnings, permission prompts, and end-of-response summaries.
+Installs `voicevox_claude_alerts`, which speaks Claude Code events
+through VoiceVox — idle warnings, subagent completion reports,
+questions from Claude Code, and so on.
 
-The script exposes a small CLI:
+It also works as a CLI with the following subcommands:
 
 - `voicevox_claude_alerts help` — list all subcommands
 - `voicevox_claude_alerts events` — list supported hooks
@@ -65,11 +84,13 @@ The script exposes a small CLI:
 
 ### Debug logging
 
-Set `CLAUDE_NOTIFY_DEBUG=1` to append every hook payload and every
-utterance to `dump.jsonl` and `spoken.log` under
-`$XDG_STATE_HOME/voicevox_claude_alerts/` (defaults to
-`~/.local/state/voicevox_claude_alerts/`). To keep it on permanently,
-add this to `~/.claude/settings.json`:
+Set `CLAUDE_NOTIFY_DEBUG=1` to record hook payloads and utterances.
+Logs land in `~/.local/state/voicevox_claude_alerts/` by default:
+
+- Hook payloads: `dump.jsonl`
+- Utterances: `spoken.log`
+
+You can also set the variable in `~/.claude/settings.json`:
 
     {
       "env": {
@@ -80,11 +101,12 @@ add this to `~/.claude/settings.json`:
 Both logs grow unbounded; delete them when no longer needed.
 
 
-## 7. WSL2 tweaks [WSL2 only]
+## 8. WSL2 tweaks [WSL2 only]
 
 - Delegate DNS resolution to the Windows host
   - Lets mDNS (`.local`) work even under WSL2 in NAT networking mode
 - Enable systemd
+- Pin the hostname
 
 ----
 [![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/h2suzuki/terminal-configs.git)
