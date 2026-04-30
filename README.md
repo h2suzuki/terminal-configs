@@ -9,10 +9,13 @@
 
 環境に合うスクリプトを root で実行してください。
 
+    # ./ubuntu2404-wsl.sh
+
+もしくは
+
     # ./debian12.sh
 
-以下のセットアップを行っています。
-
+主な内容は、以下のとおりです。
 
 ## 1. Bash 環境の設定（root, ログインユーザー）
 
@@ -39,24 +42,38 @@
 - `sudo -i` 時に `PULSE_SERVER` 環境変数を引き継ぎ
 
 
-## 4. Claude Code 設定
+## 4. 基本的なツールのインストール
 
-- Spinner Verbs の日本語訳表示
-- Status Line にプロジェクト名 / モデル名 / Context 消費 / レートリミット / 現在時刻を表示
+- neovim, tree, ssh
+- git, git-lfs, GitHub CLI
+- ripgrep, bat, delta
+- AVAHI: avahi, libnss-mdns
+- SIXEL: img2sixel
+- UV python package manager: uv
+- Node.js LTS: nvm, node
+- Chrome: google-chrome, fonts-ipafont, fonts-noto-color-emoji, upower
+- VoiceVox
+- Claude Code
 
 
-## 5. Claude Code 向け MCP / CLI
+## 5. Claude Code 設定
+
+- Spinner Verbs 日本語訳
+- Status Line: プロジェクト名 / モデル名 / Context 消費 / レートリミット / 現在時刻
+- 憲法 `/etc/claude-code/CLAUDE.md`
+- 通知フック（後述）
+
+
+## 6. Claude Code MCP / CLI
 
 (TODO)
 
 
-## 6. Claude Code 通知フック
+## 7. Claude Code 通知フック
 
-Claude Code のイベントを Voicevox で読み上げる通知スクリプト
-`voicevox_claude_alerts` を `/usr/local/bin/` にインストールします。
-アイドル警告、許可プロンプト、応答完了時の要約読み上げなどに対応します。
+待機通知、サブエージェントの完了報告、Claude Code からの質問などを VoiceVox で発話する `voicevox_claude_alerts` をインストールしています。
 
-CLI として以下のサブコマンドが利用できます:
+CLI としても利用でき、以下のサブコマンドがあります。
 
 - `voicevox_claude_alerts help` — サブコマンド一覧
 - `voicevox_claude_alerts events` — 対応フックの一覧
@@ -65,11 +82,13 @@ CLI として以下のサブコマンドが利用できます:
 
 ### デバッグログ
 
-`CLAUDE_NOTIFY_DEBUG=1` を設定すると、フック payload と発話内容が
-`$XDG_STATE_HOME/voicevox_claude_alerts/`（既定では
-`~/.local/state/voicevox_claude_alerts/`）配下の `dump.jsonl` と
-`spoken.log` に追記されます。常時有効にしたい場合は
-`~/.claude/settings.json` に以下を追加してください:
+環境変数 `CLAUDE_NOTIFY_DEBUG=1` を設定すると、Hook payload と発話内容がログに書き込まれます。ログの場所は 
+既定では `~/.local/state/voicevox_claude_alerts/` です。
+
+- Hook Payload： `dump.jsonl`
+- 発話内容： `spoken.log`
+
+環境変数は `~/.claude/settings.json` に書くこともできます。
 
     {
       "env": {
@@ -80,11 +99,12 @@ CLI として以下のサブコマンドが利用できます:
 ログは無制限に増えるので、不要になったら削除してください。
 
 
-## 7. WSL2 調整 [WSL2のみ]
+## 8. WSL2 調整 [WSL2のみ]
 
 - DNS 名前解決を Windows ホスト側にデリゲート
   - NAT モードの WSL2 上でも mDNS（`.local`）を利用可能
 - systemd の有効化
+- ホスト名の固定
 
 ----
 [![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/h2suzuki/terminal-configs.git)
