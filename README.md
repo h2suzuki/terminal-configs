@@ -19,15 +19,17 @@
 
 主な内容は、以下のとおりです。
 
-### 1. Bash 環境の設定（root, ログインユーザー）
+### 1. Bash 環境の設定
+
+ログインユーザーと root の設定をします。
 
 - プロンプト色の調整（ログインユーザーの緑 → 紫）
 - Bash エイリアスの調整・追加（`ls`, `tree`, `diffy`, `grip` など）
 - Git エイリアスの調整（`git st`, `git diffc`, `git log1`, `git graph` など）
 - Terminal bell の抑止（`inputrc`）
 - ログインユーザーへの sudo NOPASSWD 権限付与
-- 標準エディタを Neovim に
-- 標準ブラウザを `powershell.exe start` に [WSL2のみ]
+- 標準エディタ： Neovim
+- 標準ブラウザ： `powershell.exe start` [WSL2のみ]
 
 
 ### 2. X ディスプレイ・サーバーの共有
@@ -38,9 +40,9 @@
 
 ### 3. SSH 調整
 
-- SSH ログイン後の音声出力を Windows ホストへ転送
-  - PulseAudio 接続を 24713/tcp で待ち受け（ローカルプロキシ → WSLg）[WSL2のみ]
-  - ログイン時に `PULSE_SERVER=tcp:localhost:24713` を自動設定 [WSL2以外]
+- SSH ログイン後の音声出力を Windows ホストへ転送 [WSL2のみ]
+  - PulseAudio 接続を 24713/tcp で待ち受け（ローカルプロキシ → WSLg）
+  - ログイン時に `PULSE_SERVER=tcp:localhost:24713` を自動設定
 - `sudo -i` 時に `PULSE_SERVER` 環境変数を引き継ぎ
 
 
