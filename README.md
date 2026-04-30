@@ -15,9 +15,11 @@
 
     # ./debian12.sh
 
+## 主な環境設定
+
 主な内容は、以下のとおりです。
 
-## 1. Bash 環境の設定（root, ログインユーザー）
+### 1. Bash 環境の設定（root, ログインユーザー）
 
 - プロンプト色の調整（ログインユーザーの緑 → 紫）
 - Bash エイリアスの調整・追加（`ls`, `tree`, `diffy`, `grip` など）
@@ -28,13 +30,13 @@
 - 標準ブラウザを `powershell.exe start` に [WSL2のみ]
 
 
-## 2. X ディスプレイ・サーバーの共有
+### 2. X ディスプレイ・サーバーの共有
 
 - ログインユーザーの X 接続を root にも継承（`.bashrc` で `DISPLAY` と `.Xauthority` を引き継ぎ）
   - `sudo -i` 後、root から `xeyes` を起動するとログインユーザーの画面に転送される
 
 
-## 3. SSH 調整
+### 3. SSH 調整
 
 - SSH ログイン後の音声出力を Windows ホストへ転送
   - PulseAudio 接続を 24713/tcp で待ち受け（ローカルプロキシ → WSLg）[WSL2のみ]
@@ -42,7 +44,7 @@
 - `sudo -i` 時に `PULSE_SERVER` 環境変数を引き継ぎ
 
 
-## 4. 基本的なツールのインストール
+### 4. 基本的なツールのインストール
 
 - neovim, tree, ssh
 - git, git-lfs, GitHub CLI
@@ -56,7 +58,7 @@
 - Claude Code
 
 
-## 5. Claude Code 設定
+### 5. Claude Code 設定
 
 - Spinner Verbs 日本語訳
 - Status Line: プロジェクト名 / モデル名 / Context 消費 / レートリミット / 現在時刻
@@ -64,12 +66,12 @@
 - 通知フック（後述）
 
 
-## 6. Claude Code MCP / CLI
+### 6. Claude Code MCP / CLI
 
 (TODO)
 
 
-## 7. Claude Code 通知フック
+### 7. Claude Code 通知フック
 
 待機通知、サブエージェントの完了報告、Claude Code からの質問などを VoiceVox で発話する `voicevox_claude_alerts` をインストールしています。
 
@@ -80,7 +82,7 @@ CLI としても利用でき、以下のサブコマンドがあります。
 - `voicevox_claude_alerts log` — 直近の発話履歴
 - `voicevox_claude_alerts say TEXT` — 任意のテキストを読み上げ
 
-### デバッグログ
+#### デバッグログ
 
 環境変数 `CLAUDE_NOTIFY_DEBUG=1` を設定すると、Hook payload と発話内容がログに書き込まれます。ログの場所は 
 既定では `~/.local/state/voicevox_claude_alerts/` です。
@@ -99,7 +101,7 @@ CLI としても利用でき、以下のサブコマンドがあります。
 ログは無制限に増えるので、不要になったら削除してください。
 
 
-## 8. WSL2 調整 [WSL2のみ]
+### 8. WSL2 調整 [WSL2のみ]
 
 - DNS 名前解決を Windows ホスト側にデリゲート
   - NAT モードの WSL2 上でも mDNS（`.local`）を利用可能
