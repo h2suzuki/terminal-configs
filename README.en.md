@@ -15,7 +15,7 @@ or
 
     # ./debian12.sh
 
-## Main setup
+## Setup
 
 The main pieces are:
 
