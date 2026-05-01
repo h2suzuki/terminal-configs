@@ -117,7 +117,7 @@ export LC_ALL=C.UTF-8
 # when adjusting the voice. Note: --loopback is intentionally NOT here — it
 # is an implementation detail (audio routing) wired into each
 # voicevox_paplay call site so it cannot be accidentally removed.
-export VVOX_OPTS="--speed 1.5"
+export VVOX_OPTS="--speed 1.2"
 # Hard caps on subprocess durations (seconds).
 export VVOX_TIMEOUT=30
 export HAIKU_TIMEOUT=45
