@@ -113,7 +113,7 @@ copy inputrc    ~/.inputrc
 copy share_ssh_x11forwarding  ~/.share_ssh_x11forwarding
 
 
-# Vim, Git / Git-LFS, tree, ripgrep
+# Neovim, Git / Git-LFS, tree, ripgrep
 run apt update
 run apt remove -f vim
 run apt install -y --no-install-recommends \
