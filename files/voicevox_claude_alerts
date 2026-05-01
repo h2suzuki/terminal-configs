@@ -218,13 +218,14 @@ ensure_lock() {
 }
 
 # True when text contains an English word — defined as a run of 3+ ASCII
-# letters with at least one lowercase. Pure-uppercase short tokens (PR, AI,
-# URL, JSON, HTTP) are excluded because VOICEVOX reads them letter-by-letter
-# ("ピーアール", "ユーアールエル"), which matches Japanese listener
-# expectation. Mixed-case / lowercase runs (push, git, Stop) need Haiku to
-# avoid being read as individual letters ("ピー・ユー・エス・エイチ").
+# letters, regardless of case. 1-2 letter tokens (A, PR, AI, OS) stay
+# direct because VOICEVOX reads them letter-by-letter ("エー", "ピーアール")
+# the way Japanese listeners expect. 3+ letter runs go to Haiku even when
+# all-uppercase (PUSH, GIT) — users sometimes shout shell verbs in caps,
+# and "ピー・ユー・エス・エイチ" beats letter-by-letter readout in neither
+# direction.
 contains_english_word() {
-  printf '%s' "$1" | LC_ALL=C grep -oE '[A-Za-z]{3,}' | LC_ALL=C grep -q '[a-z]'
+  printf '%s' "$1" | LC_ALL=C grep -qE '[A-Za-z]{3,}'
 }
 
 # Synchronously invoke Haiku to katakana-ize the given user prompt and emit
@@ -516,7 +517,7 @@ case "$EVENT" in
       [ -z "$LAST_SENTENCE" ] && LAST_SENTENCE="$LAST_LINE"
       # Already ≤30 chars AND no English word: skip the ~6s Haiku cold-start
       # and speak as-is. See contains_english_word for the exact definition
-      # (3+ ASCII letter run with at least one lowercase).
+      # (3+ consecutive ASCII letters, regardless of case).
       if [ "${#LAST_SENTENCE}" -le 30 ] && ! contains_english_word "$LAST_SENTENCE"; then
         speak_text "$LAST_SENTENCE"
       else
