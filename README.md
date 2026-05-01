@@ -34,8 +34,8 @@
 
 ### 2. X ディスプレイ・サーバーの共有
 
-- ログインユーザーの X 接続を root にも継承（`.bashrc` で `DISPLAY` と `.Xauthority` を引き継ぎ）
-  - `sudo -i` 後、root から `xeyes` を起動するとログインユーザーの画面に転送される
+- ログインユーザーの X 接続を root にも継承（ `DISPLAY` と `.Xauthority` 設定）
+  - `sudo -i` 後、root から `xeyes` を起動するとログインユーザーの画面に表示されます
 
 
 ### 3. SSH 調整
@@ -51,11 +51,11 @@
 - neovim, tree, ssh
 - git, git-lfs, GitHub CLI
 - ripgrep, bat, delta
-- AVAHI: avahi, libnss-mdns
+- avahi, libnss-mdns
 - SIXEL: img2sixel
 - UV python package manager: uv
 - Node.js LTS: nvm, node
-- Chrome: google-chrome, fonts-ipafont, fonts-noto-color-emoji, upower
+- Chrome
 - VoiceVox
 - Claude Code
 
