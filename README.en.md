@@ -34,8 +34,8 @@ Configures both the login user and root.
 
 ### 2. Sharing the X display server
 
-- Inherit the login user's X session into root (DISPLAY and .Xauthority are propagated via `.bashrc`)
-  - After `sudo -i`, running `xeyes` as root forwards to the login user's display
+- Inherit the login user's X session into root (sets `DISPLAY` and `.Xauthority`)
+  - After `sudo -i`, `xeyes` as root shows up on the login user's screen
 
 
 ### 3. SSH adjustments
@@ -51,11 +51,11 @@ Configures both the login user and root.
 - neovim, tree, ssh
 - git, git-lfs, GitHub CLI
 - ripgrep, bat, delta
-- AVAHI: avahi, libnss-mdns
+- avahi, libnss-mdns
 - SIXEL: img2sixel
 - UV python package manager: uv
 - Node.js LTS: nvm, node
-- Chrome: google-chrome, fonts-ipafont, fonts-noto-color-emoji, upower
+- Chrome
 - VoiceVox
 - Claude Code
 
