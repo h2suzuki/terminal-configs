@@ -478,12 +478,15 @@ case "$EVENT" in
       LAST_SENTENCE=$(printf '%s' "$LAST_LINE" \
         | grep -oE '[^。？！.?!]*[。？！.?!]' | tail -1 | sed 's/^[[:space:]]*//')
       [ -z "$LAST_SENTENCE" ] && LAST_SENTENCE="$LAST_LINE"
-      # Already ≤30 chars: skip the ~6s Haiku cold-start and speak as-is.
-      if [ "${#LAST_SENTENCE}" -le 30 ]; then
+      # Already ≤30 chars AND no ASCII letters: skip the ~6s Haiku cold-start
+      # and speak as-is. If ASCII letters are present (e.g. "push", "git"),
+      # VOICEVOX falls back to letter-by-letter readout ("ピー・ユー・エス…"),
+      # so route through Haiku — its system prompt katakana-izes English.
+      if [ "${#LAST_SENTENCE}" -le 30 ] && ! printf '%s' "$LAST_SENTENCE" | LC_ALL=C grep -q '[A-Za-z]'; then
         speak_text "$LAST_SENTENCE"
       else
-        speak_summary "次の一文を、意図と意味を保ったまま 30 文字以下の自然な日本語に短縮してください。
-出力は短縮した一文のみ。装飾・引用符・改行・前置きなし。
+        speak_summary "次の一文を、意図と意味を保ったまま 30 文字以下の自然な日本語に整えてください。
+出力は整えた一文のみ。装飾・引用符・改行・前置きなし。
 
 文:
 $LAST_SENTENCE" "${EVENT_PHRASES[Stop]}"
