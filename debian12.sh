@@ -69,10 +69,10 @@ copy()
             echo -e "=> ${COLOR_YELLOW}$FNAME is already copied${COLOR_CLEAR}\n"
         else
             [ $BACKUP -eq 0 -o -e "$DST.org" ] || run install $@ "$DST" "$DST.org"
-            run install $@ "$TOP_DIR/$FNAME" "$DST"
+            run install "$@" "$TOP_DIR/$FNAME" "$DST"
         fi
     else
-        run install -D $@ "$TOP_DIR/$FNAME" "$DST"
+        run install -D "$@" "$TOP_DIR/$FNAME" "$DST"
     fi
 }
 
@@ -81,6 +81,7 @@ copy()
 [ -e ~/.bashrc ] &&
 run sed -i ~/.bashrc \
     -e '/export\ LS_OPTIONS/s/^\ *#*\ *//' \
+    -e 's/xterm-color[^\)]*/xterm-color\|\*-256color/' \
     -e '/eval\ \"\`dircolor/s/^\ *#*\ *//' \
     -e '/alias\ ls=/s/^\ *#*\ *//' \
     -e '/^alias\ ls=/s/ls\ \$LS_OPTIONS/ls\ --group-directories-first\ \$LS_OPTIONS/' \
@@ -109,12 +110,13 @@ copy pulseaudio-forwarding.sh  /etc/profile.d/pulseaudio-forwarding.sh
 run chmod 0644 /etc/profile.d/pulseaudio-forwarding.sh
 
 
-# Vim, Git / Git-LFS, tree, ripgrep
+# Neovim, Git / Git-LFS, tree, ripgrep
 run apt update
+run apt remove -f vim
 run apt install -y --no-install-recommends \
 neovim git git-lfs tree ripgrep
 
-copy --nobackup vimrc.local /etc/xdg/nvim/sysinit.vim
+copy --nobackup sysinit.vim /etc/xdg/nvim/sysinit.vim   # Neovim system-wide init file
 
 run git lfs install --skip-repo
 
@@ -129,6 +131,18 @@ run apt install -y --no-install-recommends \
 xauth jq x11-apps mesa-utils vulkan-tools wayland-utils \
 vdpau-driver-all va-driver-all \
 pulseaudio-utils
+
+
+
+# UV python package manager
+[ -s /tmp/uv_install.sh ] ||
+run curl -o /tmp/uv_install.sh \
+  -fsSL https://astral.sh/uv/install.sh
+chmod u-s,o+r /tmp/uv_install.sh
+
+export UV_INSTALL_DIR=/usr/local/bin
+run bash /tmp/uv_install.sh
+run uv self update
 
 
 # git-delta   ref. https://github.com/dandavison/delta/releases
@@ -167,6 +181,56 @@ run apt update
 run apt install -y gh
 
 
+# Voicevox Core and Pasimple for PulseAudio Python binding
+VV_VER=0.16.4
+VV_BIN_DIR=/usr/local/bin
+VV_LIB_DIR=/usr/lib/voicevox-core
+
+run uv pip install --system --break-system-packages pasimple
+run uv pip install --system --break-system-packages \
+  https://github.com/VOICEVOX/voicevox_core/releases/download/${VV_VER}/voicevox_core-${VV_VER}-cp310-abi3-manylinux_2_34_x86_64.whl
+
+[ -s /tmp/voicevox_install.sh ] ||
+run curl -o /tmp/voicevox_install.sh \
+  -fsSL https://github.com/VOICEVOX/voicevox_core/releases/download/$VV_VER/download-linux-x64
+chmod u-s,u+x /tmp/voicevox_install.sh
+
+rm -rf $VV_LIB_DIR
+expect -c '
+# GitHub login can relax the ratelimit restriction posed by this downloader
+set env(GH_TOKEN) '"$(gh auth token)"'
+set timeout 120
+
+spawn /tmp/voicevox_install.sh --output '"$VV_LIB_DIR"' --exclude c-api --models-pattern {[0-9]*.vvm}
+
+expect {
+    "*qを押してください*" {
+        send "q"
+        expect "*\[y,n,r\]*"
+        send "y\r"
+    }
+    "*\[y,n,r\]*" {
+        send "y\r"
+    }
+    timeout {
+        puts "タイムアウトしました"
+        exit 1 ;
+    }
+    eof {
+        puts "接続が切れました"
+        exit 1 ;
+    }
+}
+expect eof
+'
+
+run [ -s $VV_LIB_DIR/dict/open_jtalk_dic_utf*/sys.dic ]
+run [ -s $VV_LIB_DIR/models/vvms/0.vvm ]
+run [ -s $VV_LIB_DIR/onnxruntime/lib//libvoicevox_onnxruntime.so* ]
+
+copy --nobackup voicevox_paplay ${VV_BIN_DIR}/voicevox_paplay
+
+
 # Node.js
 [ -s /tmp/nvm_install.sh ] ||
 run curl -o /tmp/nvm_install.sh \
@@ -191,7 +255,12 @@ run curl -o /tmp/claude_install.sh \
 chmod u-s,o+r /tmp/claude_install.sh
 run bash /tmp/claude_install.sh
 
-run npm install -g ccusage
+run uv tool install --force claude-monitor #--system --break-system-packages pasimple
+
+copy --nobackup claude_CLAUDE.md        /etc/claude-code/CLAUDE.md
+copy --nobackup claude_statusline.sh    /etc/claude-code/statusline.sh -m 0755
+copy --nobackup voicevox_claude_alerts  /usr/local/bin/voicevox_claude_alerts -m 0755
+copy --nobackup claude_settings.json    ~/.claude/settings.json
 
 
 # The current user settings
@@ -246,7 +315,7 @@ EOF
     run sudo -u $LOGIN_USER bash -i -c '"nvm install --lts"'    # nvm is a shell function.
     run sudo -u $LOGIN_USER bash -i -c '"npm uninstall -g @anthropic-ai/claude-code || true"'
     run sudo -u $LOGIN_USER bash -i -c '"bash /tmp/claude_install.sh"'
-    run sudo -u $LOGIN_USER bash -i -c '"npm install -g ccusage"'
+    copy --nobackup claude_settings.json ~$LOGIN_USER/.claude/settings.json --owner $LOGIN_USER
 
 else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
