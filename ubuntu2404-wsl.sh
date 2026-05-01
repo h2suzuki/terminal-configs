@@ -85,6 +85,7 @@ copy()
 [ -e ~/.bashrc ] &&
 run sed -i ~/.bashrc \
     -e '/export\ LS_OPTIONS/s/^\ *#*\ *//' \
+    -e 's/xterm-color[^\)]*/xterm-color\|\*-256color/' \
     -e '/eval\ \"\`dircolor/s/^\ *#*\ *//' \
     -e '/alias\ ls=/s/^\ *#*\ *//' \
     -e '/^alias\ ls=/s/ls\ \$LS_OPTIONS/ls\ --group-directories-first\ \$LS_OPTIONS/' \
