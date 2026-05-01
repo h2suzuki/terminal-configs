@@ -121,8 +121,13 @@ export VVOX_OPTS="--speed 1.2"
 # Hard caps on subprocess durations (seconds).
 export VVOX_TIMEOUT=30
 export HAIKU_TIMEOUT=45
-# Haiku model used for Stop / SubagentStop summarization.
+# Haiku model used for Stop / SubagentStop summarization and CLI `say`
+# katakana conversion.
 export HAIKU_MODEL="claude-haiku-4-5"
+# Haiku system prompt — single source of truth for the katakana-conversion
+# persona used by every claude -p call this script makes. Both Stop
+# summarization and CLI say share it; only the user prompt differs.
+export HAIKU_SYSTEM_PROMPT="あなたは日本語のテキスト整形 AI です。出力にアルファベット表記を残さず、意訳せず発音をそのままカタカナにしてください。カタカナの間に中黒「・」は入れないでください。例: voicevox_paplay → ヴォイスボックスピーエープレイ、VVOX_LOCK → ブイヴォックスロック、ConfigChange → コンフィグチェンジ。"
 
 # Hook events accepted by the dispatcher; also surfaced via the `events` CLI.
 # Listed explicitly (rather than derived from EVENT_PHRASES keys) so the
@@ -192,7 +197,9 @@ fi
 #                    summarizer breaks. The CLI never reaches this lock
 #                    because the CLI path doesn't invoke claude.
 VVOX_LOCK="/tmp/$PROG_NAME.voicevox.lock"
-HAIKU_LOCK="/tmp/$PROG_NAME.haiku.lock"
+# Exported so haiku_katakanize_sync can flock it from a setsid -f subshell
+# (the hook path) without having to thread it through positional args.
+export HAIKU_LOCK="/tmp/$PROG_NAME.haiku.lock"
 
 if [ "${CLAUDE_NOTIFY_DEBUG:-0}" = "1" ]; then
   DUMP_LOG="$STATE_DIR/dump.jsonl"
@@ -210,12 +217,39 @@ ensure_lock() {
   [ -e "$1" ] || ( umask 0; : > "$1" ) 2>/dev/null
 }
 
+# True when text contains an English word — defined as a run of 3+ ASCII
+# letters with at least one lowercase. Pure-uppercase short tokens (PR, AI,
+# URL, JSON, HTTP) are excluded because VOICEVOX reads them letter-by-letter
+# ("ピーアール", "ユーアールエル"), which matches Japanese listener
+# expectation. Mixed-case / lowercase runs (push, git, Stop) need Haiku to
+# avoid being read as individual letters ("ピー・ユー・エス・エイチ").
+contains_english_word() {
+  printf '%s' "$1" | LC_ALL=C grep -oE '[A-Za-z]{3,}' | LC_ALL=C grep -q '[a-z]'
+}
+
+# Synchronously invoke Haiku to katakana-ize the given user prompt and emit
+# the resulting single-line text on stdout (empty on failure). Caller chooses
+# foreground (CLI say) vs detached (hook path wraps this in setsid -f inside
+# speak_summary). Exported so it is visible inside `bash -c '...'` subshells.
+haiku_katakanize_sync() {
+  cd /tmp && CLAUDE_NOTIFY_NESTED=1 \
+    flock "$HAIKU_LOCK" timeout "$HAIKU_TIMEOUT" claude \
+    --model "$HAIKU_MODEL" \
+    --no-session-persistence \
+    --disable-slash-commands \
+    --tools "" \
+    --strict-mcp-config \
+    --system-prompt "$HAIKU_SYSTEM_PROMPT" \
+    -p "$1" 2>/dev/null \
+    | tr -d "\r\n"
+}
+export -f haiku_katakanize_sync
+
 # CLI flag: --serialize makes the `say` subcommand take VVOX_LOCK so the CLI
 # utterance won't overlap with concurrent hook-driven ones. Hook mode takes
 # VVOX_LOCK unconditionally (wired into the speak_* helpers below), so this
-# flag only has effect on the CLI path. HAIKU_LOCK is unrelated to this
-# flag — it is always taken whenever speak_summary calls claude -p, never
-# from the CLI path.
+# flag only has effect on the CLI path. HAIKU_LOCK is taken whenever any
+# claude -p call runs — Stop summarization, or CLI say with English-word text.
 SERIALIZE=0
 if [ "${1:-}" = "--serialize" ]; then
   SERIALIZE=1
@@ -298,6 +332,18 @@ case "${1:-}" in
     # If $2 names a hook event, speak its characteristic phrase (same
     # text the runtime handler would use). Otherwise treat $2 as raw text.
     text="${EVENT_PHRASES[$2]:-$2}"
+    # English word in the text (push, git, ...) → route through Haiku
+    # synchronously so VOICEVOX gets katakana instead of bare ASCII (which
+    # it would otherwise read out letter by letter). CLI is interactive,
+    # so we block here; hook path detaches the equivalent call via setsid.
+    if contains_english_word "$text"; then
+      ensure_lock "$HAIKU_LOCK"
+      converted=$(haiku_katakanize_sync "次の一文をそのままカタカナ化して返してください。意味・長さ・語順は変えないでください。出力は変換後の一文のみ。装飾・引用符・改行・前置きなし。
+
+文:
+$text")
+      [ -n "$converted" ] && text=$converted
+    fi
     if [ "$SERIALIZE" = "1" ]; then
       ensure_lock "$VVOX_LOCK"
       exec flock "$VVOX_LOCK" voicevox_paplay --loopback $VVOX_OPTS "$text"
@@ -408,19 +454,9 @@ speak_summary() {
     prompt=$1
     fallback=$2
     vvox_lock=$3
-    haiku_lock=$4
-    event=$5
-    log=$6
-    summary=$(cd /tmp && CLAUDE_NOTIFY_NESTED=1 \
-              flock "$haiku_lock" timeout "$HAIKU_TIMEOUT" claude \
-              --model "$HAIKU_MODEL" \
-              --no-session-persistence \
-              --disable-slash-commands \
-              --tools "" \
-              --strict-mcp-config \
-              --system-prompt "あなたは日本語の要約専門 AI です。出力にアルファベット表記を残さず、意訳せず発音をそのままカタカナにしてください。カタカナの間に中黒「・」は入れないでください。例: voicevox_paplay → ヴォイスボックスピーエープレイ、VVOX_LOCK → ブイヴォックスロック、ConfigChange → コンフィグチェンジ。" \
-              -p "$prompt" 2>/dev/null \
-              | tr -d "\r\n")
+    event=$4
+    log=$5
+    summary=$(haiku_katakanize_sync "$prompt")
     # Safety cap: the prompt asks for ≤30 chars but Haiku occasionally
     # overshoots; allow up to 40 then chop. Bash substring is character-
     # aware (not byte-based) under LC_ALL=C.UTF-8, so this never splits
@@ -429,7 +465,7 @@ speak_summary() {
     [ -z "$summary" ] && summary=$fallback
     [ -n "$log" ] && printf "%s\t%s\t%s\n" "$(date -Iseconds)" "$event" "$summary" >> "$log"
     flock "$vvox_lock" timeout "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS "$summary"
-  ' _ "$prompt" "$fallback" "$VVOX_LOCK" "$HAIKU_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
+  ' _ "$prompt" "$fallback" "$VVOX_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
 }
 
 age_of() {
@@ -478,11 +514,10 @@ case "$EVENT" in
       LAST_SENTENCE=$(printf '%s' "$LAST_LINE" \
         | grep -oE '[^。？！.?!]*[。？！.?!]' | tail -1 | sed 's/^[[:space:]]*//')
       [ -z "$LAST_SENTENCE" ] && LAST_SENTENCE="$LAST_LINE"
-      # Already ≤30 chars AND no ASCII letters: skip the ~6s Haiku cold-start
-      # and speak as-is. If ASCII letters are present (e.g. "push", "git"),
-      # VOICEVOX falls back to letter-by-letter readout ("ピー・ユー・エス…"),
-      # so route through Haiku — its system prompt katakana-izes English.
-      if [ "${#LAST_SENTENCE}" -le 30 ] && ! printf '%s' "$LAST_SENTENCE" | LC_ALL=C grep -q '[A-Za-z]'; then
+      # Already ≤30 chars AND no English word: skip the ~6s Haiku cold-start
+      # and speak as-is. See contains_english_word for the exact definition
+      # (3+ ASCII letter run with at least one lowercase).
+      if [ "${#LAST_SENTENCE}" -le 30 ] && ! contains_english_word "$LAST_SENTENCE"; then
         speak_text "$LAST_SENTENCE"
       else
         speak_summary "次の一文を、意図と意味を保ったまま 30 文字以下の自然な日本語に整えてください。
