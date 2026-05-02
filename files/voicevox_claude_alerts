@@ -233,9 +233,17 @@ contains_english_word() {
 # foreground (CLI say) vs detached (hook path wraps this in setsid -f inside
 # speak_summary). Exported so it is visible inside `bash -c '...'` subshells.
 haiku_katakanize_sync() {
+  # --setting-sources project,local skips loading ~/.claude/settings.json
+  # (the "user" source) so that user-level SessionStart/PreCompact/etc.
+  # hooks don't fire for these short-lived summarizer calls. Without this
+  # an installed SessionStart hook (e.g. claude-md-lint) would push the
+  # call past HAIKU_TIMEOUT and we'd fall through to the fixed fallback
+  # phrase. /tmp has no project-level settings, so the result is a clean
+  # bare config — but auth (OAuth/keychain) is unaffected, unlike --bare.
   cd /tmp && CLAUDE_NOTIFY_NESTED=1 \
     flock "$HAIKU_LOCK" timeout "$HAIKU_TIMEOUT" claude \
     --model "$HAIKU_MODEL" \
+    --setting-sources project,local \
     --no-session-persistence \
     --disable-slash-commands \
     --tools "" \

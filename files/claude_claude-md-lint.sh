@@ -9,14 +9,6 @@
 # Re-entry guard: CLAUDE_MD_LINT_PARENT env var. The child `claude -p`
 # inherits it; the child's hook sees it and exits silently.
 #
-# Also skipped when CLAUDE_NOTIFY_NESTED=1 is set — that env var is
-# exported by voicevox_claude_alerts around its short-lived `claude -p`
-# summarizer / katakana-izer calls. Without this guard those calls
-# would each trigger a full lint pass (up to 90 s) and exceed the 45 s
-# HAIKU_TIMEOUT, falling through to the fixed "ご返答をお願いします"
-# fallback phrase. Treating other-script-spawned `claude -p` calls the
-# same as our own re-entry is the cheapest fix.
-#
 # Stdin: SessionStart payload JSON (uses .cwd).
 # Stdout: JSON with hookSpecificOutput.additionalContext, or empty.
 
@@ -28,7 +20,7 @@ readonly TIMEOUT_S=90
 
 # --- re-entry guard ---------------------------------------------------------
 
-if [[ -n "${CLAUDE_MD_LINT_PARENT:-}" || -n "${CLAUDE_NOTIFY_NESTED:-}" ]]; then
+if [[ -n "${CLAUDE_MD_LINT_PARENT:-}" ]]; then
   exit 0
 fi
 
