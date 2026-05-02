@@ -30,6 +30,15 @@ hunk-header-style = file line-number syntax
 [credential]
 helper = cache --timeout 259200
 
+[credential "https://github.com"]
+# Cache miss (or first use) on github.com falls through to gh's
+# git-credential helper, which mints a credential from the gh CLI's
+# stored OAuth token. The cache helper above then captures the
+# returned credential, so subsequent operations stay in-memory for
+# the cache TTL. Scoped to github.com so non-github hosts are
+# unaffected.
+helper = !gh auth git-credential
+
 [alias]
 co = checkout
 br = branch
