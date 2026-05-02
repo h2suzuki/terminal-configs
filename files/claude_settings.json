@@ -32,6 +32,9 @@
     ],
     "WorktreeCreate": [
       { "hooks": [ { "type": "command", "command": "/usr/local/bin/voicevox_claude_alerts WorktreeCreate" } ] }
+    ],
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/claude-md-lint.sh", "timeout": 120 } ] }
     ]
   },
   "spinnerVerbs": {

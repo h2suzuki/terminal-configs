@@ -294,10 +294,12 @@ run bash /tmp/claude_install.sh
 
 run uv tool install --force claude-monitor #--system --break-system-packages pasimple
 
-copy --nobackup claude_CLAUDE.md        /etc/claude-code/CLAUDE.md
-copy --nobackup claude_statusline.sh    /etc/claude-code/statusline.sh -m 0755
-copy --nobackup voicevox_claude_alerts  /usr/local/bin/voicevox_claude_alerts -m 0755
-copy --nobackup claude_settings.json    ~/.claude/settings.json
+copy --nobackup claude_CLAUDE.md                /etc/claude-code/CLAUDE.md
+copy --nobackup claude_statusline.sh            /etc/claude-code/statusline.sh -m 0755
+copy --nobackup claude-md-lint.sh               /etc/claude-code/claude-md-lint.sh -m 0755
+copy --nobackup voicevox_claude_alerts          /usr/local/bin/voicevox_claude_alerts -m 0755
+copy --nobackup claude_settings.json            ~/.claude/settings.json
+copy --nobackup claude_skill_claude-md-lint.md  ~/.claude/skills/claude-md-lint/SKILL.md
 
 
 # The current user settings
@@ -360,6 +362,8 @@ EOF
     run sudo -u $LOGIN_USER bash -i -c '"npm uninstall -g @anthropic-ai/claude-code || true"'
     run sudo -u $LOGIN_USER bash -i -c '"bash /tmp/claude_install.sh"'
     copy --nobackup claude_settings.json ~$LOGIN_USER/.claude/settings.json --owner $LOGIN_USER
+    copy --nobackup claude_skill_claude-md-lint.md \
+                                         ~$LOGIN_USER/.claude/skills/claude-md-lint/SKILL.md --owner $LOGIN_USER
 
 else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
