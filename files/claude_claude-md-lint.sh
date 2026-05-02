@@ -23,7 +23,13 @@
 
 set -u
 
-readonly CACHE_DIR="${HOME}/.claude/cache/claude-md-lint"
+# Cache directory follows the same XDG-aware rule as voicevox_paplay:
+# $XDG_CACHE_HOME/<prog-name>, falling back to ~/.cache/<prog-name>
+# when the env var is unset or empty. The .sh suffix is stripped so
+# the cache subdir name reflects the tool's identity rather than its
+# implementation language.
+readonly PROG_NAME="$(basename "$0" .sh)"
+readonly CACHE_DIR="${XDG_CACHE_HOME:-${HOME}/.cache}/${PROG_NAME}"
 readonly SKILL_MD="/etc/claude-code/claude-md-lint.md"
 readonly MAX_HOPS=5
 # 150 s leaves headroom over the empirically observed ~60–90 s
