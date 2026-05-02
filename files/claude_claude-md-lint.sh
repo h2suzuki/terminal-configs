@@ -9,20 +9,40 @@
 # Re-entry guard: CLAUDE_MD_LINT_PARENT env var. The child `claude -p`
 # inherits it; the child's hook sees it and exits silently.
 #
+# Architecture note: the hook resolves the candidate file paths but
+# does NOT inline their contents into the prompt. The skill body
+# (/etc/claude-code/claude-md-lint.md) is injected via
+# --append-system-prompt and the child claude reads each file itself
+# via Read tool. This is required because `claude -p` does not
+# auto-resolve `/skill-name` slash commands at the start of a prompt
+# — the skill's instructions need to land in the child's system
+# prompt explicitly.
+#
 # Stdin: SessionStart payload JSON (uses .cwd).
 # Stdout: JSON with hookSpecificOutput.additionalContext, or empty.
 
 set -u
 
 readonly CACHE_DIR="${HOME}/.claude/cache/claude-md-lint"
+readonly SKILL_MD="/etc/claude-code/claude-md-lint.md"
 readonly MAX_HOPS=5
-readonly TIMEOUT_S=90
+# 150 s leaves headroom over the empirically observed ~60–90 s
+# variance for --effort high lints; once a result is cached, repeat
+# session starts return instantly so the longer cap costs nothing on
+# the steady-state path.
+readonly TIMEOUT_S=150
 
 # --- re-entry guard ---------------------------------------------------------
 
 if [[ -n "${CLAUDE_MD_LINT_PARENT:-}" ]]; then
   exit 0
 fi
+
+# Without the skill body file there is nothing to inject — bail out
+# silently rather than firing a degraded lint. -s requires a non-zero
+# size (so a half-installed empty file doesn't slip through); -r
+# verifies the running uid can actually read it.
+[[ -s "$SKILL_MD" && -r "$SKILL_MD" ]] || exit 0
 
 # --- stdin payload → cwd ----------------------------------------------------
 
@@ -95,13 +115,14 @@ done
 
 ((${#seen[@]} == 0)) && exit 0
 
-# --- cache key (sorted paths + contents + claude version) -------------------
+# --- cache key (sorted paths + contents + skill body + claude version) ------
 
 sorted_paths="$(printf '%s\n' "${!seen[@]}" | sort)"
 
 key="$(
   {
     claude --version 2>/dev/null || echo unknown
+    cat "$SKILL_MD" 2>/dev/null
     while IFS= read -r p; do
       printf '%s\0' "$p"
       printf '%s\n' "${content_of[$p]}"
@@ -119,16 +140,49 @@ report=""
 if [[ -f "$cache_file" ]]; then
   report="$(cat "$cache_file" 2>/dev/null || true)"
 else
-  prompt_body=""
+  # Build a path-list user prompt and a deduplicated --add-dir list for
+  # every directory holding a target file. The child claude reads each
+  # file via Read tool; --permission-mode bypassPermissions skips the
+  # interactive permission prompt that --tools Read would otherwise
+  # trigger on first access.
+  paths_block=""
+  add_dirs=()
+  declare -A dir_seen=()
   while IFS= read -r p; do
-    prompt_body+="## ${p}"$'\n\n'"${content_of[$p]}"$'\n\n---\n\n'
+    paths_block+="- ${p}"$'\n'
+    d="$(dirname "$p")"
+    if [[ -z "${dir_seen[$d]:-}" ]]; then
+      dir_seen[$d]=1
+      add_dirs+=(--add-dir "$d")
+    fi
   done <<<"$sorted_paths"
 
-  prompt=$'/claude-md-lint\n\n以下が session start で auto-load される memory file 群です。skill の評価観点に従って判定してください。\n\n'"$prompt_body"
+  user_prompt=$'以下のファイルを Read tool で読み、評価観点に従って判定してください。\n\n'"$paths_block"
+  skill_body="$(cat "$SKILL_MD" 2>/dev/null)"
 
+  # --effort high: empirically required. low produced 5/5 false-positive
+  # findings (the model skipped the 3-axis "適用文脈の検査" step that the
+  # skill body mandates and reported soft overlaps as duplicates). medium
+  # is correct on judgment but ran ~82 s — uncomfortably close to the
+  # 90 s TIMEOUT_S. high lands at ~59 s with correct judgment.
+  #
+  # --setting-sources local: skip ~/.claude/settings.json so this child
+  # session doesn't re-fire the SessionStart hook (defence in depth on
+  # top of the CLAUDE_MD_LINT_PARENT guard) and doesn't inherit the
+  # user's effortLevel override.
   report="$(
     CLAUDE_MD_LINT_PARENT=1 timeout "$TIMEOUT_S" \
-      claude -p --model claude-haiku-4-5-20251001 "$prompt" </dev/null 2>/dev/null || true
+      claude -p \
+        --model claude-haiku-4-5-20251001 \
+        --effort high \
+        --setting-sources local \
+        --no-session-persistence \
+        --strict-mcp-config \
+        --tools Read \
+        "${add_dirs[@]}" \
+        --permission-mode bypassPermissions \
+        --append-system-prompt "$skill_body" \
+        "$user_prompt" </dev/null 2>/dev/null || true
   )"
 
   if [[ -n "$report" ]]; then

@@ -262,7 +262,9 @@ copy --nobackup claude_statusline.sh            /etc/claude-code/statusline.sh -
 copy --nobackup claude_claude-md-lint.sh        /etc/claude-code/claude-md-lint.sh -m 0755
 copy --nobackup voicevox_claude_alerts          /usr/local/bin/voicevox_claude_alerts -m 0755
 copy --nobackup claude_settings.json            ~/.claude/settings.json
-copy --nobackup claude_skill_claude-md-lint.md  ~/.claude/skills/claude-md-lint/SKILL.md
+copy --nobackup claude_claude-md-lint.md        /etc/claude-code/claude-md-lint.md
+run install -d ~/.claude/skills/claude-md-lint
+run ln -sfn /etc/claude-code/claude-md-lint.md  ~/.claude/skills/claude-md-lint/SKILL.md
 
 
 # The current user settings
@@ -318,8 +320,9 @@ EOF
     run sudo -u $LOGIN_USER bash -i -c '"npm uninstall -g @anthropic-ai/claude-code || true"'
     run sudo -u $LOGIN_USER bash -i -c '"bash /tmp/claude_install.sh"'
     copy --nobackup claude_settings.json ~$LOGIN_USER/.claude/settings.json --owner $LOGIN_USER
-    copy --nobackup claude_skill_claude-md-lint.md \
-                                         ~$LOGIN_USER/.claude/skills/claude-md-lint/SKILL.md --owner $LOGIN_USER
+    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/claude-md-lint
+    run sudo -u $LOGIN_USER ln -sfn /etc/claude-code/claude-md-lint.md \
+                                         ~$LOGIN_USER/.claude/skills/claude-md-lint/SKILL.md
 
 else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
