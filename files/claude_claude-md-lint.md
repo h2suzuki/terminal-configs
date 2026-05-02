@@ -112,7 +112,7 @@ flag するときは「verification 不能」だけでなく「**実際に動作
 
 冒頭にスキャン対象一覧、空行を挟んで finding list（または「なし」）を出力する。
 
-スキャン対象一覧は実際に Read したファイルのフルパスを 1 行 1 path で並べ、最後に `- System Prompt`（lint の判定基準として参照しているため）。 system prompt 自体は file ではないので path は付けず、固定の表記「System Prompt」を使う。
+スキャン対象一覧は先頭に `- System Prompt`（lint の判定基準として参照しているため）、続けて実際に Read したファイルのフルパスを 1 行 1 path で並べる。 system prompt 自体は file ではないので path は付けず、固定の表記「System Prompt」を使う。
 
 finding 行の構造（変更なし）:
 
@@ -126,10 +126,10 @@ finding 行の構造（変更なし）:
 
 ```
 スキャン対象:
+- System Prompt
 - /etc/claude-code/CLAUDE.md
 - /home/h2suzuki/.claude/CLAUDE.md
 - /home/h2suzuki/.claude/projects/-home-h2suzuki-terminal-configs/memory/MEMORY.md
-- System Prompt
 
 - [System Prompt 重複] /etc/claude-code/CLAUDE.md §7「`git push` は自動で行わず」: System Prompt「DO NOT push to the remote repository unless...」と重複（削除しても System Prompt 経由で同じ動作）
 - [input 内重複] ~/.claude/CLAUDE.md「コミットメッセージは英語で」 と /etc/claude-code/CLAUDE.md §7「コミットメッセージは英語で」 が重複
@@ -142,10 +142,10 @@ finding 行の構造（変更なし）:
 
 ```
 スキャン対象:
+- System Prompt
 - /etc/claude-code/CLAUDE.md
 - /home/h2suzuki/.claude/CLAUDE.md
 - /home/h2suzuki/.claude/projects/-home-h2suzuki-terminal-configs/memory/MEMORY.md
-- System Prompt
 
 なし
 ```
