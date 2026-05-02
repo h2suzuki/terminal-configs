@@ -164,18 +164,19 @@ else
   # findings (the model skipped the 3-axis "適用文脈の検査" step that the
   # skill body mandates and reported soft overlaps as duplicates). medium
   # is correct on judgment but ran ~82 s — uncomfortably close to the
-  # 90 s TIMEOUT_S. high lands at ~59 s with correct judgment.
+  # 90 s TIMEOUT_S that used to apply. high lands at ~55–60 s with
+  # correct judgment.
   #
-  # --setting-sources local: skip ~/.claude/settings.json so this child
-  # session doesn't re-fire the SessionStart hook (defence in depth on
-  # top of the CLAUDE_MD_LINT_PARENT guard) and doesn't inherit the
-  # user's effortLevel override.
+  # --setting-sources "": load no settings file at all (the empty value
+  # is accepted by claude). This blocks user-level SessionStart hooks
+  # from re-firing (defence in depth on top of CLAUDE_MD_LINT_PARENT)
+  # and stops the user's effortLevel override from leaking in.
   report="$(
     CLAUDE_MD_LINT_PARENT=1 timeout "$TIMEOUT_S" \
       claude -p \
         --model claude-haiku-4-5-20251001 \
         --effort high \
-        --setting-sources local \
+        --setting-sources "" \
         --no-session-persistence \
         --strict-mcp-config \
         --tools Read \

@@ -233,19 +233,22 @@ contains_english_word() {
 # foreground (CLI say) vs detached (hook path wraps this in setsid -f inside
 # speak_summary). Exported so it is visible inside `bash -c '...'` subshells.
 haiku_katakanize_sync() {
-  # --setting-sources local skips both ~/.claude/settings.json (user)
-  # and <cwd>/.claude/settings.json (project), so user-level SessionStart
-  # hooks etc. don't fire for these short-lived calls. /tmp has no
-  # .claude/settings.local.json either, so the net effect is "load no
-  # settings". Auth (OAuth/keychain) is unaffected, unlike --bare.
+  # --setting-sources "" loads no settings file at all (the empty
+  # string is accepted by claude as "skip every source", verified
+  # empirically). Earlier we used `cd /tmp && --setting-sources local`
+  # to land in a directory without a .claude/ tree — this is the
+  # cleaner equivalent. User-level SessionStart hooks don't fire on
+  # this short-lived child, the user's effortLevel doesn't leak in,
+  # and OAuth/keychain auth keeps working (unlike --bare).
   # --effort low: a single-line katakana / 30-char summarize task
-  # doesn't benefit from the higher effort tier set in user settings
-  # and pays a real latency cost there.
-  cd /tmp && CLAUDE_NOTIFY_NESTED=1 \
+  # doesn't benefit from a higher effort tier and pays a real latency
+  # cost. Long input + low effort still produces correct summaries —
+  # measured ~14 s for a ~1.1 KB SubagentStop message.
+  CLAUDE_NOTIFY_NESTED=1 \
     flock "$HAIKU_LOCK" timeout "$HAIKU_TIMEOUT" claude \
     --model "$HAIKU_MODEL" \
     --effort low \
-    --setting-sources local \
+    --setting-sources "" \
     --no-session-persistence \
     --disable-slash-commands \
     --tools "" \
