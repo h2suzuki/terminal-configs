@@ -201,9 +201,23 @@ fi
 # --- emit additionalContext if any findings ---------------------------------
 
 report="$(printf '%s' "$report" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
-[[ -z "$report" || "$report" == "なし" ]] && exit 0
+[[ -z "$report" ]] && exit 0
 
-greeting=$'## CLAUDE.md / memory lint レポート\n\nsession 起動時に auto-load される memory file 群（CLAUDE.md チェーン、MEMORY.md、`@` 参照）を `/claude-md-lint` skill で lint した結果:\n\n'"$report"$'\n\n最初のユーザーメッセージへの応答冒頭で、上記レポートを 3 行以内で簡潔に伝えてください（findings list を要約 + 詳細はユーザーが要求した時のみ展開）。それ以降は通常のセッションとして進めてください。'
+# The lint skill writes "<scan list>\n\n<findings or なし>" to the cache so
+# anyone inspecting the file later can see what was actually scanned. But
+# if we echo that header back to the next session as additionalContext,
+# the receiving model treats the file list as part of the lint report
+# and gets confused. Strip everything up to and including the first
+# blank line; what remains is the findings body.
+findings="$(printf '%s\n' "$report" | awk 'p{print} /^$/{p=1}')"
+# Fallback: if the model skipped the header (no blank line found), use
+# the whole report as findings. Keeps backward compatibility with output
+# that hasn't picked up the new format yet.
+[[ -z "$findings" ]] && findings="$report"
+findings="$(printf '%s' "$findings" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+[[ -z "$findings" || "$findings" == "なし" ]] && exit 0
+
+greeting=$'## CLAUDE.md / memory lint レポート\n\nsession 起動時に auto-load される memory file 群（CLAUDE.md チェーン、MEMORY.md、`@` 参照）を `/claude-md-lint` skill で lint した結果:\n\n'"$findings"$'\n\n最初のユーザーメッセージへの応答冒頭で、上記レポートを 3 行以内で簡潔に伝えてください（findings list を要約 + 詳細はユーザーが要求した時のみ展開）。それ以降は通常のセッションとして進めてください。'
 
 jq -n --arg ctx "$greeting" \
   '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}' 2>/dev/null

@@ -110,28 +110,51 @@ flag するときは「verification 不能」だけでなく「**実際に動作
 
 ## 出力
 
-5 件以内、優先度の高い順。問題が無ければ `なし` の 1 行のみ出力する。
+冒頭にスキャン対象一覧、空行を挟んで finding list（または「なし」）を出力する。
 
-各 finding は以下の構造で 1 行ずつ。
+スキャン対象一覧は実際に Read したファイルのフルパスを 1 行 1 path で並べ、最後に `- System Prompt`（lint の判定基準として参照しているため）。 system prompt 自体は file ではないので path は付けず、固定の表記「System Prompt」を使う。
+
+finding 行の構造（変更なし）:
 
 ```
 - [<観点>] <出典>: <短い問題説明>
 ```
 
-例:
+出典内で system prompt を言及するときも同じく「System Prompt」と表記する。
+
+例（findings あり）:
 
 ```
-- [system prompt 重複] /etc/claude-code/CLAUDE.md §7「`git push` は自動で行わず」: system prompt "DO NOT push to the remote repository unless..." と重複（削除しても system prompt 経由で同じ動作）
+スキャン対象:
+- /etc/claude-code/CLAUDE.md
+- /home/h2suzuki/.claude/CLAUDE.md
+- /home/h2suzuki/.claude/projects/-home-h2suzuki-terminal-configs/memory/MEMORY.md
+- System Prompt
+
+- [System Prompt 重複] /etc/claude-code/CLAUDE.md §7「`git push` は自動で行わず」: System Prompt「DO NOT push to the remote repository unless...」と重複（削除しても System Prompt 経由で同じ動作）
 - [input 内重複] ~/.claude/CLAUDE.md「コミットメッセージは英語で」 と /etc/claude-code/CLAUDE.md §7「コミットメッセージは英語で」 が重複
 - [stale] memory/MEMORY.md: 参照している `/bootstrap` skill は他 input で `/wire` に rename 済み
 - [input 内矛盾] /etc/claude-code/CLAUDE.md §2「サブエージェントは惜しまず使う」 vs ~/.claude/CLAUDE.md「sub agent は最後の手段」
 - [不明瞭] ~/.claude/CLAUDE.md「直感を疑え」: 適用文脈が抽象的で、検証手段が示されていない
 ```
 
+例（クリーン）:
+
+```
+スキャン対象:
+- /etc/claude-code/CLAUDE.md
+- /home/h2suzuki/.claude/CLAUDE.md
+- /home/h2suzuki/.claude/projects/-home-h2suzuki-terminal-configs/memory/MEMORY.md
+- System Prompt
+
+なし
+```
+
 ## 制約
 
-- 5 件以内。重要度の高い順に絞る
+- finding は 5 件以内、重要度の高い順に絞る
 - 修正案は出さない。read-only
-- 出力は finding list のみ。前置き・結語・markdown header を付けない
-- 全部 clean なら `なし` 1 行のみ
 - 各 finding は 1 行に収める。改行を含めない
+- finding が無いときは finding 部分を「なし」1 行に置き換える
+- スキャン対象一覧と finding list の間は空行 1 行で区切る
+- markdown header (`#` など) は使わない
