@@ -246,8 +246,6 @@ run npm -v
 
 # Claude Code
 npm uninstall -g @anthropic-ai/claude-code || true  # Old one
-run apt install -y --no-install-recommends \
-bubblewrap socat    # For Sandbox
 
 [ -s /tmp/claude_install.sh ] ||
 run curl -o /tmp/claude_install.sh \
@@ -265,6 +263,10 @@ copy --nobackup claude_settings.json            ~/.claude/settings.json
 copy --nobackup claude_claude-md-lint.md        /etc/claude-code/claude-md-lint.md
 run install -d ~/.claude/skills/claude-md-lint
 run ln -sfn /etc/claude-code/claude-md-lint.md  ~/.claude/skills/claude-md-lint/SKILL.md
+
+# Tools used by Claude Code (bubblewrap/socat: Sandbox, poppler-utils: PDF reading)
+run apt install -y --no-install-recommends \
+bubblewrap socat poppler-utils
 
 
 # The current user settings
