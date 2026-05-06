@@ -16,4 +16,6 @@ system prompt の「絶対パスで `cd` を避ける」に加えて以下を実
 
 カテゴリ判断に迷う場合は project-local を優先（後で global に昇格させやすい）。
 
+同じ指摘を受けたら必ず memory に保存する（既存 entry があれば更新）。
+
 @/home/h2suzuki/.claude/global-memory/INDEX.md
