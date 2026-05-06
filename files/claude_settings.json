@@ -8,7 +8,7 @@
     "padding": 0,
     "refreshInterval": 10
   },
-  "effortLevel": "xhigh",
+  "effortLevel": "max",
   "tui": "fullscreen",
   "skipAutoPermissionPrompt": true,
   "hooks": {
