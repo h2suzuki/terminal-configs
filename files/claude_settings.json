@@ -35,6 +35,12 @@
     ],
     "SessionStart": [
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/claude-md-lint.sh", "timeout": 120 } ] }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "clear|prompt_input_exit",
+        "hooks": [ { "type": "command", "command": "jq '.effortLevel = \"max\"' ~/.claude/settings.json > ~/.claude/settings.json.tmp && mv ~/.claude/settings.json.tmp ~/.claude/settings.json" } ]
+      }
     ]
   },
   "spinnerVerbs": {
