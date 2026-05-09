@@ -36,8 +36,8 @@ _do_dump=1
 if [ -f "$_cache_file" ]; then
     _ex="$(cat "$_cache_file" 2>/dev/null)"
     if [ -n "$_ex" ]; then
-        _ex_session="$(printf '%s' "$_ex" | jq -r '.stdin.session_id // empty' 2>/dev/null)"
-        _ex_ts="$(printf '%s' "$_ex" | jq -r '.timestamp // empty' 2>/dev/null)"
+        _ex_session="$(jq -r '.stdin.session_id // empty' 2>/dev/null <<< "$_ex")"
+        _ex_ts="$(jq -r '.timestamp // empty' 2>/dev/null <<< "$_ex")"
         if [ -n "$_cur_session" ] && [ "$_ex_session" = "$_cur_session" ]; then
             : # (i) same session → dump
         elif [ -n "$_ex_ts" ]; then
@@ -54,8 +54,8 @@ if (( _do_dump )); then
     _tmp="$(mktemp "${_cache_dir}/.stdin.XXXXXX.json" 2>/dev/null)" || _tmp=""
     if [ -n "$_tmp" ]; then
         trap 'rm -f "$_tmp"' EXIT
-        if printf '%s' "$input" | jq -S --arg ts "$_now_iso" \
-                '{stdin: ., timestamp: $ts}' > "$_tmp" 2>/dev/null; then
+        if jq -S --arg ts "$_now_iso" '{stdin: ., timestamp: $ts}' \
+                > "$_tmp" 2>/dev/null <<< "$input"; then
             mv "$_tmp" "$_cache_file" 2>/dev/null && trap - EXIT
         fi
     fi
