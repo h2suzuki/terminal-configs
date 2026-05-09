@@ -3,17 +3,64 @@
 #   🏠 project ❯ Model [effort]  Context [████░░░░░░](42%)  5H [██░░░░░░░░](27%)→00:16  1W [██████░░░░](61%)→23:16 Wednesday          YYYY/mm/dd HH:MM
 #
 # stdin JSON fields used:
+#   .session_id
 #   .model.display_name
 #   .effort.level
 #   .context_window.used_percentage
 #   .rate_limits.five_hour.{used_percentage,resets_at}   (Pro/Max only)
 #   .rate_limits.seven_day.{used_percentage,resets_at}   (Pro/Max only)
 #   .workspace.project_dir   (falls back to .cwd)
+#
+# Cache: ${XDG_CACHE_HOME:-~/.cache}/claude-tui-statusline/stdin.json
+#   Wrapped as {stdin: <original>, timestamp: <ISO8601>}. Written atomically.
+#   Race-condition guard: only overwrites if same session_id OR file is ≥60s old.
 
 set -o pipefail
 
 input="$(cat)"
 get() { printf '%s' "$input" | jq -r "$1 // empty"; }
+
+# -- Cache dump --
+if [ -n "${XDG_CACHE_HOME:-}" ]; then
+    _cache_dir="${XDG_CACHE_HOME}/claude-tui-statusline"
+else
+    _cache_dir="${HOME}/.cache/claude-tui-statusline"
+fi
+_cache_file="${_cache_dir}/stdin.json"
+mkdir -p "$_cache_dir"
+
+_cur_session="$(get '.session_id')"
+_now_iso="$(date -u '+%Y-%m-%dT%H:%M:%S.%3NZ')"
+_do_dump=1
+
+if [ -f "$_cache_file" ]; then
+    _ex="$(cat "$_cache_file" 2>/dev/null)"
+    if [ -n "$_ex" ]; then
+        _ex_session="$(printf '%s' "$_ex" | jq -r '.stdin.session_id // empty' 2>/dev/null)"
+        _ex_ts="$(printf '%s' "$_ex" | jq -r '.timestamp // empty' 2>/dev/null)"
+        if [ -n "$_cur_session" ] && [ "$_ex_session" = "$_cur_session" ]; then
+            : # (i) same session → dump
+        elif [ -n "$_ex_ts" ]; then
+            _ex_epoch="$(date -d "$_ex_ts" +%s 2>/dev/null)"
+            _now_epoch="$(date +%s)"
+            if (( _now_epoch - _ex_epoch < 60 )); then
+                _do_dump=0
+            fi
+        fi
+    fi
+fi
+
+if (( _do_dump )); then
+    _tmp="$(mktemp "${_cache_dir}/.stdin.XXXXXX.json" 2>/dev/null)" || _tmp=""
+    if [ -n "$_tmp" ]; then
+        trap 'rm -f "$_tmp"' EXIT
+        if printf '%s' "$input" | jq -S --arg ts "$_now_iso" \
+                '{stdin: ., timestamp: $ts}' > "$_tmp" 2>/dev/null; then
+            mv "$_tmp" "$_cache_file" 2>/dev/null && trap - EXIT
+        fi
+    fi
+fi
+unset _cache_dir _cache_file _cur_session _now_iso _do_dump _ex _ex_session _ex_ts _ex_epoch _now_epoch
 
 bar() {
     local width=10 pct filled empty out='[' i
