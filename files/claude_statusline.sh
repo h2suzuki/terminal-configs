@@ -31,7 +31,22 @@ mkdir -p "$_cache_dir"
 
 _cur_session="$(get '.session_id')"
 _now_iso="$(date -u '+%Y-%m-%dT%H:%M:%S.%3NZ')"
+_now_epoch="$(date +%s)"
 _do_dump=1
+
+# Obsolete-data guard: if a rate-limit bucket is at 100% AND its resets_at is already
+# in the past, the messages API is paused and Claude Code has stopped receiving fresh
+# data. Writing this stale snapshot would overwrite a more up-to-date entry from an
+# active session, so skip the dump.
+_h5_pct="$(jq -r '.rate_limits.five_hour.used_percentage // empty' 2>/dev/null <<< "$input")"
+_h5_at="$(jq  -r '.rate_limits.five_hour.resets_at       // empty' 2>/dev/null <<< "$input")"
+_wk_pct="$(jq -r '.rate_limits.seven_day.used_percentage // empty' 2>/dev/null <<< "$input")"
+_wk_at="$(jq  -r '.rate_limits.seven_day.resets_at       // empty' 2>/dev/null <<< "$input")"
+if { [ -n "$_h5_pct" ] && [ -n "$_h5_at" ] && (( ${_h5_pct%.*} >= 100 )) && (( _h5_at < _now_epoch )); } \
+|| { [ -n "$_wk_pct" ] && [ -n "$_wk_at" ] && (( ${_wk_pct%.*} >= 100 )) && (( _wk_at < _now_epoch )); }; then
+    _do_dump=0
+fi
+unset _h5_pct _h5_at _wk_pct _wk_at
 
 if [ -f "$_cache_file" ]; then
     _ex="$(cat "$_cache_file" 2>/dev/null)"
@@ -42,7 +57,6 @@ if [ -f "$_cache_file" ]; then
             : # (i) same session → dump
         elif [ -n "$_ex_ts" ]; then
             _ex_epoch="$(date -d "$_ex_ts" +%s 2>/dev/null)"
-            _now_epoch="$(date +%s)"
             if (( _now_epoch - _ex_epoch < 60 )); then
                 _do_dump=0
             fi
@@ -60,7 +74,7 @@ if (( _do_dump )); then
         fi
     fi
 fi
-unset _cache_dir _cache_file _cur_session _now_iso _do_dump _ex _ex_session _ex_ts _ex_epoch _now_epoch
+unset _cache_dir _cache_file _cur_session _now_iso _now_epoch _do_dump _ex _ex_session _ex_ts _ex_epoch
 
 bar() {
     local width=10 pct filled empty out='[' i
