@@ -18,8 +18,11 @@ description: >
   - `cp src dst && chmod 0755 dst` → `install -m 0755 src dst`（1 プロセスで完結）
 
 - **プログラム名をハードコードしない。**
-  - shebang: `#!/bin/bash` ではなく `#!/usr/bin/env bash`
   - コマンドパスを絶対パスで書かず PATH に任せる（`/usr/bin/jq` → `jq`）
   - スクリプト自身の名前はリテラルではなく `$(basename "$0")` を使う
+
+- **core-utils 以外のコマンドは存在確認してから使う。**
+  `command -v foo >/dev/null 2>&1 || { echo "foo not found"; exit 1; }`
+  あるいは任意実行なら `if command -v foo >/dev/null 2>&1; then foo ...; fi`
 
 - **shellcheck が使えるなら使う。** スクリプトを書いたら `shellcheck script.sh` で検証する
