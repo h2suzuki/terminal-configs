@@ -97,6 +97,7 @@ run sed -i ~/.bashrc \
     -e '/export\ VISUAL=/d' \
     -e '/export\ BROWSER=/d' \
     -e '/export\ PATH=.*\.local.bin:\$PATH/d' \
+    -e '/source\ \/etc\/claude-code\/env\.sh/d'
     -e '/share_ssh_x11forwarding/d'
 
 run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
@@ -323,6 +324,7 @@ run bash /tmp/claude_install.sh
 
 run uv tool install --force claude-monitor #--system --break-system-packages pasimple
 
+copy --nobackup claude_env.sh                   /etc/claude-code/env.sh
 copy --nobackup claude_system-CLAUDE.md         /etc/claude-code/CLAUDE.md
 copy --nobackup claude_statusline.sh            /etc/claude-code/statusline.sh -m 0755
 copy --nobackup claude_claude-md-lint.sh        /etc/claude-code/claude-md-lint.sh -m 0755
@@ -371,6 +373,7 @@ if [ -n "$LOGIN_USER" ]; then
             -e '/export\ VISUAL=/d' \
             -e '/export\ BROWSER=/d' \
             -e '/export\ PATH=.*\.local.bin:\$PATH/d' \
+            -e '/source\ \/etc\/claude-code\/env\.sh/d' \
             -e '/NVM_DIR/d'
 
     # Handy aliases
@@ -407,12 +410,17 @@ EOF
     run sudo -u $LOGIN_USER ln -sfn /etc/claude-code/claude-md-lint.md \
                                          ~$LOGIN_USER/.claude/skills/claude-md-lint/SKILL.md
 
+    run usermod -aG docker "$LOGIN_USER"
+
+    run echo "source /etc/claude-code/env.sh" '>>' $BASHRC
+
 else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
     echo -e "${COLOR_RED}No login user found... omitting to include ~/.nvm/nvm.sh${COLOR_CLEAR}"
     echo ""
 fi
 
+run echo "source /etc/claude-code/env.sh" '>>' ~/.bashrc
 run echo "~/.share_ssh_x11forwarding" '>>' ~/.bashrc
 
 
