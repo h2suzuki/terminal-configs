@@ -204,6 +204,22 @@ run systemctl start docker
 run docker run --rm hello-world
 
 
+# SigNoz by docker-compose
+rm -rf /opt/signoz/
+run git clone --depth=1 --filter=blob:none --sparse \
+  https://github.com/SigNoz/signoz.git /opt/signoz
+
+pushd /opt/signoz >/dev/null
+run git sparse-checkout set deploy
+run [ -d deploy/docker ]
+
+cd deploy/docker
+run docker compose up -d --remove-orphans
+# docker compose down   # When to Stop
+
+popd >/dev/null
+
+
 # Chrome
 [ -s /tmp/google-chrome.deb ] ||
 run curl -o /tmp/google-chrome.deb \
