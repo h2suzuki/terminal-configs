@@ -113,11 +113,11 @@ copy inputrc    ~/.inputrc
 copy share_ssh_x11forwarding  ~/.share_ssh_x11forwarding
 
 
-# Neovim, Git / Git-LFS, tree, ripgrep
+# Neovim, Git / Git-LFS, tree, ripgrep, shellcheck
 run apt update
 run apt remove -f vim
 run apt install -y --no-install-recommends \
-neovim git git-lfs tree ripgrep
+neovim git git-lfs tree ripgrep shellcheck
 
 copy --nobackup sysinit.vim /etc/xdg/nvim/sysinit.vim   # Neovim system-wide init file
 
