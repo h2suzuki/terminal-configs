@@ -189,6 +189,21 @@ run apt install -y --no-install-recommends \
 openssh-server openssh-client
 
 
+# Docker
+run apt remove -y \
+docker.io docker-compose docker-compose-v2 docker-doc podman-docker containerd runc
+
+[ -s /tmp/get-docker.sh ] ||
+run curl -o /tmp/get-docker.sh -fsSL https://get.docker.com
+run sed -i /tmp/get-docker.sh -e 's/sleep\ 20/:/'
+run bash /tmp/get-docker.sh
+
+run systemctl enable docker
+run systemctl start docker
+
+run docker run --rm hello-world
+
+
 # Chrome
 [ -s /tmp/google-chrome.deb ] ||
 run curl -o /tmp/google-chrome.deb \
