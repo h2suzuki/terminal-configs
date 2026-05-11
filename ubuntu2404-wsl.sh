@@ -274,22 +274,14 @@ set timeout 120
 spawn /tmp/voicevox_install.sh --output '"$VV_LIB_DIR"' --exclude c-api --models-pattern {[0-9]*.vvm}
 
 expect {
-    "*qを押してください*" {
-        send "q\r"
-        expect "*\[y,n,r\]*"
-        send "y\r"
-    }
-    "*\[y,n,r\]*" {
-        send "y\r"
-    }
-    timeout {
-        puts "タイムアウトしました"
-        exit 1 ;
-    }
-    eof {
-        puts "接続が切れました"
-        exit 1 ;
-    }
+    "qを押してください" { puts "Caught: $expect_out(0,string)"; send "q\r"; sleep 1 }
+    timeout             { puts "タイムアウトしました";  exit 1 }
+    eof                 { puts "接続が切れました";      exit 1 }
+}
+expect {
+    "\[y,n,r\]"         { puts "Caught: $expect_out(0,string)"; send "y\r"; sleep 1 }
+    timeout             { puts "タイムアウトしました";  exit 1 }
+    eof                 { puts "接続が切れました";      exit 1 }
 }
 expect eof
 '
