@@ -97,8 +97,9 @@ run sed -i ~/.bashrc \
     -e '/export\ VISUAL=/d' \
     -e '/export\ BROWSER=/d' \
     -e '/export\ PATH=.*\.local.bin:\$PATH/d' \
-    -e '/source\ \/etc\/claude-code\/env\.sh/d'
-    -e '/share_ssh_x11forwarding/d'
+    -e '/source\ \\/etc\\/claude-code\\/env\\.sh/d' \
+    -e '/share_ssh_x11forwarding/d' \
+    -e '/NVM_DIR/d'
 
 run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
 run echo "alias diffy=\\'git diff --no-index\\'" '>>' ~/.bashrc
@@ -373,7 +374,7 @@ if [ -n "$LOGIN_USER" ]; then
             -e '/export\ VISUAL=/d' \
             -e '/export\ BROWSER=/d' \
             -e '/export\ PATH=.*\.local.bin:\$PATH/d' \
-            -e '/source\ \/etc\/claude-code\/env\.sh/d' \
+            -e '/source\ \\/etc\\/claude-code\\/env\\.sh/d' \
             -e '/NVM_DIR/d'
 
     # Handy aliases
