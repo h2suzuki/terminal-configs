@@ -273,7 +273,7 @@ spawn /tmp/voicevox_install.sh --output '"$VV_LIB_DIR"' --exclude c-api --models
 
 expect {
     "*qを押してください*" {
-        send "q"
+        send "q\r"
         expect "*\[y,n,r\]*"
         send "y\r"
     }
