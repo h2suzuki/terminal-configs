@@ -17,5 +17,13 @@ highlight CursorLine term=bold cterm=bold guibg=Grey40
 set shiftwidth=4 tabstop=4 expandtab
 set softtabstop=4
 
-set list listchars=tab:>-,trail:@,precedes:<,extends:>
+set list listchars=tab:>-,trail:@,precedes:←,extends:→,nbsp:▢
 set ignorecase smartcase
+set noautoindent
+
+" Disable auto-insertion of the comment leader on `o`/`O` and <Enter>.
+" Filetype plugins reset formatoptions, so apply via autocmd.
+augroup DisableCommentContinuation
+  autocmd!
+  autocmd FileType * setlocal formatoptions-=r formatoptions-=o
+augroup END
