@@ -1,0 +1,9 @@
+services:
+  signoz:
+    ports: !override
+      - "14902:8080" # signoz port
+    environment:
+      SIGNOZ_USER_ROOT_ENABLED: "true"
+      SIGNOZ_USER_ROOT_EMAIL: "admin@signoz.localhost"
+      SIGNOZ_USER_ROOT_PASSWORD: "At4902.localhost"
+      SIGNOZ_USER_ROOT_ORG_NAME: "local"

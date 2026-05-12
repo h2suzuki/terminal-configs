@@ -115,11 +115,11 @@ copy inputrc    ~/.inputrc
 copy share_ssh_x11forwarding  ~/.share_ssh_x11forwarding
 
 
-# Neovim, Git / Git-LFS, tree, ripgrep, shellcheck
+# Neovim, Git / Git-LFS, tree, ripgrep, shellcheck, sqlite3
 run apt update
 run apt remove -f vim
 run apt install -y --no-install-recommends \
-neovim git git-lfs tree ripgrep shellcheck
+neovim git git-lfs tree ripgrep shellcheck sqlite3
 
 copy --nobackup sysinit.vim /etc/xdg/nvim/sysinit.vim   # Neovim system-wide init file
 
@@ -207,7 +207,15 @@ run docker run --rm hello-world
 
 
 # SigNoz by docker-compose
-rm -rf /opt/signoz/
+#   docker compose down       # When to stop
+#   docker compose down -v    # When to stop and erase data
+if [ -d /opt/signoz/ ]; then
+    pushd /opt/signoz/deploy/docker >/dev/null
+    docker compose down || true
+    popd >/dev/null
+
+    rm -rf /opt/signoz/
+fi
 run git clone --depth=1 --filter=blob:none --sparse \
   https://github.com/SigNoz/signoz.git /opt/signoz
 
@@ -216,8 +224,21 @@ run git sparse-checkout set deploy
 run [ -d deploy/docker ]
 
 cd deploy/docker
+run [ -f docker-compose.yaml ]
+
+# Set the listen port 14902 and the root user
+copy --nobackup signoz_compose-override.yaml docker-compose.override.yaml
+
+# Bring the services up
 run docker compose up -d --remove-orphans
-# docker compose down   # When to Stop
+
+SQLITE_PATH=$(sed -n -e '/SIGNOZ_SQLSTORE_SQLITE_PATH/{s/.*=\(.*\)/\1/p;q}' docker-compose.yaml)
+run [ -n "$SQLITE_PATH" ]
+run docker compose cp signoz:"$SQLITE_PATH" /tmp/signoz.db
+
+ORG_ID=$(sqlite3 /tmp/signoz.db "select id from organizations where name='local';")
+run [ -n "$ORG_ID" ]
+rm -f /tmp/signoz.db
 
 popd >/dev/null
 
@@ -335,6 +356,10 @@ run ln -sfn /etc/claude-code/bash-writing-rules.md ~/.claude/skills/bash-writing
 # Tools used by Claude Code (bubblewrap/socat: Sandbox, poppler-utils: PDF reading)
 run apt install -y --no-install-recommends \
 bubblewrap socat poppler-utils
+
+
+# Claude Code Dashboard of SigNoz
+run node files/signoz_claude-dashboard.mjs files/signoz_claude-dashboard.json $ORG_ID
 
 
 # The current user settings
