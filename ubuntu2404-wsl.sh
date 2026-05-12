@@ -453,6 +453,13 @@ else
     echo ""
 fi
 
+
+# Append auto-loading of nvm.sh
+run cat ">>" ~/.bashrc <<"EOF"
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+EOF
+
 run echo "source /etc/claude-code/env.sh" '>>' ~/.bashrc
 run echo "~/.share_ssh_x11forwarding" '>>' ~/.bashrc
 
