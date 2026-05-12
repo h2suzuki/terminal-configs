@@ -188,11 +188,29 @@ now="$(date '+%Y/%m/%d %H:%M')"
 
 left="${proj_seg}  ${head}  ${ctx}  ${h5}  ${wk}"
 
-# Terminal width: COLUMNS > stty > tput > default 200.
+# Terminal width: COLUMNS > stty > tput > parent-chain tty > default 200.
 # Suppress the whole group's stderr so a missing controlling tty stays silent.
 cols="${COLUMNS:-}"
 [ -z "$cols" ] && cols="$( { stty size </dev/tty | awk '{print $2}'; } 2>/dev/null )"
 [ -z "$cols" ] && cols="$( { tput cols </dev/tty; } 2>/dev/null )"
+# Claude Code TUI spawns this script with stdin/stdout/stderr as pipes and no
+# controlling tty, so the /dev/tty paths fail. Walk up the parent chain to find
+# a pty (the TUI itself owns one) and stty its dimensions.
+if [ -z "$cols" ]; then
+    _pid=$$
+    for _ in 1 2 3 4 5; do
+        _pid="$(awk '/^PPid:/ {print $2}' "/proc/$_pid/status" 2>/dev/null)"
+        [ -z "$_pid" ] || [ "$_pid" = 0 ] && break
+        _t="$(readlink "/proc/$_pid/fd/0" 2>/dev/null)"
+        case "$_t" in
+            /dev/pts/*|/dev/tty[0-9]*)
+                cols="$(stty -F "$_t" size 2>/dev/null | awk '{print $2}')"
+                [ -n "$cols" ] && break
+                ;;
+        esac
+    done
+    unset _pid _t
+fi
 [ -z "$cols" ] && cols=200
 
 # Visible character count excludes ANSI escapes.
