@@ -111,17 +111,23 @@ flag するときは「verification 不能」だけでなく「**実際に動作
 
 ## 出力
 
-冒頭にスキャン対象一覧、空行を挟んで finding list（または「なし」）を出力する。
+出力形式は 2 mode ある。 user message 中に「出力形式: JSON」という指定があれば **JSON mode**、無ければ **テキスト mode**（既定）で出力する。 mode を取り違えると caller の parse が壊れるので、user message を読んで mode を確定してから書き始める。
 
-スキャン対象一覧は先頭に `- System Prompt`（lint の判定基準として参照しているため）、続けて実際に Read したファイルのフルパスを 1 行 1 path で並べる。 system prompt 自体は file ではないので path は付けず、固定の表記「System Prompt」を使う。
-
-finding 行の構造（変更なし）:
+### finding の構造（両 mode 共通）
 
 ```
 - [<観点>] <出典>: <短い問題説明>
 ```
 
-出典内で system prompt を言及するときも同じく「System Prompt」と表記する。
+出典内で system prompt を言及するときは固定の表記「System Prompt」を使う（system prompt 自体は file ではないため path は付けない）。
+
+### scan 対象一覧
+
+`- System Prompt`（lint の判定基準として参照）を先頭に、続けて実際に Read したファイルのフルパスを 1 path = 1 要素で並べる。
+
+### テキスト mode（既定。手動 `/claude-md-lint` 想定）
+
+冒頭にスキャン対象一覧、空行を挟んで finding list（または「なし」）を出力する。
 
 例（findings あり）:
 
@@ -151,11 +157,38 @@ finding 行の構造（変更なし）:
 なし
 ```
 
+### JSON mode（SessionStart hook 等の機械処理想定）
+
+唯一の JSON object を出力する。 前後に説明文・コードフェンス・markdown など一切付けない（caller は plain JSON として parse する）。
+
+schema:
+
+```
+{
+  "scanned": [string, ...],   // scan 対象一覧。先頭は "System Prompt"、以降は Read したファイルのフルパス
+  "findings": [string, ...]   // finding 行。各要素は "- [<観点>] <出典>: <説明>" の文字列。空配列なら clean
+}
+```
+
+clean な場合の例:
+
+```
+{"scanned":["System Prompt","/etc/claude-code/CLAUDE.md","/home/h2suzuki/.claude/CLAUDE.md"],"findings":[]}
+```
+
+findings がある場合の例:
+
+```
+{"scanned":["System Prompt","/etc/claude-code/CLAUDE.md","/home/h2suzuki/.claude/CLAUDE.md"],"findings":["- [System Prompt 重複] /etc/claude-code/CLAUDE.md §7「`git push` は自動で行わず」: System Prompt「DO NOT push to the remote repository unless...」と重複（削除しても System Prompt 経由で同じ動作）","- [stale] memory/MEMORY.md: 参照している `/bootstrap` skill は他 input で `/wire` に rename 済み"]}
+```
+
+JSON mode では「なし」というリテラルは使わない（findings 空配列で表現）。 finding 文字列内に改行を含めない（テキスト mode と同じ）。
+
 ## 制約
 
 - finding は 5 件以内、重要度の高い順に絞る
 - 修正案は出さない。read-only
 - 各 finding は 1 行に収める。改行を含めない
-- finding が無いときは finding 部分を「なし」1 行に置き換える
-- スキャン対象一覧と finding list の間は空行 1 行で区切る
+- テキスト mode で finding が無いときは finding 部分を「なし」1 行に置き換える。 JSON mode では findings=[] で表現する
+- テキスト mode でスキャン対象一覧と finding list の間は空行 1 行で区切る
 - markdown header (`#` など) は使わない

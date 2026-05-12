@@ -108,6 +108,8 @@ while ((${#queue_paths[@]} > 0)); do
     [[ -z "$ref" ]] && continue
     if [[ "$ref" == "~"* ]]; then
       ref_path="${ref/#\~/$HOME}"
+    elif [[ "$ref" == "/"* ]]; then
+      ref_path="$ref"
     else
       ref_path="$(dirname "$resolved")/${ref}"
     fi
@@ -141,10 +143,43 @@ key="$(
 cache_file="${CACHE_DIR}/${key}.txt"
 
 # --- cache lookup or run lint ----------------------------------------------
+#
+# Cache file format (text, human-inspectable):
+#
+#   <ISO 8601 timestamp>
+#
+#   スキャン対象:
+#   - <path1>
+#   - <path2>
+#
+#   ----
+#
+#   <content of path1>
+#
+#   ----
+#
+#   <content of path2>
+#
+#   ----
+#
+#   <findings, one per line, or "なし">
+#
+# Findings live after the last "----" line so they can be extracted by
+# tail-after-marker without parsing JSON back. The timestamp is for
+# human inspection only — it is NOT part of the cache key (see hash
+# above).
 
-report=""
+findings=""
 if [[ -f "$cache_file" ]]; then
-  report="$(cat "$cache_file" 2>/dev/null || true)"
+  # Cache hit: everything after the last "----" line is the findings block.
+  # Skip the decorative blank line that always follows "----", and trim
+  # trailing newlines so the result is the findings body alone.
+  findings="$(awk '
+    /^----$/ { buf = ""; after = 1; next }
+    after && /^$/ { next }
+    { after = 0; buf = buf $0 "\n" }
+    END { sub(/\n+$/, "", buf); printf "%s", buf }
+  ' "$cache_file" 2>/dev/null || true)"
 else
   # Build a path-list user prompt and a deduplicated --add-dir list for
   # every directory holding a target file. The child claude reads each
@@ -163,7 +198,11 @@ else
     fi
   done <<<"$sorted_paths"
 
-  user_prompt=$'以下のファイルを Read tool で読み、評価観点に従って判定してください。\n\n'"$paths_block"
+  # 出力形式: JSON — instructs the skill to emit a single JSON object so
+  # the caller can extract findings deterministically (no awk-stripping
+  # a textual header). The skill body defines the schema:
+  # {"scanned":[...],"findings":[...]}.
+  user_prompt=$'以下のファイルを Read tool で読み、評価観点に従って判定してください。\n\n出力形式: JSON\n\n'"$paths_block"
   skill_body="$(cat "$SKILL_MD" 2>/dev/null)"
 
   # --effort high: empirically required. low produced 5/5 false-positive
@@ -177,7 +216,7 @@ else
   # is accepted by claude). This blocks user-level SessionStart hooks
   # from re-firing (defence in depth on top of CLAUDE_MD_LINT_PARENT)
   # and stops the user's effortLevel override from leaking in.
-  report="$(
+  raw="$(
     CLAUDE_MD_LINT_PARENT=1 timeout "$TIMEOUT_S" \
       claude -p \
         --model claude-haiku-4-5-20251001 \
@@ -192,28 +231,70 @@ else
         "$user_prompt" </dev/null 2>/dev/null || true
   )"
 
-  if [[ -n "$report" ]]; then
-    mkdir -p "$CACHE_DIR" 2>/dev/null
-    printf '%s' "$report" >"$cache_file" 2>/dev/null || true
+  [[ -z "$raw" ]] && exit 0
+
+  # The skill is instructed to emit plain JSON, but defensively recover
+  # from fenced (```json … ```) or prose-prefixed output. Try in order:
+  # raw → fence-stripped → substring from first '{' to last '}'.
+  json="$raw"
+  if ! jq -e . <<<"$json" >/dev/null 2>&1; then
+    json="$(printf '%s' "$raw" | sed -E '/^[[:space:]]*```(json)?[[:space:]]*$/d')"
   fi
+  if ! jq -e . <<<"$json" >/dev/null 2>&1; then
+    json="$(printf '%s' "$raw" | awk '
+      { buf = buf $0 "\n" }
+      END {
+        s = index(buf, "{")
+        if (s == 0) exit
+        for (i = length(buf); i > 0; i--)
+          if (substr(buf, i, 1) == "}") { printf "%s", substr(buf, s, i - s + 1); exit }
+      }
+    ')"
+  fi
+
+  # Parse scanned[] / findings[]. If parse still fails, bail silently
+  # rather than caching a broken entry.
+  if ! scanned="$(jq -er '.scanned // [] | .[]' <<<"$json" 2>/dev/null)"; then
+    exit 0
+  fi
+  findings_arr="$(jq -er '.findings // [] | .[]' <<<"$json" 2>/dev/null || true)"
+
+  # Build the new cache file content. mkdir before redirect — the temp
+  # file write would otherwise fail on first-ever invocation when the
+  # cache dir does not yet exist.
+  mkdir -p "$CACHE_DIR" 2>/dev/null
+  ts="$(date -Iseconds 2>/dev/null || date)"
+  {
+    printf '%s\n\n' "$ts"
+    printf 'スキャン対象:\n'
+    while IFS= read -r s; do
+      [[ -z "$s" ]] && continue
+      printf -- '- %s\n' "$s"
+    done <<<"$scanned"
+    while IFS= read -r p; do
+      [[ -z "$p" ]] && continue
+      printf '\n----\n\n'
+      cat -- "$p" 2>/dev/null || true
+    done <<<"$sorted_paths"
+    printf '\n----\n\n'
+    if [[ -z "$findings_arr" ]]; then
+      printf 'なし\n'
+    else
+      printf '%s\n' "$findings_arr"
+    fi
+  } >"$cache_file.tmp" 2>/dev/null
+
+  if [[ -s "$cache_file.tmp" ]]; then
+    mv -f "$cache_file.tmp" "$cache_file" 2>/dev/null || rm -f "$cache_file.tmp"
+  else
+    rm -f "$cache_file.tmp" 2>/dev/null
+  fi
+
+  findings="$findings_arr"
 fi
 
 # --- emit additionalContext if any findings ---------------------------------
 
-report="$(printf '%s' "$report" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
-[[ -z "$report" ]] && exit 0
-
-# The lint skill writes "<scan list>\n\n<findings or なし>" to the cache so
-# anyone inspecting the file later can see what was actually scanned. But
-# if we echo that header back to the next session as additionalContext,
-# the receiving model treats the file list as part of the lint report
-# and gets confused. Strip everything up to and including the first
-# blank line; what remains is the findings body.
-findings="$(printf '%s\n' "$report" | awk 'p{print} /^$/{p=1}')"
-# Fallback: if the model skipped the header (no blank line found), use
-# the whole report as findings. Keeps backward compatibility with output
-# that hasn't picked up the new format yet.
-[[ -z "$findings" ]] && findings="$report"
 findings="$(printf '%s' "$findings" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
 [[ -z "$findings" || "$findings" == "なし" ]] && exit 0
 
