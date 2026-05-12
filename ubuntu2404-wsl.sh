@@ -26,8 +26,7 @@ which readlink  >/dev/null || { echo "Cannot find readlink";    exit 1; }
 which cmp       >/dev/null || { echo "Cannot find cmp";         exit 1; }
 
 
-TOP_DIR="`dirname ${BASH_SOURCE[0]}`"
-TOP_DIR="`readlink -f "$TOP_DIR"`"
+TOP_DIR=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
 
 
 if tty -s >/dev/null; then
