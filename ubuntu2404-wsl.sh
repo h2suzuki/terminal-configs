@@ -89,8 +89,12 @@ run sed -i ~/.bashrc \
     -e '/alias\ ls=/s/^\ *#*\ *//' \
     -e '/^alias\ ls=/s/ls\ \$LS_OPTIONS/ls\ --group-directories-first\ \$LS_OPTIONS/' \
     -e '/alias\ tree=/d' \
+    -e '/alias\ pushd=/d' \
+    -e '/alias\ popd=/d' \
+    -e '/alias\ dirs=/d' \
     -e '/alias\ diffy=/d' \
     -e '/alias\ rg=/d' \
+    -e '/alias\ node-x=/d' \
     -e '/grip\(\)\ /d' \
     -e '/export\ EDITOR=/d' \
     -e '/export\ VISUAL=/d' \
@@ -101,8 +105,12 @@ run sed -i ~/.bashrc \
     -e '/NVM_DIR/d'
 
 run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
+run echo "alias pushd=\\'pushd \\>/dev/null\\'" '>>' ~/.bashrc
+run echo "alias popd=\\'popd \\>/dev/null\\'" '>>' ~/.bashrc
+run echo "alias dirs=\\'dirs -v\\'" '>>' ~/.bashrc
 run echo "alias diffy=\\'git diff --no-index\\'" '>>' ~/.bashrc
 run echo "alias rg=\\'rg --sort path --smart-case\\'" '>>' ~/.bashrc
+run echo "alias node-x=\\'NODE_DEBUG=module,fs,net node\\'" '>>' ~/.bashrc
 run echo 'grip\(\) \{ rg --sort path --smart-case --json -C 2 \"\$@\" \| delta\; \}' '>>' ~/.bashrc
 run echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' '>>' ~/.bashrc
 
@@ -383,8 +391,12 @@ if [ -n "$LOGIN_USER" ]; then
     run sed -i $BASHRC \
             -e '/^\ *PS1=/s/32m/35m/' \
             -e '/alias\ tree=/d' \
+            -e '/alias\ pushd=/d' \
+            -e '/alias\ popd=/d' \
+            -e '/alias\ dirs=/d' \
             -e '/alias\ diffy=/d' \
             -e '/alias\ rg=/d' \
+            -e '/alias\ node-x=/d' \
             -e '/grip\(\)\ /d' \
             -e '/export\ EDITOR=/d' \
             -e '/export\ VISUAL=/d' \
@@ -395,8 +407,12 @@ if [ -n "$LOGIN_USER" ]; then
 
     # Handy aliases
     run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' $BASHRC
+    run echo "alias pushd=\\'pushd \\>/dev/null\\'" '>>' $BASHRC
+    run echo "alias popd=\\'popd \\>/dev/null\\'" '>>' $BASHRC
+    run echo "alias dirs=\\'dirs -v\\'" '>>' $BASHRC
     run echo "alias diffy=\\'git diff --no-index\\'" '>>' $BASHRC
     run echo "alias rg=\\'rg --sort path --smart-case\\'" '>>' $BASHRC
+    run echo "alias node-x=\\'NODE_DEBUG=module,fs,net node\\'" '>>' $BASHRC
     run echo 'grip\(\) \{ rg --sort path --smart-case --json -C 2 \"\$@\" \| delta\; \}' '>>' $BASHRC
 
     # Set the default editor as neovim
