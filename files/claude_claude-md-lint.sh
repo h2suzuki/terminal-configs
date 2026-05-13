@@ -19,7 +19,11 @@
 # prompt explicitly.
 #
 # Stdin: SessionStart payload JSON (uses .cwd).
-# Stdout: JSON with hookSpecificOutput.additionalContext, or empty.
+# Stdout: SessionStart hook JSON. When the lint ran successfully:
+#   - `systemMessage` is always set (visible "completed" confirmation)
+#   - `hookSpecificOutput.additionalContext` is added only when findings exist
+# When the hook is a no-op (re-entry guard, missing skill body, no candidate
+# files, child claude validation failure), stdout is empty.
 
 set -u
 
@@ -37,6 +41,14 @@ readonly MAX_HOPS=5
 # session starts return instantly so the longer cap costs nothing on
 # the steady-state path.
 readonly TIMEOUT_S=150
+# JSON Schema passed to `claude -p --json-schema`. The child model's
+# final answer is validated against this and surfaced under
+# `.structured_output` in the --output-format json envelope, removing
+# the need for ad-hoc fenced-code / substring fallback parsers. The
+# shape mirrors what the skill body (/etc/claude-code/claude-md-lint.md)
+# specifies for "JSON mode".
+readonly JSON_SCHEMA='{"type":"object","properties":{"scanned":{"type":"array","items":{"type":"string"}},"findings":{"type":"array","items":{"type":"string"}}},"required":["scanned","findings"],"additionalProperties":false}'
+readonly SYSTEM_MSG='セッション開始時のメモリチェックが完了しました'
 
 # --- re-entry guard ---------------------------------------------------------
 
@@ -130,6 +142,7 @@ sorted_paths="$(printf '%s\n' "${!seen[@]}" | sort)"
 key="$(
   {
     claude --version 2>/dev/null || echo unknown
+    printf '%s\n' "$JSON_SCHEMA"
     cat "$SKILL_MD" 2>/dev/null
     while IFS= read -r p; do
       printf '%s\0' "$p"
@@ -199,10 +212,10 @@ else
     fi
   done <<<"$sorted_paths"
 
-  # 出力形式: JSON — instructs the skill to emit a single JSON object so
-  # the caller can extract findings deterministically (no awk-stripping
-  # a textual header). The skill body defines the schema:
-  # {"scanned":[...],"findings":[...]}.
+  # 出力形式: JSON — keeps the skill body in JSON-mode formatting rules
+  # (no markdown headers, no inline newlines per finding). The actual
+  # shape is enforced separately by --json-schema below; this line just
+  # selects the right branch of the skill's own output spec.
   user_prompt=$'以下のファイルを Read tool で読み、評価観点に従って判定してください。\n\n出力形式: JSON\n\n'"$paths_block"
   skill_body="$(cat "$SKILL_MD" 2>/dev/null)"
 
@@ -217,6 +230,13 @@ else
   # is accepted by claude). This blocks user-level SessionStart hooks
   # from re-firing (defence in depth on top of CLAUDE_MD_LINT_PARENT)
   # and stops the user's effortLevel override from leaking in.
+  #
+  # --output-format json --json-schema "$JSON_SCHEMA": request structured
+  # outputs. The agent SDK validates the model's final answer against
+  # the schema (retrying on mismatch) and returns one JSON envelope on
+  # stdout with the validated payload under .structured_output. This
+  # replaces the earlier "prompt-based JSON + best-effort jq recovery"
+  # path and makes parsing a single jq filter.
   raw="$(
     CLAUDE_MD_LINT_PARENT=1 timeout "$TIMEOUT_S" \
       claude -p \
@@ -229,36 +249,25 @@ else
         "${add_dirs[@]}" \
         --permission-mode bypassPermissions \
         --append-system-prompt "$skill_body" \
+        --output-format json \
+        --json-schema "$JSON_SCHEMA" \
         "$user_prompt" </dev/null 2>/dev/null || true
   )"
 
   [[ -z "$raw" ]] && exit 0
 
-  # The skill is instructed to emit plain JSON, but defensively recover
-  # from fenced (```json … ```) or prose-prefixed output. Try in order:
-  # raw → fence-stripped → substring from first '{' to last '}'.
-  json="$raw"
-  if ! jq -e . <<<"$json" >/dev/null 2>&1; then
-    json="$(printf '%s' "$raw" | sed -E '/^[[:space:]]*```(json)?[[:space:]]*$/d')"
-  fi
-  if ! jq -e . <<<"$json" >/dev/null 2>&1; then
-    json="$(printf '%s' "$raw" | awk '
-      { buf = buf $0 "\n" }
-      END {
-        s = index(buf, "{")
-        if (s == 0) exit
-        for (i = length(buf); i > 0; i--)
-          if (substr(buf, i, 1) == "}") { printf "%s", substr(buf, s, i - s + 1); exit }
-      }
-    ')"
-  fi
-
-  # Parse scanned[] / findings[]. If parse still fails, bail silently
-  # rather than caching a broken entry.
-  if ! scanned="$(jq -er '.scanned // [] | .[]' <<<"$json" 2>/dev/null)"; then
+  # Envelope check: bail silently on validation retry exhaustion
+  # (subtype = "error_max_structured_output_retries") or any other
+  # non-success terminal state. structured_output is only populated on
+  # success.
+  if ! jq -e '.subtype == "success" and (.structured_output | type == "object")' \
+       <<<"$raw" >/dev/null 2>&1; then
     exit 0
   fi
-  findings_arr="$(jq -er '.findings // [] | .[]' <<<"$json" 2>/dev/null || true)"
+
+  scanned="$(jq -r '.structured_output.scanned // [] | .[]' <<<"$raw" 2>/dev/null || true)"
+  findings_arr="$(jq -r '.structured_output.findings // [] | .[]' <<<"$raw" 2>/dev/null || true)"
+  [[ -z "$scanned" ]] && exit 0
 
   # Build the new cache file content. mkdir before redirect — the temp
   # file write would otherwise fail on first-ever invocation when the
@@ -294,14 +303,30 @@ else
   findings="$findings_arr"
 fi
 
-# --- emit additionalContext if any findings ---------------------------------
+# --- emit hook JSON ---------------------------------------------------------
+#
+# The lint actually completed at this point (either cache hit or fresh run
+# that produced valid structured output), so we always surface a
+# `systemMessage` for terminal-side confirmation. When findings exist we
+# additionally inject them via `hookSpecificOutput.additionalContext` so the
+# parent Claude reports them at the top of its first response.
+#
+# JSON shape follows the SessionStart hook spec:
+#   - systemMessage              → shown to the user (visible)
+#   - hookSpecificOutput.*       → injected into Claude's context (hidden)
+# Refs: https://code.claude.com/docs/en/hooks (SessionStart fields).
 
 findings="$(printf '%s' "$findings" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
-[[ -z "$findings" || "$findings" == "なし" ]] && exit 0
+
+if [[ -z "$findings" || "$findings" == "なし" ]]; then
+  jq -n --arg msg "$SYSTEM_MSG" \
+    '{systemMessage: $msg}' 2>/dev/null
+  exit 0
+fi
 
 greeting=$'## CLAUDE.md / memory lint レポート\n\nsession 起動時に auto-load される memory file 群（CLAUDE.md チェーン、MEMORY.md、`@` 参照）を `/claude-md-lint` skill で lint した結果:\n\n'"$findings"$'\n\n最初のユーザーメッセージへの応答冒頭で、上記レポートを 3 行以内で簡潔に伝えてください（findings list を要約 + 詳細はユーザーが要求した時のみ展開）。それ以降は通常のセッションとして進めてください。'
 
-jq -n --arg ctx "$greeting" \
-  '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}' 2>/dev/null
+jq -n --arg ctx "$greeting" --arg msg "$SYSTEM_MSG" \
+  '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}, systemMessage: $msg}' 2>/dev/null
 
 exit 0
