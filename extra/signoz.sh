@@ -25,9 +25,9 @@ fgrep -qs "Ubuntu 24.04" /etc/lsb-release || {
 which tty       >/dev/null || { echo "Cannot find tty";         exit 1; }
 which readlink  >/dev/null || { echo "Cannot find readlink";    exit 1; }
 which cmp       >/dev/null || { echo "Cannot find cmp";         exit 1; }
-which docker    >/dev/null || { echo "Cannot find docker (run ubuntu2404-wsl.sh first)";  exit 1; }
-which git       >/dev/null || { echo "Cannot find git (run ubuntu2404-wsl.sh first)";     exit 1; }
-which node      >/dev/null || { echo "Cannot find node (run ubuntu2404-wsl.sh first)";    exit 1; }
+which docker    >/dev/null || { echo "Cannot find docker";      exit 1; }
+which git       >/dev/null || { echo "Cannot find git";         exit 1; }
+which node      >/dev/null || { echo "Cannot find node";        exit 1; }
 
 
 # Repository root (one level up from extra/)
