@@ -526,7 +526,7 @@ case "$EVENT" in
       LAST_LINE=$(printf '%s' "$INPUT" | jq -r '.last_assistant_message // ""' \
         | sed 's/[[:space:]]*$//' | awk 'NF{l=$0} END{print l}')
       LAST_SENTENCE=$(printf '%s' "$LAST_LINE" \
-        | grep -oE '[^。？！.?!]*[。？！.?!]' | tail -1 | sed 's/^[[:space:]]*//')
+        | grep -oE '[^。？?]*[。？?]' | tail -1 | sed 's/^[[:space:]]*//')
       [ -z "$LAST_SENTENCE" ] && LAST_SENTENCE="$LAST_LINE"
       # Already ≤30 chars AND no English word: skip the ~6s Haiku cold-start
       # and speak as-is. See contains_english_word for the exact definition
