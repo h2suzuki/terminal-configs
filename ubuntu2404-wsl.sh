@@ -100,7 +100,6 @@ run sed -i ~/.bashrc \
     -e '/export\ VISUAL=/d' \
     -e '/export\ BROWSER=/d' \
     -e '/export\ PATH=.*\.local.bin:\$PATH/d' \
-    -e '/source\ \\/etc\\/claude-code\\/env\\.sh/d' \
     -e '/share_ssh_x11forwarding/d' \
     -e '/NVM_DIR/d'
 
@@ -213,43 +212,6 @@ run systemctl start docker
 run docker run --rm hello-world
 
 
-# SigNoz by docker-compose
-#   docker compose down       # When to stop
-#   docker compose down -v    # When to stop and erase data
-if [ -d /opt/signoz/ ]; then
-    pushd /opt/signoz/deploy/docker >/dev/null
-    docker compose down || true
-    popd >/dev/null
-
-    rm -rf /opt/signoz/
-fi
-run git clone --depth=1 --filter=blob:none --sparse \
-  https://github.com/SigNoz/signoz.git /opt/signoz
-
-pushd /opt/signoz >/dev/null
-run git sparse-checkout set deploy
-run [ -d deploy/docker ]
-
-cd deploy/docker
-run [ -f docker-compose.yaml ]
-
-# Set the listen port 14902 and the root user
-copy --nobackup signoz_compose-override.yaml docker-compose.override.yaml
-
-# Bring the services up
-run docker compose up -d --remove-orphans
-
-SQLITE_PATH=$(sed -n -e '/SIGNOZ_SQLSTORE_SQLITE_PATH/{s/.*=\(.*\)/\1/p;q}' docker-compose.yaml)
-run [ -n "$SQLITE_PATH" ]
-run docker compose cp signoz:"$SQLITE_PATH" /tmp/signoz.db
-
-ORG_ID=$(sqlite3 /tmp/signoz.db "select id from organizations where name='local';")
-run [ -n "$ORG_ID" ]
-rm -f /tmp/signoz.db
-
-popd >/dev/null
-
-
 # Chrome
 [ -s /tmp/google-chrome.deb ] ||
 run curl -o /tmp/google-chrome.deb \
@@ -345,7 +307,6 @@ run bash /tmp/claude_install.sh
 
 run uv tool install --force claude-monitor #--system --break-system-packages pasimple
 
-copy --nobackup claude_env.sh                   /etc/claude-code/env.sh
 copy --nobackup claude_system-CLAUDE.md         /etc/claude-code/CLAUDE.md
 copy --nobackup claude_statusline.sh            /etc/claude-code/statusline.sh -m 0755
 copy --nobackup claude_claude-md-lint.sh        /etc/claude-code/claude-md-lint.sh -m 0755
@@ -363,10 +324,6 @@ run ln -sfn /etc/claude-code/bash-writing-rules.md ~/.claude/skills/bash-writing
 # Tools used by Claude Code (bubblewrap/socat: Sandbox, poppler-utils: PDF reading)
 run apt install -y --no-install-recommends \
 bubblewrap socat poppler-utils
-
-
-# Claude Code Dashboard of SigNoz
-run node files/signoz_claude-dashboard.mjs files/signoz_claude-dashboard.json $ORG_ID
 
 
 # The current user settings
@@ -402,7 +359,6 @@ if [ -n "$LOGIN_USER" ]; then
             -e '/export\ VISUAL=/d' \
             -e '/export\ BROWSER=/d' \
             -e '/export\ PATH=.*\.local.bin:\$PATH/d' \
-            -e '/source\ \\/etc\\/claude-code\\/env\\.sh/d' \
             -e '/NVM_DIR/d'
 
     # Handy aliases
@@ -445,8 +401,6 @@ EOF
 
     run usermod -aG docker "$LOGIN_USER"
 
-    run echo "source /etc/claude-code/env.sh" '>>' $BASHRC
-
 else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
     echo -e "${COLOR_RED}No login user found... omitting to include ~/.nvm/nvm.sh${COLOR_CLEAR}"
@@ -460,7 +414,6 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
 EOF
 
-run echo "source /etc/claude-code/env.sh" '>>' ~/.bashrc
 run echo "~/.share_ssh_x11forwarding" '>>' ~/.bashrc
 
 
