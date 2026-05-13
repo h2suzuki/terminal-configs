@@ -1,5 +1,3 @@
-# CLAUDE.md (terminal-configs)
-
 ## 禁則事項: deploy 先だけ編集して repo を放置するな
 
 このリポジトリは `ubuntu2404-wsl.sh` / `debian12.sh` の `copy` 行で `files/` 配下の source を `/etc/claude-code/`・`~/.claude/`・`/usr/local/bin/` などへ deploy する構造である。 **canonical source は常に `files/` 側であり、deploy 先はその出力**。
