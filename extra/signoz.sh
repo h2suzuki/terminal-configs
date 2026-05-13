@@ -1,20 +1,8 @@
 #!/bin/bash
 
-# This script sets up SigNoz on Ubuntu 24.04 on WSL2.
-# Run this AFTER ../ubuntu2404-wsl.sh as an opt-in step.
+# This script sets up SigNoz as an opt-in step after the base setup
+# (../ubuntu2404-wsl.sh or ../debian12.sh).
 
-which fgrep >/dev/null || {
-    echo "Cannot find grep"
-    exit 1
-}
-fgrep -qs WSL /proc/version || {
-    echo "This environment does not look like WSL"
-    exit 1
-}
-fgrep -qs "Ubuntu 24.04" /etc/lsb-release || {
-    echo "This environment does not look like Ubuntu 24.04"
-    exit 1
-}
 [ "$EUID" = 0 ] || {
     echo "Please run as root"
     exit 1
