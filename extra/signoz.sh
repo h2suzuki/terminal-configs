@@ -1,7 +1,6 @@
 #!/bin/bash
 
-# This script sets up SigNoz as an opt-in step after the base setup
-# (../ubuntu2404-wsl.sh or ../debian12.sh).
+# This script sets up SigNoz as an opt-in step after the base setup.
 
 [ "$EUID" = 0 ] || {
     echo "Please run as root"
