@@ -152,30 +152,31 @@ cache_file="${CACHE_DIR}/${key}.txt"
 #   - <path1>
 #   - <path2>
 #
-#   ----
+#   -------- <path1> --------
 #
 #   <content of path1>
 #
-#   ----
+#   -------- <path2> --------
 #
 #   <content of path2>
 #
-#   ----
+#   -------- findings --------
 #
 #   <findings, one per line, or "なし">
 #
-# Findings live after the last "----" line so they can be extracted by
+# Findings live after the last separator line so they can be extracted by
 # tail-after-marker without parsing JSON back. The timestamp is for
 # human inspection only — it is NOT part of the cache key (see hash
-# above).
+# above). The reader also accepts the legacy bare "----" separator so
+# pre-existing cache files keep parsing after the format change.
 
 findings=""
 if [[ -f "$cache_file" ]]; then
-  # Cache hit: everything after the last "----" line is the findings block.
-  # Skip the decorative blank line that always follows "----", and trim
-  # trailing newlines so the result is the findings body alone.
+  # Cache hit: everything after the last separator line is the findings block.
+  # Skip the decorative blank line that always follows the separator, and
+  # trim trailing newlines so the result is the findings body alone.
   findings="$(awk '
-    /^----$/ { buf = ""; after = 1; next }
+    /^(----+|-+ .+ -+)$/ { buf = ""; after = 1; next }
     after && /^$/ { next }
     { after = 0; buf = buf $0 "\n" }
     END { sub(/\n+$/, "", buf); printf "%s", buf }
@@ -273,10 +274,10 @@ else
     done <<<"$scanned"
     while IFS= read -r p; do
       [[ -z "$p" ]] && continue
-      printf '\n----\n\n'
+      printf '\n-------- %s --------\n\n' "$p"
       cat -- "$p" 2>/dev/null || true
     done <<<"$sorted_paths"
-    printf '\n----\n\n'
+    printf '\n-------- findings --------\n\n'
     if [[ -z "$findings_arr" ]]; then
       printf 'なし\n'
     else
