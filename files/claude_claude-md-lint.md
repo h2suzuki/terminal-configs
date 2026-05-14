@@ -1,6 +1,7 @@
 ---
 name: claude-md-lint
 description: Lint the auto-loaded CLAUDE.md / MEMORY.md / @-imported memory files. Detect (a) system-prompt duplications, (b) internal contradictions/redundancy among input files, (c) stale references, (d) unclear directives. Conflicts between input and system prompt are NOT flagged (CLAUDE.md overrides system prompt by official spec). Output 5 findings max, or "なし" if clean. Read-only — no fixes. Invoked from the SessionStart hook or manually as `/claude-md-lint`.
+context: fork
 ---
 
 # claude-md-lint
