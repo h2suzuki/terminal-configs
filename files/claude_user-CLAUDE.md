@@ -1,7 +1,7 @@
 # ~/.claude/CLAUDE.md: プロジェクト横断 preference
 
 ## コミット
-- author は `Hideaki Suzuki <h2suzuki@gmail.com>` で統一する（`noreply.*` は使わない）。コミット前に `git config user.email` を確認する。
+- author は `Hideaki Suzuki <h2suzuki@gmail.com>` で統一する。コミット前に `git config user.email` を確認する。
 
 ## Bash 運用
 
