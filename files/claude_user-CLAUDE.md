@@ -8,7 +8,7 @@
 system prompt の「絶対パスで `cd` を避ける」に加えて以下を実施する。
 
 - **cwd 汚染を疑うエラーパターン**: `no such file` / `cannot open directory` / `pathspec did not match` が routine コマンドで突然出たら推測 retry せず `pwd` で確認する
-- **git は cwd 不変で切替**: `cd /repo && git ...` ではなく `git -C /repo ...` を使う
+- **git は cwd 不変で切替**: `cd /repo && git ...` ではなく `git -C /repo ...` を使う。ただし `git push origin main` は除く (allowlist 文字列マッチのため `-C` 抜きで実行、詳細は project memory の `feedback_git_push_allowlist.md`)
 - **1 行複数操作**: `cd /a/b && mkdir c && mv x c/` ではなく `mkdir /a/b/c && mv /a/b/x /a/b/c/`
 
 ## グローバルメモリ
