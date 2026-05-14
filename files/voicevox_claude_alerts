@@ -48,9 +48,9 @@
 #     the audio worker via `setsid -f`, so the wait is effectively zero.
 #
 # Env vars:
-#   CLAUDE_NOTIFY_DEBUG=1   Append every payload to dump.jsonl and every
-#                           utterance to spoken.log under STATE_DIR. Default
-#                           off — no log files written.
+#   CLAUDE_NOTIFY_DEBUG=1   Append every payload to dump.jsonl under STATE_DIR.
+#                           Default off — full JSON dump can be large.
+#                           spoken.log is unconditional (see file layout below).
 #   CLAUDE_NOTIFY_NESTED=1  Internal recursion guard. Set by speak_summary
 #                           when it spawns `claude -p`; the re-entered hook
 #                           returns immediately (see "Recursion guard"
@@ -86,8 +86,15 @@
 #       (fallback: $HOME/.local/state/<prog>)
 #       dump.jsonl                     debug log: every payload as JSONL,
 #                                      written only when CLAUDE_NOTIFY_DEBUG=1
-#       spoken.log                     debug log: TSV of every utterance,
-#                                      written only when CLAUDE_NOTIFY_DEBUG=1
+#       spoken.log                     always-on, fixed-width log of every
+#                                      utterance. Columns are space-padded
+#                                      so they don't shift between events:
+#                                        ISO_TS EVENT(14) haiku=STATUS(13) dur=Nms(11) MESSAGE
+#                                      STATUS ∈ {OK, EMPTY, TIMEOUT, SKIPPED};
+#                                      SKIPPED means no Haiku call was made
+#                                      (cached / fixed-phrase paths). Grep
+#                                      TIMEOUT to spot Haiku slowdowns at a
+#                                      glance.
 #
 #   $XDG_CACHE_HOME/voicevox_paplay/               (managed by voicevox_paplay,
 #       (fallback: $HOME/.cache/voicevox_paplay)    not by this script)
@@ -120,7 +127,11 @@ export LC_ALL=C.UTF-8
 export VVOX_OPTS="--speed 1.2"
 # Hard caps on subprocess durations (seconds).
 export VVOX_TIMEOUT=30
-export HAIKU_TIMEOUT=45
+# 60s chosen empirically: claude -p with --effort low on claude-haiku-4-5
+# regressed to 18-64s after Claude Code 2.1.140 (was 21s on 2.1.139).
+# 60s catches most successful calls while keeping the fallback path latency
+# bounded. Timeouts are visible in spoken.log as `haiku=TIMEOUT`.
+export HAIKU_TIMEOUT=60
 # Haiku model used for Stop / SubagentStop summarization and CLI `say`
 # katakana conversion.
 export HAIKU_MODEL="claude-haiku-4-5"
@@ -201,12 +212,14 @@ VVOX_LOCK="/tmp/$PROG_NAME.voicevox.lock"
 # (the hook path) without having to thread it through positional args.
 export HAIKU_LOCK="/tmp/$PROG_NAME.haiku.lock"
 
+# spoken.log is always written — it's a small TSV (~100 B per utterance) and
+# the timing/status columns are the user-facing diagnostic surface for Haiku
+# timeouts. dump.jsonl stays opt-in because the full hook payload is large.
+SPOKEN_LOG="$STATE_DIR/spoken.log"
 if [ "${CLAUDE_NOTIFY_DEBUG:-0}" = "1" ]; then
   DUMP_LOG="$STATE_DIR/dump.jsonl"
-  SPOKEN_LOG="$STATE_DIR/spoken.log"
 else
   DUMP_LOG=""
-  SPOKEN_LOG=""
 fi
 
 # Ensure each system-wide lock file exists with mode 0666 so any UID can take
@@ -301,8 +314,8 @@ Hook mode:
   a usage hint instead of hanging on stdin. Always exits 0; no stdout.
 
 Environment Variables:
-  CLAUDE_NOTIFY_DEBUG=1   Append every payload to dump.jsonl and every
-                          utterance to spoken.log under STATE_DIR.
+  CLAUDE_NOTIFY_DEBUG=1   Append every payload to dump.jsonl under STATE_DIR.
+                          spoken.log is always written (see Locations).
 
 Locations:
   Debug logs (per-user, opt-in):  $STATE_DIR
@@ -332,7 +345,7 @@ case "${1:-}" in
     LOG_PATH="$STATE_DIR/spoken.log"
     if [ ! -f "$LOG_PATH" ]; then
       echo "$PROG_NAME: no spoken log at $LOG_PATH" >&2
-      echo "Set CLAUDE_NOTIFY_DEBUG=1 and trigger a hook to create it." >&2
+      echo "Trigger a hook event to create it (the file is created on first write)." >&2
       exit 1
     fi
     tail -n "${2:-20}" "$LOG_PATH"
@@ -386,9 +399,8 @@ fi
 # ---------------------------------------------------------------------------
 # Hook mode
 # ---------------------------------------------------------------------------
-mkdir -p "$RUNTIME_DIR"
+mkdir -p "$RUNTIME_DIR" "$STATE_DIR"
 chmod 0700 "$RUNTIME_DIR" 2>/dev/null
-[ -n "$DUMP_LOG" ] && mkdir -p "$STATE_DIR"
 
 ensure_lock "$VVOX_LOCK"
 ensure_lock "$HAIKU_LOCK"
@@ -444,7 +456,7 @@ speak_cached() {
     vvox_lock=$2
     event=$3
     log=$4
-    [ -n "$log" ] && printf "%s\t%s\t%s\n" "$(date -Iseconds)" "$event" "$text" >> "$log"
+    printf "%s %-14s %-13s %-11s %s\n" "$(date -Iseconds)" "$event" "haiku=SKIPPED" "dur=N/A" "$text" >> "$log"
     flock "$vvox_lock" timeout "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS --cache "$text"
   ' _ "$text" "$VVOX_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
 }
@@ -456,7 +468,7 @@ speak_text() {
     vvox_lock=$2
     event=$3
     log=$4
-    [ -n "$log" ] && printf "%s\t%s\t%s\n" "$(date -Iseconds)" "$event" "$text" >> "$log"
+    printf "%s %-14s %-13s %-11s %s\n" "$(date -Iseconds)" "$event" "haiku=SKIPPED" "dur=N/A" "$text" >> "$log"
     flock "$vvox_lock" timeout "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS "$text"
   ' _ "$text" "$VVOX_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
 }
@@ -470,16 +482,35 @@ speak_summary() {
     vvox_lock=$3
     event=$4
     log=$5
+    haiku_timeout=$6
+    # $EPOCHREALTIME → "1736000000.123456"; strip the dot to get microseconds
+    # (bash 5+). Integer math avoids awk/bc and stays accurate to 1ms.
+    start_us=${EPOCHREALTIME/./}
     summary=$(haiku_katakanize_sync "$prompt")
+    end_us=${EPOCHREALTIME/./}
+    dur_ms=$(( (end_us - start_us) / 1000 ))
+    if [ -z "$summary" ]; then
+      # Heuristic: a timeout(1) SIGKILL terminates claude near
+      # haiku_timeout seconds. Anything ≥95% of the budget with empty
+      # output is almost certainly the timeout; below that it is some
+      # other empty-output failure (auth, network, parse).
+      if [ "$dur_ms" -ge $(( haiku_timeout * 950 )) ]; then
+        status=TIMEOUT
+      else
+        status=EMPTY
+      fi
+      summary=$fallback
+    else
+      status=OK
+    fi
     # Safety cap: the prompt asks for ≤30 chars but Haiku occasionally
     # overshoots; allow up to 40 then chop. Bash substring is character-
     # aware (not byte-based) under LC_ALL=C.UTF-8, so this never splits
     # a multi-byte sequence mid-codepoint.
     summary=${summary:0:40}
-    [ -z "$summary" ] && summary=$fallback
-    [ -n "$log" ] && printf "%s\t%s\t%s\n" "$(date -Iseconds)" "$event" "$summary" >> "$log"
+    printf "%s %-14s %-13s %-11s %s\n" "$(date -Iseconds)" "$event" "haiku=$status" "dur=${dur_ms}ms" "$summary" >> "$log"
     flock "$vvox_lock" timeout "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS "$summary"
-  ' _ "$prompt" "$fallback" "$VVOX_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
+  ' _ "$prompt" "$fallback" "$VVOX_LOCK" "$EVENT" "$SPOKEN_LOG" "$HAIKU_TIMEOUT" </dev/null >/dev/null 2>&1
 }
 
 age_of() {
@@ -534,7 +565,7 @@ case "$EVENT" in
       if [ "${#LAST_SENTENCE}" -le 30 ] && ! contains_english_word "$LAST_SENTENCE"; then
         speak_text "$LAST_SENTENCE"
       else
-        speak_summary "次の一文を、意図と意味を保ったまま 30 文字以下の自然な日本語に整えてください。
+        speak_summary "次の一文を 30 文字以下の自然な日本語に整えてください。意図と意味は変えないこと。アルファベットの単語・略語はそのまま残さず、すべて発音通りのカタカナに置き換えてください (例: commit → コミット、OK → オーケー、push → プッシュ)。
 出力は整えた一文のみ。装飾・引用符・改行・前置きなし。
 
 文:
@@ -582,7 +613,7 @@ $LAST_SENTENCE" "${EVENT_PHRASES[Stop]}"
     is_internal_subagent && exit 0
     LAST_MSG=$(printf '%s' "$INPUT" | jq -r '.last_assistant_message // ""')
     speak_summary "以下は AI サブエージェントが最後に出力したテキストです。
-このサブエージェントが何を完了・報告したかを、30文字以下の自然な日本語で簡潔に。
+このサブエージェントが何を完了・報告したかを、30 文字以下の自然な日本語で簡潔にまとめてください。アルファベットの単語・略語はそのまま残さず、すべて発音通りのカタカナに置き換えてください (例: commit → コミット、PR → ピーアール、push → プッシュ)。
 出力は要約のみ。装飾・引用符・改行・前置きなし。
 
 応答:
