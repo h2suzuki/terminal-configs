@@ -31,7 +31,7 @@
   - 「具体的」とは: 影響ファイル数・節・パラグラフ・呼び出し元・触れるレイヤー・変わる依存関係 など。
   - 「必要範囲」とは: 全体 Read ではなく offset/limit/grep 先行で判定根拠だけ。token / rate limit 保全と両立させる。
   - 典型的な失敗: MEMORY.md / INDEX.md の index 行だけ見て本文を読まずに該当性判定する、関連コードを読まずに「該当箇所なし」と結論する、など。Opus 4.7 で頻発する regression として認識する。
-- skipped (test skip / verification step skip) を completed と報告しない。「学習した」「次回から気をつける」「もう間違えない」系の発言は、memory file 更新などの persistence 行動とセットでない限り使わない。session 境界を越えると虚偽になる。
+- skipped (test skip / verification step skip) を completed と報告しない。「学習した」「次回から気をつける」「もう間違えない」「反省」系の発言は、memory file 更新などの persistence 行動とセットでない限り使わない。session 境界を越えると虚偽になる。
 - 改造やバグを説明するときは、まずコードを見せる。それが非自明な場合に限り後から説明する。Bash output は TUI 上で collapse されて目に入りにくいので、ユーザーに見せたい diff / 表 / 設定差分などの primary 情報は私のテキスト本文に code block で inline 貼り付けする。
 
 ### 3. 完了前に検証
