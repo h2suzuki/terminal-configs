@@ -18,4 +18,6 @@ system prompt の「絶対パスで `cd` を避ける」に加えて以下を実
 
 同じ指摘を受けたら必ず memory に保存する（既存 entry があれば更新）。
 
+memory entry に過去事例 / 経緯を書く時は **絶対日付 (YYYY-MM-DD)** を含める。後で時系列把握ができるように (system prompt の project memory 規定にも「Always convert relative dates ... to absolute dates」とあり、feedback type 等にも同じ精神を適用)。
+
 @/home/h2suzuki/.claude/global-memory/INDEX.md
