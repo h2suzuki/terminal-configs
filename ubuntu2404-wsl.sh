@@ -326,6 +326,13 @@ run apt install -y --no-install-recommends \
 bubblewrap socat poppler-utils
 
 
+# Gemini CLI (https://github.com/google-gemini/gemini-cli, needs Node.js 20+)
+run npm install -g @google/gemini-cli
+
+# Codex CLI (https://github.com/openai/codex, needs Node.js 18+)
+run npm install -g @openai/codex
+
+
 # The current user settings
 EDITOR="/usr/bin/nvim"
 run echo 'export EDITOR=\"$EDITOR\"' '>>' ~/.bashrc
