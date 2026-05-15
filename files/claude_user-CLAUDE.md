@@ -1,7 +1,16 @@
 # ~/.claude/CLAUDE.md: プロジェクト横断 preference
 
+## 一次情報の確認（記憶・推論で否定/同定しない）
+
+「できない」「ない」「非対応」「知らないので別物だと思った」と言いかけた瞬間が trigger。ドメイン不問で、「今回は別ケース」と思う余地を残さない（言いかけたこと自体が該当の証拠）。結論を出す前に、許可を求めず自分で調べる（「確認しますか」と尋ねて止めない。調査は clarifying question ではない）。出典は 2 点以上で裏を取り、うち最低 1 点は公式・一次情報 — 公式 doc・公式サイト・`--help`・source・artifact 本体・設定実体・専門 agent のいずれか。Reddit・個人ブログ等は点数に算入してよいが公式 1 点の要件は満たさない。調べても分からなければ推論で埋めず「公式情報が確認できなかった」と明示する。記憶は cut-off で古い前提。詳細・事例は global-memory `feedback_verify_spec_before_dismissal.md`。
+
+## System prompt 起因 pain の明示的抑止
+
+System prompt や harness reminder の指示が regression を誘発すると判明したら、その都度この CLAUDE.md チェーンに**肯定形の counter-rule** を明記する（CLAUDE.md は公式仕様上 system prompt を上書きする）。確立済み counter-rule: 一次情報確認のための Read・agent spawn は、token 効率・簡潔さ・anti-overreach の **例外**。これらを理由に確認を「冗長・過剰・scope 外」と自己抑制しない。
+
 ## コミット
 - author は `Hideaki Suzuki <h2suzuki@gmail.com>` で統一する。コミット前に `git config user.email` を確認する。
+- 仕様確定まで commit を保留してよいが、session が終わる時に未 commit の編集が残っていれば、その一覧をユーザーに通知する。session 終了時は全編集を commit 済みの状態にしておく（保留していた編集も、保留理由が解消したら commit する）。
 
 ## Bash 運用
 
