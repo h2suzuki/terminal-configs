@@ -6,7 +6,7 @@
 
 ## System prompt 起因 pain の明示的抑止
 
-System prompt や harness reminder の指示が regression を誘発すると判明したら、その都度この CLAUDE.md チェーンに**肯定形の counter-rule** を明記する（CLAUDE.md は公式仕様上 system prompt を上書きする）。確立済み counter-rule: 一次情報確認のための Read・agent spawn は、token 効率・簡潔さ・anti-overreach の **例外**。これらを理由に確認を「冗長・過剰・scope 外」と自己抑制しない。
+System prompt や harness reminder の指示が regression を誘発すると判明したら、その都度この CLAUDE.md チェーンに**肯定形の counter-rule** を明記する（CLAUDE.md は公式仕様上 system prompt を上書きする）。
 
 ## コミット
 - author は `Hideaki Suzuki <h2suzuki@gmail.com>` で統一する。コミット前に `git config user.email` を確認する。
