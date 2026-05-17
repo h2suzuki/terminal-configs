@@ -1,10 +1,13 @@
 #!/bin/bash
 # /etc/claude-code/claude-md-lint.sh
 #
-# SessionStart hook — cross-project lint of auto-loaded CLAUDE.md /
-# MEMORY.md / @-imported memory files. Read-only; flags duplications
-# with system prompt, internal contradictions, stale references, and
-# unclear directives. Output goes into the session as additionalContext.
+# SessionStart hook — cross-project lint of the auto-loaded CLAUDE.md
+# chain (org / user / project CLAUDE.md and @-imported CLAUDE.md files).
+# Auto-memory index files (MEMORY.md / global-memory) are excluded: they
+# change almost every session and would make the result cache miss
+# perpetually. Read-only; flags duplications with system prompt, internal
+# contradictions, stale references, and unclear directives. Output goes
+# into the session as additionalContext.
 #
 # Re-entry guard: CLAUDE_MD_LINT_PARENT env var. The child `claude -p`
 # inherits it; the child's hook sees it and exits silently.
@@ -48,7 +51,7 @@ readonly TIMEOUT_S=150
 # shape mirrors what the skill body (/etc/claude-code/claude-md-lint.md)
 # specifies for "JSON mode".
 readonly JSON_SCHEMA='{"type":"object","properties":{"scanned":{"type":"array","items":{"type":"string"}},"findings":{"type":"array","items":{"type":"string"}}},"required":["scanned","findings"],"additionalProperties":false}'
-readonly SYSTEM_MSG='セッション開始時のメモリチェックが完了しました'
+readonly SYSTEM_MSG='セッション開始時の CLAUDE.md チェックが完了しました'
 
 # --- re-entry guard ---------------------------------------------------------
 
@@ -71,15 +74,11 @@ cwd="$(jq -r '.cwd // empty' <<<"$payload" 2>/dev/null || true)"
 
 # --- collect input files ----------------------------------------------------
 
-project_id="${cwd//\//-}"
-mem_path="${HOME}/.claude/projects/${project_id}/memory/MEMORY.md"
-
 candidates=(
   /etc/claude-code/CLAUDE.md
   "${HOME}/.claude/CLAUDE.md"
   "${cwd}/CLAUDE.md"
   "${cwd}/.claude/CLAUDE.md"
-  "${mem_path}"
 )
 
 declare -A seen=()
@@ -128,6 +127,12 @@ while ((${#queue_paths[@]} > 0)); do
     ref_path="$(realpath -e "$ref_path" 2>/dev/null || true)"
     [[ -z "$ref_path" ]] && continue
     [[ "$ref_path" == *.md ]] || continue
+    # Auto-memory index files are rewritten almost every session; keying
+    # the lint cache on them makes it miss perpetually. Lint the CLAUDE.md
+    # chain only — skip @-refs into global-memory / per-project memory.
+    case "$ref_path" in
+      */global-memory/*|*/projects/*/memory/*) continue ;;
+    esac
     queue_paths+=("$ref_path")
     queue_depths+=($((d + 1)))
   done <<<"$refs"
