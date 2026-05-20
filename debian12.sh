@@ -120,7 +120,7 @@ run chmod 0644 /etc/profile.d/pulseaudio-forwarding.sh
 
 # Neovim, Git / Git-LFS, tree, ripgrep
 run apt update
-run apt remove -f vim
+run apt remove -y vim
 run apt install -y --no-install-recommends \
 neovim git git-lfs tree ripgrep
 

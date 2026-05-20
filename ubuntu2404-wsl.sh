@@ -123,7 +123,7 @@ copy share_ssh_x11forwarding  ~/.share_ssh_x11forwarding
 
 # Neovim, Git / Git-LFS, tree, ripgrep, shellcheck
 run apt update
-run apt remove -f vim
+run apt remove -y vim
 run apt install -y --no-install-recommends \
 neovim git git-lfs tree ripgrep shellcheck
 
