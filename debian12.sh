@@ -137,8 +137,7 @@ libsixel-bin
 # X window forwarding and some small programs for testing
 run apt install -y --no-install-recommends \
 xauth jq x11-apps mesa-utils vulkan-tools wayland-utils \
-vdpau-driver-all va-driver-all \
-pulseaudio-utils
+vdpau-driver-all va-driver-all expect pulseaudio-utils
 
 
 
