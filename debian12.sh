@@ -22,8 +22,7 @@ which readlink  >/dev/null || { echo "Cannot find readlink";    exit 1; }
 which cmp       >/dev/null || { echo "Cannot find cmp";         exit 1; }
 
 
-TOP_DIR="`dirname ${BASH_SOURCE[0]}`"
-TOP_DIR="`readlink -f "$TOP_DIR"`"
+TOP_DIR=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
 
 
 if tty -s >/dev/null; then
@@ -86,17 +85,26 @@ run sed -i ~/.bashrc \
     -e '/alias\ ls=/s/^\ *#*\ *//' \
     -e '/^alias\ ls=/s/ls\ \$LS_OPTIONS/ls\ --group-directories-first\ \$LS_OPTIONS/' \
     -e '/alias\ tree=/d' \
+    -e '/alias\ pushd=/d' \
+    -e '/alias\ popd=/d' \
+    -e '/alias\ dirs=/d' \
     -e '/alias\ diffy=/d' \
     -e '/alias\ rg=/d' \
+    -e '/alias\ node-x=/d' \
     -e '/grip\(\)\ /d' \
     -e '/export\ EDITOR=/d' \
     -e '/export\ VISUAL=/d' \
     -e '/export\ PATH=.*\.local.bin:\$PATH/d' \
-    -e '/share_ssh_x11forwarding/d'
+    -e '/share_ssh_x11forwarding/d' \
+    -e '/NVM_DIR/d'
 
 run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' ~/.bashrc
+run echo "alias pushd=\\'pushd \\>/dev/null\\'" '>>' ~/.bashrc
+run echo "alias popd=\\'popd \\>/dev/null\\'" '>>' ~/.bashrc
+run echo "alias dirs=\\'dirs -v\\'" '>>' ~/.bashrc
 run echo "alias diffy=\\'git diff --no-index\\'" '>>' ~/.bashrc
 run echo "alias rg=\\'rg --sort path --smart-case\\'" '>>' ~/.bashrc
+run echo "alias node-x=\\'NODE_DEBUG=module,fs,net node\\'" '>>' ~/.bashrc
 run echo 'grip\(\) \{ rg --sort path --smart-case --json -C 2 \"\$@\" \| delta\; \}' '>>' ~/.bashrc
 run echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' '>>' ~/.bashrc
 
@@ -204,22 +212,14 @@ set timeout 120
 spawn /tmp/voicevox_install.sh --output '"$VV_LIB_DIR"' --exclude c-api --models-pattern {[0-9]*.vvm}
 
 expect {
-    "*qを押してください*" {
-        send "q"
-        expect "*\[y,n,r\]*"
-        send "y\r"
-    }
-    "*\[y,n,r\]*" {
-        send "y\r"
-    }
-    timeout {
-        puts "タイムアウトしました"
-        exit 1 ;
-    }
-    eof {
-        puts "接続が切れました"
-        exit 1 ;
-    }
+    "qを押してください" { puts "Caught: $expect_out(0,string)"; send "q\r"; sleep 1 }
+    timeout             { puts "タイムアウトしました";  exit 1 }
+    eof                 { puts "接続が切れました";      exit 1 }
+}
+expect {
+    "\[y,n,r\]"         { puts "Caught: $expect_out(0,string)"; send "y\r"; sleep 1 }
+    timeout             { puts "タイムアウトしました";  exit 1 }
+    eof                 { puts "接続が切れました";      exit 1 }
 }
 expect eof
 '
@@ -272,6 +272,10 @@ run apt install -y --no-install-recommends \
 bubblewrap socat poppler-utils
 
 
+# Codex CLI (https://github.com/openai/codex, needs Node.js 18+)
+run npm install -g @openai/codex
+
+
 # The current user settings
 EDITOR="/usr/bin/nvim"
 run echo 'export EDITOR=\"$EDITOR\"' '>>' ~/.bashrc
@@ -291,8 +295,12 @@ if [ -n "$LOGIN_USER" ]; then
     run sed -i $BASHRC \
             -e '/^\ *PS1=/s/32m/35m/' \
             -e '/alias\ tree=/d' \
+            -e '/alias\ pushd=/d' \
+            -e '/alias\ popd=/d' \
+            -e '/alias\ dirs=/d' \
             -e '/alias\ diffy=/d' \
             -e '/alias\ rg=/d' \
+            -e '/alias\ node-x=/d' \
             -e '/grip\(\)\ /d' \
             -e '/export\ EDITOR=/d' \
             -e '/export\ VISUAL=/d' \
@@ -301,8 +309,12 @@ if [ -n "$LOGIN_USER" ]; then
 
     # Handy aliases
     run echo "alias tree=\\'tree --charset ascii --dirsfirst\\'" '>>' $BASHRC
+    run echo "alias pushd=\\'pushd \\>/dev/null\\'" '>>' $BASHRC
+    run echo "alias popd=\\'popd \\>/dev/null\\'" '>>' $BASHRC
+    run echo "alias dirs=\\'dirs -v\\'" '>>' $BASHRC
     run echo "alias diffy=\\'git diff --no-index\\'" '>>' $BASHRC
     run echo "alias rg=\\'rg --sort path --smart-case\\'" '>>' $BASHRC
+    run echo "alias node-x=\\'NODE_DEBUG=module,fs,net node\\'" '>>' $BASHRC
     run echo 'grip\(\) \{ rg --sort path --smart-case --json -C 2 \"\$@\" \| delta\; \}' '>>' $BASHRC
 
     # Set the default editor as neovim
@@ -324,6 +336,7 @@ EOF
     run sudo -u $LOGIN_USER bash -i -c '"nvm install --lts"'    # nvm is a shell function.
     run sudo -u $LOGIN_USER bash -i -c '"npm uninstall -g @anthropic-ai/claude-code || true"'
     run sudo -u $LOGIN_USER bash -i -c '"bash /tmp/claude_install.sh"'
+    run sudo -u $LOGIN_USER bash -i -c '"npm install -g @openai/codex"'
     copy --nobackup claude_settings.json ~$LOGIN_USER/.claude/settings.json --owner $LOGIN_USER
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/claude-md-lint
     run sudo -u $LOGIN_USER ln -sfn /etc/claude-code/claude-md-lint.md \
@@ -334,6 +347,12 @@ else
     echo -e "${COLOR_RED}No login user found... omitting to include ~/.nvm/nvm.sh${COLOR_CLEAR}"
     echo ""
 fi
+
+# Append auto-loading of nvm.sh
+run cat ">>" ~/.bashrc <<"EOF"
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+EOF
 
 run echo "~/.share_ssh_x11forwarding" '>>' ~/.bashrc
 
