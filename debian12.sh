@@ -335,13 +335,14 @@ EOF
 
     run echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' '>>' $BASHRC
 
-    run sudo -u $LOGIN_USER bash -i -c '"nvm install --lts"'    # nvm is a shell function.
-    run sudo -u $LOGIN_USER bash -i -c '"npm uninstall -g @anthropic-ai/claude-code || true"'
-    run sudo -u $LOGIN_USER bash -i -c '"bash /tmp/claude_install.sh"'
-    run sudo -u $LOGIN_USER bash -i -c '"npm install -g @openai/codex"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"nvm install --lts"'    # nvm is a shell function.
+    run sudo -i -u $LOGIN_USER bash -i -c '"npm uninstall -g @anthropic-ai/claude-code || true"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"bash /tmp/claude_install.sh"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g @openai/codex"'
     copy --nobackup claude_settings.json ~$LOGIN_USER/.claude/settings.json --owner $LOGIN_USER
+    #copy --nobackup claude_user-CLAUDE.md ~$LOGIN_USER/.claude/CLAUDE.md --owner $LOGIN_USER
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/claude-md-lint
-    run sudo -u $LOGIN_USER ln -sfn /etc/claude-code/claude-md-lint.md \
+    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/claude-md-lint.md \
                                          ~$LOGIN_USER/.claude/skills/claude-md-lint/SKILL.md
 
 else
