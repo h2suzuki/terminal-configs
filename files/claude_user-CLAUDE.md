@@ -13,23 +13,29 @@ System prompt や harness reminder の指示が regression を誘発すると判
 - 調べても分からなければ推論で埋めず「公式情報が確認できなかった」と明示する。見つからなくても、存在を否定することにはならない
 - Claude hook・subagent・plugin・skill の設計、既存仕様に依存する断定（「feature が無い」等の否定形を含む）、公式エコシステムのツール採否では、CLI `--help`、`docs.claude.com`、`code.claude.com`、`github.com/anthropics/*`、`claude.com/plugins`、`claude-code-guide` subagent に最新状況の裏とりをする
 
-## コミット運用
+## コミット・PUSH運用
 
 原則「変更 1 件 = 1 コミット」。1 コミット内で複数テーマが不可避な場合は複合コミットとし、メッセージに両テーマを明記する。
 
 - Author は `Hideaki Suzuki <h2suzuki@gmail.com>` で統一する。コミット前に `git config user.email` を確認する
-- コミットのタイトルは `<area>: <Imperative description> [<tag>...]` 形式。動詞は大文字始まり。tag はプロジェクトの必要性に応じて任意付与する（`<docs>`・`<style>`・`<chore>` など）
-- 仕様確定までコミットを保留してよい。すなわち、同一セッション内で同じ箇所を続けて編集する見込みがある間、推敲中の節や議論中の skill 仕様などは step ごとにコミットしない。同一セッションで確定した時点でまとめて 1 コミットにする（log のノイズ低減のため）。ただし「内容が時系列で変化し得る」ことは保留理由にならない。セッション終了時は全編集をコミット済みの状態にしておく（保留していた編集も、保留理由が解消したらコミットする）
-- セッションを跨ぐ更新見込み（日付付き snapshot 等）は当該セッションでは確定扱いとして通常どおりコミットし、時系列は git 履歴と日付付き記述で辿る。保留可否は LLM 判断で、毎回ユーザーに確認しない
-- セッションが終わる時に未コミットの編集が残っていれば、その一覧をユーザーに通知する
+- コミットメッセージは英語で、50/72 rule に従う
+- コミットの件名は簡潔に `<area>: <Imperative description> [<tag>...]` 形式。area はファイル名など。Imperative verb は大文字始まり。tag はプロジェクトの必要性に応じて任意付与する（`<docs>`・`<style>`・`<chore>` など）
+- コミットログのノイズ低減のため、仕様確定までコミットを保留してよい。すなわち、同一セッション内で同じ箇所を続けて編集する見込みがある間、推敲中の節や議論中の skill 仕様などは step ごとにコミットしない。同一セッションで確定した時点でまとめて 1 コミットにする。ただし「内容が時系列で変化し得る」ことは保留理由にならない
+- ユーザーの指示（handoff依頼、セッションリセット宣言、これで終わります等の挨拶）によってセッションが終了する見通しとなったら、全編集をコミット済みの状態にしておく。セッションを跨ぐ更新見込み（日付付き snapshot 等）は当該セッションでは確定扱いとし、時系列は git 履歴と日付付き記述で辿れるようにする。保留可否は LLM 判断で、毎回ユーザーに確認しない
+- セッションが終わる時に、未コミットの編集が残っていれば、その一覧をユーザーに通知する
+- `git push` の催促・予告（「次に push しますか」等）を能動的に出さない
 
 ## Bash 運用
 
-system prompt の「絶対パスで `cd` を避ける」に加えて以下を実施する。
+第一に「絶対パスで `cd` を避ける」べき。それでも `cd` が必要な状況では代わりに `pushd` / `popd` / `dirs` を用いて、現在のディレクトリスタックを意識しながら操作する。
 
-- **cwd 汚染を疑うエラーパターン**: `no such file` / `cannot open directory` / `pathspec did not match` が routine コマンドで突然出たら推測 retry せず `pwd` で確認する
-- **git は cwd 不変で切替**: `cd /repo && git ...` ではなく `git -C /repo ...` を使う。ただし `git push origin main` は除く (allowlist 文字列マッチのため `-C` 抜きで実行、詳細は project memory の `feedback_git_push_allowlist.md`)
-- **1 行複数操作**: `cd /a/b && mkdir c && mv x c/` ではなく `mkdir /a/b/c && mv /a/b/x /a/b/c/`
+- 良い例: `mkdir /a/b/c && mv /a/b/x /a/b/c/`
+- 悪い例: `cd /a/b && mkdir c && mv x c/`
+- 良い例: `git -C /repo ...`
+- 悪い例: `cd /repo && git ...`
+- 例外: `git push origin main` -> allowlist 文字列マッチのため `-C` 抜きで実行、詳細は project memory の `feedback_git_push_allowlist.md`
+
+**cwd 汚染を疑うエラーパターン**: `no such file` / `cannot open directory` / `pathspec did not match` が routine コマンドで突然出たら推測 retry せず `pwd` で確認する
 
 ## グローバルメモリ
 
