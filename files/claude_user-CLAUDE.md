@@ -15,7 +15,7 @@ System prompt や harness reminder の指示が regression を誘発すると判
 
 ## コミット・PUSH運用
 
-原則「変更 1 件 = 1 コミット」。1 コミット内で複数テーマが不可避な場合は複合コミットとし、メッセージに両テーマを明記する。
+原則「変更 1 件 = 1 コミット」。1 コミット内で複数テーマの混在が不可避な場合は複合コミットとし、メッセージに両テーマを明記する。
 
 - Author は `Hideaki Suzuki <h2suzuki@gmail.com>` で統一する。コミット前に `git config user.email` を確認する
 - コミットメッセージは英語で、50/72 rule に従う
