@@ -263,6 +263,8 @@ copy --nobackup claude_system_hooks/read_before_edit.py \
 copy --nobackup claude_user_hooks/avoid_cd.py   /etc/claude-code/hooks/avoid_cd.py -m 0755
 copy --nobackup claude_user_hooks/check_commit_author.py \
                                                 /etc/claude-code/hooks/check_commit_author.py -m 0755
+copy --nobackup claude_user_hooks/check_commit_format.py \
+                                                /etc/claude-code/hooks/check_commit_format.py -m 0755
 copy --nobackup voicevox_claude_alerts          /usr/local/bin/voicevox_claude_alerts -m 0755
 copy --nobackup claude_settings.json            ~/.claude/settings.json
 #copy --nobackup claude_user-CLAUDE.md           ~/.claude/CLAUDE.md
