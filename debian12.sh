@@ -265,11 +265,15 @@ copy --nobackup claude_settings.json            ~/.claude/settings.json
 #copy --nobackup claude_user-CLAUDE.md           ~/.claude/CLAUDE.md
 copy --nobackup claude_claude-md-lint.md        /etc/claude-code/claude-md-lint.md
 copy --nobackup claude_bash-writing-rules.md    /etc/claude-code/bash-writing-rules.md
+copy --nobackup claude_system_skills/verbalize-before-action.md \
+                                                /etc/claude-code/verbalize-before-action.md
 
 run install -d ~/.claude/skills/claude-md-lint
 run install -d ~/.claude/skills/bash-writing-rules
+run install -d ~/.claude/skills/verbalize-before-action
 run ln -sfn /etc/claude-code/claude-md-lint.md  ~/.claude/skills/claude-md-lint/SKILL.md
 run ln -sfn /etc/claude-code/bash-writing-rules.md ~/.claude/skills/bash-writing-rules/SKILL.md
+run ln -sfn /etc/claude-code/verbalize-before-action.md ~/.claude/skills/verbalize-before-action/SKILL.md
 
 # Tools used by Claude Code (bubblewrap/socat: Sandbox, poppler-utils: PDF reading)
 run apt install -y --no-install-recommends \
@@ -344,8 +348,11 @@ EOF
     copy --nobackup claude_settings.json ~$LOGIN_USER/.claude/settings.json --owner $LOGIN_USER
     #copy --nobackup claude_user-CLAUDE.md ~$LOGIN_USER/.claude/CLAUDE.md --owner $LOGIN_USER
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/claude-md-lint
+    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/verbalize-before-action
     run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/claude-md-lint.md \
                                          ~$LOGIN_USER/.claude/skills/claude-md-lint/SKILL.md
+    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/verbalize-before-action.md \
+                                         ~$LOGIN_USER/.claude/skills/verbalize-before-action/SKILL.md
 
 else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
