@@ -363,6 +363,8 @@ copy --nobackup claude_user_skills/no-routing-questions.md \
                                                 /etc/claude-code/no-routing-questions.md
 copy --nobackup claude_user_skills/no-redundant-design-litigation.md \
                                                 /etc/claude-code/no-redundant-design-litigation.md
+copy --nobackup claude_user_skills/commit-discipline.md \
+                                                /etc/claude-code/commit-discipline.md
 
 run install -d ~/.claude/skills/claude-md-lint
 run install -d ~/.claude/skills/bash-writing-rules
@@ -376,6 +378,7 @@ run install -d ~/.claude/skills/verify-spec-before-dismissal
 run install -d ~/.claude/skills/verify-before-asserting
 run install -d ~/.claude/skills/no-routing-questions
 run install -d ~/.claude/skills/no-redundant-design-litigation
+run install -d ~/.claude/skills/commit-discipline
 run ln -sfn /etc/claude-code/claude-md-lint.md  ~/.claude/skills/claude-md-lint/SKILL.md
 run ln -sfn /etc/claude-code/bash-writing-rules.md ~/.claude/skills/bash-writing-rules/SKILL.md
 run ln -sfn /etc/claude-code/verbalize-before-action.md ~/.claude/skills/verbalize-before-action/SKILL.md
@@ -388,6 +391,7 @@ run ln -sfn /etc/claude-code/verify-spec-before-dismissal.md ~/.claude/skills/ve
 run ln -sfn /etc/claude-code/verify-before-asserting.md ~/.claude/skills/verify-before-asserting/SKILL.md
 run ln -sfn /etc/claude-code/no-routing-questions.md ~/.claude/skills/no-routing-questions/SKILL.md
 run ln -sfn /etc/claude-code/no-redundant-design-litigation.md ~/.claude/skills/no-redundant-design-litigation/SKILL.md
+run ln -sfn /etc/claude-code/commit-discipline.md ~/.claude/skills/commit-discipline/SKILL.md
 
 # Tools used by Claude Code (bubblewrap/socat: Sandbox, poppler-utils: PDF reading)
 run apt install -y --no-install-recommends \
@@ -492,6 +496,7 @@ EOF
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/verify-before-asserting
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/no-routing-questions
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/no-redundant-design-litigation
+    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/commit-discipline
     run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/claude-md-lint.md \
                                          ~$LOGIN_USER/.claude/skills/claude-md-lint/SKILL.md
     run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/bash-writing-rules.md \
@@ -516,6 +521,8 @@ EOF
                                          ~$LOGIN_USER/.claude/skills/no-routing-questions/SKILL.md
     run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/no-redundant-design-litigation.md \
                                          ~$LOGIN_USER/.claude/skills/no-redundant-design-litigation/SKILL.md
+    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/commit-discipline.md \
+                                         ~$LOGIN_USER/.claude/skills/commit-discipline/SKILL.md
 
     run usermod -aG docker "$LOGIN_USER"
 
