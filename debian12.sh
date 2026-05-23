@@ -257,7 +257,8 @@ run uv tool install --force claude-monitor #--system --break-system-packages pas
 
 copy --nobackup claude_system-CLAUDE.md         /etc/claude-code/CLAUDE.md
 copy --nobackup claude_statusline.sh            /etc/claude-code/statusline.sh -m 0755
-copy --nobackup claude_claude-md-lint.sh        /etc/claude-code/claude-md-lint.sh -m 0755
+copy --nobackup claude_system_hooks/claude-md-lint.sh \
+                                                /etc/claude-code/claude-md-lint.sh -m 0755
 copy --nobackup claude_system_hooks/read_before_edit.py \
                                                 /etc/claude-code/hooks/read_before_edit.py -m 0755
 copy --nobackup claude_user_hooks/avoid_cd.py   /etc/claude-code/hooks/avoid_cd.py -m 0755
@@ -270,8 +271,10 @@ copy --nobackup claude_user_hooks/detect_cwd_pollution.py \
 copy --nobackup voicevox_claude_alerts          /usr/local/bin/voicevox_claude_alerts -m 0755
 copy --nobackup claude_settings.json            ~/.claude/settings.json
 #copy --nobackup claude_user-CLAUDE.md           ~/.claude/CLAUDE.md
-copy --nobackup claude_claude-md-lint.md        /etc/claude-code/claude-md-lint.md
-copy --nobackup claude_bash-writing-rules.md    /etc/claude-code/bash-writing-rules.md
+copy --nobackup claude_system_skills/claude-md-lint.md \
+                                                /etc/claude-code/claude-md-lint.md
+copy --nobackup claude_system_skills/bash-writing-rules.md \
+                                                /etc/claude-code/bash-writing-rules.md
 copy --nobackup claude_system_skills/verbalize-before-action.md \
                                                 /etc/claude-code/verbalize-before-action.md
 copy --nobackup claude_system_skills/scope-mismatch-detector.md \
