@@ -258,6 +258,8 @@ run uv tool install --force claude-monitor #--system --break-system-packages pas
 copy --nobackup claude_system-CLAUDE.md         /etc/claude-code/CLAUDE.md
 copy --nobackup claude_statusline.sh            /etc/claude-code/statusline.sh -m 0755
 copy --nobackup claude_claude-md-lint.sh        /etc/claude-code/claude-md-lint.sh -m 0755
+copy --nobackup claude_system_hooks/read_before_edit.py \
+                                                /etc/claude-code/hooks/read_before_edit.py -m 0755
 copy --nobackup voicevox_claude_alerts          /usr/local/bin/voicevox_claude_alerts -m 0755
 copy --nobackup claude_settings.json            ~/.claude/settings.json
 #copy --nobackup claude_user-CLAUDE.md           ~/.claude/CLAUDE.md

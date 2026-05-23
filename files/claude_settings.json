@@ -11,6 +11,18 @@
   "tui": "fullscreen",
   "skipAutoPermissionPrompt": true,
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/read_before_edit.py check" } ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Read|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/read_before_edit.py record" } ]
+      }
+    ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "/usr/local/bin/voicevox_claude_alerts Stop" } ] }
     ],
