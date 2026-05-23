@@ -43,17 +43,6 @@ token の価値を最大化する指針を述べる。
 
 動作を証明できたタスクのみ完了とマークする。テストを実行し、ログを確認し、正しさを示す。skipped（test skip / verification step skip）は completed と混ぜて報告しない。
 
-### 4. サブエージェント
-
-サブエージェントを使うべき条件と、使うべきでない条件を分ける。
-
-- 以下のいずれかが当てはまる時に使う
-  - (a) 並列実行できる独立タスクがある
-  - (b) output volume が大きく main context に取り込みたいのは結論だけ
-  - (c) 探索範囲が不明瞭で 3 query 以上の試行錯誤を要する
-  - (d) 専門 agent の領域。例: Explore、security-review、code-reviewer など
-- サブエージェント起動の overhead（context 切り替え / 結果統合 / token コスト）より小さい lookup には使わない。例: 単一ファイルの Read、1 query で完結する grep、自分が直接見て即判断したい中間状態
-
 ## 開発
 
 ### a. コーディング
