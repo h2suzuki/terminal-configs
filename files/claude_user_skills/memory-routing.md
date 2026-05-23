@@ -1,14 +1,13 @@
 ---
 name: memory-routing
-legacy: user CLAUDE.md「グローバルメモリ」 より
 description: >
-  Memory entry を保存する際、 project-local (`<project>/memory/MEMORY.md`) と global (`~/.claude/global-memory/INDEX.md`) のどちらに置くかを判断する。 プロジェクト横断で適用すべき memory (LLM 一般の認知バイアス対策、 ユーザーの普遍的 preference、 複数プロジェクトで再現したパターン) は global、 それ以外は project-local。 同じ指摘を受けたら必ず memory に保存する。 過去事例 / 経緯は絶対日付 (YYYY-MM-DD) を含める。
+  Memory entry の保存先 (global vs project-local) と保存タイミング判断、 過去事例 / 経緯は絶対日付 (YYYY-MM-DD)。
   TRIGGER when: user から指摘 / feedback / correction を受けたとき (memory 化判断のため毎回発火);
-  user が同じ指摘を以前にもしたと感じる / 既視感のある指摘を受けたとき;
-  「memory に書く / 保存する」「entry を追加 / 更新する」 と発しかけたとき;
-  global / project-local どちらの memory dir に置くか迷ったとき;
-  memory entry を Edit / Write で更新しようとしたとき (日付形式 check のため);
-  memory entry に過去事例 / 経緯を記載しようとしたとき。
+  user が既視感のある指摘を発したとき (同じ指摘 → 必ず memory);
+  「memory に書く / 保存」「entry を追加 / 更新」 と発しかけたとき;
+  global / project-local の routing で迷ったとき;
+  memory entry を Edit / Write しようとしたとき (日付形式 check)。
+legacy: user CLAUDE.md「グローバルメモリ」 より
 ---
 
 # Memory Routing

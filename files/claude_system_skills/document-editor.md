@@ -1,21 +1,15 @@
 ---
 name: document-editor
-legacy: org CLAUDE.md 文章執筆の自己レビュー より
 description: >
-  artifact (session を越えて残る永続文章 — README / 公開 doc / 教材 / spec /
-  canonical ガイドライン / 設計書 / ライブラリ API doc / 5 行以上のコードコメント /
-  ハウスキーピング文章) を編集するとき自動的に呼び出す。
-  chat 応答 / todos.md / drafts/* のような ephemeral 文章は対象外。
-  fork 内で verbalize-before-edit discipline を適用する。
-  (1) 分類・読者・節目的・jargon 妥当性を事前に 1 文ずつ verbalize、
-  (2) 赤信号フレーズ (「このドキュメントが解決した」「旧 X との差分」「以前は…だった」「矛盾していたので一本化」「執筆経緯」「旧版 changelog」「reconciliation」「今回直した点」「検証証跡」「台帳参照 C##/H##/M##」 等) を本文から削除、
-  (3) discussion label (Plan C / Phase γ 等) を descriptive name に置換、
-  (4) 読者 level に合わない jargon を平易化または初出で定義補強。
-  fork 内で対象 file を直接 Edit/Write し、 main session には主な変更の 1 行要約 list のみを返す
-  (artifact 本文は file に書き戻し済みなので main の context に load し直さない)。
-  syntactic style (paren-density / enumeration-separator 等) は scope 外。
+  Session を越えて残る永続文章 (README / 公開 doc / 教材 / spec / canonical ガイドライン / 設計書 / ライブラリ API doc / 5 行以上のコードコメント / ハウスキーピング文章) を fork 内で verbalize-before-edit discipline 適用しつつ編集する。 fork 内で対象 file を直接書き戻し、 main には変更要約のみ返却 (context 肥大対策)。
+  TRIGGER when: 永続 artifact を Edit / Write しようとしたとき;
+  artifact 本文に 「このドキュメントが解決した」「旧 X との差分」「以前は…だった」「矛盾していたので一本化」「執筆経緯」 等の赤信号フレーズを書き出そうとしたとき;
+  Plan C / Phase γ 等の discussion label を確定済 doc に書きそうなとき。
+  SKIP: chat 応答 / todos.md / drafts/* など ephemeral 文章;
+  4 行以下のコードコメント (fork overhead に見合わない、 inline で適用)。
 context: fork
 agent: general-purpose
+legacy: org CLAUDE.md 文章執筆の自己レビュー より
 ---
 
 # Document Editor

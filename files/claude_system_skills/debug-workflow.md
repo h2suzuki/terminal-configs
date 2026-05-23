@@ -1,16 +1,14 @@
 ---
 name: debug-workflow
-legacy: org CLAUDE.md 開発 § c. デバッグ より
 description: >
-  不可解な現象 (動かない / 効かない / 失敗した / うまくいかない) に出会ったら、 まず 2-3 の原因仮説を立て、 コード / log で裏付け、 artifact-level (コード / 設定 / spec) の修正提案に着地する。
-  手動 spawn / session 再起動 / 再 cd などの symptom 緩和 workaround を勧めない。
-  TRIGGER when: 「動かない」「効かない」「失敗した」「うまくいかない」「動作しない」「結果が違う」「エラーが出る」「期待と違う」 とユーザーから聞いたとき / 自分が発しかけたとき;
-  「とりあえず手動で〜してみますか」「session 再起動で〜」「もう一度 cd すれば〜」 と提案しかけたとき (workaround 誘導);
-  原因不明なまま 「たぶん〜だと思う」 と推測で答えようとしたとき;
-  バグ修正報告を書きかけたとき (簡潔さと発生条件の AND 集合形式)。
+  不可解な現象に遭遇したら 2-3 仮説 → コード / log で裏付け → artifact-level fix に着地、 手動 spawn / session 再起動 / 再 cd の workaround を勧めない。
+  TRIGGER when: 「動かない」「効かない」「失敗した」「うまくいかない」「エラーが出る」「期待と違う」 とユーザーから聞いた / 自分が発しかけたとき;
+  「とりあえず手動で〜」「session 再起動で〜」 と workaround を提案しかけたとき;
+  原因不明なまま 「たぶん〜だと思う」 と推測で答えようとしたとき。
   SKIP: typo / syntax error など error message が原因を直接指し示している場合;
-  ユーザーから明示的に「とりあえず動かして」 と workaround を要求された場合;
+  user が明示的に 「とりあえず動かして」 と workaround を要求した場合;
   root cause がスコープ外と合意済の場合。
+legacy: org CLAUDE.md 開発 § c. デバッグ より
 ---
 
 # Debug Workflow

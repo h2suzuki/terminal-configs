@@ -1,15 +1,12 @@
 ---
 name: scope-mismatch-detector
-legacy: org CLAUDE.md 判断の心構え より (bullet 4)
 description: >
-  ルール / 経験 / skill を別状況に流用する前に、 想定 trigger / scope を抽出し、 目前状況と一致するか確認する。
-  LLM 一般の calibration error (「文脈は理解した」 という主観の誤り) を補正。
-  Overapplied (trigger / scope が違うのに発火) と Underapplied (一致するのに 「別ケース」 と判断して未発火) の両方を検出する。
-  TRIGGER when: 既知のルール / 過去経験 / 別 skill を目前の状況に当てはめようとしたとき;
+  ルール / 経験 / skill を別状況に流用する前に trigger / scope の一致を確認、 Overapplied と Underapplied 両方を検出 (LLM の calibration error 補正)。
+  TRIGGER when: 既知のルール / 過去経験 / 別 skill を目前状況に当てはめようとしたとき;
   「これは前にやった〜と同じ」「あの時の〜が使える」「経験から〜だ」 と言いかけたとき;
-  逆に 「このケースは別」「文脈が違う」 と発火を抑止しかけたとき;
-  trigger / scope の境界が曖昧な対応を始めようとしたとき。
-  SKIP: ルールの新規定義 / 初回適用; user から明示的に 「別件として扱え」 と指示された対応。
+  「このケースは別」「文脈が違う」 と発火を抑止しかけたとき。
+  SKIP: ルールの新規定義 / 初回適用; user から明示的に 「別件として扱え」 と指示された場合。
+legacy: org CLAUDE.md 判断の心構え より (bullet 4)
 ---
 
 # Scope Mismatch Detector

@@ -1,12 +1,12 @@
 ---
 name: verify-before-asserting
-legacy: user CLAUDE.md「一次情報の確認」 § 正対称の self-verification claim より
 description: >
-  「詳しく見た」「確認済み」「読了した」「網羅した」「すべて把握」「整理した」「全部読んだ」 等の self-verification claim を発しかけた瞬間、 参照ポインタ先を実体まで網羅したか自問する。 入口 file 1 本だけで 「網羅」 と framing しない。
-  TRIGGER when: 「詳しく見た」「確認済み」「読了した」「精査した」「網羅した」「全部 sweep した」「すべて把握」「整理した」「全部読んだ」「すべて確認」 と発しかけたとき;
-  「INDEX の全 file 見た」「entry 全件読んだ」 など参照範囲を主張するとき;
-  reasonable default / lean / 自然な選択 / schema は X / X は Z を返す 等の positive 断定形を出そうとしたとき (verify-spec-before-dismissal の負形対称)。
-  SKIP: 1 file / 1 entry のみ確認した場合 (scope を明示すれば OK)。
+  Positive self-verification claim を発しかけた瞬間、 参照ポインタ先を実体まで網羅したか自問。 1 file だけで 「網羅」 と framing しない。
+  TRIGGER when: 「詳しく見た」「確認済み」「読了した」「網羅した」「すべて把握」「全部読んだ」「全件読んだ」「全 sweep した」 と発しかけたとき;
+  「INDEX の全 file 見た」「entry 全件読んだ」 等の参照範囲主張;
+  「reasonable default」「自然な選択」「schema は X」「X は Z を返す」 等の positive 断定形 (verify-spec-before-dismissal の正対称)。
+  SKIP: 1 file / 1 entry のみ確認した場合で scope を明示するなら OK。
+legacy: user CLAUDE.md「一次情報の確認」 § 正対称の self-verification claim より
 ---
 
 # Verify Before Asserting

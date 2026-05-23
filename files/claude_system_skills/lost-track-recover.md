@@ -1,8 +1,8 @@
 ---
 name: lost-track-recover
 disable-model-invocation: true
-legacy: org CLAUDE.md ワークフローの統制 § 1. 計画と遂行 より (lost track 復旧 bullet)
 description: Recovery procedure for Claude lost-track state. USER-INVOKED only (auto-trigger disabled).
+legacy: org CLAUDE.md ワークフローの統制 § 1. 計画と遂行 より (lost track 復旧 bullet)
 ---
 
 # Lost-Track Recover

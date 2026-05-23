@@ -1,13 +1,12 @@
 ---
 name: subagent-gate
-legacy: org CLAUDE.md ワークフローの統制 § 4. サブエージェント より
 description: >
-  subagent (Agent / Task tool) 起動前に、 4 条件のいずれかに該当するか確認する: 並列実行可能 / output 大量 / 3 query 以上の探索 / 専門 agent 領域。
-  起動 overhead (context 切り替え / 結果統合 / token コスト) より小さい lookup には使わない。
+  subagent 起動前に 4 条件 (並列可 / output 大量 / 3 query 以上の探索 / 専門 agent 領域) のいずれかを確認、 overhead 未満の lookup には使わない。
   TRIGGER when: Agent / Task tool を spawn しかけた瞬間;
-  「subagent で〜」「並列に分けて」「Explore / code-reviewer / security-review / general-purpose を起動」 と書き出そうとしたとき;
-  大量 output が予想される処理を main context で受けるか subagent に分離するか迷ったとき。
-  SKIP: 単一ファイルの Read; 1 query で完結する grep / find; 自分が直接見て即判断したい中間状態 (git status / ls -la / ファイル先頭数十行 等)。
+  「subagent で」「並列に分けて」「Explore / code-reviewer / security-review / general-purpose を起動」 と書き出そうとしたとき;
+  大量 output 処理を main / subagent どちらで受けるか迷ったとき。
+  SKIP: 単一 file の Read; 1 query で完結する grep / find; 直接見て即判断したい中間状態 (git status / ls -la 等)。
+legacy: org CLAUDE.md ワークフローの統制 § 4. サブエージェント より
 ---
 
 # Subagent Gate

@@ -1,12 +1,12 @@
 ---
 name: verify-spec-before-dismissal
-legacy: user CLAUDE.md「一次情報の確認」 + org CLAUDE.md「token 効率」 より
 description: >
-  「できない」「ない」「非対応」「知らないので別物だと思った」 等の否定形断定を発しかけた瞬間、 結論前に公式一次情報で裏とりする。 許可を求めず自分で調べる。
-  TRIGGER when: 「できない」「ない」「非対応」「サポートされていない」「機能が無い」「未対応」「使えない」「知らないので別物だと思った」 と発しかけたとき (ドメイン不問);
-  Claude hook / subagent / plugin / skill / Anthropic API 等の official ecosystem に依存する断定をしようとしたとき;
+  否定形断定を発しかけた瞬間、 結論前に公式一次情報で裏とり。 許可を求めず自分で調べる (ドメイン不問)。
+  TRIGGER when: 「できない」「ない」「非対応」「サポートされていない」「機能が無い」「未対応」「使えない」「知らないので別物だと思った」 と発しかけたとき;
+  Claude hook / subagent / plugin / skill / Anthropic API 等の existing spec に依存する断定;
   「今回は別ケース」「該当しない」 と発火を抑止しかけたとき。
   SKIP: 自分が直接読んだ一次情報を根拠に否定する場合 (URL / cite を本文に出すなら OK)。
+legacy: user CLAUDE.md「一次情報の確認」 + org CLAUDE.md「token 効率」 より
 ---
 
 # Verify Spec Before Dismissal

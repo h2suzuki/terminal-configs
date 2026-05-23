@@ -1,17 +1,16 @@
 ---
 name: claude-code-guide
 argument-hint: <調査対象>
-legacy: user CLAUDE.md「一次情報の確認」 より
 description: >
-  Claude Code の hook・subagent・plugin・skill・settings・MCP・CLI 仕様に関する一次情報確認を fork 内で実行する。
-
-  Auto-invoke triggers: (a) これらの設計や採否判断を行う場面、 (b) 「feature が無い」「対応していない」「該当 event が無い」 等の Claude Code 範疇の否定形断定を発しかけた瞬間、 (c) Claude Code の hook event 名 / payload schema / SKILL.md frontmatter field / settings.json hook 構造 / CLI flag に関する具体的な肯定形断定 (例: 「`UserPromptSubmit` hook で X できる」「`context: fork` は Y を意味する」「`disable-model-invocation` は Z 挙動」) を発しかけた瞬間。 手動呼び出しは `/claude-code-guide <調査対象>`。
-
-  確認経路 (複数併用、 1 経路で見つからなくても存在を否定しない): CLI `--help` (`claude --help`・`claude <subcommand> --help` 等)、 `docs.claude.com`、 `code.claude.com`、 `github.com/anthropics/claude-code` (docs / issues / changelog / discussions)、 `claude.com/plugins`、 補助として 2026 年以降のコミュニティ報告 (個人ブログ等)。 公式 1 点以上を必須として 2 点以上で交差確認する。
-
-  返却は (a) 結論 1-2 文、 (b) 公式情報源 URL list、 (c) 確認した経路と未確認の経路、 (d) 関連 issue・regression があれば URL + 1 行要約、 (e) 確信度 (公式 1 点以上で 「確認済」、 未満なら 「未確認: 範囲明示」、 Anthropic 内で情報が割れていれば 「conflicting」)。 Claude API 一般・SDK 仕様・Anthropic 製品全般・モデル料金など Claude Code 仕様の範囲外は scope 外として返す。
+  Claude Code 仕様 (hook / subagent / plugin / skill / settings / MCP / CLI) を一次情報で fork 内検証する。
+  TRIGGER when: これらの設計や採否判断;
+  Claude Code 範疇の否定形断定 (「feature が無い」「該当 event が無い」 等);
+  Claude Code spec の具体的肯定形断定 (「`UserPromptSubmit` hook で X」「`context: fork` は Y」「`disable-model-invocation` は Z」 等);
+  手動: `/claude-code-guide <調査対象>`。
+  SKIP: Claude API / SDK / Anthropic 他製品 / モデル料金 / 非 Claude Code ツール (scope 外として返却)。
 context: fork
 agent: general-purpose
+legacy: user CLAUDE.md「一次情報の確認」 より
 ---
 
 # Claude Code Guide

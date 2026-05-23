@@ -1,15 +1,12 @@
 ---
 name: no-redundant-design-litigation
-legacy: user CLAUDE.md「一次情報の確認」 § documented な設計選択は再 litigate しない より
 description: >
-  code comment / canonical doc / handoff に rationale が明記された設計選択を user に確認 question で再 litigate しない。 documented rationale を継承して実装に進む。 設計案を提示する前に関連 comment / doc を必要範囲で読み、 「この選択は既に documented な rationale を持たないか?」 を 1 拍 verbalize する。
-  TRIGGER when: 既存の定数値 / 閾値 / metric / アーキ選択 を user に提示しようとしたとき;
-  「これ X にしますか? それとも Y にしますか?」 と既存設計選択を user に問い返そうとしたとき;
-  「この値の根拠は?」 を user に聞く前に code comment / commit message / handoff を読んでいないとき;
-  実装方針を提示する前で、 同 file / 周辺 doc に既存 rationale が書かれている可能性があるとき。
-  SKIP: 前提変化や新規 trade-off が発生して、 既存 rationale では決まらない場合;
-  rationale が見当たらず documented 化されていない設計選択を新規に決める場合;
-  元の rationale が陳腐化したと判明し、 観測結果を 1 文 verbalize した上で user 提示する場合。
+  Documented rationale (code comment / canonical doc / handoff) のある設計選択を user に確認 question で再 litigate しない、 継承して進む。
+  TRIGGER when: 既存の定数値 / 閾値 / metric / アーキ選択を user に再提示しようとしたとき;
+  「X にしますか? Y にしますか?」 と既存設計を再選択させそうなとき;
+  「この値の根拠は?」 を user に聞く前 (まず doc / commit message を読む)。
+  SKIP: 前提変化 / 新規 trade-off が発生、 rationale が陳腐化、 documented 化されていない新規 design choice。
+legacy: user CLAUDE.md「一次情報の確認」 § documented な設計選択は再 litigate しない より
 ---
 
 # No Redundant Design Litigation

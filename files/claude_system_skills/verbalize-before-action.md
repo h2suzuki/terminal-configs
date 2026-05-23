@@ -1,15 +1,12 @@
 ---
 name: verbalize-before-action
-legacy: org CLAUDE.md 判断の心構え より (bullets 1-3)
 description: >
-  判断・推奨・規模影響評価を出す前に 1 文 verbalize し、自分で反論を試みてから再構成する。
-  silent intent inference (黙って直感で進める) の代替。
-  TRIGGER when: 判断・推奨・提案を発しかけたとき (例: 「〜すべき」「〜が良い」「次は〜」「〜が正しい」「〜と思う」 と書き出そうとした瞬間);
+  判断・推奨・規模影響評価を出す前に 1 文 verbalize し自分で反論してから再構成。 silent intent inference の代替。
+  TRIGGER when: 判断・推奨・提案を発しかけたとき (例: 「〜すべき」「〜が良い」「次は〜」「〜が正しい」「〜と思う」);
   期待動作と差分を見つけて方針を決めかけたとき (error chain 検知);
-  目前の課題に対して回避・省略・後回しを提案しかけたとき。
-  SKIP: 単純な fact 報告 / tool 実行結果の中継 / 既に合意済の手順の機械的実行 /
-  「〜できました」「〜になりました」 のような状態報告 /
-  user が verbalize 不要と明示した場合。
+  回避・省略・後回しを提案しかけたとき。
+  SKIP: 単純な fact 報告 / tool 結果中継 / 合意済手順の機械的実行 / 「〜できました」「〜になりました」 等の状態報告 / user が verbalize 不要と明示した場合。
+legacy: org CLAUDE.md 判断の心構え より (bullets 1-3)
 ---
 
 # Verbalize Before Action

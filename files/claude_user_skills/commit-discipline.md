@@ -1,14 +1,13 @@
 ---
 name: commit-discipline
-legacy: user CLAUDE.md「コミット・PUSH運用」 より
 description: >
-  コミット粒度 / タイミング / 保留判断を自律実行。 「変更 1 件 = 1 コミット」 を原則とし、 step ごとに commit するかは仕様確定状況で判断。 push / push --force / reset --hard / branch 削除 / 共有 state 影響 など destructive・irreversible 操作のみ user permission を取る。 push の催促・予告は能動的に出さない。
-  TRIGGER when: 編集が論理的に完結して commit するかどうか判断するとき;
-  「step ごとに commit しますか?」「まとめて commit しますか?」 と user に聞こうとしたとき;
-  `git push` / `git push --force` / `git reset --hard` / `git branch -D` 等 destructive 操作を実行しようとしたとき;
-  push を能動的に切り出そうとしたとき (「次に push しますか?」「push は催促しません」 等);
-  セッション終了 trigger (「handoff」「セッションリセット」「お疲れさまでした」「終わります」「ありがとうございました」「今日はここまで」「またね」「明日続き」「bye」 等の wind-down 表現) を user が発したとき。
-  SKIP: user が明示的に commit 方針を指示している場合 (その指示に従う)。
+  コミット粒度・タイミング・保留判断を自律実行、 destructive 操作 (push / force / reset --hard / branch 削除 等) のみ user permission を取る、 push 催促を能動的に出さない、 session 終了時に未コミット変更を knowingly 残さない。
+  TRIGGER when: 編集が論理的に完結し commit 判断するとき;
+  destructive git 操作を実行しようとしたとき;
+  push を能動的に話題化しかけたとき (直接 / 間接形を問わず);
+  session 終了の wind-down 表現 (「handoff」「お疲れさま」「ありがとう」 等) を user が発したとき。
+  SKIP: user が commit 粒度・タイミングを明示指示している場合 (その指示に従う; 他の rules — push silence / session-end — は適用継続)。
+legacy: user CLAUDE.md「コミット・PUSH運用」 より
 ---
 
 # Commit Discipline
