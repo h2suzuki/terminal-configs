@@ -266,22 +266,31 @@ run curl -o /tmp/voicevox_install.sh \
 chmod u-s,u+x /tmp/voicevox_install.sh
 
 rm -rf $VV_LIB_DIR
+
+echo -e "=> ${COLOR_YELLOW}Installing VoiceVox ...${COLOR_CLEAR}"
+
+# The downloader is a TUI that redraws on the alternate screen buffer, so its progress output never
+# lands in the terminal scrollback. Set OMIT_TUI_OUTPUT=1 in the parent shell to silence that relay
+export OMIT_TUI_OUTPUT=1
+
 expect -c '
 # GitHub login can relax the ratelimit restriction posed by this downloader
 set env(GH_TOKEN) '"$(gh auth token)"'
 set timeout 120
 
+if {[info exists env(OMIT_TUI_OUTPUT)] && $env(OMIT_TUI_OUTPUT) eq "1"} { log_user 0; }
+
 spawn /tmp/voicevox_install.sh --output '"$VV_LIB_DIR"' --exclude c-api --models-pattern {[0-9]*.vvm}
 
 expect {
-    "qを押してください" { puts "Caught: $expect_out(0,string)"; send "q\r"; sleep 1 }
-    timeout             { puts "タイムアウトしました";  exit 1 }
-    eof                 { puts "接続が切れました";      exit 1 }
+    -ex "qを押してください" { puts "Caught: $expect_out(0,string) => Sending: q"; send "q\r"; sleep 1 }
+    timeout                 { puts "タイムアウトしました";  exit 1 }
+    eof                     { puts "接続が切れました";      exit 1 }
 }
 expect {
-    "\[y,n,r\]"         { puts "Caught: $expect_out(0,string)"; send "y\r"; sleep 1 }
-    timeout             { puts "タイムアウトしました";  exit 1 }
-    eof                 { puts "接続が切れました";      exit 1 }
+    -ex "\[y,n,r\]"         { puts "Caught: $expect_out(0,string) => Sending: y"; send "y\r"; sleep 1 }
+    timeout                 { puts "タイムアウトしました";  exit 1 }
+    eof                     { puts "接続が切れました";      exit 1 }
 }
 expect eof
 '
