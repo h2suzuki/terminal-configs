@@ -4,26 +4,69 @@ Read-before-edit hook for Claude Code.
 
 Legacy: org CLAUDE.md「a. コーディング」より (「編集前に git status / ls -la で mtime 確認」 bullet を hook 化)
 
-Subcommands:
-  record   PostToolUse hook for Read / Edit / Write / MultiEdit /
-           NotebookEdit. Records the file's post-tool mtime keyed by
-           (session_id, canonical_path).
+Use-case scenarios
+==================
 
-  check    PreToolUse hook for Edit / Write / MultiEdit /
-           NotebookEdit. Emits hookSpecificOutput.additionalContext
-           when the target file's current mtime differs from the
-           recorded value for this session, or when no record exists
-           yet. Never blocks the tool call.
+PostToolUse — fix knowledge state
+---------------------------------
+On Read or Write:
+  Knowledge is now in Claude's context.
+    Read  -> INSERT record (tool=Read, range = offset+limit, mtime_ns).
+    Write -> INSERT record (tool=Write, range = whole file, mtime_ns).
+
+On Edit, MultiEdit, or NotebookEdit:
+  Exact post-edit content is uncertain — context cache is invalidated.
+  No action required: the file's mtime change automatically excludes
+  prior records from the current-mtime filter on the next check.
+
+PreToolUse — gate or prompt the tool call
+-----------------------------------------
+On Read:
+  Look up records at the file's current mtime.
+    No Read/Write record  -> cache invalidated -> allow
+                             (Read is justified, silent advisory).
+    Read/Write record(s)  -> advise that the duplicate range is
+                             already in context; allow.
+
+On Write or NotebookEdit:
+  Unconditional allow. Do nothing else.
+
+On Edit or MultiEdit:
+  Look up records at the file's current mtime.
+    No Read/Write record  -> cache invalidated -> DENY with a
+                             Read-before-Edit instruction.
+    Read/Write record(s)  -> if any Write covers the whole file,
+                             stay silent (full coverage).
+                             Otherwise (Read records only), advise
+                             that the Edit region may fall outside
+                             the prior Read scope; allow.
+
+Subcommands
+===========
+
+  record  PostToolUse hook for Read / Write. Appends an entry
+          {tool, mtime_ns, [offset, limit | -]} to accesses_json.
+
+  check   PreToolUse hook for Read / Edit / MultiEdit. Emits
+          hookSpecificOutput per the scenarios above.
+
+  Write and NotebookEdit PreToolUse, and Edit / MultiEdit /
+  NotebookEdit PostToolUse, should not route through this hook
+  (excluded at the settings.json matcher level). The hook is
+  defensive and early-returns on unexpected tools.
 
 State lives in ~/.claude/hooks/state/read_mtime.sqlite3 (WAL mode).
 Rows older than TTL_SECONDS (default 7 days) are pruned
-opportunistically on each write.
+opportunistically on each write. accesses_json is capped to the last
+ACCESS_HISTORY_CAP entries per row.
 
 Paths are canonicalised via os.path.realpath against the payload's
 `cwd`, so symlink and relative/absolute path variants converge to a
 single state row.
 
-Exit code is always 0 (fail-open) so that hook bugs never block Claude.
+`record` always exits 0. `check` exits 0 even when denying — the
+deny is communicated via JSON `permissionDecision: "deny"`, not via
+exit code, so hook bugs cannot accidentally block Claude.
 """
 
 from __future__ import annotations
@@ -36,22 +79,27 @@ import time
 from pathlib import Path
 
 TTL_SECONDS = 7 * 24 * 3600
+ACCESS_HISTORY_CAP = 50
 DB_PATH = Path.home() / ".claude" / "hooks" / "state" / "read_mtime.sqlite3"
-EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
-RECORD_TOOLS = EDIT_TOOLS | {"Read"}
+RECORD_TOOLS = {"Read", "Write"}
+CHECK_TOOLS = {"Read", "Edit", "MultiEdit"}
+EXPECTED_COLUMNS = {"session_id", "path", "recorded_at", "accesses_json"}
 
 
 def _open_db() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=2.0)
     conn.execute("PRAGMA journal_mode=WAL")
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(read_mtime)").fetchall()}
+    if cols and cols != EXPECTED_COLUMNS:
+        conn.execute("DROP TABLE read_mtime")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS read_mtime (
-            session_id  TEXT NOT NULL,
-            path        TEXT NOT NULL,
-            mtime_ns    INTEGER NOT NULL,
-            recorded_at INTEGER NOT NULL,
+            session_id    TEXT NOT NULL,
+            path          TEXT NOT NULL,
+            recorded_at   INTEGER NOT NULL,
+            accesses_json TEXT NOT NULL DEFAULT '[]',
             PRIMARY KEY (session_id, path)
         )
         """
@@ -79,10 +127,10 @@ def _canonical(raw_path: str, cwd: str) -> str:
     return os.path.realpath(raw_path)
 
 
-def _emit(event_name: str, msg: str) -> None:
+def _emit_allow(msg: str) -> None:
     payload = {
         "hookSpecificOutput": {
-            "hookEventName": event_name,
+            "hookEventName": "PreToolUse",
             "permissionDecision": "allow",
             "additionalContext": msg,
         }
@@ -90,7 +138,18 @@ def _emit(event_name: str, msg: str) -> None:
     sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
-def _extract(payload: dict) -> tuple[str, str, str]:
+def _emit_deny(reason: str) -> None:
+    payload = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    }
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def _extract(payload: dict) -> tuple[str, str, str, dict]:
     tool = payload.get("tool_name") or ""
     sid = payload.get("session_id") or ""
     cwd = payload.get("cwd") or ""
@@ -101,56 +160,123 @@ def _extract(payload: dict) -> tuple[str, str, str]:
         or ""
     )
     path = _canonical(raw_path, cwd)
-    return tool, sid, path
+    return tool, sid, path, tool_input
+
+
+def _build_entry(tool: str, tool_input: dict, mtime_ns: int) -> dict:
+    entry: dict = {"tool": tool, "mtime_ns": mtime_ns}
+    if tool == "Read":
+        entry["offset"] = tool_input.get("offset")
+        entry["limit"] = tool_input.get("limit")
+    return entry
+
+
+def _load_accesses(blob: str | None) -> list[dict]:
+    try:
+        data = json.loads(blob or "[]")
+        if isinstance(data, list):
+            return [a for a in data if isinstance(a, dict)]
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return []
+
+
+def _format_entry(a: dict) -> str:
+    tool = a.get("tool") or "?"
+    if tool == "Read":
+        return f"Read(offset={a.get('offset')}, limit={a.get('limit')})"
+    if tool == "Write":
+        return "Write()"
+    return f"{tool}()"
 
 
 def cmd_record(payload: dict) -> None:
-    tool, sid, path = _extract(payload)
+    tool, sid, path, tool_input = _extract(payload)
     if tool not in RECORD_TOOLS or not sid or not path:
         return
     mtime_ns = _file_mtime_ns(path)
     if mtime_ns is None:
         return
     now = int(time.time())
+    entry = _build_entry(tool, tool_input, mtime_ns)
+
     with _open_db() as conn:
+        row = conn.execute(
+            "SELECT accesses_json FROM read_mtime "
+            "WHERE session_id=? AND path=?",
+            (sid, path),
+        ).fetchone()
+        accesses = _load_accesses(row[0]) if row else []
+        accesses.append(entry)
+        if len(accesses) > ACCESS_HISTORY_CAP:
+            accesses = accesses[-ACCESS_HISTORY_CAP:]
         conn.execute(
-            "INSERT INTO read_mtime(session_id, path, mtime_ns, recorded_at) "
+            "INSERT INTO read_mtime(session_id, path, recorded_at, accesses_json) "
             "VALUES(?, ?, ?, ?) "
             "ON CONFLICT(session_id, path) DO UPDATE SET "
-            "mtime_ns=excluded.mtime_ns, recorded_at=excluded.recorded_at",
-            (sid, path, mtime_ns, now),
+            "recorded_at=excluded.recorded_at, "
+            "accesses_json=excluded.accesses_json",
+            (sid, path, now, json.dumps(accesses)),
         )
         _prune(conn)
 
 
 def cmd_check(payload: dict) -> None:
-    tool, sid, path = _extract(payload)
-    if tool not in EDIT_TOOLS or not sid or not path:
+    tool, sid, path, _ = _extract(payload)
+    if tool not in CHECK_TOOLS or not sid or not path:
         return
     if not os.path.exists(path):
-        return  # new-file Write: nothing to compare
+        return
     current_ns = _file_mtime_ns(path)
     if current_ns is None:
         return
+
     with _open_db() as conn:
         row = conn.execute(
-            "SELECT mtime_ns FROM read_mtime WHERE session_id=? AND path=?",
+            "SELECT accesses_json FROM read_mtime "
+            "WHERE session_id=? AND path=?",
             (sid, path),
         ).fetchone()
-    if row is None:
-        _emit(
-            "PreToolUse",
-            f"{path}: 本セッションで未 Read のまま編集しようとしています。"
-            "書き換え前に Read してください。",
+
+    accesses = _load_accesses(row[0]) if row else []
+    same_mtime = [a for a in accesses if a.get("mtime_ns") == current_ns]
+
+    if tool == "Read":
+        if same_mtime:
+            formatted = ", ".join(_format_entry(a) for a in same_mtime)
+            _emit_allow(
+                f"{path}: current mtime に対し既に "
+                f"{len(same_mtime)} 件 Read/Write 済 [{formatted}]。 "
+                "重複 scope の Read は context に既保持。 "
+                "新 scope (異なる offset/limit) の Read は問題ありません。"
+            )
+        return
+
+    # Edit / MultiEdit
+    if same_mtime:
+        if any(a.get("tool") == "Write" for a in same_mtime):
+            return
+        formatted = ", ".join(_format_entry(a) for a in same_mtime)
+        _emit_allow(
+            f"{path}: current mtime に対する Read scope [{formatted}] あり。 "
+            "Edit 対象 region が Read scope 外の場合は再 Read 推奨 "
+            "(Write は無いため file 全件は cover されていません)。"
         )
-    elif current_ns != row[0]:
-        delta_s = (current_ns - row[0]) / 1_000_000_000
-        _emit(
-            "PreToolUse",
-            f"{path}: 直近 Read 後に disk 側 mtime が "
-            f"{delta_s:+.3f}s 変化しています。"
-            "他者変更の可能性があるため、Edit 前に再 Read してください。",
+        return
+
+    # No Read/Write at current mtime → cache invalidated, must Read first
+    if not accesses:
+        reason = (
+            f"{path}: 本セッションで未 Read のまま編集しようとしています。 "
+            "Edit 前に Read してください。"
         )
+    else:
+        reason = (
+            f"{path}: 直近 Read/Write 以降に disk 側 mtime が変化しています "
+            "(Edit / MultiEdit / NotebookEdit / 他 process による変更)。 "
+            "cache invalidated — Edit 前に再 Read してください。"
+        )
+    _emit_deny(reason)
 
 
 def main() -> int:

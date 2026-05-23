@@ -13,7 +13,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "matcher": "Read|Edit|MultiEdit",
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/read_before_edit.py check" } ]
       },
       {
@@ -29,7 +29,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Read|Edit|Write|MultiEdit|NotebookEdit",
+        "matcher": "Read|Write",
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/read_before_edit.py record" } ]
       }
     ],
