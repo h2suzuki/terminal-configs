@@ -1,5 +1,6 @@
 ---
 name: scope-mismatch-detector
+legacy: org CLAUDE.md 判断の心構え より (bullet 4)
 description: >
   ルール / 経験 / skill を別状況に流用する前に、 想定 trigger / scope を抽出し、 目前状況と一致するか確認する。
   LLM 一般の calibration error (「文脈は理解した」 という主観の誤り) を補正。

@@ -1,5 +1,6 @@
 ---
 name: verbalize-before-action
+legacy: org CLAUDE.md 判断の心構え より (bullets 1-3)
 description: >
   判断・推奨・規模影響評価を出す前に 1 文 verbalize し、自分で反論を試みてから再構成する。
   silent intent inference (黙って直感で進める) の代替。

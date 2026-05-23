@@ -2,6 +2,8 @@
 """
 Read-before-edit hook for Claude Code.
 
+Legacy: org CLAUDE.md「a. コーディング」より (「編集前に git status / ls -la で mtime 確認」 bullet を hook 化)
+
 Subcommands:
   record   PostToolUse hook for Read / Edit / Write / MultiEdit /
            NotebookEdit. Records the file's post-tool mtime keyed by

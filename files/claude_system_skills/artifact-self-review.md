@@ -1,5 +1,6 @@
 ---
 name: artifact-self-review
+legacy: org CLAUDE.md 文章執筆の自己レビュー より
 description: >
   Session を越えて残る artifact (README / 公開 doc / 教材 / spec / canonical ガイドライン / 設計書 / ライブラリ API / コードコメント) を編集する前に、
   分類 / 読者 / 節目的 / 不要な文 / jargon 適切性 を 1 文 verbalize する。
