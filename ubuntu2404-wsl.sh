@@ -338,13 +338,17 @@ copy --nobackup claude_claude-md-lint.md        /etc/claude-code/claude-md-lint.
 copy --nobackup claude_bash-writing-rules.md    /etc/claude-code/bash-writing-rules.md
 copy --nobackup claude_system_skills/verbalize-before-action.md \
                                                 /etc/claude-code/verbalize-before-action.md
+copy --nobackup claude_system_skills/scope-mismatch-detector.md \
+                                                /etc/claude-code/scope-mismatch-detector.md
 
 run install -d ~/.claude/skills/claude-md-lint
 run install -d ~/.claude/skills/bash-writing-rules
 run install -d ~/.claude/skills/verbalize-before-action
+run install -d ~/.claude/skills/scope-mismatch-detector
 run ln -sfn /etc/claude-code/claude-md-lint.md  ~/.claude/skills/claude-md-lint/SKILL.md
 run ln -sfn /etc/claude-code/bash-writing-rules.md ~/.claude/skills/bash-writing-rules/SKILL.md
 run ln -sfn /etc/claude-code/verbalize-before-action.md ~/.claude/skills/verbalize-before-action/SKILL.md
+run ln -sfn /etc/claude-code/scope-mismatch-detector.md ~/.claude/skills/scope-mismatch-detector/SKILL.md
 
 # Tools used by Claude Code (bubblewrap/socat: Sandbox, poppler-utils: PDF reading)
 run apt install -y --no-install-recommends \
@@ -439,10 +443,13 @@ EOF
     #copy --nobackup claude_user-CLAUDE.md ~$LOGIN_USER/.claude/CLAUDE.md --owner $LOGIN_USER
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/claude-md-lint
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/verbalize-before-action
+    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/scope-mismatch-detector
     run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/claude-md-lint.md \
                                          ~$LOGIN_USER/.claude/skills/claude-md-lint/SKILL.md
     run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/verbalize-before-action.md \
                                          ~$LOGIN_USER/.claude/skills/verbalize-before-action/SKILL.md
+    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/scope-mismatch-detector.md \
+                                         ~$LOGIN_USER/.claude/skills/scope-mismatch-detector/SKILL.md
 
     run usermod -aG docker "$LOGIN_USER"
 
