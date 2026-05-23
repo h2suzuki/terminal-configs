@@ -273,6 +273,8 @@ copy --nobackup claude_system_skills/artifact-self-review.md \
                                                 /etc/claude-code/artifact-self-review.md
 copy --nobackup claude_system_skills/subagent-gate.md \
                                                 /etc/claude-code/subagent-gate.md
+copy --nobackup claude_system_skills/debug-workflow.md \
+                                                /etc/claude-code/debug-workflow.md
 
 run install -d ~/.claude/skills/claude-md-lint
 run install -d ~/.claude/skills/bash-writing-rules
@@ -280,12 +282,14 @@ run install -d ~/.claude/skills/verbalize-before-action
 run install -d ~/.claude/skills/scope-mismatch-detector
 run install -d ~/.claude/skills/artifact-self-review
 run install -d ~/.claude/skills/subagent-gate
+run install -d ~/.claude/skills/debug-workflow
 run ln -sfn /etc/claude-code/claude-md-lint.md  ~/.claude/skills/claude-md-lint/SKILL.md
 run ln -sfn /etc/claude-code/bash-writing-rules.md ~/.claude/skills/bash-writing-rules/SKILL.md
 run ln -sfn /etc/claude-code/verbalize-before-action.md ~/.claude/skills/verbalize-before-action/SKILL.md
 run ln -sfn /etc/claude-code/scope-mismatch-detector.md ~/.claude/skills/scope-mismatch-detector/SKILL.md
 run ln -sfn /etc/claude-code/artifact-self-review.md ~/.claude/skills/artifact-self-review/SKILL.md
 run ln -sfn /etc/claude-code/subagent-gate.md ~/.claude/skills/subagent-gate/SKILL.md
+run ln -sfn /etc/claude-code/debug-workflow.md ~/.claude/skills/debug-workflow/SKILL.md
 
 # Tools used by Claude Code (bubblewrap/socat: Sandbox, poppler-utils: PDF reading)
 run apt install -y --no-install-recommends \
@@ -365,6 +369,7 @@ EOF
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/scope-mismatch-detector
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/artifact-self-review
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/subagent-gate
+    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/debug-workflow
     run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/claude-md-lint.md \
                                          ~$LOGIN_USER/.claude/skills/claude-md-lint/SKILL.md
     run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/bash-writing-rules.md \
@@ -377,6 +382,8 @@ EOF
                                          ~$LOGIN_USER/.claude/skills/artifact-self-review/SKILL.md
     run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/subagent-gate.md \
                                          ~$LOGIN_USER/.claude/skills/subagent-gate/SKILL.md
+    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/debug-workflow.md \
+                                         ~$LOGIN_USER/.claude/skills/debug-workflow/SKILL.md
 
 else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
