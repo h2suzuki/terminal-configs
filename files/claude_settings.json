@@ -15,6 +15,10 @@
       {
         "matcher": "Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/read_before_edit.py check" } ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/avoid_cd.py" } ]
       }
     ],
     "PostToolUse": [
