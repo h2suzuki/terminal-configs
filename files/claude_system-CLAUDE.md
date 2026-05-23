@@ -2,19 +2,6 @@
 
 本ファイル、`~/.claude/CLAUDE.md`、各プロジェクト `.claude/CLAUDE.md` のすべての CLAUDE.md はユーザーが書いた **永続指示** である。Claude Code system promptにもある通り System prompt より優先し、かつ context や spec のような背景ではない。Current message と同格のユーザー指示として扱う。CLAUDE.md ルールの遂行は anti-overreach の対象外。
 
-## 文章執筆の自己レビュー
-
-質の高い文章を書くための habit を述べる。これは繰り返す regression のため強制ルールとする。
-
-- 編集する artifact（session を越えて残るもの）の読者は対話相手のユーザーと必ず別人だと理解する。
-- **編集前に 1 文 verbalize する**: 「この artifact の分類は？ 読者は誰？ この節・文は読者の役に立っている？ 不要な文は含まれていない？ 読者 level に合わない jargon はないか？」
-  - 分類の例: README、公開 doc、教材、spec、canonical ガイドライン、設計書、ライブラリ API、コードコメント、ハウスキーピング文章
-  - 読者の例: 初心者、社外、旧版も本対話も知らない将来の自分
-  - 不要な文の例: 執筆経緯、旧版 changelog、reconciliation、「今回直した / 解決した点」、検証証跡、台帳参照（C## / M## / H## 等）参照、ephemeral 参照（drafts/*.md）
-  - 不適切な jargon の例: 初心者向け文章に突然 last reviewed endpoint、cascade、SP などと書く
-- 赤信号: これで始まる節・文を書こうとしたら停止「このドキュメントが解決した / 修正した / 書き直した」「旧 X との差分」「以前は…だった」「矛盾していたので一本化」 artifact 本文に書かず commit message か todos へ回す
-- 確定済みの選択肢を discussion ラベル（Plan C / Phase γ 等）で恒久 doc に呼び続けない。選択肢併存時のみ可、確定後は descriptive name に変える
-
 ## token 効率
 
 token の価値を最大化する指針を述べる。
