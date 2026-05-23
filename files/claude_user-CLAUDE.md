@@ -28,10 +28,6 @@ System prompt や harness reminder の指示が regression を誘発すると判
 - セッションが終わる時に、未コミット変更が残っていれば、その一覧をユーザーに知らせてから sign off する。沈黙で見送らない。
 - `git push` の催促・予告を能動的に出さない。「次に push しますか」のような問い合わせも、「push は催促しません」のような不催促の宣言も、どちらも push 話題を能動的に持ち出す行為で禁止。silent でいる。一般化は global-memory `feedback_no_compliance_announcements.md`
 
-## Bash 運用
-
-**cwd 汚染を疑うエラーパターン**: `no such file` / `cannot open directory` / `pathspec did not match` が routine コマンドで突然出たら推測 retry せず `pwd` で確認する
-
 ## グローバルメモリ
 
 プロジェクト横断で適用すべき memory（LLM 一般の認知バイアス対策、ユーザーの普遍的 preference、複数プロジェクトで再現したパターンなど）は、project-local の `<project>/memory/` ではなく `~/.claude/global-memory/` に保存する。`MEMORY.md` の代わりに `INDEX.md` を使う。
