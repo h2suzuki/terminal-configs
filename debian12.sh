@@ -294,6 +294,8 @@ copy --nobackup claude_user_skills/no-redundant-design-litigation.md \
                                                 /etc/claude-code/no-redundant-design-litigation.md
 copy --nobackup claude_user_skills/commit-discipline.md \
                                                 /etc/claude-code/commit-discipline.md
+copy --nobackup claude_user_skills/claude-code-guide.md \
+                                                /etc/claude-code/claude-code-guide.md
 
 run install -d ~/.claude/skills/claude-md-lint
 run install -d ~/.claude/skills/bash-writing-rules
@@ -308,6 +310,7 @@ run install -d ~/.claude/skills/verify-before-asserting
 run install -d ~/.claude/skills/no-routing-questions
 run install -d ~/.claude/skills/no-redundant-design-litigation
 run install -d ~/.claude/skills/commit-discipline
+run install -d ~/.claude/skills/claude-code-guide
 run ln -sfn /etc/claude-code/claude-md-lint.md  ~/.claude/skills/claude-md-lint/SKILL.md
 run ln -sfn /etc/claude-code/bash-writing-rules.md ~/.claude/skills/bash-writing-rules/SKILL.md
 run ln -sfn /etc/claude-code/verbalize-before-action.md ~/.claude/skills/verbalize-before-action/SKILL.md
@@ -321,6 +324,7 @@ run ln -sfn /etc/claude-code/verify-before-asserting.md ~/.claude/skills/verify-
 run ln -sfn /etc/claude-code/no-routing-questions.md ~/.claude/skills/no-routing-questions/SKILL.md
 run ln -sfn /etc/claude-code/no-redundant-design-litigation.md ~/.claude/skills/no-redundant-design-litigation/SKILL.md
 run ln -sfn /etc/claude-code/commit-discipline.md ~/.claude/skills/commit-discipline/SKILL.md
+run ln -sfn /etc/claude-code/claude-code-guide.md ~/.claude/skills/claude-code-guide/SKILL.md
 
 # Tools used by Claude Code (bubblewrap/socat: Sandbox, poppler-utils: PDF reading)
 run apt install -y --no-install-recommends \
@@ -407,6 +411,7 @@ EOF
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/no-routing-questions
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/no-redundant-design-litigation
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/commit-discipline
+    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/claude-code-guide
     run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/claude-md-lint.md \
                                          ~$LOGIN_USER/.claude/skills/claude-md-lint/SKILL.md
     run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/bash-writing-rules.md \
@@ -433,6 +438,8 @@ EOF
                                          ~$LOGIN_USER/.claude/skills/no-redundant-design-litigation/SKILL.md
     run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/commit-discipline.md \
                                          ~$LOGIN_USER/.claude/skills/commit-discipline/SKILL.md
+    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/claude-code-guide.md \
+                                         ~$LOGIN_USER/.claude/skills/claude-code-guide/SKILL.md
 
 else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
