@@ -31,6 +31,12 @@
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/read_before_edit.py record" } ]
       }
     ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/detect_cwd_pollution.py" } ]
+      }
+    ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "/usr/local/bin/voicevox_claude_alerts Stop" } ] }
     ],
