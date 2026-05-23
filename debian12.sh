@@ -356,11 +356,14 @@ EOF
     copy --nobackup claude_settings.json ~$LOGIN_USER/.claude/settings.json --owner $LOGIN_USER
     #copy --nobackup claude_user-CLAUDE.md ~$LOGIN_USER/.claude/CLAUDE.md --owner $LOGIN_USER
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/claude-md-lint
+    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/bash-writing-rules
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/verbalize-before-action
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/scope-mismatch-detector
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/artifact-self-review
     run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/claude-md-lint.md \
                                          ~$LOGIN_USER/.claude/skills/claude-md-lint/SKILL.md
+    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/bash-writing-rules.md \
+                                         ~$LOGIN_USER/.claude/skills/bash-writing-rules/SKILL.md
     run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/verbalize-before-action.md \
                                          ~$LOGIN_USER/.claude/skills/verbalize-before-action/SKILL.md
     run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/scope-mismatch-detector.md \
