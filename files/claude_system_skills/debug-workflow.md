@@ -1,14 +1,7 @@
 ---
 name: debug-workflow
-description: >
-  不可解な現象に遭遇したら 2-3 仮説 → コード / log で裏付け → artifact-level fix に着地、 手動 spawn / session 再起動 / 再 cd の workaround を勧めない。
-  TRIGGER when: 「動かない」「効かない」「失敗した」「うまくいかない」「エラーが出る」「期待と違う」 とユーザーから聞いた / 自分が発しかけたとき;
-  「とりあえず手動で〜」「session 再起動で〜」 と workaround を提案しかけたとき;
-  原因不明なまま 「たぶん〜だと思う」 と推測で答えようとしたとき。
-  SKIP: typo / syntax error など error message が原因を直接指し示している場合;
-  user が明示的に 「とりあえず動かして」 と workaround を要求した場合;
-  root cause がスコープ外と合意済の場合。
-legacy: org CLAUDE.md 開発 § c. デバッグ より
+description: For inexplicable phenomena, form 2-3 hypotheses, back them with code / log, land on artifact-level fix; do not suggest manual respawn / session restart / re-cd workarounds.
+when_to_use: TRIGGER when user reports or self-says "動かない" / "効かない" / "失敗した" / "うまくいかない" / "エラーが出る" / "期待と違う", when about to propose workarounds like "とりあえず手動で〜" / "session 再起動で〜", or when about to answer with "たぶん〜だと思う" without root-cause backing. SKIP for typos / syntax errors where the error message directly indicates the cause, when user explicitly requests "とりあえず動かして" workaround, or when root cause is agreed to be out of scope.
 ---
 
 # Debug Workflow
@@ -26,3 +19,7 @@ legacy: org CLAUDE.md 開発 § c. デバッグ より
 - **修正報告は一回で簡潔に**: 何を、 どこで見つけ、 どう直したのかを述べる。 一回で、 簡潔に。
 
 - **発生条件は最小 AND 集合の箇条書きで述べる**: 必要となる条件の最小 AND 集合を、 箇条書きで述べる。
+
+## Related
+
+- **Legacy:** org CLAUDE.md 開発 § c. デバッグ より

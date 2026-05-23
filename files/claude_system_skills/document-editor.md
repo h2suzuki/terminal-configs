@@ -1,30 +1,26 @@
 ---
 name: document-editor
-description: >
-  Session を越えて残る永続文章 (README / 公開 doc / 教材 / spec / canonical ガイドライン / 設計書 / ライブラリ API doc / 5 行以上のコードコメント / ハウスキーピング文章) を fork 内で verbalize-before-edit discipline 適用しつつ編集する。 fork 内で対象 file を直接書き戻し、 main には変更要約のみ返却 (context 肥大対策)。
-  TRIGGER when: 永続 artifact を Edit / Write しようとしたとき;
-  artifact 本文に 「このドキュメントが解決した」「旧 X との差分」「以前は…だった」「矛盾していたので一本化」「執筆経緯」 等の赤信号フレーズを書き出そうとしたとき;
-  Plan C / Phase γ 等の discussion label を確定済 doc に書きそうなとき。
-  SKIP: chat 応答 / todos.md / drafts/* など ephemeral 文章;
-  4 行以下のコードコメント (fork overhead に見合わない、 inline で適用)。
+description: Edit persistent artifacts (README / public doc / tutorial / spec / canonical guide / design doc / library API doc / 5+ line code comments / housekeeping prose) in a fork with verbalize-before-edit discipline; write the file back inside the fork and return only a change-summary to main (context bloat protection).
+when_to_use: TRIGGER when about to Edit / Write a persistent artifact, when about to write red-flag phrases ("このドキュメントが解決した" / "旧 X との差分" / "以前は…だった" / "矛盾していたので一本化" / "執筆経緯" etc.) into the artifact body, or when about to leave a discussion label (Plan C / Phase γ) in a finalized doc. SKIP for ephemeral text (chat reply / todos.md / drafts/*) or code comments of 4 lines or fewer (fork overhead is not worth it — apply inline).
+argument-hint: <file-path> <edit-intent>
+arguments: file edit_intent
 context: fork
 agent: general-purpose
-legacy: org CLAUDE.md 文章執筆の自己レビュー より
 ---
 
 # Document Editor
 
-fork 内 (general-purpose subagent) で動く。 main session の context は持たない。 SKILL.md と invocation 引数 (対象 file path / 編集意図) のみを参照して動く。
+fork 内 (general-purpose subagent) で動く。 main session の context は持たない。 SKILL.md と invocation 引数 (`$file` / `$edit_intent`) のみを参照して動く。
 
 ## Input
 
-- 編集対象 artifact の path
-- 編集意図の 1-2 文要約 (例: 「新規 API 追加に伴う section 追記」「stale 節を整理」)
+- **`$file`** — 編集対象 artifact の path
+- **`$edit_intent`** — 編集意図の 1-2 文要約 (例: 「新規 API 追加に伴う section 追記」「stale 節を整理」)
 - (optional) 参考用の補助情報 (関連 commit / 上流 issue 等)
 
-current content は path を Read して subagent が取得する。
+current content は `$file` を Read して subagent が取得する。
 
-## Procedure
+## Process
 
 - **分類・読者・節目的・jargon 妥当性を verbalize**: 分類 (README / 公開 doc / 教材 / spec / canonical ガイドライン / 設計書 / ライブラリ API / 5 行以上のコードコメント / ハウスキーピング)、 想定読者 (初心者 / 社外 / 旧版も本対話も知らない将来の自分)、 各節の目的、 jargon 妥当性 を 1 文ずつ言葉にする。 言葉にできなければ source / 周辺ファイルを Read してから戻る。
 
@@ -45,7 +41,7 @@ fork 内で **対象 file を直接 Edit/Write** して書き戻す。 main sess
 - `L120 jargon 「cascade」 を 「変更が依存先に連鎖伝播する仕組み」 に置換`
 - `L155 対話接続表現 「ご指摘の通り」 を削除`
 
-## Out of scope
+## What to leave out
 
 - **syntactic style**: paren-density / enumeration-separator / 句読点 / 改行・空行 ルール 等。 別途 syntactic style checker を持つプロジェクトに任せる前提。
 - **factual rewrite**: 設計変更や API 仕様変更を伴う書き換え。 本 skill は「読者基準で整える」 だけ。
@@ -56,3 +52,4 @@ fork 内で **対象 file を直接 Edit/Write** して書き戻す。 main sess
 ## Related
 
 - **inline (fork なし) 適用**: 小さい edit、 1-4 行コードコメント、 1-2 行修正は、 main session の Claude が本 skill の 4-step discipline を verbalize して direct に適用する。 fork の overhead に見合わない場合の fallback。
+- **Legacy:** org CLAUDE.md 文章執筆の自己レビュー より

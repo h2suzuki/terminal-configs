@@ -1,25 +1,28 @@
 ---
 name: claude-code-guide
-argument-hint: <調査対象>
-description: >
-  Claude Code 仕様 (hook / subagent / plugin / skill / settings / MCP / CLI) を一次情報で fork 内検証する。
-  TRIGGER when: これらの設計や採否判断;
-  Claude Code 範疇の否定形断定 (「feature が無い」「該当 event が無い」 等);
-  Claude Code spec の具体的肯定形断定 (「`UserPromptSubmit` hook で X」「`context: fork` は Y」「`disable-model-invocation` は Z」 等);
-  手動: `/claude-code-guide <調査対象>`。
-  SKIP: Claude API / SDK / Anthropic 他製品 / モデル料金 / 非 Claude Code ツール (scope 外として返却)。
+description: Verify Claude Code specs (hook / subagent / plugin / skill / settings / MCP / CLI) against primary sources in a fork.
+when_to_use: 'TRIGGER when about to make design or adoption decisions in these areas, when about to issue a negation claim within Claude Code scope ("feature が無い" / "該当 event が無い" etc.), or when about to make a specific positive assertion about Claude Code spec ("`UserPromptSubmit` hook で X" / "`context: fork` は Y" / "`disable-model-invocation` は Z" etc.). Manual invocation: `/claude-code-guide <topic>`. SKIP for Claude API / SDK / other Anthropic products / model pricing / non-Claude-Code tools (return as out-of-scope).'
+argument-hint: <topic>
+arguments: topic
 context: fork
 agent: general-purpose
-legacy: user CLAUDE.md「一次情報の確認」 より
 ---
 
 # Claude Code Guide
 
-**Verify the following Claude Code spec question:** $ARGUMENTS
+**Verify the following Claude Code spec question:** $topic
 
 下記の protocol に従って一次情報で裏とりし、 末尾の Output 形式で報告すること。
 
-## 確認経路 (優先順)
+## Process
+
+- **公式 1 点以上を必須**、 全体で **2 点以上** で交差確認
+- 1 経路で見つからなくても存在を否定しない: 公式 doc 未記載でも実機で動くケースあり、 逆に docs にあっても deprecated のケースあり — 複数経路 confirm が必須
+- **conflicting** (Anthropic 内で情報が割れている) 場合は両方提示
+
+## Sources
+
+優先順 (上から):
 
 1. **CLI `--help` 出力**: `claude --help` / `claude <subcommand> --help` (agents / mcp / plugins 等)
 2. **`docs.claude.com`**: Anthropic 公式 docs
@@ -28,15 +31,9 @@ legacy: user CLAUDE.md「一次情報の確認」 より
 5. **`claude.com/plugins`**: plugin marketplace
 6. (補助) **2026 年以降のコミュニティ報告**: 個人ブログ / Reddit / X 等。 公式 1 点要件は満たさない
 
-## 確認 protocol
+## Output
 
-- **公式 1 点以上を必須**、 全体で **2 点以上** で交差確認
-- 1 経路で見つからなくても存在を否定しない: 公式 doc 未記載でも実機で動くケースあり、 逆に docs にあっても deprecated のケースあり — 複数経路 confirm が必須
-- **conflicting** (Anthropic 内で情報が割れている) 場合は両方提示
-
-## Output (main session に返す)
-
-5 部構成で返却:
+5 部構成で main session に返却:
 
 1. **結論** (1-2 文): "Yes, X works as Y" / "No, X is not supported" / "Conflicting: A says X, B says Y" 等
 2. **公式情報源 URL list**: cite した公式 URL を列挙
@@ -47,7 +44,7 @@ legacy: user CLAUDE.md「一次情報の確認」 より
    - 「未確認: 範囲明示」 — 公式 0 点 or 交差未達 (何が未確認か明示)
    - 「conflicting」 — 公式同士で割れている
 
-## Out of scope
+## What to leave out
 
 以下は scope 外として 「本 skill は Claude Code 仕様に限定」 と明示して返す:
 
@@ -55,3 +52,7 @@ legacy: user CLAUDE.md「一次情報の確認」 より
 - Anthropic 製品全般 (Claude consumer app / claude.ai / Console 等)
 - モデル料金 / pricing
 - Claude Code 以外のツール (Cursor / Aider / Codex 等)
+
+## Related
+
+- **Legacy:** user CLAUDE.md「一次情報の確認」 より

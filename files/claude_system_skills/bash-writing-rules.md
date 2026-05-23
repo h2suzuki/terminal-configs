@@ -1,13 +1,12 @@
 ---
 name: bash-writing-rules
-description: >
-  Rules for writing bash scripts and shell functions.
-  TRIGGER when: user is editing or creating a .sh file; user asks to write a shell
-  script, bash function, or multi-line shell pipeline.
-  SKIP: Python, Ruby, fish, or other non-bash scripts.
+description: Rules for writing bash scripts and shell functions.
+when_to_use: TRIGGER when editing or creating a .sh file, or when writing a shell script / bash function / multi-line shell pipeline. SKIP for Python, Ruby, fish, or other non-bash scripts.
 ---
 
 # Bash Writing Rules
+
+## Rules
 
 - **パイプを避けられる時は避ける。**
   - `grep regex | awk '{ do-something }'` → `awk '/regex/ { do-something }'`

@@ -1,12 +1,7 @@
 ---
 name: verbalize-before-action
-description: >
-  判断・推奨・規模影響評価を出す前に 1 文 verbalize し自分で反論してから再構成。 silent intent inference の代替。
-  TRIGGER when: 判断・推奨・提案を発しかけたとき (例: 「〜すべき」「〜が良い」「次は〜」「〜が正しい」「〜と思う」);
-  期待動作と差分を見つけて方針を決めかけたとき (error chain 検知);
-  回避・省略・後回しを提案しかけたとき。
-  SKIP: 単純な fact 報告 / tool 結果中継 / 合意済手順の機械的実行 / 「〜できました」「〜になりました」 等の状態報告 / user が verbalize 不要と明示した場合。
-legacy: org CLAUDE.md 判断の心構え より (bullets 1-3)
+description: Verbalize judgment / recommendation / impact assessment in one sentence and self-rebut before action; alternative to silent intent inference.
+when_to_use: TRIGGER when about to issue a judgment / recommendation / proposal (e.g. "〜すべき" / "〜が良い" / "次は〜" / "〜が正しい" / "〜と思う"), when noticing a divergence from expected behavior and deciding next steps (error chain detection), or when about to propose a workaround / shortcut / deferral. SKIP for simple fact reports, tool-result relays, mechanical execution of already-agreed procedures, state reports like "〜できました" / "〜になりました", or when the user has explicitly waived verbalize.
 ---
 
 # Verbalize Before Action
@@ -21,3 +16,7 @@ legacy: org CLAUDE.md 判断の心構え より (bullets 1-3)
   - 例: PostTool hook 後、 tool が 1 回動作と想定したが 2 回動作した。 tool は idempotent だから大丈夫、 で済ませず、 どんなメカニズムで差が生じて、 設計文書にどう影響があるのか、 原因究明と恒久対策を立案する。
 
 - **目前の課題への回避・省略・後回しを忌避し立ち向かう**: ユーザーに回避・省略・後回しを提案するのは怠惰とみなす。 ただし、 ユーザーが回避・省略・後回しを明示的に許容した場合は除く。
+
+## Related
+
+- **Legacy:** org CLAUDE.md 判断の心構え より (bullets 1-3)
