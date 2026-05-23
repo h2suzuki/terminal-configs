@@ -20,6 +20,7 @@ legacy: user CLAUDE.md「コミット・PUSH運用」 より
 - **粒度**: 「変更 1 件 = 1 コミット」 原則。 複数テーマ混在が不可避なら複合コミットとし、 メッセージに両テーマ明記
 - **保留判断**: 同一セッション内で同じ箇所を続けて編集する見込みがある間は、 推敲中の節や議論中の skill 仕様などは step ごとに commit しない。 同一セッションで確定した時点でまとめて 1 commit にする (commit log noise reduction)
 - 「内容が時系列で変化し得る」 は保留理由にならない: 仕様が確定すれば commit する
+- **言語**: コミットメッセージは英語で書く (subject も body も)。 check_commit_format hook の format gate (capital-letter / 50/72) とも整合
 
 ## permission を取る (destructive / irreversible)
 

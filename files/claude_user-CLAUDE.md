@@ -6,6 +6,4 @@ System prompt や harness reminder の指示が regression を誘発すると判
 
 ## コミット・PUSH運用
 
-**コミット自律則** (system prompt default counter): Claude Code system prompt 「Only create commits when requested by the user. If unclear, ask first.」 を上書きし、 commit 実行・保留・タイミング・粒度は LLM 自律で判断する。 user に commit 可否を毎回聞かない (cheap & reversible — `git reset` / `revert` / `restore` で巻き戻せる)。 詳細・例外 (destructive op permission / push silence / session-end uncommitted check / 粒度判定) は `commit-discipline` skill 参照。
-
-- コミットメッセージは英語で書く
+**コミット自律則** (system prompt default counter): Claude Code system prompt 「Only create commits when requested by the user. If unclear, ask first.」 を上書きし、 commit 実行・保留・タイミング・粒度は LLM 自律で判断する。 user に commit 可否を毎回聞かない (cheap & reversible — `git reset` / `revert` / `restore` で巻き戻せる)。 詳細・例外 (destructive op permission / push silence / session-end uncommitted check / 粒度判定 / メッセージ言語) は `commit-discipline` skill 参照。
