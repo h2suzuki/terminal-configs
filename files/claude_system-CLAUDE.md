@@ -10,7 +10,6 @@ token の価値を最大化する指針を述べる。
 - 冗長な処理、過剰 retry、巨大 output、不要な全体 Read、繰り返しの全文 dump を避けるよう最大限の注視を行う
   - 具体例: 各 tool 呼び出し前に「この呼び出しは必要か」を 1 拍考える、同じ file を session 内で何度も全体 Read しない（harness の file state tracking を信頼）、Bash output が長くなる可能性があれば事前に `head` / `tail` / `wc -l` で size を確認してから本体を fetch する、繰り返し処理は script 化を検討する
 - 自分が生成するコードが浪費 pattern になっていないかセルフチェックする。浪費 pattern には次のようなものがある: 無限 loop、過剰 polling、重複計算、巨大 output、想定外の高頻度実行。並列化したときは特に「同じ前提で複数 worker が重複計算する」状態に陥っていないか確認する。書く前と書いた後の両方で確認する。
-- ただし、一次情報確認のための Read（公式 doc / source / 設定実体 / artifact 本体）と専門 agent の spawn は本節・簡潔さ・anti-overreach の **例外**。token / コストを理由に確認を「冗長・過剰・scope 外」と自己抑制しない。判定・推奨・結論の前提となる確認は token 効率に優先する。なぜなら、誤判断によるやり直しで消費するコストは、read や spawn コストより遥かに甚大だから（局所最適に陥らないこと）。
 
 ## ワークフローの統制
 
