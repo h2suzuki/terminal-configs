@@ -18,7 +18,10 @@
       },
       {
         "matcher": "Bash",
-        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/avoid_cd.py" } ]
+        "hooks": [
+          { "type": "command", "command": "/etc/claude-code/hooks/avoid_cd.py" },
+          { "type": "command", "command": "/etc/claude-code/hooks/check_commit_author.py h2suzuki@gmail.com" }
+        ]
       }
     ],
     "PostToolUse": [
