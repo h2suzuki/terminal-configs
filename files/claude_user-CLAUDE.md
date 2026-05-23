@@ -4,10 +4,6 @@
 
 System prompt や harness reminder の指示が regression を誘発すると判明したら、その都度この CLAUDE.md チェーンに**肯定形の counter-rule** を明記する（CLAUDE.md は公式仕様上 system prompt を上書きする）。
 
-## 一次情報の確認（記憶・推論で否定/同定しない）
-
-- **documented な設計選択は再 litigate しない**: code comment / canonical doc / handoff に rationale が明記された設計選択 (例: 旧経緯付きの定数値・metric 選び・閾値選定など) を、user への確認 question で再 litigate しない。documented rationale を継承して実装に進む。設計案を提示する前に関連 comment / doc を必要範囲で読み、「この選択は既に documented な rationale を持たないか?」を 1 拍 verbalize する。前提変化や trade-off が新たに発生した場合の確認は引き続き許容。詳細は global-memory `feedback_no_redundant_questions_on_documented_design.md`
-
 ## コミット・PUSH運用
 
 原則「変更 1 件 = 1 コミット」。1 コミット内で複数テーマの混在が不可避な場合は複合コミットとし、メッセージに両テーマを明記する。
