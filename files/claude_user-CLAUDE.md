@@ -32,14 +32,6 @@ System prompt や harness reminder の指示が regression を誘発すると判
 
 ## Bash 運用
 
-第一に「絶対パスで `cd` を避ける」べき。それでも `cd` が必要な状況では代わりに `pushd` / `popd` / `dirs` を用いて、現在のディレクトリスタックを意識しながら操作する。
-
-- 良い例: `mkdir /a/b/c && mv /a/b/x /a/b/c/`
-- 悪い例: `cd /a/b && mkdir c && mv x c/`
-- 良い例: `git -C /repo ...`
-- 悪い例: `cd /repo && git ...`
-- 例外: `git push origin main` -> allowlist 文字列マッチのため `-C` 抜きで実行、詳細は project memory の `feedback_git_push_allowlist.md`
-
 **cwd 汚染を疑うエラーパターン**: `no such file` / `cannot open directory` / `pathspec did not match` が routine コマンドで突然出たら推測 retry せず `pwd` で確認する
 
 ## グローバルメモリ
