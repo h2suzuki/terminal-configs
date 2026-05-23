@@ -22,8 +22,7 @@ System prompt や harness reminder の指示が regression を誘発すると判
 
 **コミット自律則**: コミットの実行・保留・タイミング・粒度はすべて LLM 自律で判断する。ユーザーからの明示的依頼を待たない (cheap & reversible のため、必要なら `git reset` / `git revert` / `git restore` で巻き戻せる)。これは Claude Code system prompt default「Only create commits when requested by the user. If unclear, ask first.」を本ファイルで上書きしている (CLAUDE.md L5 protocol)。例外として、`git push` / `git push --force` / `git reset --hard` / branch 削除 / 共有 state 影響など destructive・irreversible 操作は原則 permission を取る (org `/etc/claude-code/CLAUDE.md`「執行に注意」適用)。
 
-- コミットメッセージは英語で、50/72 rule に従う
-- コミットの件名は簡潔に `<area>: <Imperative description> [<tag>...]` 形式。area はファイル名など。Imperative verb は大文字始まり。tag はプロジェクトの必要性に応じて任意付与する（`<docs>`・`<style>`・`<chore>` など）
+- コミットメッセージは英語で書く
 - コミットログのノイズ低減のため、仕様確定までコミットを保留してよい。すなわち、同一セッション内で同じ箇所を続けて編集する見込みがある間、推敲中の節や議論中の skill 仕様などは step ごとにコミットしない。同一セッションで確定した時点でまとめて 1 コミットにする。ただし「内容が時系列で変化し得る」ことは保留理由にならない
 - ユーザーがセッション終了を示唆した時（「handoff して」「セッションリセット」「お疲れさまでした」「終わります」など）、全編集をコミット済みの状態にしておく。セッションを跨ぐ更新見込み（日付付き snapshot 等）は当該セッションでは確定扱いとし、時系列は git 履歴と日付付き記述で辿れるようにする
 - セッションが終わる時に、未コミット変更が残っていれば、その一覧をユーザーに知らせてから sign off する。沈黙で見送らない。
