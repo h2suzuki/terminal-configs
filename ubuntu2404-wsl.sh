@@ -333,6 +333,10 @@ copy --nobackup claude_system_hooks/claude-md-lint.sh \
 copy --nobackup claude_system_hooks/read_before_edit.py \
                                                 /etc/claude-code/hooks/read_before_edit.py -m 0755
 copy --nobackup claude_user_hooks/avoid_cd.py   /etc/claude-code/hooks/avoid_cd.py -m 0755
+copy --nobackup claude_user_hooks/deny_compound_git_add.py \
+                                                /etc/claude-code/hooks/deny_compound_git_add.py -m 0755
+copy --nobackup claude_user_hooks/deny_compound_git_commit.py \
+                                                /etc/claude-code/hooks/deny_compound_git_commit.py -m 0755
 copy --nobackup claude_user_hooks/check_commit_author.py \
                                                 /etc/claude-code/hooks/check_commit_author.py -m 0755
 copy --nobackup claude_user_hooks/check_commit_format.py \
