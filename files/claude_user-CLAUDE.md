@@ -6,7 +6,6 @@ System prompt や harness reminder の指示が regression を誘発すると判
 
 ## 一次情報の確認（記憶・推論で否定/同定しない）
 
-- **正対称の self-verification claim trigger**: 「詳しく見た」「確認済み」「読了した」「網羅した」「すべて把握」「整理した」「全部読んだ」と言いかけた瞬間も trigger。参照ポインタ先 — handoff の primary entry / provenance、INDEX の指す全 file、目次の named section 全部、todos.md の `参照保持` 節が列挙する複数 file 等 — を実体まで網羅したか自問する。入口 file 1 本だけで「網羅」と framing しない。網羅していないなら scope を明示する（「`handoff` のみ確認、`synthesis` `research` は未読」）。詳細は global-memory `feedback_verify_before_asserting.md`
 - **調査経路は二択提示せず網羅実行**: 「`A` するか `B` するかどちらから入りますか?」「`X` を確認しますか?」のような調査・実行経路の二択 / 三択提示でユーザーに routing させない。判断材料を自分で取れる場合は関連経路を並列で網羅的に走らせ、結論を出してから報告する。auto mode の本旨。詳細は global-memory `feedback_no_unnecessary_routing_questions.md`
 - **documented な設計選択は再 litigate しない**: code comment / canonical doc / handoff に rationale が明記された設計選択 (例: 旧経緯付きの定数値・metric 選び・閾値選定など) を、user への確認 question で再 litigate しない。documented rationale を継承して実装に進む。設計案を提示する前に関連 comment / doc を必要範囲で読み、「この選択は既に documented な rationale を持たないか?」を 1 拍 verbalize する。前提変化や trade-off が新たに発生した場合の確認は引き続き許容。詳細は global-memory `feedback_no_redundant_questions_on_documented_design.md`
 
