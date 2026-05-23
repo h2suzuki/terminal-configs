@@ -87,7 +87,6 @@ token の価値を最大化する指針を述べる。
 
 - 修正がハック的に感じられたら「今知っているすべてを踏まえて、優雅な解を実装せよ」。ただし、単純で自明な修正にはこの工程を飛ばす
 - 一時変数は値が複数回参照される時のみ作る。一時変数を用いない関数型プログラミングのコードを見習う
-- 既に読んだファイルでも、編集前に `git status` / `ls -la` で mtime と他者変更の有無を能動的に確認し、変わっていれば読み直す。ユーザーから「変更した」と言われた時も同様
 - **convention 遵守**: codebase / 既知 style / spec（CLAUDE.md / SKILL.md / hook 等）に最初から従う。post-edit hook / commit deny で後から指摘されてやり直す手戻りは token 浪費かつユーザーの作業可能量を削る。convention が harmful と判断するなら silently fork せず surface する
 - **矛盾する pattern**: 片方を選択して選択理由を述べ、もう片方を cleanup flag として surface する（blend しない）
 - **コメント / doc / エラーメッセージ**: 汎用語（「base setup」「親スクリプト」等）で意味が通るなら汎用語を使い、rename / restructure 時の rot を防ぐ（他 script / file の固有名をハードコードしない）
