@@ -288,6 +288,8 @@ copy --nobackup claude_user_skills/verify-spec-before-dismissal.md \
                                                 /etc/claude-code/verify-spec-before-dismissal.md
 copy --nobackup claude_user_skills/verify-before-asserting.md \
                                                 /etc/claude-code/verify-before-asserting.md
+copy --nobackup claude_user_skills/no-routing-questions.md \
+                                                /etc/claude-code/no-routing-questions.md
 
 run install -d ~/.claude/skills/claude-md-lint
 run install -d ~/.claude/skills/bash-writing-rules
@@ -299,6 +301,7 @@ run install -d ~/.claude/skills/lost-track-recover
 run install -d ~/.claude/skills/document-editor
 run install -d ~/.claude/skills/verify-spec-before-dismissal
 run install -d ~/.claude/skills/verify-before-asserting
+run install -d ~/.claude/skills/no-routing-questions
 run ln -sfn /etc/claude-code/claude-md-lint.md  ~/.claude/skills/claude-md-lint/SKILL.md
 run ln -sfn /etc/claude-code/bash-writing-rules.md ~/.claude/skills/bash-writing-rules/SKILL.md
 run ln -sfn /etc/claude-code/verbalize-before-action.md ~/.claude/skills/verbalize-before-action/SKILL.md
@@ -309,6 +312,7 @@ run ln -sfn /etc/claude-code/lost-track-recover.md ~/.claude/skills/lost-track-r
 run ln -sfn /etc/claude-code/document-editor.md ~/.claude/skills/document-editor/SKILL.md
 run ln -sfn /etc/claude-code/verify-spec-before-dismissal.md ~/.claude/skills/verify-spec-before-dismissal/SKILL.md
 run ln -sfn /etc/claude-code/verify-before-asserting.md ~/.claude/skills/verify-before-asserting/SKILL.md
+run ln -sfn /etc/claude-code/no-routing-questions.md ~/.claude/skills/no-routing-questions/SKILL.md
 
 # Tools used by Claude Code (bubblewrap/socat: Sandbox, poppler-utils: PDF reading)
 run apt install -y --no-install-recommends \
@@ -392,6 +396,7 @@ EOF
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/document-editor
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/verify-spec-before-dismissal
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/verify-before-asserting
+    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/no-routing-questions
     run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/claude-md-lint.md \
                                          ~$LOGIN_USER/.claude/skills/claude-md-lint/SKILL.md
     run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/bash-writing-rules.md \
@@ -412,6 +417,8 @@ EOF
                                          ~$LOGIN_USER/.claude/skills/verify-spec-before-dismissal/SKILL.md
     run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/verify-before-asserting.md \
                                          ~$LOGIN_USER/.claude/skills/verify-before-asserting/SKILL.md
+    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/no-routing-questions.md \
+                                         ~$LOGIN_USER/.claude/skills/no-routing-questions/SKILL.md
 
 else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
