@@ -10,6 +10,14 @@
   },
   "tui": "fullscreen",
   "skipAutoPermissionPrompt": true,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/check_commit_author.py h2suzuki@gmail.com" } ]
+      }
+    ]
+  },
   "spinnerVerbs": {
     "mode": "replace",
     "verbs": [
