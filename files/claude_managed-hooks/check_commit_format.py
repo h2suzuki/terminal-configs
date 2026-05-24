@@ -223,7 +223,7 @@ def _run(payload: dict) -> int:
     if not SUBJECT_FORMAT_RE.match(subject):
         hard.append(
             "subject does not match `<area>: <Capital-imperative>` format "
-            "(e.g., `claude_user_hooks: Add check_commit_format`)"
+            "(e.g., `claude_user-hooks: Add check_commit_format`)"
         )
 
     for i, line in enumerate(body_lines, start=2):

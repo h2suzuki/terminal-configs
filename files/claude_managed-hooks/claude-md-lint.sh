@@ -29,7 +29,7 @@
 # `--setting-sources ""` keeps the child from loading the settings file
 # that registers this hook (verified primary defence under `--bg`).
 #
-# The skill body (/etc/claude-code/claude-md-lint.md) is injected via
+# The skill body (/etc/claude-code/skills/claude-md-lint/SKILL.md) is injected via
 # --append-system-prompt so the child gets the evaluation criteria; the
 # child reads each target file itself with the Read tool.
 #
@@ -47,7 +47,7 @@ readonly PROG_NAME
 readonly CACHE_DIR="${XDG_CACHE_HOME:-${HOME}/.cache}/${PROG_NAME}"
 readonly INFLIGHT_DIR="${CACHE_DIR}/.inflight"
 readonly STAGING_DIR="${CACHE_DIR}/.staging"
-readonly SKILL_MD="/etc/claude-code/claude-md-lint.md"
+readonly SKILL_MD="/etc/claude-code/skills/claude-md-lint/SKILL.md"
 readonly MAX_HOPS=5
 # Identifies this hook's background sessions. The reaper only stops/rm's
 # a session whose jobs/<id>/state.json "name" equals this exact string.

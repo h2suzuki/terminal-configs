@@ -253,31 +253,31 @@ run bash /tmp/claude_install.sh
 run uv tool install --force claude-monitor #--system --break-system-packages pasimple
 
 rm -rf /etc/claude-code/
-copy --nobackup claude_system-CLAUDE.md                         /etc/claude-code/CLAUDE.md
+copy --nobackup claude_managed-CLAUDE.md                        /etc/claude-code/CLAUDE.md
 copy --nobackup claude_statusline.sh                            /etc/claude-code/statusline.sh -m 0755
 
-copy --nobackup claude_system_hooks/claude-md-lint.sh           /etc/claude-code/claude-md-lint.sh -m 0755
-copy --nobackup claude_system_hooks/read_before_edit.py         /etc/claude-code/hooks/read_before_edit.py -m 0755
-copy --nobackup claude_system_hooks/avoid_cd.py                   /etc/claude-code/hooks/avoid_cd.py -m 0755
-copy --nobackup claude_system_hooks/deny_compound_git_add.py      /etc/claude-code/hooks/deny_compound_git_add.py -m 0755
-copy --nobackup claude_system_hooks/deny_compound_git_commit.py   /etc/claude-code/hooks/deny_compound_git_commit.py -m 0755
-copy --nobackup claude_user_hooks/check_commit_author.py        /etc/claude-code/hooks/check_commit_author.py -m 0755
-copy --nobackup claude_system_hooks/check_commit_format.py        /etc/claude-code/hooks/check_commit_format.py -m 0755
-copy --nobackup claude_system_hooks/detect_cwd_pollution.py       /etc/claude-code/hooks/detect_cwd_pollution.py -m 0755
+copy --nobackup claude_managed-hooks/claude-md-lint.sh          /etc/claude-code/claude-md-lint.sh -m 0755
+copy --nobackup claude_managed-hooks/read_before_edit.py        /etc/claude-code/hooks/read_before_edit.py -m 0755
+copy --nobackup claude_managed-hooks/avoid_cd.py                  /etc/claude-code/hooks/avoid_cd.py -m 0755
+copy --nobackup claude_managed-hooks/deny_compound_git_add.py     /etc/claude-code/hooks/deny_compound_git_add.py -m 0755
+copy --nobackup claude_managed-hooks/deny_compound_git_commit.py  /etc/claude-code/hooks/deny_compound_git_commit.py -m 0755
+copy --nobackup claude_user-hooks/check_commit_author.py        /etc/claude-code/hooks/check_commit_author.py -m 0755
+copy --nobackup claude_managed-hooks/check_commit_format.py       /etc/claude-code/hooks/check_commit_format.py -m 0755
+copy --nobackup claude_managed-hooks/detect_cwd_pollution.py      /etc/claude-code/hooks/detect_cwd_pollution.py -m 0755
 
-copy --nobackup claude_settings.json            ~/.claude/settings.json
+copy --nobackup claude_user-settings.json       ~/.claude/settings.json
 copy --nobackup claude_managed-settings.json    /etc/claude-code/managed-settings.json
 [ -e ~/.claude/CLAUDE.md ] ||
 copy --nobackup claude_user-CLAUDE.md           ~/.claude/CLAUDE.md
 
-copy_dir claude_system_skills/ /etc/claude-code/skills/
+copy_dir claude_managed-skills/ /etc/claude-code/skills/
 for skill_dir in /etc/claude-code/skills/*/; do
     run ln -sfn "$skill_dir" ~/.claude/skills/
 done
 
-pushd "$TOP_DIR"/files/claude_user_skills >/dev/null
+pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
 for sk in */; do
-    copy_dir "claude_user_skills/$sk" ~/.claude/skills/$sk
+    copy_dir "claude_user-skills/$sk" ~/.claude/skills/$sk
 done
 popd >/dev/null
 
@@ -351,16 +351,16 @@ EOF
     run sudo -i -u $LOGIN_USER bash -i -c '"npm uninstall -g @anthropic-ai/claude-code || true"'
     run sudo -i -u $LOGIN_USER bash -i -c '"bash /tmp/claude_install.sh"'
     run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g @openai/codex"'
-    copy --nobackup claude_settings.json ~$LOGIN_USER/.claude/settings.json --owner $LOGIN_USER
+    copy --nobackup claude_user-settings.json ~$LOGIN_USER/.claude/settings.json --owner $LOGIN_USER
     [ -e ~$LOGIN_USER/.claude/CLAUDE.md ] ||
     copy --nobackup claude_user-CLAUDE.md ~$LOGIN_USER/.claude/CLAUDE.md --owner $LOGIN_USER
     for skill_dir in /etc/claude-code/skills/*/; do
         run sudo -i -u $LOGIN_USER ln -sfn "$skill_dir" ~$LOGIN_USER/.claude/skills/
     done
 
-    pushd "$TOP_DIR"/files/claude_user_skills >/dev/null
+    pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
     for sk in */; do
-        copy_dir "claude_user_skills/$sk" ~$LOGIN_USER/.claude/skills/$sk --owner $LOGIN_USER
+        copy_dir "claude_user-skills/$sk" ~$LOGIN_USER/.claude/skills/$sk --owner $LOGIN_USER
     done
     popd >/dev/null
 
