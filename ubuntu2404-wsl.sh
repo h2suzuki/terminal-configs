@@ -95,6 +95,21 @@ copy()
 }
 
 
+# Mirror files/$1's children into $2 (DST contents are wiped first).
+copy_dir()
+{
+    DNAME=files/${1%/}
+    DST=${2%/}
+    shift 2
+
+    [ -d "$DST" ] || { rm -rf "$DST"; run install --directory "$@" "$DST"; }
+    rm -rf "$DST"/*
+    for child in "$TOP_DIR/$DNAME"/*; do
+        run cp -r "$child" "$DST/"
+    done
+}
+
+
 
 [ -e ~/.bashrc ] &&
 run sed -i ~/.bashrc \
@@ -355,6 +370,7 @@ run bash /tmp/claude_install.sh
 
 run uv tool install --force claude-monitor #--system --break-system-packages pasimple
 
+rm -rf /etc/claude-code/
 copy --nobackup claude_system-CLAUDE.md                         /etc/claude-code/CLAUDE.md
 copy --nobackup claude_statusline.sh                            /etc/claude-code/statusline.sh -m 0755
 
@@ -373,53 +389,16 @@ copy --nobackup claude_managed-settings.json    /etc/claude-code/managed-setting
 [ -e ~/.claude/CLAUDE.md ] ||
 copy --nobackup claude_user-CLAUDE.md           ~/.claude/CLAUDE.md
 
-copy --nobackup claude_system_skills/claude-md-lint.md              /etc/claude-code/claude-md-lint.md
-copy --nobackup claude_system_skills/bash-writing-rules.md          /etc/claude-code/bash-writing-rules.md
-copy --nobackup claude_system_skills/verbalize-before-action.md     /etc/claude-code/verbalize-before-action.md
-copy --nobackup claude_system_skills/scope-mismatch-detector.md     /etc/claude-code/scope-mismatch-detector.md
-copy --nobackup claude_system_skills/subagent-gate.md               /etc/claude-code/subagent-gate.md
-copy --nobackup claude_system_skills/debug-workflow.md              /etc/claude-code/debug-workflow.md
-copy --nobackup claude_system_skills/lost-track-recover.md          /etc/claude-code/lost-track-recover.md
-copy --nobackup claude_system_skills/document-editor.md             /etc/claude-code/document-editor.md
-copy --nobackup claude_system_skills/verify-spec-before-dismissal.md  /etc/claude-code/verify-spec-before-dismissal.md
-copy --nobackup claude_system_skills/verify-before-asserting.md       /etc/claude-code/verify-before-asserting.md
-copy --nobackup claude_system_skills/no-routing-questions.md          /etc/claude-code/no-routing-questions.md
-copy --nobackup claude_system_skills/no-redundant-design-litigation.md /etc/claude-code/no-redundant-design-litigation.md
-copy --nobackup claude_system_skills/commit-discipline.md             /etc/claude-code/commit-discipline.md
-copy --nobackup claude_system_skills/claude-code-guide.md             /etc/claude-code/claude-code-guide.md
-copy --nobackup claude_user_skills/memory-routing.md                /etc/claude-code/memory-routing.md
+copy_dir claude_system_skills/ /etc/claude-code/skills/
+for skill_dir in /etc/claude-code/skills/*/; do
+    run ln -sfn "$skill_dir" ~/.claude/skills/
+done
 
-run install -d ~/.claude/skills/claude-md-lint
-run install -d ~/.claude/skills/bash-writing-rules
-run install -d ~/.claude/skills/verbalize-before-action
-run install -d ~/.claude/skills/scope-mismatch-detector
-run install -d ~/.claude/skills/subagent-gate
-run install -d ~/.claude/skills/debug-workflow
-run install -d ~/.claude/skills/lost-track-recover
-run install -d ~/.claude/skills/document-editor
-run install -d ~/.claude/skills/verify-spec-before-dismissal
-run install -d ~/.claude/skills/verify-before-asserting
-run install -d ~/.claude/skills/no-routing-questions
-run install -d ~/.claude/skills/no-redundant-design-litigation
-run install -d ~/.claude/skills/commit-discipline
-run install -d ~/.claude/skills/claude-code-guide
-run install -d ~/.claude/skills/memory-routing
-
-run ln -sfn /etc/claude-code/claude-md-lint.md                  ~/.claude/skills/claude-md-lint/SKILL.md
-run ln -sfn /etc/claude-code/bash-writing-rules.md              ~/.claude/skills/bash-writing-rules/SKILL.md
-run ln -sfn /etc/claude-code/verbalize-before-action.md         ~/.claude/skills/verbalize-before-action/SKILL.md
-run ln -sfn /etc/claude-code/scope-mismatch-detector.md         ~/.claude/skills/scope-mismatch-detector/SKILL.md
-run ln -sfn /etc/claude-code/subagent-gate.md                   ~/.claude/skills/subagent-gate/SKILL.md
-run ln -sfn /etc/claude-code/debug-workflow.md                  ~/.claude/skills/debug-workflow/SKILL.md
-run ln -sfn /etc/claude-code/lost-track-recover.md              ~/.claude/skills/lost-track-recover/SKILL.md
-run ln -sfn /etc/claude-code/document-editor.md                 ~/.claude/skills/document-editor/SKILL.md
-run ln -sfn /etc/claude-code/verify-spec-before-dismissal.md    ~/.claude/skills/verify-spec-before-dismissal/SKILL.md
-run ln -sfn /etc/claude-code/verify-before-asserting.md         ~/.claude/skills/verify-before-asserting/SKILL.md
-run ln -sfn /etc/claude-code/no-routing-questions.md            ~/.claude/skills/no-routing-questions/SKILL.md
-run ln -sfn /etc/claude-code/no-redundant-design-litigation.md  ~/.claude/skills/no-redundant-design-litigation/SKILL.md
-run ln -sfn /etc/claude-code/commit-discipline.md               ~/.claude/skills/commit-discipline/SKILL.md
-run ln -sfn /etc/claude-code/claude-code-guide.md               ~/.claude/skills/claude-code-guide/SKILL.md
-run ln -sfn /etc/claude-code/memory-routing.md                  ~/.claude/skills/memory-routing/SKILL.md
+pushd "$TOP_DIR"/files/claude_user_skills >/dev/null
+for sk in */; do
+    copy_dir "claude_user_skills/$sk" ~/.claude/skills/$sk
+done
+popd >/dev/null
 
 # Tools used by Claude Code (bubblewrap/socat: Sandbox, poppler-utils: PDF reading)
 run apt install -y --no-install-recommends \
@@ -513,51 +492,15 @@ EOF
     copy --nobackup claude_settings.json ~$LOGIN_USER/.claude/settings.json --owner $LOGIN_USER
     [ -e ~$LOGIN_USER/.claude/CLAUDE.md ] ||
     copy --nobackup claude_user-CLAUDE.md ~$LOGIN_USER/.claude/CLAUDE.md --owner $LOGIN_USER
-    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/claude-md-lint
-    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/bash-writing-rules
-    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/verbalize-before-action
-    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/scope-mismatch-detector
-    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/subagent-gate
-    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/debug-workflow
-    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/lost-track-recover
-    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/document-editor
-    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/verify-spec-before-dismissal
-    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/verify-before-asserting
-    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/no-routing-questions
-    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/no-redundant-design-litigation
-    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/commit-discipline
-    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/claude-code-guide
-    run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/memory-routing
-    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/claude-md-lint.md \
-                                         ~$LOGIN_USER/.claude/skills/claude-md-lint/SKILL.md
-    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/bash-writing-rules.md \
-                                         ~$LOGIN_USER/.claude/skills/bash-writing-rules/SKILL.md
-    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/verbalize-before-action.md \
-                                         ~$LOGIN_USER/.claude/skills/verbalize-before-action/SKILL.md
-    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/scope-mismatch-detector.md \
-                                         ~$LOGIN_USER/.claude/skills/scope-mismatch-detector/SKILL.md
-    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/subagent-gate.md \
-                                         ~$LOGIN_USER/.claude/skills/subagent-gate/SKILL.md
-    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/debug-workflow.md \
-                                         ~$LOGIN_USER/.claude/skills/debug-workflow/SKILL.md
-    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/lost-track-recover.md \
-                                         ~$LOGIN_USER/.claude/skills/lost-track-recover/SKILL.md
-    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/document-editor.md \
-                                         ~$LOGIN_USER/.claude/skills/document-editor/SKILL.md
-    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/verify-spec-before-dismissal.md \
-                                         ~$LOGIN_USER/.claude/skills/verify-spec-before-dismissal/SKILL.md
-    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/verify-before-asserting.md \
-                                         ~$LOGIN_USER/.claude/skills/verify-before-asserting/SKILL.md
-    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/no-routing-questions.md \
-                                         ~$LOGIN_USER/.claude/skills/no-routing-questions/SKILL.md
-    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/no-redundant-design-litigation.md \
-                                         ~$LOGIN_USER/.claude/skills/no-redundant-design-litigation/SKILL.md
-    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/commit-discipline.md \
-                                         ~$LOGIN_USER/.claude/skills/commit-discipline/SKILL.md
-    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/claude-code-guide.md \
-                                         ~$LOGIN_USER/.claude/skills/claude-code-guide/SKILL.md
-    run sudo -i -u $LOGIN_USER ln -sfn /etc/claude-code/memory-routing.md \
-                                         ~$LOGIN_USER/.claude/skills/memory-routing/SKILL.md
+    for skill_dir in /etc/claude-code/skills/*/; do
+        run sudo -i -u $LOGIN_USER ln -sfn "$skill_dir" ~$LOGIN_USER/.claude/skills/
+    done
+
+    pushd "$TOP_DIR"/files/claude_user_skills >/dev/null
+    for sk in */; do
+        copy_dir "claude_user_skills/$sk" ~$LOGIN_USER/.claude/skills/$sk --owner $LOGIN_USER
+    done
+    popd >/dev/null
 
     run usermod -aG docker "$LOGIN_USER"
 
