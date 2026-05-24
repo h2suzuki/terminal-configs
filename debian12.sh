@@ -63,6 +63,20 @@ copy()
     DST="$2"
     shift 2
 
+    # When the caller did not pass -m, default the mode by extension:
+    #   *.md  -> 0644 (read-only markdown content)
+    #   else  -> 0755 (matches install's own default; scripts / configs)
+    # Security-sensitive targets (sudoers, secrets) must pass -m explicitly.
+    case " $* " in
+        *" -m "*) ;;
+        *)
+            case "$FNAME" in
+                *.md) set -- -m 0644 "$@" ;;
+                *)    set -- -m 0755 "$@" ;;
+            esac
+            ;;
+    esac
+
     if [ -e "$DST" ]; then
         if cmp -s "$TOP_DIR/$FNAME" "$DST"; then
             echo -e "=> ${COLOR_YELLOW}$FNAME is already copied${COLOR_CLEAR}\n"
@@ -110,7 +124,7 @@ run echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' '>>' ~/.bashrc
 
 
 [ -d /etc/sudoers.d ] &&
-copy sudoers    /etc/sudoers.d/nopasswd
+copy sudoers    /etc/sudoers.d/nopasswd -m 0440
 copy gitconfig  /etc/gitconfig
 copy inputrc    ~/.inputrc
 copy share_ssh_x11forwarding  ~/.share_ssh_x11forwarding
