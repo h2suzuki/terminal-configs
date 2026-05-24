@@ -370,7 +370,8 @@ copy --nobackup claude_system_hooks/detect_cwd_pollution.py       /etc/claude-co
 copy --nobackup voicevox_claude_alerts          /usr/local/bin/voicevox_claude_alerts -m 0755
 copy --nobackup claude_settings.json            ~/.claude/settings.json
 copy --nobackup claude_managed-settings.json    /etc/claude-code/managed-settings.json
-#copy --nobackup claude_user-CLAUDE.md           ~/.claude/CLAUDE.md
+[ -e ~/.claude/CLAUDE.md ] ||
+copy --nobackup claude_user-CLAUDE.md           ~/.claude/CLAUDE.md
 
 copy --nobackup claude_system_skills/claude-md-lint.md              /etc/claude-code/claude-md-lint.md
 copy --nobackup claude_system_skills/bash-writing-rules.md          /etc/claude-code/bash-writing-rules.md
@@ -510,7 +511,8 @@ EOF
     run sudo -i -u $LOGIN_USER bash -i -c '"bash /tmp/claude_install.sh"'
     run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g @openai/codex"'
     copy --nobackup claude_settings.json ~$LOGIN_USER/.claude/settings.json --owner $LOGIN_USER
-    #copy --nobackup claude_user-CLAUDE.md ~$LOGIN_USER/.claude/CLAUDE.md --owner $LOGIN_USER
+    [ -e ~$LOGIN_USER/.claude/CLAUDE.md ] ||
+    copy --nobackup claude_user-CLAUDE.md ~$LOGIN_USER/.claude/CLAUDE.md --owner $LOGIN_USER
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/claude-md-lint
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/bash-writing-rules
     run install -d -o $LOGIN_USER ~$LOGIN_USER/.claude/skills/verbalize-before-action
