@@ -346,6 +346,7 @@ run npm install -g @openai/codex
 
 # The current user settings
 EDITOR="/usr/bin/nvim"
+run echo '' '>>' ~/.bashrc
 run echo 'export EDITOR=\"$EDITOR\"' '>>' ~/.bashrc
 run echo 'export VISUAL=\"$EDITOR\"' '>>' ~/.bashrc
 
