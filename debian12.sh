@@ -194,6 +194,8 @@ VV_VER=0.16.4
 VV_BIN_DIR=/usr/local/bin
 VV_LIB_DIR=/usr/lib/voicevox-core
 
+if [ ! -s $VV_LIB_DIR/models/vvms/0.vvm ]; then
+
 run uv pip install --system --break-system-packages pasimple
 run uv pip install --system --break-system-packages \
   https://github.com/VOICEVOX/voicevox_core/releases/download/${VV_VER}/voicevox_core-${VV_VER}-cp310-abi3-manylinux_2_34_x86_64.whl
@@ -204,29 +206,50 @@ run curl -o /tmp/voicevox_install.sh \
 chmod u-s,u+x /tmp/voicevox_install.sh
 
 rm -rf $VV_LIB_DIR
+
+echo -e "=> ${COLOR_YELLOW}Installing VoiceVox ...${COLOR_CLEAR}"
+
+# The downloader is a TUI that redraws on the alternate screen buffer, so its progress output never
+# lands in the terminal scrollback. Set OMIT_TUI_OUTPUT=1 in the parent shell to silence that relay
+export OMIT_TUI_OUTPUT=1
+
 expect -c '
 # GitHub login can relax the ratelimit restriction posed by this downloader
 set env(GH_TOKEN) '"$(gh auth token)"'
-set timeout 120
+set timeout 300
+
+if {[info exists env(OMIT_TUI_OUTPUT)] && $env(OMIT_TUI_OUTPUT) eq "1"} { log_user 0; }
 
 spawn /tmp/voicevox_install.sh --output '"$VV_LIB_DIR"' --exclude c-api --models-pattern {[0-9]*.vvm}
 
 expect {
-    "qを押してください" { puts "Caught: $expect_out(0,string)"; send "q\r"; sleep 1 }
-    timeout             { puts "タイムアウトしました";  exit 1 }
-    eof                 { puts "接続が切れました";      exit 1 }
+    -ex "qを押してください" { puts "Caught: $expect_out(0,string) => Sending: q"; send "q\r"; sleep 1 }
+    timeout                 { puts "タイムアウトしました";  exit 1 }
+    eof                     { puts "接続が切れました";      exit 1 }
 }
 expect {
-    "\[y,n,r\]"         { puts "Caught: $expect_out(0,string)"; send "y\r"; sleep 1 }
-    timeout             { puts "タイムアウトしました";  exit 1 }
-    eof                 { puts "接続が切れました";      exit 1 }
+    -ex "\[y,n,r\]"         { puts "Caught: $expect_out(0,string) => Sending: y"; send "y\r"; sleep 1 }
+    timeout                 { puts "タイムアウトしました";  exit 1 }
+    eof                     { puts "接続が切れました";      exit 1 }
 }
-expect eof
+expect {
+    timeout                 { puts "タイムアウトしました";  exit 1 }
+    eof                     { puts "インストールが完了";    exit 0 }
+}
 '
 
+    RETVAL=$?
+    if [ $RETVAL -eq 0 ]; then
+        echo -e "[ ${COLOR_GREEN}OK${COLOR_CLEAR} ]\n"
+    else
+        echo -e "[ ${COLOR_RED}ERROR($RETVAL)${COLOR_CLEAR} ]\n"
+        exit $RETVAL
+    fi
+fi
+
 run [ -s $VV_LIB_DIR/dict/open_jtalk_dic_utf*/sys.dic ]
-run [ -s $VV_LIB_DIR/models/vvms/0.vvm ]
-run [ -s $VV_LIB_DIR/onnxruntime/lib//libvoicevox_onnxruntime.so* ]
+run [ -s $VV_LIB_DIR/onnxruntime/lib/libvoicevox_onnxruntime.so* ]
+for i in `seq 0 24`; do run [ -s $VV_LIB_DIR/models/vvms/$i.vvm ]; done
 
 copy --nobackup voicevox_paplay ${VV_BIN_DIR}/voicevox_paplay
 
