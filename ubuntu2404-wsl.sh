@@ -294,7 +294,7 @@ rm -rf /etc/claude-code/
 copy --nobackup claude_managed-CLAUDE.md                        /etc/claude-code/CLAUDE.md
 copy --nobackup claude_statusline.sh                            /etc/claude-code/statusline.sh -m 0755
 
-copy --nobackup claude_managed-hooks/claude-md-lint.sh          /etc/claude-code/claude-md-lint.sh -m 0755
+copy --nobackup claude_managed-hooks/claude-md-lint.sh          /etc/claude-code/hooks/claude-md-lint.sh -m 0755
 copy --nobackup claude_managed-hooks/read_before_edit.py        /etc/claude-code/hooks/read_before_edit.py -m 0755
 copy --nobackup claude_managed-hooks/avoid_cd.py                  /etc/claude-code/hooks/avoid_cd.py -m 0755
 copy --nobackup claude_managed-hooks/deny_compound_git_add.py     /etc/claude-code/hooks/deny_compound_git_add.py -m 0755

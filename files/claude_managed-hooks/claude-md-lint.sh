@@ -1,5 +1,5 @@
 #!/bin/bash
-# /etc/claude-code/claude-md-lint.sh
+# /etc/claude-code/hooks/claude-md-lint.sh
 #
 # SessionStart hook — cross-project lint of the auto-loaded CLAUDE.md
 # chain (org / user / project CLAUDE.md and @-imported CLAUDE.md files).
