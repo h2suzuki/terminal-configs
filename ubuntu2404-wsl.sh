@@ -309,7 +309,7 @@ copy --nobackup claude_managed-settings.json    /etc/claude-code/managed-setting
 copy --nobackup claude_user-CLAUDE.md           ~/.claude/CLAUDE.md
 
 copy_dir claude_managed-skills/ /etc/claude-code/skills/
-for skill_dir in /etc/claude-code/skills/*/; do
+for skill_dir in /etc/claude-code/skills/*; do
     rm -rf ~/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
     run ln -sfn "$skill_dir" ~/.claude/skills/
 done
@@ -412,7 +412,7 @@ EOF
     copy --nobackup claude_user-settings.json ~$LOGIN_USER/.claude/settings.json --owner $LOGIN_USER
     [ -e ~$LOGIN_USER/.claude/CLAUDE.md ] ||
     copy --nobackup claude_user-CLAUDE.md ~$LOGIN_USER/.claude/CLAUDE.md --owner $LOGIN_USER
-    for skill_dir in /etc/claude-code/skills/*/; do
+    for skill_dir in /etc/claude-code/skills/*; do
         rm -rf ~$LOGIN_USER/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
         run sudo -i -u $LOGIN_USER ln -sfn "$skill_dir" ~$LOGIN_USER/.claude/skills/
     done
