@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/voicevox_claude_alerts Stop" } ] }
+    ],
+    "Notification": [
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/voicevox_claude_alerts Notification" } ] }
+    ],
+    "SubagentStart": [
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/voicevox_claude_alerts SubagentStart" } ] }
+    ],
+    "SubagentStop": [
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/voicevox_claude_alerts SubagentStop" } ] }
+    ],
+    "ConfigChange": [
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/voicevox_claude_alerts ConfigChange" } ] }
+    ],
+    "PreCompact": [
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/voicevox_claude_alerts PreCompact" } ] }
+    ],
+    "WorktreeCreate": [
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/voicevox_claude_alerts WorktreeCreate" } ] }
+    ]
+  }
+}
