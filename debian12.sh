@@ -128,6 +128,7 @@ run sed -i ~/.bashrc \
     -e '/export\ PATH=.*\.local.bin:\$PATH/d' \
     -e '/share_ssh_x11forwarding/d' \
     -e '/NVM_DIR/d'
+run sed -i ~/.bashrc -e ':a' -e "'/^[[:space:]]*$/{\$d;N;ba'" -e '}'
 
 run echo -e '\\n\\n# ---- Terminal Config ----' '>>' ~/.bashrc
 run echo "alias tree=\\'tree --dirsfirst --noreport -I __pycache__\\'" '>>' ~/.bashrc
@@ -324,6 +325,7 @@ if [ -n "$LOGIN_USER" ]; then
             -e '/export\ VISUAL=/d' \
             -e '/export\ PATH=.*\.local.bin:\$PATH/d' \
             -e '/NVM_DIR/d'
+    run sed -i $BASHRC -e ':a' -e "'/^[[:space:]]*$/{\$d;N;ba'" -e '}'
 
     # Handy aliases
     run echo -e '\\n\\n# ---- Terminal Config ----' '>>' $BASHRC
