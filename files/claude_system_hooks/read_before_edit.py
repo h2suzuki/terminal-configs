@@ -4,6 +4,7 @@ Read-before-edit hook for Claude Code.
 
 Legacy: org CLAUDE.md「a. コーディング」より (「編集前に git status / ls -la で mtime 確認」 bullet を hook 化)
 
+
 Use-case scenarios
 ==================
 
@@ -52,17 +53,24 @@ Subcommands
 
   Write and NotebookEdit PreToolUse, and Edit / MultiEdit /
   NotebookEdit PostToolUse, should not route through this hook
-  (excluded at the settings.json matcher level). The hook is
+  (excluded at the settings.json matcher level — anchored
+  `^(Read|Edit|MultiEdit)$` and `^(Read|Write)$`). The hook is
   defensive and early-returns on unexpected tools.
+
 
 State lives in ~/.claude/hooks/state/read_mtime.sqlite3 (WAL mode).
 Rows older than TTL_SECONDS (default 7 days) are pruned
 opportunistically on each write. accesses_json is capped to the last
 ACCESS_HISTORY_CAP entries per row.
 
-Paths are canonicalised via os.path.realpath against the payload's
-`cwd`, so symlink and relative/absolute path variants converge to a
-single state row.
+Paths are canonicalised via `~`-expansion -> realpath against the
+payload's `cwd`, so symlink and relative/absolute path variants
+converge to a single state row. Tool inputs whose `file_path` is
+non-string are rejected early.
+
+cmd_record wraps the SELECT-then-UPSERT in a single
+`BEGIN IMMEDIATE` transaction so two concurrent PostToolUse hooks
+for the same (session_id, path) cannot lose an append.
 
 `record` always exits 0. `check` exits 0 even when denying — the
 deny is communicated via JSON `permissionDecision: "deny"`, not via
@@ -88,11 +96,13 @@ EXPECTED_COLUMNS = {"session_id", "path", "recorded_at", "accesses_json"}
 
 def _open_db() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, timeout=2.0)
+    # isolation_level=None gives us manual control over transactions so
+    # cmd_record can use BEGIN IMMEDIATE to serialize concurrent appends.
+    conn = sqlite3.connect(DB_PATH, timeout=2.0, isolation_level=None)
     conn.execute("PRAGMA journal_mode=WAL")
     cols = {r[1] for r in conn.execute("PRAGMA table_info(read_mtime)").fetchall()}
     if cols and cols != EXPECTED_COLUMNS:
-        conn.execute("DROP TABLE read_mtime")
+        conn.execute("DROP TABLE IF EXISTS read_mtime")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS read_mtime (
@@ -120,11 +130,13 @@ def _file_mtime_ns(path: str) -> int | None:
 
 
 def _canonical(raw_path: str, cwd: str) -> str:
-    if not raw_path:
+    if not isinstance(raw_path, str) or not raw_path:
         return ""
-    if not os.path.isabs(raw_path) and cwd:
-        raw_path = os.path.join(cwd, raw_path)
-    return os.path.realpath(raw_path)
+    expanded = os.path.expanduser(raw_path)
+    if not os.path.isabs(expanded):
+        base = cwd if cwd else os.getcwd()
+        expanded = os.path.join(base, expanded)
+    return os.path.realpath(expanded)
 
 
 def _emit_allow(msg: str) -> None:
@@ -150,15 +162,15 @@ def _emit_deny(reason: str) -> None:
 
 
 def _extract(payload: dict) -> tuple[str, str, str, dict]:
+    if not isinstance(payload, dict):
+        return "", "", "", {}
     tool = payload.get("tool_name") or ""
     sid = payload.get("session_id") or ""
     cwd = payload.get("cwd") or ""
     tool_input = payload.get("tool_input") or {}
-    raw_path = (
-        tool_input.get("file_path")
-        or tool_input.get("notebook_path")
-        or ""
-    )
+    if not isinstance(tool_input, dict):
+        return tool, sid, "", {}
+    raw_path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
     path = _canonical(raw_path, cwd)
     return tool, sid, path, tool_input
 
@@ -200,25 +212,37 @@ def cmd_record(payload: dict) -> None:
     now = int(time.time())
     entry = _build_entry(tool, tool_input, mtime_ns)
 
-    with _open_db() as conn:
-        row = conn.execute(
-            "SELECT accesses_json FROM read_mtime "
-            "WHERE session_id=? AND path=?",
-            (sid, path),
-        ).fetchone()
-        accesses = _load_accesses(row[0]) if row else []
-        accesses.append(entry)
-        if len(accesses) > ACCESS_HISTORY_CAP:
-            accesses = accesses[-ACCESS_HISTORY_CAP:]
-        conn.execute(
-            "INSERT INTO read_mtime(session_id, path, recorded_at, accesses_json) "
-            "VALUES(?, ?, ?, ?) "
-            "ON CONFLICT(session_id, path) DO UPDATE SET "
-            "recorded_at=excluded.recorded_at, "
-            "accesses_json=excluded.accesses_json",
-            (sid, path, now, json.dumps(accesses)),
-        )
-        _prune(conn)
+    conn = _open_db()
+    try:
+        # BEGIN IMMEDIATE acquires a RESERVED lock right away so concurrent
+        # PostToolUse hooks for the same (session_id, path) cannot interleave
+        # SELECT-then-UPSERT and clobber each other's append.
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                "SELECT accesses_json FROM read_mtime "
+                "WHERE session_id=? AND path=?",
+                (sid, path),
+            ).fetchone()
+            accesses = _load_accesses(row[0]) if row else []
+            accesses.append(entry)
+            if len(accesses) > ACCESS_HISTORY_CAP:
+                accesses = accesses[-ACCESS_HISTORY_CAP:]
+            conn.execute(
+                "INSERT INTO read_mtime(session_id, path, recorded_at, accesses_json) "
+                "VALUES(?, ?, ?, ?) "
+                "ON CONFLICT(session_id, path) DO UPDATE SET "
+                "recorded_at=excluded.recorded_at, "
+                "accesses_json=excluded.accesses_json",
+                (sid, path, now, json.dumps(accesses)),
+            )
+            _prune(conn)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.close()
 
 
 def cmd_check(payload: dict) -> None:
@@ -231,12 +255,15 @@ def cmd_check(payload: dict) -> None:
     if current_ns is None:
         return
 
-    with _open_db() as conn:
+    conn = _open_db()
+    try:
         row = conn.execute(
             "SELECT accesses_json FROM read_mtime "
             "WHERE session_id=? AND path=?",
             (sid, path),
         ).fetchone()
+    finally:
+        conn.close()
 
     accesses = _load_accesses(row[0]) if row else []
     same_mtime = [a for a in accesses if a.get("mtime_ns") == current_ns]

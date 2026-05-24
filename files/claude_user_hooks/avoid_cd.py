@@ -8,12 +8,19 @@ PreToolUse hook on Bash. Detects commands starting with `cd ` (or
 bare `cd`) and emits hookSpecificOutput.additionalContext suggesting
 alternatives (pushd/popd, absolute paths, `git -C <repo>`).
 
-The git-push allowlist exception (`git push origin main` must be
-run as the bare string for the permission allowlist to match) is
-documented in the warning text; the hook does not need a separate
-carve-out because that command does not match ^cd\\s.
+Scope is intentionally narrow: only leading-`cd` is flagged. Embedded
+forms (`; cd`, `bash -c 'cd ...'`, `(cd /tmp; ls)`) are NOT flagged
+here; the runtime-symptom detector `detect_cwd_pollution.py`
+(PostToolUseFailure) catches their consequences when they actually
+pollute cwd. Broadening this prefix check would over-flag legitimate
+subshell idioms.
 
-Exit code is always 0 (fail-open).
+The git-push allowlist exception (`git push origin main` must be
+run as the bare string for the permission allowlist to match) does
+not match `^cd\\s`, so no carve-out is required.
+
+Exit code is always 0 (fail-open). Any unexpected exception during
+parsing is swallowed silently so a hook bug never blocks Claude.
 """
 
 from __future__ import annotations
@@ -36,16 +43,19 @@ def _emit(msg: str) -> None:
     sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
-def main() -> int:
-    try:
-        payload = json.loads(sys.stdin.read() or "{}")
-    except json.JSONDecodeError:
-        return 0
+def _run(payload: dict) -> None:
+    if not isinstance(payload, dict):
+        return
     if payload.get("tool_name") != "Bash":
-        return 0
-    cmd = (payload.get("tool_input") or {}).get("command") or ""
+        return
+    tool_input = payload.get("tool_input") or {}
+    if not isinstance(tool_input, dict):
+        return
+    cmd = tool_input.get("command") or ""
+    if not isinstance(cmd, str):
+        return
     if not CD_PREFIX_RE.match(cmd):
-        return 0
+        return
     snippet = cmd if len(cmd) <= 80 else cmd[:80] + "..."
     _emit(
         f"cd で始まる Bash コマンドが検出されました: `{snippet}`\n"
@@ -56,6 +66,14 @@ def main() -> int:
         "例外: `git push origin main` のみ allowlist 文字列マッチのため `-C` 抜き必須 "
         "(詳細は project memory `feedback_git_push_allowlist.md`)。"
     )
+
+
+def main() -> int:
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+        _run(payload)
+    except Exception:
+        pass
     return 0
 
 
