@@ -134,6 +134,15 @@ run apt install -y --no-install-recommends \
 libsixel-bin
 
 
+# markdown-reader (markdown-tui-explorer)   ref. https://github.com/leboiko/markdown-reader/releases
+MDR_VER=1.34.70
+[ -s /tmp/markdown-reader.tar.gz ] ||
+run curl -o /tmp/markdown-reader.tar.gz \
+  -fsSL https://github.com/leboiko/markdown-reader/releases/download/v${MDR_VER}/markdown-reader-x86_64-unknown-linux-gnu.tar.gz
+run tar -xzf /tmp/markdown-reader.tar.gz -C /tmp
+run install -m 0755 /tmp/markdown-reader-${MDR_VER}-x86_64-unknown-linux-gnu/markdown-reader /usr/bin/markdown-reader
+
+
 # X window forwarding and some small programs for testing
 run apt install -y --no-install-recommends \
 xauth jq x11-apps mesa-utils vulkan-tools wayland-utils \
