@@ -345,6 +345,7 @@ copy --nobackup claude_user_hooks/detect_cwd_pollution.py \
                                                 /etc/claude-code/hooks/detect_cwd_pollution.py -m 0755
 copy --nobackup voicevox_claude_alerts          /usr/local/bin/voicevox_claude_alerts -m 0755
 copy --nobackup claude_settings.json            ~/.claude/settings.json
+copy --nobackup claude_managed-settings.json    /etc/claude-code/managed-settings.json
 #copy --nobackup claude_user-CLAUDE.md           ~/.claude/CLAUDE.md
 copy --nobackup claude_system_skills/claude-md-lint.md \
                                                 /etc/claude-code/claude-md-lint.md

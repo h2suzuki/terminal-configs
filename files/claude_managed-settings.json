@@ -1,0 +1,32 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(Read|Edit|MultiEdit)$",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/read_before_edit.py check" } ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "/etc/claude-code/hooks/avoid_cd.py" },
+          { "type": "command", "command": "/etc/claude-code/hooks/deny_compound_git_add.py" },
+          { "type": "command", "command": "/etc/claude-code/hooks/deny_compound_git_commit.py" },
+          { "type": "command", "command": "/etc/claude-code/hooks/check_commit_author.py h2suzuki@gmail.com" },
+          { "type": "command", "command": "/etc/claude-code/hooks/check_commit_format.py" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(Read|Write)$",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/read_before_edit.py record" } ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/detect_cwd_pollution.py" } ]
+      }
+    ]
+  }
+}
