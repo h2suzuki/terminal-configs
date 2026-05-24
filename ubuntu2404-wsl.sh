@@ -116,6 +116,7 @@ run sed -i ~/.bashrc \
     -e '/export\ LS_OPTIONS/s/^\ *#*\ *//' \
     -e 's/xterm-color[^\)]*/xterm-color\|\*-256color/' \
     -e '/eval\ \"\`dircolor/s/^\ *#*\ *//' \
+    -e "/Terminal\ Config/d" \
     -e '/alias\ ls=/s/^\ *#*\ *//' \
     -e '/^alias\ ls=/s/ls\ \$LS_OPTIONS/ls\ --group-directories-first\ \$LS_OPTIONS/' \
     -e '/alias\ tree=/d' \
@@ -133,6 +134,7 @@ run sed -i ~/.bashrc \
     -e '/share_ssh_x11forwarding/d' \
     -e '/NVM_DIR/d'
 
+run echo -e '\\n\\n# ---- Terminal Config ----' '>>' ~/.bashrc
 run echo "alias tree=\\'tree --dirsfirst --noreport -I __pycache__\\'" '>>' ~/.bashrc
 run echo "alias pushd=\\'pushd \\>/dev/null\\'" '>>' ~/.bashrc
 run echo "alias popd=\\'popd \\>/dev/null\\'" '>>' ~/.bashrc
@@ -362,6 +364,7 @@ if [ -n "$LOGIN_USER" ]; then
     run [ -s $BASHRC ]
     run sed -i $BASHRC \
             -e '/^\ *PS1=/s/32m/35m/' \
+            -e "/Terminal\ Config/d" \
             -e '/alias\ tree=/d' \
             -e '/alias\ pushd=/d' \
             -e '/alias\ popd=/d' \
@@ -377,6 +380,7 @@ if [ -n "$LOGIN_USER" ]; then
             -e '/NVM_DIR/d'
 
     # Handy aliases
+    run echo -e '\\n\\n# ---- Terminal Config ----' '>>' $BASHRC
     run echo "alias tree=\\'tree --dirsfirst --noreport -I __pycache__\\'" '>>' $BASHRC
     run echo "alias pushd=\\'pushd \\>/dev/null\\'" '>>' $BASHRC
     run echo "alias popd=\\'popd \\>/dev/null\\'" '>>' $BASHRC
