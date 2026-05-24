@@ -278,57 +278,38 @@ run bash /tmp/claude_install.sh
 
 run uv tool install --force claude-monitor #--system --break-system-packages pasimple
 
-copy --nobackup claude_system-CLAUDE.md         /etc/claude-code/CLAUDE.md
-copy --nobackup claude_statusline.sh            /etc/claude-code/statusline.sh -m 0755
-copy --nobackup claude_system_hooks/claude-md-lint.sh \
-                                                /etc/claude-code/claude-md-lint.sh -m 0755
-copy --nobackup claude_system_hooks/read_before_edit.py \
-                                                /etc/claude-code/hooks/read_before_edit.py -m 0755
-copy --nobackup claude_user_hooks/avoid_cd.py   /etc/claude-code/hooks/avoid_cd.py -m 0755
-copy --nobackup claude_user_hooks/deny_compound_git_add.py \
-                                                /etc/claude-code/hooks/deny_compound_git_add.py -m 0755
-copy --nobackup claude_user_hooks/deny_compound_git_commit.py \
-                                                /etc/claude-code/hooks/deny_compound_git_commit.py -m 0755
-copy --nobackup claude_user_hooks/check_commit_author.py \
-                                                /etc/claude-code/hooks/check_commit_author.py -m 0755
-copy --nobackup claude_user_hooks/check_commit_format.py \
-                                                /etc/claude-code/hooks/check_commit_format.py -m 0755
-copy --nobackup claude_user_hooks/detect_cwd_pollution.py \
-                                                /etc/claude-code/hooks/detect_cwd_pollution.py -m 0755
+copy --nobackup claude_system-CLAUDE.md                         /etc/claude-code/CLAUDE.md
+copy --nobackup claude_statusline.sh                            /etc/claude-code/statusline.sh -m 0755
+
+copy --nobackup claude_system_hooks/claude-md-lint.sh           /etc/claude-code/claude-md-lint.sh -m 0755
+copy --nobackup claude_system_hooks/read_before_edit.py         /etc/claude-code/hooks/read_before_edit.py -m 0755
+copy --nobackup claude_user_hooks/avoid_cd.py                   /etc/claude-code/hooks/avoid_cd.py -m 0755
+copy --nobackup claude_user_hooks/deny_compound_git_add.py      /etc/claude-code/hooks/deny_compound_git_add.py -m 0755
+copy --nobackup claude_user_hooks/deny_compound_git_commit.py   /etc/claude-code/hooks/deny_compound_git_commit.py -m 0755
+copy --nobackup claude_user_hooks/check_commit_author.py        /etc/claude-code/hooks/check_commit_author.py -m 0755
+copy --nobackup claude_user_hooks/check_commit_format.py        /etc/claude-code/hooks/check_commit_format.py -m 0755
+copy --nobackup claude_user_hooks/detect_cwd_pollution.py       /etc/claude-code/hooks/detect_cwd_pollution.py -m 0755
+
 copy --nobackup voicevox_claude_alerts          /usr/local/bin/voicevox_claude_alerts -m 0755
 copy --nobackup claude_settings.json            ~/.claude/settings.json
 copy --nobackup claude_managed-settings.json    /etc/claude-code/managed-settings.json
 #copy --nobackup claude_user-CLAUDE.md           ~/.claude/CLAUDE.md
-copy --nobackup claude_system_skills/claude-md-lint.md \
-                                                /etc/claude-code/claude-md-lint.md
-copy --nobackup claude_system_skills/bash-writing-rules.md \
-                                                /etc/claude-code/bash-writing-rules.md
-copy --nobackup claude_system_skills/verbalize-before-action.md \
-                                                /etc/claude-code/verbalize-before-action.md
-copy --nobackup claude_system_skills/scope-mismatch-detector.md \
-                                                /etc/claude-code/scope-mismatch-detector.md
-copy --nobackup claude_system_skills/subagent-gate.md \
-                                                /etc/claude-code/subagent-gate.md
-copy --nobackup claude_system_skills/debug-workflow.md \
-                                                /etc/claude-code/debug-workflow.md
-copy --nobackup claude_system_skills/lost-track-recover.md \
-                                                /etc/claude-code/lost-track-recover.md
-copy --nobackup claude_system_skills/document-editor.md \
-                                                /etc/claude-code/document-editor.md
-copy --nobackup claude_user_skills/verify-spec-before-dismissal.md \
-                                                /etc/claude-code/verify-spec-before-dismissal.md
-copy --nobackup claude_user_skills/verify-before-asserting.md \
-                                                /etc/claude-code/verify-before-asserting.md
-copy --nobackup claude_user_skills/no-routing-questions.md \
-                                                /etc/claude-code/no-routing-questions.md
-copy --nobackup claude_user_skills/no-redundant-design-litigation.md \
-                                                /etc/claude-code/no-redundant-design-litigation.md
-copy --nobackup claude_user_skills/commit-discipline.md \
-                                                /etc/claude-code/commit-discipline.md
-copy --nobackup claude_user_skills/claude-code-guide.md \
-                                                /etc/claude-code/claude-code-guide.md
-copy --nobackup claude_user_skills/memory-routing.md \
-                                                /etc/claude-code/memory-routing.md
+
+copy --nobackup claude_system_skills/claude-md-lint.md              /etc/claude-code/claude-md-lint.md
+copy --nobackup claude_system_skills/bash-writing-rules.md          /etc/claude-code/bash-writing-rules.md
+copy --nobackup claude_system_skills/verbalize-before-action.md     /etc/claude-code/verbalize-before-action.md
+copy --nobackup claude_system_skills/scope-mismatch-detector.md     /etc/claude-code/scope-mismatch-detector.md
+copy --nobackup claude_system_skills/subagent-gate.md               /etc/claude-code/subagent-gate.md
+copy --nobackup claude_system_skills/debug-workflow.md              /etc/claude-code/debug-workflow.md
+copy --nobackup claude_system_skills/lost-track-recover.md          /etc/claude-code/lost-track-recover.md
+copy --nobackup claude_system_skills/document-editor.md             /etc/claude-code/document-editor.md
+copy --nobackup claude_user_skills/verify-spec-before-dismissal.md  /etc/claude-code/verify-spec-before-dismissal.md
+copy --nobackup claude_user_skills/verify-before-asserting.md       /etc/claude-code/verify-before-asserting.md
+copy --nobackup claude_user_skills/no-routing-questions.md          /etc/claude-code/no-routing-questions.md
+copy --nobackup claude_user_skills/no-redundant-design-litigation.md /etc/claude-code/no-redundant-design-litigation.md
+copy --nobackup claude_user_skills/commit-discipline.md             /etc/claude-code/commit-discipline.md
+copy --nobackup claude_user_skills/claude-code-guide.md             /etc/claude-code/claude-code-guide.md
+copy --nobackup claude_user_skills/memory-routing.md                /etc/claude-code/memory-routing.md
 
 run install -d ~/.claude/skills/claude-md-lint
 run install -d ~/.claude/skills/bash-writing-rules
@@ -345,21 +326,22 @@ run install -d ~/.claude/skills/no-redundant-design-litigation
 run install -d ~/.claude/skills/commit-discipline
 run install -d ~/.claude/skills/claude-code-guide
 run install -d ~/.claude/skills/memory-routing
-run ln -sfn /etc/claude-code/claude-md-lint.md  ~/.claude/skills/claude-md-lint/SKILL.md
-run ln -sfn /etc/claude-code/bash-writing-rules.md ~/.claude/skills/bash-writing-rules/SKILL.md
-run ln -sfn /etc/claude-code/verbalize-before-action.md ~/.claude/skills/verbalize-before-action/SKILL.md
-run ln -sfn /etc/claude-code/scope-mismatch-detector.md ~/.claude/skills/scope-mismatch-detector/SKILL.md
-run ln -sfn /etc/claude-code/subagent-gate.md ~/.claude/skills/subagent-gate/SKILL.md
-run ln -sfn /etc/claude-code/debug-workflow.md ~/.claude/skills/debug-workflow/SKILL.md
-run ln -sfn /etc/claude-code/lost-track-recover.md ~/.claude/skills/lost-track-recover/SKILL.md
-run ln -sfn /etc/claude-code/document-editor.md ~/.claude/skills/document-editor/SKILL.md
-run ln -sfn /etc/claude-code/verify-spec-before-dismissal.md ~/.claude/skills/verify-spec-before-dismissal/SKILL.md
-run ln -sfn /etc/claude-code/verify-before-asserting.md ~/.claude/skills/verify-before-asserting/SKILL.md
-run ln -sfn /etc/claude-code/no-routing-questions.md ~/.claude/skills/no-routing-questions/SKILL.md
-run ln -sfn /etc/claude-code/no-redundant-design-litigation.md ~/.claude/skills/no-redundant-design-litigation/SKILL.md
-run ln -sfn /etc/claude-code/commit-discipline.md ~/.claude/skills/commit-discipline/SKILL.md
-run ln -sfn /etc/claude-code/claude-code-guide.md ~/.claude/skills/claude-code-guide/SKILL.md
-run ln -sfn /etc/claude-code/memory-routing.md ~/.claude/skills/memory-routing/SKILL.md
+
+run ln -sfn /etc/claude-code/claude-md-lint.md                  ~/.claude/skills/claude-md-lint/SKILL.md
+run ln -sfn /etc/claude-code/bash-writing-rules.md              ~/.claude/skills/bash-writing-rules/SKILL.md
+run ln -sfn /etc/claude-code/verbalize-before-action.md         ~/.claude/skills/verbalize-before-action/SKILL.md
+run ln -sfn /etc/claude-code/scope-mismatch-detector.md         ~/.claude/skills/scope-mismatch-detector/SKILL.md
+run ln -sfn /etc/claude-code/subagent-gate.md                   ~/.claude/skills/subagent-gate/SKILL.md
+run ln -sfn /etc/claude-code/debug-workflow.md                  ~/.claude/skills/debug-workflow/SKILL.md
+run ln -sfn /etc/claude-code/lost-track-recover.md              ~/.claude/skills/lost-track-recover/SKILL.md
+run ln -sfn /etc/claude-code/document-editor.md                 ~/.claude/skills/document-editor/SKILL.md
+run ln -sfn /etc/claude-code/verify-spec-before-dismissal.md    ~/.claude/skills/verify-spec-before-dismissal/SKILL.md
+run ln -sfn /etc/claude-code/verify-before-asserting.md         ~/.claude/skills/verify-before-asserting/SKILL.md
+run ln -sfn /etc/claude-code/no-routing-questions.md            ~/.claude/skills/no-routing-questions/SKILL.md
+run ln -sfn /etc/claude-code/no-redundant-design-litigation.md  ~/.claude/skills/no-redundant-design-litigation/SKILL.md
+run ln -sfn /etc/claude-code/commit-discipline.md               ~/.claude/skills/commit-discipline/SKILL.md
+run ln -sfn /etc/claude-code/claude-code-guide.md               ~/.claude/skills/claude-code-guide/SKILL.md
+run ln -sfn /etc/claude-code/memory-routing.md                  ~/.claude/skills/memory-routing/SKILL.md
 
 # Tools used by Claude Code (bubblewrap/socat: Sandbox, poppler-utils: PDF reading)
 run apt install -y --no-install-recommends \
