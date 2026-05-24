@@ -12,7 +12,6 @@
 which tty       >/dev/null || { echo "Cannot find tty";         exit 1; }
 which readlink  >/dev/null || { echo "Cannot find readlink";    exit 1; }
 which cmp       >/dev/null || { echo "Cannot find cmp";         exit 1; }
-which docker    >/dev/null || { echo "Cannot find docker";      exit 1; }
 which git       >/dev/null || { echo "Cannot find git";         exit 1; }
 which node      >/dev/null || { echo "Cannot find node";        exit 1; }
 
@@ -86,6 +85,21 @@ copy()
     fi
 }
 
+
+
+# Docker (required by SigNoz)
+run apt remove -y \
+docker.io docker-compose docker-compose-v2 docker-doc podman-docker containerd runc
+
+[ -s /tmp/get-docker.sh ] ||
+run curl -o /tmp/get-docker.sh -fsSL https://get.docker.com
+run sed -i /tmp/get-docker.sh -e 's/sleep\ 20/:/'
+run bash /tmp/get-docker.sh
+
+run systemctl enable docker
+run systemctl start docker
+
+run docker run --rm hello-world
 
 
 # sqlite3 is used below to fetch SigNoz's ORG_ID
