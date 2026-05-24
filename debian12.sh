@@ -64,15 +64,16 @@ copy()
     shift 2
 
     # When the caller did not pass -m, default the mode by extension:
-    #   *.md  -> 0644 (read-only markdown content)
-    #   else  -> 0755 (matches install's own default; scripts / configs)
+    #   *.md / *.json / *.jsonl  -> 0644 (read-only data)
+    #   else                     -> 0755 (matches install's own default;
+    #                                     scripts / configs)
     # Security-sensitive targets (sudoers, secrets) must pass -m explicitly.
     case " $* " in
         *" -m "*) ;;
         *)
             case "$FNAME" in
-                *.md) set -- -m 0644 "$@" ;;
-                *)    set -- -m 0755 "$@" ;;
+                *.md|*.json|*.jsonl) set -- -m 0644 "$@" ;;
+                *)                   set -- -m 0755 "$@" ;;
             esac
             ;;
     esac
