@@ -295,6 +295,18 @@ run apt install -y --no-install-recommends \
 bubblewrap socat poppler-utils
 
 
+# Antigravity CLI (https://antigravity.google/)
+[ -s /tmp/antigravity_cli_install.sh ] ||
+run curl -o /tmp/antigravity_cli_install.sh \
+  -fsSL https://antigravity.google/cli/install.sh
+chmod u-s,o+r /tmp/antigravity_cli_install.sh
+
+sed -i /tmp/antigravity_cli_install.sh -e '/BINARY_PATH.*CUSTOM_DIR/s#DIR\".*#DIR\" --skip-aliases --skip-path || true#'
+
+rm -f "/usr/local/bin/agy"
+run bash /tmp/antigravity_cli_install.sh --dir /usr/local/bin
+
+
 # Codex CLI (https://github.com/openai/codex, needs Node.js 18+)
 run npm install -g @openai/codex
 
