@@ -583,19 +583,18 @@ $LAST_SENTENCE" "${EVENT_PHRASES[Stop]}"
         fi
         ;;
       permission_prompt)
-        # message の文言で 2 パターンに分岐（実観測ベース、Claude Code 2.1.123）:
+        # message の文言で attention/permission の 2 パターンを認識
+        # （実観測ベース、Claude Code 2.1.123）:
         #   "Claude Code needs your attention"     → AskUserQuestion 等
         #   "Claude needs your permission to use *" → Bash 等のツール許可
-        # それ以外の未知パターンは silent（誤発話より沈黙を優先）。
+        # どちらも統一文言で発話する。 attention とツール許可を区別する
+        # 意味が薄く、permission 用文言が場面と合わないことがあるため。
+        # 未知パターンは silent（誤発話より沈黙を優先）。
         # 発話した場合のみ SPOKE_MARKER を touch（沈黙時は idle 抑制も不要）。
         NOTIF_MSG=$(printf '%s' "$INPUT" | jq -r '.message // ""')
         case "$NOTIF_MSG" in
-          *"needs your attention"*)
-            speak_cached "質問がありました。"
-            touch "$SPOKE_MARKER"
-            ;;
-          *"needs your permission"*)
-            speak_cached "権限が必要でした。"
+          *"needs your attention"*|*"needs your permission"*)
+            speak_cached "お伺いしたいことがあります。"
             touch "$SPOKE_MARKER"
             ;;
         esac
