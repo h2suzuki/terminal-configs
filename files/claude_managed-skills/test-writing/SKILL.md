@@ -1,6 +1,6 @@
 ---
 name: test-writing
-description: Rules for creating / editing tests (intent encoding, 並行処理可視化, verify 対象拡張).
+description: Rules for creating / editing tests (intent encoding, concurrency visibility, verify target expansion).
 when_to_use: TRIGGER when editing test files. SKIP for production code (use code-conventions).
 paths: "**/test_*.py, **/*_test.py, **/tests/**, **/__tests__/**, **/*.test.ts, **/*.test.tsx, **/*.test.js, **/*.spec.ts, **/*.spec.tsx, **/*.spec.js, **/*_test.go, **/*_spec.rb, **/spec/**, **/*Test.java, **/*Tests.cs"
 ---

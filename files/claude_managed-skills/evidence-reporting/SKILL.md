@@ -1,6 +1,6 @@
 ---
 name: evidence-reporting
-description: Rules to consult before asserting 判定 / 推奨 / 結論 / 規模影響評価.
+description: Rules to consult before asserting judgment / recommendation / conclusion / scale-impact assessment.
 when_to_use: TRIGGER when about to use evaluative terms like "大改造" / "軽微" / "影響大" / "リスクが高い" / "具体的" / "必要範囲" / "アーキテクチャ見直し". SKIP for mechanical tool output reports.
 ---
 
