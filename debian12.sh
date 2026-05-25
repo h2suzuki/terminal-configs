@@ -258,33 +258,37 @@ run bash /tmp/claude_install.sh
 
 run uv tool install --force claude-monitor #--system --break-system-packages pasimple
 
+
+# Construct /etc/claude-code/ from scratch
 rm -rf /etc/claude-code/
+copy --nobackup claude_statusline.sh                        /etc/claude-code/statusline.sh
+copy --nobackup claude_managed-CLAUDE.md                    /etc/claude-code/CLAUDE.md
+copy --nobackup claude_managed-settings.json                /etc/claude-code/managed-settings.json
+copy_dir        claude_managed-hooks/                       /etc/claude-code/hooks/
+copy_dir        claude_managed-skills/                      /etc/claude-code/skills/
 
-# === Managed (org-shared, /etc/claude-code/) ===
-copy --nobackup claude_managed-CLAUDE.md     /etc/claude-code/CLAUDE.md
-copy --nobackup claude_statusline.sh         /etc/claude-code/statusline.sh         -m 0755
-copy --nobackup claude_managed-settings.json /etc/claude-code/managed-settings.json
-copy_dir        claude_managed-hooks/        /etc/claude-code/hooks/
-copy_dir        claude_managed-skills/       /etc/claude-code/skills/
+# Populate ~/.claude/ (try to preserve the existing contents)
+[ -e ~/.claude/CLAUDE.md ] ||
+copy --nobackup claude_user-CLAUDE.md                       ~/.claude/CLAUDE.md
+copy --nobackup claude_user-settings.json                   ~/.claude/settings.json
+copy --nobackup claude_user-hooks/check_commit_author.py    ~/.claude/hooks/check_commit_author.py
+copy --nobackup claude_user-hooks/push_prompting_check.py   ~/.claude/hooks/push_prompting_check.py
 
-# Symlink farm: managed skills appear under ~/.claude/skills/ so `/skill-name` works
+# Install the user skills
+pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
+for skill_dir in */; do
+    [ -d "$skill_dir" ] || continue
+    copy_dir "claude_user-skills/$skill_dir" ~/.claude/skills/$skill_dir
+done
+popd >/dev/null
+
+# Symlink the org skills
 for skill_dir in /etc/claude-code/skills/*; do
+    [ -d "$skill_dir" ] || continue
     rm -rf ~/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
     run ln -sfn "$skill_dir" ~/.claude/skills/
 done
 
-# === User (per-user, ~/.claude/) ===
-[ -e ~/.claude/CLAUDE.md ] ||
-copy --nobackup claude_user-CLAUDE.md     ~/.claude/CLAUDE.md
-copy --nobackup claude_user-settings.json ~/.claude/settings.json
-copy --nobackup claude_user-hooks/check_commit_author.py  ~/.claude/hooks/check_commit_author.py  -m 0755
-copy --nobackup claude_user-hooks/push_prompting_check.py ~/.claude/hooks/push_prompting_check.py -m 0755
-
-pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
-for sk in */; do
-    copy_dir "claude_user-skills/$sk" ~/.claude/skills/$sk
-done
-popd >/dev/null
 
 # Tools used by Claude Code (bubblewrap/socat: Sandbox, poppler-utils: PDF reading)
 run apt install -y --no-install-recommends \
@@ -360,21 +364,28 @@ EOF
     run sudo -i -u $LOGIN_USER bash -i -c '"npm uninstall -g @anthropic-ai/claude-code || true"'
     run sudo -i -u $LOGIN_USER bash -i -c '"bash /tmp/claude_install.sh"'
     run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g @openai/codex"'
-    copy --nobackup claude_user-settings.json ~$LOGIN_USER/.claude/settings.json --owner $LOGIN_USER
+
+    # Populate ~$LOGIN_USER/.claude/ (try to preserve the existing contents)
     [ -e ~$LOGIN_USER/.claude/CLAUDE.md ] ||
-    copy --nobackup claude_user-CLAUDE.md ~$LOGIN_USER/.claude/CLAUDE.md --owner $LOGIN_USER
-    copy --nobackup claude_user-hooks/check_commit_author.py  ~$LOGIN_USER/.claude/hooks/check_commit_author.py  -m 0755 --owner $LOGIN_USER
-    copy --nobackup claude_user-hooks/push_prompting_check.py ~$LOGIN_USER/.claude/hooks/push_prompting_check.py -m 0755 --owner $LOGIN_USER
+    copy --nobackup claude_user-CLAUDE.md                       ~$LOGIN_USER/.claude/CLAUDE.md --owner $LOGIN_USER
+    copy --nobackup claude_user-settings.json                   ~$LOGIN_USER/.claude/settings.json --owner $LOGIN_USER
+    copy --nobackup claude_user-hooks/check_commit_author.py    ~$LOGIN_USER/.claude/hooks/check_commit_author.py  --owner $LOGIN_USER
+    copy --nobackup claude_user-hooks/push_prompting_check.py   ~$LOGIN_USER/.claude/hooks/push_prompting_check.py --owner $LOGIN_USER
+
+    # Install the user skills
+    pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
+    for skill_dir in */; do
+        [ -d "$skill_dir" ] || continue
+        copy_dir "claude_user-skills/$skill_dir" ~$LOGIN_USER/.claude/skills/$skill_dir --owner $LOGIN_USER
+    done
+    popd >/dev/null
+
+    # Symlink the org skills
     for skill_dir in /etc/claude-code/skills/*; do
+        [ -d "$skill_dir" ] || continue
         rm -rf ~$LOGIN_USER/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
         run sudo -i -u $LOGIN_USER ln -sfn "$skill_dir" ~$LOGIN_USER/.claude/skills/
     done
-
-    pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
-    for sk in */; do
-        copy_dir "claude_user-skills/$sk" ~$LOGIN_USER/.claude/skills/$sk --owner $LOGIN_USER
-    done
-    popd >/dev/null
 
 else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
