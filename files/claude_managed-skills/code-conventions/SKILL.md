@@ -1,8 +1,8 @@
 ---
 name: code-conventions
-description: Rules for creating / editing source code (mode classification, convention compliance, wasteful pattern avoidance, LLM API restrictions).
-when_to_use: TRIGGER when editing source code. SKIP for bash (use bash-writing-rules) and tests (use test-writing).
-paths: "**/*.py, **/*.ts, **/*.tsx, **/*.js, **/*.jsx, **/*.mjs, **/*.cjs, **/*.go, **/*.rs, **/*.rb, **/*.java, **/*.kt, **/*.swift, **/*.c, **/*.cc, **/*.cpp, **/*.h, **/*.hpp"
+description: Universal source code rules (mode classification, convention compliance, wasteful pattern avoidance, LLM API restrictions). Applies to any language; language-specific add-ons (bash-writing-rules, test-writing) layer on top.
+when_to_use: TRIGGER when editing source code in any language (including bash, tests). Stacks additively with language-specific add-on skills — do not treat add-ons as replacements.
+paths: "**/*.py, **/*.ts, **/*.tsx, **/*.js, **/*.jsx, **/*.mjs, **/*.cjs, **/*.go, **/*.rs, **/*.rb, **/*.java, **/*.kt, **/*.swift, **/*.c, **/*.cc, **/*.cpp, **/*.h, **/*.hpp, **/*.sh, **/*.bash, **/*.zsh, **/*.fish"
 ---
 
 # Code Conventions
