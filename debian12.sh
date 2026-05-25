@@ -154,11 +154,11 @@ copy pulseaudio-forwarding.sh  /etc/profile.d/pulseaudio-forwarding.sh
 run chmod 0644 /etc/profile.d/pulseaudio-forwarding.sh
 
 
-# Neovim, Git / Git-LFS, tree, ripgrep
+# Neovim, Git / Git-LFS, tree, ripgrep, shellcheck
 run apt update
 run apt remove -y vim
 run apt install -y --no-install-recommends \
-neovim git git-lfs tree ripgrep
+neovim git git-lfs tree ripgrep shellcheck
 
 copy --nobackup sysinit.vim /etc/xdg/nvim/sysinit.vim   # Neovim system-wide init file
 
