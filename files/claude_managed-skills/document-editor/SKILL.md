@@ -45,7 +45,7 @@ fork 内で **対象 file を直接 Edit/Write** して書き戻す。 main sess
 
 - **syntactic style**: paren-density / enumeration-separator / 句読点 / 改行・空行 ルール 等。 別途 syntactic style checker を持つプロジェクトに任せる前提。
 - **factual rewrite**: 設計変更や API 仕様変更を伴う書き換え。 本 skill は「読者基準で整える」 だけ。
-- **ephemeral 文章**: chat 応答 / todos.md / drafts/* など session 越えで残らない文章。
+- **ephemeral 文章**: chat 応答 / drafts/* など fork overhead に見合わない短命な文章。 todos.md は session 越しに残る永続 sink だが、 短い checklist として in-place 編集で十分なため同じく対象外。
 - **intent change**: 元の意図を変える書き換え (intent-preserving edit のみ)。
 - **短いコードコメント (4 行以下)**: fork overhead に見合わない。 inline で Claude が direct 適用。
 
