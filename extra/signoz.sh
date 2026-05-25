@@ -164,9 +164,10 @@ if [ -n "$LOGIN_USER" ]; then
     run sed -i $BASHRC \
             -e '/source\ \\/etc\\/claude-code\\/env\\.sh/d'
     run echo "source /etc/claude-code/env.sh" '>>' $BASHRC
+
+    run usermod -aG docker "$LOGIN_USER"
 else
     echo -e "${COLOR_RED}No login user found... omitting to source env.sh from ~/.bashrc${COLOR_CLEAR}"
 fi
-
 
 # END
