@@ -1,7 +1,7 @@
 ---
 name: code-conventions
-description: コード新規作成・編集時のルール集 (mode 分類・convention 遵守・浪費 pattern 回避・LLM API 制限 等)。
-when_to_use: TRIGGER when editing source code. SKIP for bash (use bash-writing-rules) and tests (use test-writing)。
+description: Rules for creating / editing source code (mode 分類, convention 遵守, 浪費 pattern 回避, LLM API 制限).
+when_to_use: TRIGGER when editing source code. SKIP for bash (use bash-writing-rules) and tests (use test-writing).
 paths: "**/*.py, **/*.ts, **/*.tsx, **/*.js, **/*.jsx, **/*.mjs, **/*.cjs, **/*.go, **/*.rs, **/*.rb, **/*.java, **/*.kt, **/*.swift, **/*.c, **/*.cc, **/*.cpp, **/*.h, **/*.hpp"
 ---
 
