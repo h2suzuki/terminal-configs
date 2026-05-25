@@ -96,6 +96,8 @@ copy()
 
 
 # Mirror files/$1's children into $2 (DST contents are wiped first).
+# __pycache__ subdirs are removed from the destination after copy (cp -r
+# would otherwise deploy Python bytecode from source).
 copy_dir()
 {
     DNAME=files/${1%/}
@@ -107,6 +109,7 @@ copy_dir()
     for child in "$TOP_DIR/$DNAME"/*; do
         run cp -r "$child" "$DST/"
     done
+    find "$DST" -depth -type d -name __pycache__ -exec rm -rf {} +
 }
 
 
@@ -297,17 +300,9 @@ rm -rf /etc/claude-code/
 copy --nobackup claude_managed-CLAUDE.md                        /etc/claude-code/CLAUDE.md
 copy --nobackup claude_statusline.sh                            /etc/claude-code/statusline.sh -m 0755
 
-copy --nobackup claude_managed-hooks/claude-md-lint.sh          /etc/claude-code/hooks/claude-md-lint.sh -m 0755
-copy --nobackup claude_managed-hooks/read_before_edit.py        /etc/claude-code/hooks/read_before_edit.py -m 0755
-copy --nobackup claude_managed-hooks/avoid_cd.py                  /etc/claude-code/hooks/avoid_cd.py -m 0755
-copy --nobackup claude_managed-hooks/deny_compound_git_add.py     /etc/claude-code/hooks/deny_compound_git_add.py -m 0755
-copy --nobackup claude_managed-hooks/deny_compound_git_commit.py  /etc/claude-code/hooks/deny_compound_git_commit.py -m 0755
-copy --nobackup claude_user-hooks/check_commit_author.py        /etc/claude-code/hooks/check_commit_author.py -m 0755
-copy --nobackup claude_managed-hooks/check_commit_format.py       /etc/claude-code/hooks/check_commit_format.py -m 0755
-copy --nobackup claude_managed-hooks/detect_cwd_pollution.py      /etc/claude-code/hooks/detect_cwd_pollution.py -m 0755
-copy --nobackup claude_managed-hooks/stop_checks.py               /etc/claude-code/hooks/stop_checks.py -m 0755
-copy --nobackup claude_managed-hooks/handoff_uncommitted_check.py /etc/claude-code/hooks/handoff_uncommitted_check.py -m 0755
-copy --nobackup claude_user-hooks/push_prompting_check.py         /etc/claude-code/hooks/push_prompting_check.py -m 0755
+copy_dir claude_managed-hooks/ /etc/claude-code/hooks/
+copy --nobackup claude_user-hooks/check_commit_author.py  /etc/claude-code/hooks/check_commit_author.py  -m 0755
+copy --nobackup claude_user-hooks/push_prompting_check.py /etc/claude-code/hooks/push_prompting_check.py -m 0755
 
 copy --nobackup claude_user-settings.json       ~/.claude/settings.json
 copy --nobackup claude_managed-settings.json    /etc/claude-code/managed-settings.json
