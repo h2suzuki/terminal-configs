@@ -38,11 +38,3 @@ token の価値を最大化する指針を述べる。
 
 ## 開発
 
-### b. テスト
-
-テストが encode すべき intent と、観察可能性が必要な領域を区分する。
-
-- テストは intent（WHY）を encode する。business logic が変われば必ず fail するように書く
-- 並行処理、共有状態、I/O 順序、多 component 連携、external resource 操作、event 順序依存 のいずれかが関わる場合は「気づきにくい」と仮定し、可視化（log 追加 / trace / 状態 dump）を作って観察してから完了判定する。race condition / 処理順序 / 冗長計算 / 並列度 / 表示・出力の質など観察可能な動作品質も verify 対象
-
-
