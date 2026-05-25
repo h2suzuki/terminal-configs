@@ -378,6 +378,7 @@ run echo 'export BROWSER=\"$BROWSER\"' '>>' ~/.bashrc
 LOGIN_USER="$(logname)"
 [ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
 if [ -n "$LOGIN_USER" ]; then
+    LOGIN_GROUP="$(id -gn "$LOGIN_USER")"
     BASHRC="~$LOGIN_USER/.bashrc"
     run [ -s $BASHRC ]
     run sed -i $BASHRC \
@@ -418,8 +419,8 @@ if [ -n "$LOGIN_USER" ]; then
     # Set the default browser as the one on the Windows host
     run echo 'export BROWSER=\"$BROWSER\"' '>>' $BASHRC
 
-    run install --mode 0755 --owner $LOGIN_USER --directory ~$LOGIN_USER/.nvm
-    run install --mode 0644 --owner $LOGIN_USER "$HOME/.nvm/nvm.sh" ~$LOGIN_USER/.nvm/nvm.sh
+    run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory ~$LOGIN_USER/.nvm
+    run install --mode 0644 --owner $LOGIN_USER --group $LOGIN_GROUP "$HOME/.nvm/nvm.sh" ~$LOGIN_USER/.nvm/nvm.sh
 
     # Append auto-loading of nvm.sh
     run cat ">>" $BASHRC <<"EOF"
@@ -436,22 +437,22 @@ EOF
     run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g @openai/codex"'
 
     # Pre-create user-owned parents — `install -D/-d --owner` only owners the final component.
-    run install --mode 0755 --owner $LOGIN_USER --directory ~$LOGIN_USER/.claude
-    run install --mode 0755 --owner $LOGIN_USER --directory ~$LOGIN_USER/.claude/hooks
-    run install --mode 0755 --owner $LOGIN_USER --directory ~$LOGIN_USER/.claude/skills
+    run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory ~$LOGIN_USER/.claude
+    run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory ~$LOGIN_USER/.claude/hooks
+    run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory ~$LOGIN_USER/.claude/skills
 
     # Populate ~$LOGIN_USER/.claude/ (try to preserve the existing contents)
     [ -e ~$LOGIN_USER/.claude/CLAUDE.md ] ||
-    copy --nobackup claude_user-CLAUDE.md                       ~$LOGIN_USER/.claude/CLAUDE.md --owner $LOGIN_USER
-    copy --nobackup claude_user-settings.json                   ~$LOGIN_USER/.claude/settings.json --owner $LOGIN_USER
-    copy --nobackup claude_user-hooks/check_commit_author.py    ~$LOGIN_USER/.claude/hooks/check_commit_author.py  --owner $LOGIN_USER
-    copy --nobackup claude_user-hooks/push_prompting_check.py   ~$LOGIN_USER/.claude/hooks/push_prompting_check.py --owner $LOGIN_USER
+    copy --nobackup claude_user-CLAUDE.md                       ~$LOGIN_USER/.claude/CLAUDE.md --owner $LOGIN_USER --group $LOGIN_GROUP
+    copy --nobackup claude_user-settings.json                   ~$LOGIN_USER/.claude/settings.json --owner $LOGIN_USER --group $LOGIN_GROUP
+    copy --nobackup claude_user-hooks/check_commit_author.py    ~$LOGIN_USER/.claude/hooks/check_commit_author.py  --owner $LOGIN_USER --group $LOGIN_GROUP
+    copy --nobackup claude_user-hooks/push_prompting_check.py   ~$LOGIN_USER/.claude/hooks/push_prompting_check.py --owner $LOGIN_USER --group $LOGIN_GROUP
 
     # Install the user skills
     pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
     for skill_dir in */; do
         [ -d "$skill_dir" ] || continue
-        copy_dir "claude_user-skills/$skill_dir" ~$LOGIN_USER/.claude/skills/$skill_dir --owner $LOGIN_USER
+        copy_dir "claude_user-skills/$skill_dir" ~$LOGIN_USER/.claude/skills/$skill_dir --owner $LOGIN_USER --group $LOGIN_GROUP
     done
     popd >/dev/null
 
