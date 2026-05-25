@@ -92,8 +92,7 @@ copy()
 
 
 # Mirror files/$1's children into $2 (DST contents are wiped first).
-# __pycache__ subdirs are removed from the destination after copy (cp -r
-# would otherwise deploy Python bytecode from source).
+# Top-level __pycache__ in source is skipped to avoid deploying Python bytecode.
 copy_dir()
 {
     DNAME=files/${1%/}
@@ -112,9 +111,9 @@ copy_dir()
     [ -d "$DST" ] || { rm -rf "$DST"; run install --directory "$@" "$DST"; }
     rm -rf "$DST"/*
     for child in "$TOP_DIR/$DNAME"/*; do
+        [ "${child##*/}" = __pycache__ ] && continue
         run cp -r "$child" "$DST/"
     done
-    find "$DST" -depth -type d -name __pycache__ -exec rm -rf {} +
     [ -n "$OWNER" ] && run chown -R "$OWNER:" "$DST"
 }
 
