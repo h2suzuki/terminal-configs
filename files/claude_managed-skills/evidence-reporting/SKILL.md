@@ -1,7 +1,7 @@
 ---
 name: evidence-reporting
-description: 判定・推奨・結論・規模影響評価を発話する直前に参照する用語定義集。規模表現 (大改造 / 軽微 / 影響大 / アーキテクチャ見直し / リスクが高い 等) の意味、「具体的」 (影響ファイル数 / 節 / パラグラフ / 呼び出し元 / 触れるレイヤー / 変わる依存関係) の意味、「必要範囲」 (全体 Read ではなく offset / limit / grep 先行で判定根拠だけ取得) の意味。
-when_to_use: TRIGGER when about to assert a judgment / recommendation / conclusion / scale-impact assessment ("大改造" / "軽微" / "影響大" / "アーキテクチャ見直し" / "リスクが高い" / "こちらの方が改造が少ない" 等), or when about to use 「具体的」 「必要範囲」 in a report and need to be precise. SKIP for mechanical reports of tool output or simple confirmations.
+description: 判定・推奨・結論・規模影響評価の発話直前に参照する用語定義集 (規模表現・「具体的」・「必要範囲」 の意味)。
+when_to_use: TRIGGER when about to use 「大改造」「軽微」「影響大」「リスクが高い」「具体的」「必要範囲」 等の評価語。 SKIP for mechanical tool output reports。
 ---
 
 # Evidence Reporting

@@ -1,7 +1,7 @@
 ---
 name: test-writing
-description: テスト新規作成・編集時のルール。intent (WHY) encoding (business logic 変更で必ず fail するように書く)、並行処理 / 共有状態 / I/O 順序 / 多 component / external resource / event 順序依存が絡むケースでの可視化 (log / trace / 状態 dump) 要求、race condition / 処理順序 / 冗長計算 / 並列度 / 表示出力の質の verify 対象拡張。
-when_to_use: TRIGGER when editing or creating test files (pytest / vitest / jest / go test / rspec / JUnit / xunit). Specifically when path matches test naming convention (test_*.py, *_test.py, tests/, __tests__/, *.test.ts, *_test.go, *_spec.rb). SKIP for production code (use code-conventions skill).
+description: テスト新規作成・編集時のルール (intent encoding・並行処理可視化・verify 対象拡張)。
+when_to_use: TRIGGER when editing test files (paths で命名規約限定済み)。 SKIP for production code (use code-conventions)。
 paths: "**/test_*.py, **/*_test.py, **/tests/**, **/__tests__/**, **/*.test.ts, **/*.test.tsx, **/*.test.js, **/*.spec.ts, **/*.spec.tsx, **/*.spec.js, **/*_test.go, **/*_spec.rb, **/spec/**, **/*Test.java, **/*Tests.cs"
 ---
 

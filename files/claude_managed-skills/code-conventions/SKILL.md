@@ -1,7 +1,7 @@
 ---
 name: code-conventions
-description: コード新規作成・編集・リファクタリング時の汎用ルール集。改造 / 新規実装 の mode 分類、ハック → 優雅な解への昇格、一時変数の節度、convention 遵守、矛盾 pattern の扱い、汎用語コメント、LLM API 呼び出し制限、浪費 pattern (無限 loop / 過剰 polling / 重複計算 / 巨大 output / 高頻度実行) 回避、tool 呼び出し前の 1 拍確認。
-when_to_use: TRIGGER when editing or creating Python / TypeScript / JavaScript / Go / Rust / Ruby / Java / Kotlin / Swift / C / C++ source files, when about to spawn subagents, or before running Bash commands whose output could be large. SKIP for bash scripts (use bash-writing-rules) and test files (use test-writing).
+description: コード新規作成・編集時のルール集 (mode 分類・convention 遵守・浪費 pattern 回避・LLM API 制限 等)。
+when_to_use: TRIGGER when editing source code (paths で対象拡張子限定済み)。 SKIP for bash (use bash-writing-rules) and tests (use test-writing)。
 paths: "**/*.py, **/*.ts, **/*.tsx, **/*.js, **/*.jsx, **/*.mjs, **/*.cjs, **/*.go, **/*.rs, **/*.rb, **/*.java, **/*.kt, **/*.swift, **/*.c, **/*.cc, **/*.cpp, **/*.h, **/*.hpp"
 ---
 
