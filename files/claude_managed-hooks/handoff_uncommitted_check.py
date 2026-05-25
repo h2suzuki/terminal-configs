@@ -35,8 +35,13 @@ import re
 import subprocess
 import sys
 
+# Case-insensitive: catches `Handoff`, `HANDOFF`, `Sign Off` etc.
+# (common when copy-pasting from chat/email subject lines).
+# `本日はこれで` requires これで explicitly to avoid matching bare
+# `本日は…` neutral prompts (e.g., `本日は晴天なり`).
 HANDOFF_RE = re.compile(
-    r"handoff|セッション(終了|リセット)|お疲れさま(でし)?(た)?|終わります|またね|sign\s?off|本日は(これで)?"
+    r"handoff|セッション(終了|リセット)|お疲れさま(でし)?(た)?|終わります|またね|sign\s?off|本日はこれで",
+    re.IGNORECASE,
 )
 
 MAX_FILES_LISTED = 20
