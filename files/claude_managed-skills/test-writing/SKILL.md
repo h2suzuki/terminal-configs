@@ -1,7 +1,7 @@
 ---
 name: test-writing
 description: テスト新規作成・編集時のルール (intent encoding・並行処理可視化・verify 対象拡張)。
-when_to_use: TRIGGER when editing test files (paths で命名規約限定済み)。 SKIP for production code (use code-conventions)。
+when_to_use: TRIGGER when editing test files. SKIP for production code (use code-conventions).
 paths: "**/test_*.py, **/*_test.py, **/tests/**, **/__tests__/**, **/*.test.ts, **/*.test.tsx, **/*.test.js, **/*.spec.ts, **/*.spec.tsx, **/*.spec.js, **/*_test.go, **/*_spec.rb, **/spec/**, **/*Test.java, **/*Tests.cs"
 ---
 
@@ -13,11 +13,13 @@ paths: "**/test_*.py, **/*_test.py, **/tests/**, **/__tests__/**, **/*.test.ts, 
 
 ### Intent encoding
 
-テストは intent (WHY) を encode する。 business logic が変われば必ず fail するように書く。 implementation detail (中間関数名・内部 state) ではなく、 callers が依存する **外から見える振る舞い** を assert する。
+テストは intent (WHY) を encode する。
+business logic が変われば必ず fail するように書く。
+implementation detail (中間関数名・内部 state) ではなく、callers が依存する **外から見える振る舞い** を assert する。
 
 ### Observability requirements
 
-以下のいずれかが関わる場合は 「気づきにくい」 と仮定し、 可視化 (log 追加 / trace / 状態 dump) を作って観察してから完了判定する:
+以下のいずれかが関わる場合は「気づきにくい欠陥がある」と仮定し、能動的に可視化 (log 追加 / trace / 状態 dump) し、観察してから完了判定する:
 
 - 並行処理
 - 共有状態
