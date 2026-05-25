@@ -30,6 +30,9 @@
     "SessionStart": [
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/claude-md-lint.sh", "timeout": 120 } ] }
     ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/handoff_uncommitted_check.py" } ] }
+    ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/stop_checks.py" } ] }
     ]
