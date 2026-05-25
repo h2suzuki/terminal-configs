@@ -33,6 +33,19 @@ auto-load される CLAUDE.md チェーン（org / user / project CLAUDE.md と 
 - 既訪問パスは skip
 - auto-memory の index file は scan 対象外: per-project `~/.claude/projects/<project_id>/memory/MEMORY.md` と `~/.claude/global-memory/` 配下（INDEX.md 含む）。 ほぼ毎セッション書き換わり lint cache を永続的に miss させること、および feedback 反復記録の場で CLAUDE.md チェーンとの重複が意図的（lint すると noise）なことが理由
 
+### Available skills listing
+
+呼び出し側 (SessionStart hook など) は path 一覧に続けて、 現在 system に登録されている skill の basename 一覧を user message に添える:
+
+```
+Available skills (...):
+- commit-discipline
+- claude-md-lint
+- ...
+```
+
+呼び出し側で各 skill dir の `SKILL.md` 実在を確認済み。 lint 側ではファイルシステムを読まず、 この listing を `<name> skill` 形式参照の stale 判定の text matching pool として使う（criteria 4 参照）。
+
 ### Self-resolution fallback
 
 user message に path 一覧が無い場合（手動で `/claude-md-lint` だけ呼ばれた等）、cwd を環境のプライマリ working directory として、以下を順に試し、存在するものを入力に加える:
@@ -70,7 +83,7 @@ input ファイル同士（CLAUDE.md チェーン内、@ imports 含む）の重
 1. **system prompt との重複** — input が system prompt の規範を再述しており、削除しても system prompt 経由で同じ動作が保証される。 **矛盾は flag 対象外**（メンタルモデル参照）
 2. **input 内矛盾** — input ファイル間（CLAUDE.md チェーン同士、@ imports 含む）で食い違っている指示
 3. **input 内重複** — 同じ rule が input ファイル間で再述されており、片方を消しても他方で代替可能な状態
-4. **stale 化** — 参照しているファイル / スキル / 用語が現在も実在するか、別名に rename されていないか。実在性は input 群の text matching で判定し、ファイルシステム読み取りは試みない
+4. **stale 化** — 参照しているファイル / スキル / 用語が現在も実在するか、別名に rename されていないか。実在性は input 群の text matching で判定し、ファイルシステム読み取りは試みない。 ただし `<name> skill` 形式の skill 参照については、 user message に渡される **Available skills 一覧** を text matching pool に含めてよい (呼び出し側で SKILL.md 実在を確認済みの listing)
 5. **不明瞭さ** — 検証手段のない抽象規範、複数解釈可能な命令、適用文脈が曖昧な指示
 
 #### Context-check before flagging duplicate / conflict

@@ -71,7 +71,7 @@ readonly BG_SELF_REAP_S=180
 # Mixed into the cache key. Bumping it intentionally invalidates every
 # existing cache file — used here because the execution model and cache
 # format changed from the synchronous `claude -p` JSON-envelope era.
-readonly CACHE_KEY_SALT='claude-md-lint cache v2 (bg/staging)'
+readonly CACHE_KEY_SALT='claude-md-lint cache v3 (bg/staging+skills)'
 readonly SYSTEM_MSG='セッション開始時の CLAUDE.md チェックが完了しました'
 
 # --- session reap helpers ---------------------------------------------------
@@ -247,7 +247,28 @@ done
 
 ((${#seen[@]} == 0)) && exit 0
 
-# --- cache key (claude version + salt + skill body + paths + contents) ------
+# --- collect available skill names ------------------------------------------
+#
+# Skill bodies are not lint targets, but their basenames are passed to the
+# child so the stale-ref check can verify that "<name> skill" references in
+# CLAUDE.md actually exist on disk. Scope: the same three locations the
+# session loads skills from. SKILL.md existence is required (filters out
+# leftover empty dirs / non-skill subdirs).
+
+declare -A skill_seen=()
+skills_block=""
+for skill_dir in /etc/claude-code/skills/*/ "${HOME}/.claude/skills/"*/ "${cwd}/.claude/skills/"*/; do
+  [[ -d "$skill_dir" ]] || continue
+  [[ -f "${skill_dir}SKILL.md" ]] || continue
+  sn="${skill_dir%/}"
+  sn="${sn##*/}"
+  [[ -z "$sn" ]] && continue
+  [[ -n "${skill_seen[$sn]:-}" ]] && continue
+  skill_seen[$sn]=1
+  skills_block+="- ${sn}"$'\n'
+done
+
+# --- cache key (claude version + salt + skill body + paths + contents + skills) ----
 
 sorted_paths="$(printf '%s\n' "${!seen[@]}" | sort)"
 
@@ -256,6 +277,7 @@ key="$(
     claude --version 2>/dev/null || echo unknown
     printf '%s\n' "$CACHE_KEY_SALT"
     cat "$SKILL_MD" 2>/dev/null
+    printf 'SKILLS\n%s' "$skills_block"
     while IFS= read -r p; do
       printf '%s\0' "$p"
       printf '%s\n' "${content_of[$p]}"
@@ -323,7 +345,7 @@ else
   staging="${STAGING_DIR}/${key}.txt"
   rm -f "$staging" 2>/dev/null
   skill_body="$(cat "$SKILL_MD" 2>/dev/null)"
-  user_prompt=$'以下のファイルを Read tool で読み、評価観点に従って判定してください。\n\n出力は stdout でなく Write tool で次のファイルに書いてください:\n'"$staging"$'\n内容は findings を 1 行 1 件、無ければ「なし」の 1 語のみ。JSON や前置き・後置きの散文は書かない。\n\n対象ファイル:\n'"$paths_block"
+  user_prompt=$'以下のファイルを Read tool で読み、評価観点に従って判定してください。\n\n出力は stdout でなく Write tool で次のファイルに書いてください:\n'"$staging"$'\n内容は findings を 1 行 1 件、無ければ「なし」の 1 語のみ。JSON や前置き・後置きの散文は書かない。\n\n対象ファイル:\n'"$paths_block"$'\nAvailable skills (SKILL.md がディスク上に存在することを呼び出し側で確認済み。 stale 判定で `<name> skill` 形式参照を name 照合する用):\n'"$skills_block"
 
   # `claude --bg`: detached, subscription-billed. acceptEdits auto-allows
   # the Write tool non-interactively (bypassPermissions needs a one-time
