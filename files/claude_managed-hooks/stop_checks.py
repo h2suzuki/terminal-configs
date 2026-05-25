@@ -4,8 +4,8 @@ Combined Stop hook for org-managed Claude Code:
 
   H1 empty-learning (enforcement, exit 2):
     Detect 「学習した」「次回から気をつけ」「反省」 系 assistant text;
-    block unless a memory file (~/.claude/global-memory/**/*.md or
-    */memory/**/*.md) was Written/Edited/MultiEdited in this turn.
+    block unless a memory subtree write (under ~/.claude/global-memory/
+    or */memory/, any extension) was recorded in this turn.
 
   H7 deferral (warning-only, exit 0):
     Detect 「後で対処」「別タスクに切り出」「TODO として」 系 text;
@@ -33,7 +33,8 @@ thinking / tool_use blocks.
 Current-turn boundary: walk backwards in the transcript to the
 most recent user entry whose content is a str (= human prompt),
 then consider all assistant entries after that index as the
-current turn.
+current turn. If no such entry is found (corrupted / partial
+transcript), return empty values rather than fall-broad scan.
 
 Exit:
   0: no enforcement triggered (warnings may be emitted on stderr)
@@ -48,8 +49,13 @@ import json
 import re
 import sys
 
+# `反省し(た|ました|て(い|ます)|ています)` is anchored to positive
+# conjugations to avoid matching negation forms (反省しない /
+# 反省しません / 反省しなければ) — H1 is enforcement (exit 2) so a
+# false match would block legitimate non-blame text.
+# `今後(は)?気をつけ` mirrors the optional は in `次回(から)?(は)?気をつけ`.
 EMPTY_LEARNING_RE = re.compile(
-    r"学習した|次回(から)?(は)?気をつけ|もう間違え(ない|ません)|反省し|今後は気をつけ"
+    r"学習した|次回(から)?(は)?気をつけ|もう間違え(ない|ません)|反省し(た|ました|て(い|ます)|ています)|今後(は)?気をつけ"
 )
 DEFERRAL_RE = re.compile(
     r"後で(対処|やる|考える)|別タスクに(切り出|分け)|今は(処置|対処)しません|後回し|TODO として|次回(に)?(対応|やる)"
@@ -58,9 +64,11 @@ CLAIM_RE = re.compile(
     r"不明|該当なし|存在しません|未確認|わかりません|分かりません"
 )
 
-# Memory file path heuristics. Matches both the global memory dir
+# Memory subtree heuristics. Matches both the global memory dir
 # (`~/.claude/global-memory/...`) and per-project memory subtrees
-# (`.../memory/...`).
+# (`.../memory/...`). Any file extension under these subtrees is
+# treated as memory persistence (convention: markdown but the
+# subtree itself is the marker).
 MEMORY_PATH_RE = re.compile(r"(global-memory|/memory/)")
 
 # A todos.md anywhere in the path counts as a deferral sink.
@@ -81,7 +89,7 @@ PATH_RECORDING_TOOLS = {"Write", "Edit", "MultiEdit"}
 def _load_transcript(path: str) -> list[dict]:
     out: list[dict] = []
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -100,9 +108,10 @@ def _current_turn(entries: list[dict]) -> tuple[str, set[str], list[str]]:
 
     Current turn starts after the most recent user entry whose
     `message.content` is a string (= human prompt; tool_result entries
-    use a list of content blocks).
+    use a list of content blocks). If no such entry is found, return
+    empty values (avoids fail-broad scanning of the whole transcript).
     """
-    start_idx = 0
+    start_idx = -1
     for i in range(len(entries) - 1, -1, -1):
         obj = entries[i]
         if obj.get("type") != "user":
@@ -111,6 +120,8 @@ def _current_turn(entries: list[dict]) -> tuple[str, set[str], list[str]]:
         if isinstance(msg, dict) and isinstance(msg.get("content"), str):
             start_idx = i + 1
             break
+    if start_idx == -1:
+        return "", set(), []
 
     text_parts: list[str] = []
     tool_names: set[str] = set()
@@ -157,7 +168,7 @@ def _check(
         if not memory_updated:
             blocking.append(
                 f"empty-learning: 「{m.group(0)}」 と発話したが当ターンで "
-                f"memory file (~/.claude/global-memory/**/*.md または */memory/**/*.md) "
+                f"memory subtree (~/.claude/global-memory/ または */memory/) "
                 f"への Write/Edit/MultiEdit が記録されていません (System §報告・応答)。 "
                 f"memory-routing skill を起動して persistence を行うか、 "
                 f"該当発話を取り消して再応答してください。"
