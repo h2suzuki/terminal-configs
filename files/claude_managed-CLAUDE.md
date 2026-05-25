@@ -8,8 +8,6 @@ token の価値を最大化する指針を述べる。
 
 - token / rate limit / コストを常に意識する。これはユーザーの 1 週間の作業可能量に直接効く制約であり、すべての行動に普遍的に適用される
 - 冗長な処理、過剰 retry、巨大 output、不要な全体 Read、繰り返しの全文 dump を避けるよう最大限の注視を行う
-  - 具体例: 各 tool 呼び出し前に「この呼び出しは必要か」を 1 拍考える、同じ file を session 内で何度も全体 Read しない（harness の file state tracking を信頼）、Bash output が長くなる可能性があれば事前に `head` / `tail` / `wc -l` で size を確認してから本体を fetch する、繰り返し処理は script 化を検討する
-- 自分が生成するコードが浪費 pattern になっていないかセルフチェックする。浪費 pattern には次のようなものがある: 無限 loop、過剰 polling、重複計算、巨大 output、想定外の高頻度実行。並列化したときは特に「同じ前提で複数 worker が重複計算する」状態に陥っていないか確認する。書く前と書いた後の両方で確認する。
 
 ## ワークフローの統制
 
@@ -18,9 +16,7 @@ token の価値を最大化する指針を述べる。
 計画の立て方と、進行中に方向感覚を失った場合の復旧手順を示す。
 
 - 非自明なタスク（3 ステップ以上、または設計上の判断を伴うもの）には必ず計画を立てる
-- タスクを最初に **改造** / **新規実装** に分類し、適切な mode で進める
-  - **改造**: 既存部分が fragile なので surgical 方針。壊さないよう悪い部分だけを改良する（動物の手術と同じで、殺さない・全体を作り変えない）。触る前に対象ファイル / exports / 直接 callers / shared utilities を必要範囲で読む。「orthogonal に見える」は危険な signal。依頼に直接トレースできる変更だけを加える
-  - **新規実装**: 想定すべき複数 case（境界条件 / エラー / 並行 / scale）を verbalize して整理してから書く。simplicity を優先しすぎるとナイーブ実装になり、後から壊れる
+- タスクを最初に **改造** (fragile・surgical・callers/utilities を read) / **新規実装** (複数 case を verbalize 整理) に分類する
 - significant step ごとに、現状を 1 文で restate する。「significant step」とは 1 タスク完了、複数 sub-step 後、長い tool 連発後、セクション境界など。restate しようとして describe back できなければ、それが lost track の検出シグナル
 - 「後で対処」「別タスクに切り出し」「今は処置しません」など deferred を含むやり取りが出たら、明示・暗黙を問わず即時に Task / todos.md に登録する。後回しの自然消滅による作業漏れを 0 にする。記録には **発言者**（ユーザー or 私）/ **承認者** / **status**（承認待ち / 承認済み / 拒否）を明示し、承認待ちのままになっている事項が一目で分かるようにする。会話が次の話題に移る前に、現在の pending 事項（特に承認待ち）を 1 度整理して verbalize する。話題遷移を漏れの最終チェックポイントとする
 
@@ -41,17 +37,6 @@ token の価値を最大化する指針を述べる。
 動作を証明できたタスクのみ完了とマークする。テストを実行し、ログを確認し、正しさを示す。skipped（test skip / verification step skip）は completed と混ぜて報告しない。
 
 ## 開発
-
-### a. コーディング
-
-実装時の作法と、convention 衝突への向き合い方を述べる。
-
-- 修正がハック的に感じられたら「今知っているすべてを踏まえて、優雅な解を実装せよ」。ただし、単純で自明な修正にはこの工程を飛ばす
-- 一時変数は値が複数回参照される時のみ作る。一時変数を用いない関数型プログラミングのコードを見習う
-- **convention 遵守**: codebase / 既知 style / spec（CLAUDE.md / SKILL.md / hook 等）に最初から従う。post-edit hook / commit deny で後から指摘されてやり直す手戻りは token 浪費かつユーザーの作業可能量を削る。convention が harmful と判断するなら silently fork せず surface する
-- **矛盾する pattern**: 片方を選択して選択理由を述べ、もう片方を cleanup flag として surface する（blend しない）
-- **コメント / doc / エラーメッセージ**: 汎用語（「base setup」「親スクリプト」等）で意味が通るなら汎用語を使い、rename / restructure 時の rot を防ぐ（他 script / file の固有名をハードコードしない）
-- **LLM API を呼ぶ実装**（Anthropic Messages API など）: LLM 呼び出しは分類・起草・要約・抽出など judgment が要るものに限定する。リトライ条件、ルーティング、deterministic transform は LLM に投げない。動的 prompt で判定が確率的になり flake するため
 
 ### b. テスト
 
