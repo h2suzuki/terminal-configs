@@ -459,7 +459,8 @@ EOF
     for skill_dir in /etc/claude-code/skills/*; do
         [ -d "$skill_dir" ] || continue
         rm -rf ~$LOGIN_USER/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
-        run sudo -i -u $LOGIN_USER ln -sfn "$skill_dir" ~$LOGIN_USER/.claude/skills/
+        run ln -sfn "$skill_dir" ~$LOGIN_USER/.claude/skills/
+        run chown -h $LOGIN_USER: ~$LOGIN_USER/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
     done
 
 else
