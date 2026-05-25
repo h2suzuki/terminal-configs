@@ -263,8 +263,8 @@ copy --nobackup claude_managed-CLAUDE.md                        /etc/claude-code
 copy --nobackup claude_statusline.sh                            /etc/claude-code/statusline.sh -m 0755
 
 copy_dir claude_managed-hooks/ /etc/claude-code/hooks/
-copy --nobackup claude_user-hooks/check_commit_author.py  /etc/claude-code/hooks/check_commit_author.py  -m 0755
-copy --nobackup claude_user-hooks/push_prompting_check.py /etc/claude-code/hooks/push_prompting_check.py -m 0755
+copy --nobackup claude_user-hooks/check_commit_author.py  ~/.claude/hooks/check_commit_author.py  -m 0755
+copy --nobackup claude_user-hooks/push_prompting_check.py ~/.claude/hooks/push_prompting_check.py -m 0755
 
 copy --nobackup claude_user-settings.json       ~/.claude/settings.json
 copy --nobackup claude_managed-settings.json    /etc/claude-code/managed-settings.json
@@ -360,6 +360,8 @@ EOF
     copy --nobackup claude_user-settings.json ~$LOGIN_USER/.claude/settings.json --owner $LOGIN_USER
     [ -e ~$LOGIN_USER/.claude/CLAUDE.md ] ||
     copy --nobackup claude_user-CLAUDE.md ~$LOGIN_USER/.claude/CLAUDE.md --owner $LOGIN_USER
+    copy --nobackup claude_user-hooks/check_commit_author.py  ~$LOGIN_USER/.claude/hooks/check_commit_author.py  -m 0755 --owner $LOGIN_USER
+    copy --nobackup claude_user-hooks/push_prompting_check.py ~$LOGIN_USER/.claude/hooks/push_prompting_check.py -m 0755 --owner $LOGIN_USER
     for skill_dir in /etc/claude-code/skills/*; do
         rm -rf ~$LOGIN_USER/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
         run sudo -i -u $LOGIN_USER ln -sfn "$skill_dir" ~$LOGIN_USER/.claude/skills/
