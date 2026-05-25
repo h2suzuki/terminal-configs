@@ -104,12 +104,22 @@ copy_dir()
     DST=${2%/}
     shift 2
 
+    # Pick up --owner from "$@" so we can chown -R after cp (cp -r ignores --owner).
+    OWNER=
+    prev=
+    for a in "$@"; do
+        [ "$prev" = "--owner" ] && { OWNER=$a; break; }
+        case "$a" in --owner=*) OWNER=${a#--owner=}; break;; esac
+        prev=$a
+    done
+
     [ -d "$DST" ] || { rm -rf "$DST"; run install --directory "$@" "$DST"; }
     rm -rf "$DST"/*
     for child in "$TOP_DIR/$DNAME"/*; do
         run cp -r "$child" "$DST/"
     done
     find "$DST" -depth -type d -name __pycache__ -exec rm -rf {} +
+    [ -n "$OWNER" ] && run chown -R "$OWNER:" "$DST"
 }
 
 
@@ -425,6 +435,11 @@ EOF
     run sudo -i -u $LOGIN_USER bash -i -c '"npm uninstall -g @anthropic-ai/claude-code || true"'
     run sudo -i -u $LOGIN_USER bash -i -c '"bash /tmp/claude_install.sh"'
     run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g @openai/codex"'
+
+    # Pre-create user-owned parents — `install -D/-d --owner` only owners the final component.
+    run install --mode 0755 --owner $LOGIN_USER --directory ~$LOGIN_USER/.claude
+    run install --mode 0755 --owner $LOGIN_USER --directory ~$LOGIN_USER/.claude/hooks
+    run install --mode 0755 --owner $LOGIN_USER --directory ~$LOGIN_USER/.claude/skills
 
     # Populate ~$LOGIN_USER/.claude/ (try to preserve the existing contents)
     [ -e ~$LOGIN_USER/.claude/CLAUDE.md ] ||
