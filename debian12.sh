@@ -267,6 +267,7 @@ copy --nobackup claude_managed-hooks/deny_compound_git_commit.py  /etc/claude-co
 copy --nobackup claude_user-hooks/check_commit_author.py        /etc/claude-code/hooks/check_commit_author.py -m 0755
 copy --nobackup claude_managed-hooks/check_commit_format.py       /etc/claude-code/hooks/check_commit_format.py -m 0755
 copy --nobackup claude_managed-hooks/detect_cwd_pollution.py      /etc/claude-code/hooks/detect_cwd_pollution.py -m 0755
+copy --nobackup claude_managed-hooks/stop_checks.py               /etc/claude-code/hooks/stop_checks.py -m 0755
 
 copy --nobackup claude_user-settings.json       ~/.claude/settings.json
 copy --nobackup claude_managed-settings.json    /etc/claude-code/managed-settings.json

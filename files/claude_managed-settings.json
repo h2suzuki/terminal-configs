@@ -29,6 +29,9 @@
     ],
     "SessionStart": [
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/claude-md-lint.sh", "timeout": 120 } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/stop_checks.py" } ] }
     ]
   }
 }
