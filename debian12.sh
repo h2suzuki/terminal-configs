@@ -125,6 +125,7 @@ run sed -i ~/.bashrc \
     -e '/alias\ diffy=/d' \
     -e '/alias\ rg=/d' \
     -e '/alias\ node-x=/d' \
+    -e '/alias\ mdr=/d' \
     -e '/grip\(\)\ /d' \
     -e '/export\ EDITOR=/d' \
     -e '/export\ VISUAL=/d' \
@@ -141,6 +142,7 @@ run echo "alias dirs=\\'dirs -v\\'" '>>' ~/.bashrc
 run echo "alias diffy=\\'git diff --no-index\\'" '>>' ~/.bashrc
 run echo "alias rg=\\'rg --sort path --smart-case\\'" '>>' ~/.bashrc
 run echo "alias node-x=\\'NODE_DEBUG=module,fs,net node\\'" '>>' ~/.bashrc
+run echo "alias mdr=markdown-reader" '>>' ~/.bashrc
 run echo 'grip\(\) \{ rg --sort path --smart-case --json -C 2 \"\$@\" \| delta\; \}' '>>' ~/.bashrc
 run echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' '>>' ~/.bashrc
 
@@ -338,6 +340,7 @@ if [ -n "$LOGIN_USER" ]; then
             -e '/alias\ diffy=/d' \
             -e '/alias\ rg=/d' \
             -e '/alias\ node-x=/d' \
+            -e '/alias\ mdr=/d' \
             -e '/grip\(\)\ /d' \
             -e '/export\ EDITOR=/d' \
             -e '/export\ VISUAL=/d' \
@@ -354,6 +357,7 @@ if [ -n "$LOGIN_USER" ]; then
     run echo "alias diffy=\\'git diff --no-index\\'" '>>' $BASHRC
     run echo "alias rg=\\'rg --sort path --smart-case\\'" '>>' $BASHRC
     run echo "alias node-x=\\'NODE_DEBUG=module,fs,net node\\'" '>>' $BASHRC
+    run echo "alias mdr=markdown-reader" '>>' $BASHRC
     run echo 'grip\(\) \{ rg --sort path --smart-case --json -C 2 \"\$@\" \| delta\; \}' '>>' $BASHRC
 
     # Set the default editor as neovim
