@@ -16,6 +16,9 @@
         "matcher": "Bash",
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/check_commit_author.py h2suzuki@gmail.com" } ]
       }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/push_prompting_check.py" } ] }
     ]
   },
   "spinnerVerbs": {
