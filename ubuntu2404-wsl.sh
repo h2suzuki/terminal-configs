@@ -297,23 +297,26 @@ run bash /tmp/claude_install.sh
 run uv tool install --force claude-monitor #--system --break-system-packages pasimple
 
 rm -rf /etc/claude-code/
-copy --nobackup claude_managed-CLAUDE.md                        /etc/claude-code/CLAUDE.md
-copy --nobackup claude_statusline.sh                            /etc/claude-code/statusline.sh -m 0755
 
-copy_dir claude_managed-hooks/ /etc/claude-code/hooks/
-copy --nobackup claude_user-hooks/check_commit_author.py  ~/.claude/hooks/check_commit_author.py  -m 0755
-copy --nobackup claude_user-hooks/push_prompting_check.py ~/.claude/hooks/push_prompting_check.py -m 0755
+# === Managed (org-shared, /etc/claude-code/) ===
+copy --nobackup claude_managed-CLAUDE.md     /etc/claude-code/CLAUDE.md
+copy --nobackup claude_statusline.sh         /etc/claude-code/statusline.sh         -m 0755
+copy --nobackup claude_managed-settings.json /etc/claude-code/managed-settings.json
+copy_dir        claude_managed-hooks/        /etc/claude-code/hooks/
+copy_dir        claude_managed-skills/       /etc/claude-code/skills/
 
-copy --nobackup claude_user-settings.json       ~/.claude/settings.json
-copy --nobackup claude_managed-settings.json    /etc/claude-code/managed-settings.json
-[ -e ~/.claude/CLAUDE.md ] ||
-copy --nobackup claude_user-CLAUDE.md           ~/.claude/CLAUDE.md
-
-copy_dir claude_managed-skills/ /etc/claude-code/skills/
+# Symlink farm: managed skills appear under ~/.claude/skills/ so `/skill-name` works
 for skill_dir in /etc/claude-code/skills/*; do
     rm -rf ~/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
     run ln -sfn "$skill_dir" ~/.claude/skills/
 done
+
+# === User (per-user, ~/.claude/) ===
+[ -e ~/.claude/CLAUDE.md ] ||
+copy --nobackup claude_user-CLAUDE.md     ~/.claude/CLAUDE.md
+copy --nobackup claude_user-settings.json ~/.claude/settings.json
+copy --nobackup claude_user-hooks/check_commit_author.py  ~/.claude/hooks/check_commit_author.py  -m 0755
+copy --nobackup claude_user-hooks/push_prompting_check.py ~/.claude/hooks/push_prompting_check.py -m 0755
 
 pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
 for sk in */; do
