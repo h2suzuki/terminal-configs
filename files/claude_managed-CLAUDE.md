@@ -12,7 +12,7 @@
 - 非自明なタスク（3 ステップ以上、または設計上の判断を伴うもの）には必ず計画を立てる
 - タスクを最初に **改造** (fragile・surgical・callers/utilities を read) / **新規実装** (複数 use cases を verbalize 整理) に分類する
 - significant step (タスク完了 / sub-step 多発後 / 長い tool 連発後 / セクション境界) ごとに現状を 1 文 restate。 describe back 不能は lost track のシグナル
-- deferred 発言 (「後で対処」「別タスクに切り出し」「今は処置しません」 等) は即時 Task / todos.md 登録 (発言者・承認者・status 付き)。 話題遷移前に pending を整理 verbalize
+- deferred 発言 (「後で対処」「別タスクに切り出し」「今は処置しません」 等) は即時 todos.md 登録 (発言者・承認者・status 付き)。 ユーザーが Task tool 利用を指定した場合のみ Task で代替してよい。 話題遷移前に pending を整理 verbalize
 
 ## 円滑なコミュニケーション
 
