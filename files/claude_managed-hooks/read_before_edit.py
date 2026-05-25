@@ -291,17 +291,26 @@ def cmd_check(payload: dict) -> None:
         )
         return
 
-    # No Read/Write at current mtime → cache invalidated, must Read first
+    # No Read/Write at current mtime → cache invalidated, must Read first.
+    # 文面は意図的に冗長: 過去の deny 文面が技術用語のせいで「hook 自身が
+    # file を変更している」と誤解されたことがあり、 verify-after-edit を
+    # Claude に内面化させる方向に寄せている。 trim せず維持。
     if not accesses:
         reason = (
-            f"{path}: 本セッションで未 Read のまま編集しようとしています。 "
-            "Edit 前に Read してください。"
+            f"{path}: 本セッションでこの file をまだ Read していません。 "
+            "Edit の old_string を現状と確実に一致させるため、 まず Read してから "
+            "Edit してください。 以降、 Edit 後は編集範囲を Read で読み直すと "
+            "反映が期待通りか確認でき、 続く Edit が本 hook で deny されることも "
+            "なくなります。"
         )
     else:
         reason = (
-            f"{path}: 直近 Read/Write 以降に disk 側 mtime が変化しています "
-            "(Edit / MultiEdit / NotebookEdit / 他 process による変更)。 "
-            "cache invalidated — Edit 前に再 Read してください。"
+            f"{path}: 直前の編集 (Edit/MultiEdit/Write 等) のあと、 改めて "
+            "Read していません — この hook はファイル mtime を観察するだけで、 "
+            "hook 自身がファイルを変更することはありません。 context 内の "
+            "snapshot は pre-edit のままで、 続けて Edit すると old_string が "
+            "現状と合わず fail しがちです。 編集した範囲を Read で読み直して "
+            "ください — 反映確認も同時にでき、 次の Edit はそのまま通ります。"
         )
     _emit_deny(reason)
 
