@@ -12,6 +12,8 @@ Stdin: Stop payload JSON with `transcript_path`.
 Transcript walking is identical to the org-scope stop_checks.py:
 walk backwards to the most recent human-input user entry (content
 is a str), then collect text from all assistant entries after it.
+If no such entry is found (corrupted / partial transcript), return
+empty text rather than fall-broad scan.
 
 Exit:
   0: no push-prompting detected
@@ -26,23 +28,23 @@ import json
 import re
 import sys
 
-# Catches phrasings like:
-#   "次にpushしますか?" / "push しますか？"
-#   "push しましょうか" / "push しますか"
-#   "push する予定" / "push するつもり"
-#   "push しる予定" / "push します予定"
+# Case-insensitive: catches `Push しますか?`, `PUSH しましょうか`,
+# sentence-initial `Push する予定` etc. The 4th alternation from the
+# original spec (`push\s?(し|を)?(る|ます)予定`) was dropped — it
+# matched grammatically invalid Japanese and added no useful coverage
+# beyond alternation 3 (`push\s?する(予定|つもり)`).
 PUSH_PROMPT_RE = re.compile(
     r"(次に)?push\s?(し|を)?ますか[?？]"
     r"|push\s?しま(しょう|す)か"
-    r"|push\s?する(予定|つもり)"
-    r"|push\s?(し|を)?(る|ます)予定"
+    r"|push\s?する(予定|つもり)",
+    re.IGNORECASE,
 )
 
 
 def _load_transcript(path: str) -> list[dict]:
     out: list[dict] = []
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -58,8 +60,9 @@ def _load_transcript(path: str) -> list[dict]:
 
 def _last_assistant_text(entries: list[dict]) -> str:
     """Concatenated text from assistant entries since the most recent
-    human-input user entry (content is str)."""
-    start_idx = 0
+    human-input user entry (content is str). Returns empty string if
+    no such boundary is found (avoids fall-broad transcript scan)."""
+    start_idx = -1
     for i in range(len(entries) - 1, -1, -1):
         obj = entries[i]
         if obj.get("type") != "user":
@@ -68,6 +71,9 @@ def _last_assistant_text(entries: list[dict]) -> str:
         if isinstance(msg, dict) and isinstance(msg.get("content"), str):
             start_idx = i + 1
             break
+    if start_idx == -1:
+        return ""
+
     parts: list[str] = []
     for obj in entries[start_idx:]:
         if obj.get("type") != "assistant":
