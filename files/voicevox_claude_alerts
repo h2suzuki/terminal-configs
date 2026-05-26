@@ -241,6 +241,19 @@ contains_english_word() {
   printf '%s' "$1" | LC_ALL=C grep -qE '[A-Za-z]{3,}'
 }
 
+# True if hook fires from a Claude Code background session
+# (`claude agents --json` の .kind 判定)。 idle_prompt 抑止用、
+# 失敗時 false (= 発話する側へ safe fall through)。
+is_background_session() {
+  [ -n "${SESSION_ID:-}" ] && [ "$SESSION_ID" != "unknown" ] || return 1
+  local kind
+  kind=$(CLAUDE_NOTIFY_NESTED=1 timeout 5 claude agents --json 2>/dev/null \
+    | jq -r --arg sid "$SESSION_ID" \
+        '.[]? | select(.sessionId == $sid) | .kind // empty' 2>/dev/null \
+    | head -1)
+  [ "$kind" = "background" ]
+}
+
 # Synchronously invoke Haiku to katakana-ize the given user prompt and emit
 # the resulting single-line text on stdout (empty on failure). Caller chooses
 # foreground (CLI say) vs detached (hook path wraps this in setsid -f inside
@@ -579,18 +592,13 @@ $LAST_SENTENCE" "${EVENT_PHRASES[Stop]}"
     case "$NOTIF_TYPE" in
       idle_prompt)
         if [ "$(age_of "$SPOKE_MARKER")" -ge 90 ]; then
+          is_background_session && exit 0  # bg session の idle 連発抑止
           speak_cached "${EVENT_PHRASES[Notification]}"
         fi
         ;;
       permission_prompt)
-        # message の文言で attention/permission の 2 パターンを認識
-        # （実観測ベース、Claude Code 2.1.123）:
-        #   "Claude Code needs your attention"     → AskUserQuestion 等
-        #   "Claude needs your permission to use *" → Bash 等のツール許可
-        # どちらも統一文言で発話する。 attention とツール許可を区別する
-        # 意味が薄く、permission 用文言が場面と合わないことがあるため。
-        # 未知パターンは silent（誤発話より沈黙を優先）。
-        # 発話した場合のみ SPOKE_MARKER を touch（沈黙時は idle 抑制も不要）。
+        # attention (AskUserQuestion 等) と permission (Bash 等の許可) を統一発話。
+        # 未知パターンは silent (誤発話より沈黙)。
         NOTIF_MSG=$(printf '%s' "$INPUT" | jq -r '.message // ""')
         case "$NOTIF_MSG" in
           *"needs your attention"*|*"needs your permission"*)
