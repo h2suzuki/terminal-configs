@@ -6,6 +6,10 @@
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/read_before_edit.py check" } ]
       },
       {
+        "matcher": "^(Edit|Write|MultiEdit)$",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/dangling_ref_check.py" } ]
+      },
+      {
         "matcher": "Bash",
         "hooks": [
           { "type": "command", "command": "/etc/claude-code/hooks/avoid_cd.py" },
