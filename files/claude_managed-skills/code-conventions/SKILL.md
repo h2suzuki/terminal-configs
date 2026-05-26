@@ -78,6 +78,21 @@ deterministic ならコードを書いて、毎回それを呼び出す。
 - 無限 loop / 過剰 polling / 重複計算 / 巨大 output / 想定外の高頻度実行
 - 並列化時は特に 「同じ前提で複数 worker が重複計算」 に陥っていないか確認
 
+### No global-memory references in persistent files
+
+永続ファイル (repo に commit される source / doc / SKILL.md / hook script / template / コメント / commit message 等) から `~/.claude/global-memory/` 配下の memory entry を citation してはならない。
+
+**Why:** global memory は端末固有 (個人 device の personal memory) で repo に含まれない。 他環境で当該 file が deploy された時に dangling reference になり、 reader が参照先を fetch できない。 同じ理由で ephemeral tag (Action Item 番号 / Plan C / Phase γ 等の一時的ラベル) も永続 file 本文に残さない。
+
+**代替:**
+
+- 内容が project 全体で必要 → 該当 file の body に inline で明文化、 または project 内別 file (`files/...`) に切り出して file path で reference
+- 個人 device 固有 → 永続化せず、 chat 内の会話だけで使う
+
+**例外 (許容される機械 reference):**
+
+`stop_checks.py` / `claude-md-lint.sh` 等が `~/.claude/global-memory/` を path-matching の対象として扱う用途は機械 reference であり citation ではない (他環境で空 match で動作)。 同様に `memory-routing` skill が global memory dir 自体の routing を define する path 言及も許容。
+
 ## Related
 
 - **Legacy:** org CLAUDE.md §token 効率 (sub-bullets), §計画と遂行 (改造/新規実装 mode 詳細), §開発 a. コーディング (全体 6 項目) より

@@ -47,11 +47,12 @@ skill 実行後の出力 / 振る舞いの形式 (該当する場合)。
 ## Related
 
 - `sibling-skill-1` — 隣接 scope の skill
-- (global memory) `feedback_X` — 関連 memory entry
-- (project memory) `feedback_Y` — 関連 project-local memory
+- `code-conventions` — 永続ファイル汎用 rule (例: 「No global-memory references in persistent files」)
 
 <!--
-=== Writing Convention Cheatsheet (global memory: skill-text-language) ===
+=== Writing Convention Cheatsheet ===
+
+(永続ファイルから ~/.claude/global-memory/ 配下の entry を citation するのは禁止 — code-conventions の Rules 参照)
 
 frontmatter:
   - description: 1 文英語、 文末 `.`、 quote `"..."`

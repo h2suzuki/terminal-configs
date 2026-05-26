@@ -102,8 +102,6 @@ hook が deny する時の reason 文面:
 - **corrective 行動を直接書き下す**: 「verify-after-edit して」 ではなく「該当 region を Read で読み直してください — 反映確認も同時にでき、 次の Edit はそのまま通ります」
 - **trim 抑止 comment を残す**: 短くしたくなる文面でも、 reader (LLM 含む) が混乱しないよう冗長性を残す。 trim する人がいたら「あえて長い」 ことを comment で明示
 
-参考: global memory `feedback_hook_deny_reason_wording`
-
 ## 6. Deploy
 
 - canonical source: `files/<hook-name>` (本 repo 配下)
