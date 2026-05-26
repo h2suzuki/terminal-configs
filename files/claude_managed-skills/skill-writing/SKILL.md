@@ -16,17 +16,17 @@ skill SKILL.md / hook script を書く時の format 統一・writing convention 
 4. **Verify the deploy path** — managed (org-wide) vs user (個人) を意識:
    - managed: `files/claude_managed-skills/<name>/` → `/etc/claude-code/skills/<name>/` + symlink to `~/.claude/skills/<name>`
    - user: `files/claude_user-skills/<name>/` → `~/.claude/skills/<name>/` (実 dir、 install script で copy)
-5. **Sync both source and deploy target** — project CLAUDE.md ルールに従い、 deploy 先だけ編集する regression を避ける (`cp` で同 session 内 sync)
+5. **Sync both source and deploy target** — deploy 先だけ編集して repo の source を放置すると、 次に repo から再 deploy した時点で改造が静かに消える regression を抱える。 source 編集と deploy 先への `cp` を同 session 内で完結させる
 
 ## Rules
 
 - **frontmatter は英語、 body は日本語可**: 中途半端な日英 mix は禁止 (例: `description: Rules for X (categories 日本語).` は NG)
 - **TRIGGER + SKIP の pair**: when_to_use は両方明示。 片方だけは ambiguous
 - **`##` headers は Process / Rules / Output / Related 優先**: 内容に合わない場合のみ他の英語名 (Sources / Examples / Definitions / Red flags 等)
-- **Related section で隣接 skill (repo 内 file) を citation**: 重複や orthogonal scope の明示で family 化。 `~/.claude/global-memory/` の memory entry は **citation しない** (端末固有で dangling reference 化)
+- **Related section で隣接 skill を citation**: skill 名 symbolic (例: `code-conventions`) で。 重複や orthogonal scope の明示で family 化。 端末固有 path / skill dir 外 file / ephemeral tag は **citation しない** (詳細は `code-conventions` Rules)
 - **description tighten 時**: 削った詳細を body に明文化 (frontmatter 短縮 ≠ 情報削除)
 - **trigger 列挙の精度**: specific phrase を quote する。 一般化しすぎると trigger 不発火
-- **永続 file から global memory / ephemeral tag を citation しない**: 詳細は `code-conventions` Rules 参照
+- **No dangling-prone references**: SKILL.md / hook / template に端末固有 path / skill dir 外 file への file path citation / ephemeral tag / 会話文脈依存 reference を残さない。 詳細: `code-conventions` Rules
 
 ## Output
 
@@ -41,5 +41,4 @@ skill SKILL.md / hook script を書く時の format 統一・writing convention 
 - `template-skill.md` (本 skill dir 内) — skill SKILL.md の commented template
 - `template-hook.md` (本 skill dir 内) — hook script + settings.json entry の template
 - `claude-code-guide` — Claude Code 公式 spec を primary source で verify
-- `code-conventions` — Rules に「No global-memory references in persistent files」 (永続ファイルからの dangling reference を抑止)
-- (project CLAUDE.md) deploy 先と source の sync ルール
+- `code-conventions` — Rules に「No dangling-prone references in persistent files」 (永続ファイルから外部 / 端末固有 / ephemeral な reference を入れない)

@@ -108,4 +108,4 @@ hook が deny する時の reason 文面:
 - deploy 先 (project の install script で copy):
   - **org-wide**: `/etc/claude-code/hooks/<hook-name>` + `files/claude_managed-settings.json` に hook entry
   - **user-specific**: `~/.claude/hooks/<hook-name>` + `files/claude_user-settings.json` に hook entry
-- **両方を同 session 内で同 content に保つ** (deploy 先だけ編集する regression を防ぐ、 project CLAUDE.md ルール)
+- **両方を同 session 内で同 content に保つ**: deploy 先だけ編集して repo の source を放置すると、 次に repo から再 deploy した時点で改造が静かに消える regression を抱える

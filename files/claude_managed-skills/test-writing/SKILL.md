@@ -76,9 +76,9 @@ business logic が変われば必ず fail するように書く。 implementatio
 - 並列度
 - 表示・出力の質
 
-### No global-memory references in persistent files
+### No dangling-prone references in persistent files
 
-test code / docstring / fixture comment から `~/.claude/global-memory/` 配下の memory entry や ephemeral tag (Action Item 番号 / Plan C 等の一時ラベル) を citation しない。 端末固有 / 一時的で repo に残らず dangling reference 化する。 詳細: `code-conventions` Rules 参照。
+test code / docstring / fixture comment に **dangling reference** を入れない: 端末固有 path (`~/.claude/global-memory/...`)、 ephemeral tag (Action Item 番号 / Plan C 等の一時ラベル)、 「先ほどのテスト」 系の会話文脈依存 reference 等。 他環境 / 時間経過後の reader が参照を解決できない。 詳細: `code-conventions` Rules 参照。
 
 ## Related
 

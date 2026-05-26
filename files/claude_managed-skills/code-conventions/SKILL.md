@@ -78,20 +78,30 @@ deterministic ならコードを書いて、毎回それを呼び出す。
 - 無限 loop / 過剰 polling / 重複計算 / 巨大 output / 想定外の高頻度実行
 - 並列化時は特に 「同じ前提で複数 worker が重複計算」 に陥っていないか確認
 
-### No global-memory references in persistent files
+### No dangling-prone references in persistent files
 
-永続ファイル (repo に commit される source / doc / SKILL.md / hook script / template / コメント / commit message 等) から `~/.claude/global-memory/` 配下の memory entry を citation してはならない。
+永続ファイル (repo に commit される source / doc / SKILL.md / hook script / template / コメント / commit message 等) には、 deploy 先 / 他環境 / 時間経過後に reader が参照解決できない reference を入れない。 含まれてはならない pattern:
 
-**Why:** global memory は端末固有 (個人 device の personal memory) で repo に含まれない。 他環境で当該 file が deploy された時に dangling reference になり、 reader が参照先を fetch できない。 同じ理由で ephemeral tag (Action Item 番号 / Plan C / Phase γ 等の一時的ラベル) も永続 file 本文に残さない。
+- **端末固有 path**: `~/.claude/global-memory/...` (個人 device の memory dir、 repo に含まれない)
+- **skill dir 外 file への file path 参照**: skill SKILL.md は同 skill dir 内の supporting file (template / data / sub-doc) のみ確証してアクセスできる。 dir 外の repo file (project / org の任意 path、 「project CLAUDE.md」 wording 含む) への file path citation は、 他環境で deploy された時に dir 構造が異なれば dangling reference となる
+- **ephemeral tag**: Action Item 番号 (`AI-12` 等) / Plan C / Phase γ / sprint label など、 議論 / sprint / review 中の一時的ラベル。 永続化すると context が失われた reader に意味不明
+- **会話文脈依存 reference**: 「先ほどの議論で」「前回のセッションで」「上の例で」 など、 当該 file 単独で解決できない indexical な参照
+
+**Why:** dangling reference は、 永続 file の自己完結性 (standalone readability) を損なう。 他環境 deploy 時 / 時間経過後 / 別 reader が読むときに参照先を fetch できず、 文章の主張が verify 不能になる。
 
 **代替:**
 
-- 内容が project 全体で必要 → 該当 file の body に inline で明文化、 または project 内別 file (`files/...`) に切り出して file path で reference
-- 個人 device 固有 → 永続化せず、 chat 内の会話だけで使う
+- 内容を該当 file の body に **inline で明文化** する (rationale を doc 内で完結)
+- 必要な context を文章で説明: 「個人 device の memory に X という rule あり」 ではなく「X という rule に従う」 と直接書く
+- 他 skill 間 reference は **skill 名 symbolic** (例: `code-conventions`) で。 Claude Code が auto-discover する spec に依存する OK pattern (skill 名は file path ではない)
 
 **例外 (許容される機械 reference):**
 
-`stop_checks.py` / `claude-md-lint.sh` 等が `~/.claude/global-memory/` を path-matching の対象として扱う用途は機械 reference であり citation ではない (他環境で空 match で動作)。 同様に `memory-routing` skill が global memory dir 自体の routing を define する path 言及も許容。
+skill 機能上 path-matching の対象として扱う path 言及は citation ではなく機械 reference (他環境で空 match で動作する設計):
+
+- `claude-md-lint` が `/etc/claude-code/CLAUDE.md`, `~/.claude/CLAUDE.md`, `<cwd>/.claude/CLAUDE.md` を scan target として listing
+- `stop_checks.py` / `claude-md-lint.sh` が `~/.claude/global-memory/` を path-matching 対象として参照
+- `memory-routing` skill が memory dir 自体の routing を define
 
 ## Related
 
