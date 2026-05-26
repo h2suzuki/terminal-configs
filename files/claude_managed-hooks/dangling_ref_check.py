@@ -20,7 +20,7 @@ PATTERNS = [
     (re.compile(r'/home/[^/]+/\.claude/global-memory/'),
      '端末固有 path (/home/<user>/.claude/global-memory/)'),
     (re.compile(r'\(global[ -]memory\)'),
-     'global memory citation 句 ((global memory))'),
+     'global memory citation 句'),
     (re.compile(r'\(project CLAUDE\.md\)'),
      'project CLAUDE.md citation 句'),
     (re.compile(r'project CLAUDE\.md ルール'),
@@ -76,28 +76,19 @@ def main():
             continue
         for pat, pat_label in PATTERNS:
             for m in pat.finditer(text):
-                findings.append(f"  - {label}: {pat_label} — matched '{m.group(0)}'")
+                findings.append(f"  - {label}: {pat_label} — '{m.group(0)}'")
 
     if not findings:
         return 0
 
     msg = (
-        "dangling-ref-check: 編集内容に dangling-prone reference が含まれています。\n"
-        "永続 file の自己完結性を保つため、 これらの pattern は本文に残さないでください。\n"
+        "dangling-ref-check: 永続 file に dangling-prone reference を入れない。\n"
         "\n"
         "検出:\n"
         + "\n".join(findings) + "\n"
         "\n"
-        "対処:\n"
-        "  - 内容を inline で明文化する (端末固有 memory / 外部 doc を本文に展開)\n"
-        "  - skill 間 reference は skill 名 symbolic で (例: `code-conventions`)\n"
-        "  - ephemeral tag は本文から削除、 必要なら commit message に残す\n"
-        "\n"
-        "意図的な pattern (rule 説明、 hook source、 test fixture 等) の場合:\n"
-        "  同じ content 内に `dangling-ref-check: allow` の marker を含めると "
-        "本 check を skip します (1 件あれば content 全体 skip)。\n"
-        "\n"
-        "詳細: code-conventions Rules「No dangling-prone references in persistent files」\n"
+        "修正: 内容を inline で書く / ephemeral tag は本文から削除。\n"
+        "意図的なら content に `dangling-ref-check: allow` を含めて再実行。\n"
     )
     print(msg, file=sys.stderr)
     return 2  # block
