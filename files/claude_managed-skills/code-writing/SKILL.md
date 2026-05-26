@@ -1,5 +1,5 @@
 ---
-name: code-conventions
+name: code-writing
 description: Universal source code rules (mode classification, convention compliance, wasteful pattern avoidance, LLM API restrictions). Applies to any language; language-specific add-ons (bash-writing-rules, test-writing) layer on top.
 when_to_use: TRIGGER when editing source code in any language (including bash, tests). Stacks additively with language-specific add-on skills — do not treat add-ons as replacements.
 ---
@@ -93,7 +93,7 @@ deterministic ならコードを書いて、毎回それを呼び出す。
 
 - 内容を該当 file の body に **inline で明文化** する (rationale を doc 内で完結)
 - 必要な context を文章で説明: 「個人 device の memory に X という rule あり」 ではなく「X という rule に従う」 と直接書く
-- 他 skill 間 reference は **skill 名 symbolic** (例: `code-conventions`) で。 Claude Code が auto-discover する spec に依存する OK pattern (skill 名は file path ではない)
+- 他 skill 間 reference は **skill 名 symbolic** (例: `code-writing`) で。 Claude Code が auto-discover する spec に依存する OK pattern (skill 名は file path ではない)
 
 **例外 (許容される機械 reference):**
 

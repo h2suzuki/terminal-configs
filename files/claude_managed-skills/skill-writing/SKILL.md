@@ -11,7 +11,7 @@ skill SKILL.md / hook script を書く時の format 統一・writing convention 
 ## Process
 
 1. **Read the templates first** — `template-skill.md` (skill 用) と `template-hook.md` (hook 用) を SKILL.md の隣 (本 skill dir 内) から Read で読む。 frontmatter field 全列挙と writing convention の inline reminder が入っている。
-2. **Cross-reference an existing skill** — 同じ project 内の既存 skill を 1-2 個 sample で Read する (例: `verify-before-asserting`, `subagent-gate`, `code-conventions`)。 frontmatter pattern と section 構成が template 通りか実例で確認。
+2. **Cross-reference an existing skill** — 同じ project 内の既存 skill を 1-2 個 sample で Read する (例: `verify-before-asserting`, `subagent-gate`, `code-writing`)。 frontmatter pattern と section 構成が template 通りか実例で確認。
 3. **Apply writing convention** — frontmatter description / when_to_use / headers は **英語**、 body は **日本語可**。 trigger keyword だけ quoted 日本語 OK。 詳細は `template-skill.md` の commented cheatsheet (本 skill dir 内) を参照。
 4. **Verify the deploy path** — managed (org-wide) vs user (個人) を意識:
    - managed: `files/claude_managed-skills/<name>/` → `/etc/claude-code/skills/<name>/` + symlink to `~/.claude/skills/<name>`
@@ -23,10 +23,10 @@ skill SKILL.md / hook script を書く時の format 統一・writing convention 
 - **frontmatter は英語、 body は日本語可**: 中途半端な日英 mix は禁止 (例: `description: Rules for X (categories 日本語).` は NG)
 - **TRIGGER + SKIP の pair**: when_to_use は両方明示。 片方だけは ambiguous
 - **`##` headers は Process / Rules / Output / Related 優先**: 内容に合わない場合のみ他の英語名 (Sources / Examples / Definitions / Red flags 等)
-- **Related section で隣接 skill を citation**: skill 名 symbolic (例: `code-conventions`) で。 重複や orthogonal scope の明示で family 化。 端末固有 path / skill dir 外 file / ephemeral tag は **citation しない** (詳細は `code-conventions` Rules)
+- **Related section で隣接 skill を citation**: skill 名 symbolic (例: `code-writing`) で。 重複や orthogonal scope の明示で family 化。 端末固有 path / skill dir 外 file / ephemeral tag は **citation しない** (詳細は `code-writing` Rules)
 - **description tighten 時**: 削った詳細を body に明文化 (frontmatter 短縮 ≠ 情報削除)
 - **trigger 列挙の精度**: specific phrase を quote する。 一般化しすぎると trigger 不発火
-- **No dangling-prone references**: SKILL.md / hook / template に端末固有 path / skill dir 外 file への file path citation / ephemeral tag / 会話文脈依存 reference を残さない。 詳細: `code-conventions` Rules
+- **No dangling-prone references**: SKILL.md / hook / template に端末固有 path / skill dir 外 file への file path citation / ephemeral tag / 会話文脈依存 reference を残さない。 詳細: `code-writing` Rules
 
 ## Output
 
@@ -41,4 +41,4 @@ skill SKILL.md / hook script を書く時の format 統一・writing convention 
 - `template-skill.md` (本 skill dir 内) — skill SKILL.md の commented template
 - `template-hook.md` (本 skill dir 内) — hook script + settings.json entry の template
 - `claude-code-guide` — Claude Code 公式 spec を primary source で verify
-- `code-conventions` — Rules に「No dangling-prone references in persistent files」 (永続ファイルから外部 / 端末固有 / ephemeral な reference を入れない)
+- `code-writing` — Rules に「No dangling-prone references in persistent files」 (永続ファイルから外部 / 端末固有 / ephemeral な reference を入れない)

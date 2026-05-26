@@ -1,7 +1,7 @@
 ---
 name: test-writing
 description: Rules for designing / editing tests (TDD discipline, design-claim enumeration, intent encoding, coverage techniques, observability, verify target expansion).
-when_to_use: TRIGGER when designing or editing test code, including proposing test classes or cases in chat, enumerating design claims to assert, sketching tests in drafts/, planning TDD red phase, or sweeping existing tests against design docs. SKIP for production code (use code-conventions).
+when_to_use: TRIGGER when designing or editing test code, including proposing test classes or cases in chat, enumerating design claims to assert, sketching tests in drafts/, planning TDD red phase, or sweeping existing tests against design docs. SKIP for production code (use code-writing).
 paths: "**/test_*.py, **/*_test.py, **/tests/**, **/__tests__/**, **/*.test.ts, **/*.test.tsx, **/*.test.js, **/*.spec.ts, **/*.spec.tsx, **/*.spec.js, **/*_test.go, **/*_spec.rb, **/spec/**, **/*Test.java, **/*Tests.cs"
 ---
 
@@ -78,7 +78,7 @@ business logic が変われば必ず fail するように書く。 implementatio
 
 ### No dangling-prone references in persistent files
 
-test code / docstring / fixture comment に **dangling reference** を入れない: 端末固有 path (`~/.claude/global-memory/...`)、 ephemeral tag (Action Item 番号 / Plan C 等の一時ラベル)、 「先ほどのテスト」 系の会話文脈依存 reference 等。 他環境 / 時間経過後の reader が参照を解決できない。 詳細: `code-conventions` Rules 参照。
+test code / docstring / fixture comment に **dangling reference** を入れない: 端末固有 path (`~/.claude/global-memory/...`)、 ephemeral tag (Action Item 番号 / Plan C 等の一時ラベル)、 「先ほどのテスト」 系の会話文脈依存 reference 等。 他環境 / 時間経過後の reader が参照を解決できない。 詳細: `code-writing` Rules 参照。
 
 ## Related
 
