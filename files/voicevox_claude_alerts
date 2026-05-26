@@ -560,6 +560,7 @@ detect_question() {
 
 case "$EVENT" in
   Stop)
+    is_background_session && exit 0  # bg は user 待ち状態でないので silent
     if detect_question; then
       # Anchor on the same "last non-empty line" detect_question used, then
       # extract the last sentence within it. Earlier we flattened the whole
@@ -597,6 +598,7 @@ $LAST_SENTENCE" "${EVENT_PHRASES[Stop]}"
         fi
         ;;
       permission_prompt)
+        is_background_session && exit 0  # bg session は user attention 設計外なので silent
         # attention (AskUserQuestion 等) と permission (Bash 等の許可) を統一発話。
         # 未知パターンは silent (誤発話より沈黙)。
         NOTIF_MSG=$(printf '%s' "$INPUT" | jq -r '.message // ""')
@@ -627,10 +629,17 @@ $LAST_SENTENCE" "${EVENT_PHRASES[Stop]}"
 $LAST_MSG" "${EVENT_PHRASES[SubagentStop]}"
     ;;
   ConfigChange)
+    is_background_session && exit 0  # 全 session が ack するので bg は silent (多重発話抑止)
     speak_cached "${EVENT_PHRASES[ConfigChange]}"
     ;;
   PreCompact)
-    speak_cached "${EVENT_PHRASES[PreCompact]}"
+    # bg は sessionId 込みで発話し、 spoken.log の text 列に残して後から照合可能にする
+    # (現行 log format には sessionId 専用列が無いため text に含める)。
+    if is_background_session; then
+      speak_cached "バックグラウンドセッション ${SESSION_ID} の圧縮を開始します。"
+    else
+      speak_cached "${EVENT_PHRASES[PreCompact]}"
+    fi
     ;;
   WorktreeCreate)
     speak_cached "${EVENT_PHRASES[WorktreeCreate]}"
