@@ -16,9 +16,9 @@ import sys
 # 「dangling」 と判定された pattern を本文に書こうとしている場合に match。
 PATTERNS = [
     (re.compile(r'~/\.claude/global-memory/'),
-     '端末固有 path (~/.claude/global-memory/)'),
+     'repo deploy 範囲外 path (~/.claude/global-memory/)'),
     (re.compile(r'/home/[^/]+/\.claude/global-memory/'),
-     '端末固有 path (/home/<user>/.claude/global-memory/)'),
+     'repo deploy 範囲外 path (/home/<user>/.claude/global-memory/)'),
     (re.compile(r'\(global[ -]memory\)'),
      'global memory citation 句'),
     (re.compile(r'\(project CLAUDE\.md\)'),

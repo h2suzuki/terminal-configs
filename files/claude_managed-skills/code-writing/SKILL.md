@@ -80,14 +80,18 @@ deterministic ならコードを書いて、毎回それを呼び出す。
 
 ### No dangling-prone references in persistent files
 
-永続ファイル (repo に commit される source / doc / SKILL.md / hook script / template / コメント / commit message 等) には、 deploy 先 / 他環境 / 時間経過後に reader が参照解決できない reference を入れない。 含まれてはならない pattern:
+<!-- dangling-ref-check: allow (本 section は rule 説明として dangling pattern を例示する) -->
 
-- **端末固有 path**: `~/.claude/global-memory/...` (個人 device の memory dir、 repo に含まれない)
-- **skill dir 外 file への file path 参照**: skill SKILL.md は同 skill dir 内の supporting file (template / data / sub-doc) のみ確証してアクセスできる。 dir 外の repo file (project / org の任意 path、 「project CLAUDE.md」 wording 含む) への file path citation は、 他環境で deploy された時に dir 構造が異なれば dangling reference となる
-- **ephemeral tag**: Action Item 番号 (`AI-12` 等) / Plan C / Phase γ / sprint label など、 議論 / sprint / review 中の一時的ラベル。 永続化すると context が失われた reader に意味不明
+判定基準は「**この repo を新規環境に deploy したとき、 参照解決できなくなる reference か**」。 同じ repo install で作られる path (`/etc/claude-code/...` / `~/.claude/skills/<name>/...` / `~/.claude/CLAUDE.md` / `~/.claude/hooks/<name>` 等) への reference は新規環境でも生成されるので OK。
+
+永続ファイル (repo に commit される source / doc / SKILL.md / hook script / template / コメント / commit message 等) に含まれてはならない pattern:
+
+- **repo deploy 範囲外の path**: 個人 device 固有 / Claude Code runtime 生成 dir (`~/.claude/global-memory/`、 `~/.claude/projects/.../memory/` 等)。 repo install script で作られないため、 新規環境では存在しない
+- **skill dir 外 file への file path 参照**: skill SKILL.md は同 skill dir 内の supporting file (template / data / sub-doc) のみ確証してアクセスできる。 dir 外の任意 path (project CLAUDE.md / `files/...` の repo path 等) への file path citation は deploy 順序 / dir 構造に依存し dangling 可能
+- **ephemeral tag**: Action Item 番号 (`AI-12` 等) / Plan C / Phase γ / sprint label など、 議論 / sprint / review 中の一時的ラベル。 永続化すると context が失われた reader に意味不明 (例外: GitHub Issue / PR 番号 `#NNN` は発行で永続化されるので OK) <!-- dangling-ref-check: allow -->
 - **会話文脈依存 reference**: 「先ほどの議論で」「前回のセッションで」「上の例で」 など、 当該 file 単独で解決できない indexical な参照
 
-**Why:** dangling reference は、 永続 file の自己完結性 (standalone readability) を損なう。 他環境 deploy 時 / 時間経過後 / 別 reader が読むときに参照先を fetch できず、 文章の主張が verify 不能になる。
+**Why:** dangling reference は永続 file の自己完結性 (standalone readability) を損なう。 新規環境 deploy 時 / 時間経過後 / 別 reader が読むときに参照先を fetch できず、 文章の主張が verify 不能になる。
 
 **代替:**
 

@@ -78,7 +78,7 @@ business logic が変われば必ず fail するように書く。 implementatio
 
 ### No dangling-prone references in persistent files
 
-test code / docstring / fixture comment に **dangling reference** を入れない: 端末固有 path (`~/.claude/global-memory/...`)、 ephemeral tag (Action Item 番号 / Plan C 等の一時ラベル)、 「先ほどのテスト」 系の会話文脈依存 reference 等。 他環境 / 時間経過後の reader が参照を解決できない。 詳細: `code-writing` Rules 参照。
+test code / docstring / fixture comment に **dangling reference** を入れない: repo deploy 範囲外の path (`~/.claude/global-memory/`, `~/.claude/projects/.../memory/` 等)、 ephemeral tag (Action Item 番号 / Plan C 等の一時ラベル <!-- dangling-ref-check: allow -->)、 「先ほどのテスト」 系の会話文脈依存 reference 等。 判定基準: 新規環境で repo install したとき参照解決できない reference。 詳細: `code-writing` Rules 参照。
 
 ## Related
 

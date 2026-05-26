@@ -23,10 +23,10 @@ skill SKILL.md / hook script を書く時の format 統一・writing convention 
 - **frontmatter は英語、 body は日本語可**: 中途半端な日英 mix は禁止 (例: `description: Rules for X (categories 日本語).` は NG)
 - **TRIGGER + SKIP の pair**: when_to_use は両方明示。 片方だけは ambiguous
 - **`##` headers は Process / Rules / Output / Related 優先**: 内容に合わない場合のみ他の英語名 (Sources / Examples / Definitions / Red flags 等)
-- **Related section で隣接 skill を citation**: skill 名 symbolic (例: `code-writing`) で。 重複や orthogonal scope の明示で family 化。 端末固有 path / skill dir 外 file / ephemeral tag は **citation しない** (詳細は `code-writing` Rules)
+- **Related section で隣接 skill を citation**: skill 名 symbolic (例: `code-writing`) で。 重複や orthogonal scope の明示で family 化。 repo deploy 範囲外 path / skill dir 外 file / ephemeral tag は **citation しない** (詳細は `code-writing` Rules)
 - **description tighten 時**: 削った詳細を body に明文化 (frontmatter 短縮 ≠ 情報削除)
 - **trigger 列挙の精度**: specific phrase を quote する。 一般化しすぎると trigger 不発火
-- **No dangling-prone references**: SKILL.md / hook / template に端末固有 path / skill dir 外 file への file path citation / ephemeral tag / 会話文脈依存 reference を残さない。 詳細: `code-writing` Rules
+- **No dangling-prone references**: SKILL.md / hook / template にrepo deploy 範囲外 path / skill dir 外 file への file path citation / ephemeral tag / 会話文脈依存 reference を残さない。 詳細: `code-writing` Rules
 
 ## Output
 
@@ -41,4 +41,4 @@ skill SKILL.md / hook script を書く時の format 統一・writing convention 
 - `template-skill.md` (本 skill dir 内) — skill SKILL.md の commented template
 - `template-hook.md` (本 skill dir 内) — hook script + settings.json entry の template
 - `claude-code-guide` — Claude Code 公式 spec を primary source で verify
-- `code-writing` — Rules に「No dangling-prone references in persistent files」 (永続ファイルから外部 / 端末固有 / ephemeral な reference を入れない)
+- `code-writing` — Rules に「No dangling-prone references in persistent files」 (新規環境 deploy で参照解決できない reference を永続 file に入れない: repo 範囲外 path / skill dir 外 file path / ephemeral tag / 会話文脈依存)
