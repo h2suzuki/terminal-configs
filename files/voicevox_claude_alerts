@@ -89,7 +89,7 @@
 #       spoken.log                     always-on, fixed-width log of every
 #                                      utterance. Columns are space-padded
 #                                      so they don't shift between events:
-#                                        ISO_TS EVENT(14) haiku=STATUS(13) dur=Nms(11) MESSAGE
+#                                        ISO_TS EVENT(14) sid=UUID haiku=STATUS(13) dur=Nms(11) MESSAGE
 #                                      STATUS ∈ {OK, EMPTY, TIMEOUT, SKIPPED};
 #                                      SKIPPED means no Haiku call was made
 #                                      (cached / fixed-phrase paths). Grep
@@ -469,9 +469,10 @@ speak_cached() {
     vvox_lock=$2
     event=$3
     log=$4
-    printf "%s %-14s %-13s %-11s %s\n" "$(date -Iseconds)" "$event" "haiku=SKIPPED" "dur=N/A" "$text" >> "$log"
+    sid=$5
+    printf "%s %-14s sid=%s %-13s %-11s %s\n" "$(date -Iseconds)" "$event" "$sid" "haiku=SKIPPED" "dur=N/A" "$text" >> "$log"
     flock "$vvox_lock" timeout "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS --cache "$text"
-  ' _ "$text" "$VVOX_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
+  ' _ "$text" "$VVOX_LOCK" "$EVENT" "$SPOKEN_LOG" "$SESSION_ID" </dev/null >/dev/null 2>&1
 }
 
 speak_text() {
@@ -481,9 +482,10 @@ speak_text() {
     vvox_lock=$2
     event=$3
     log=$4
-    printf "%s %-14s %-13s %-11s %s\n" "$(date -Iseconds)" "$event" "haiku=SKIPPED" "dur=N/A" "$text" >> "$log"
+    sid=$5
+    printf "%s %-14s sid=%s %-13s %-11s %s\n" "$(date -Iseconds)" "$event" "$sid" "haiku=SKIPPED" "dur=N/A" "$text" >> "$log"
     flock "$vvox_lock" timeout "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS "$text"
-  ' _ "$text" "$VVOX_LOCK" "$EVENT" "$SPOKEN_LOG" </dev/null >/dev/null 2>&1
+  ' _ "$text" "$VVOX_LOCK" "$EVENT" "$SPOKEN_LOG" "$SESSION_ID" </dev/null >/dev/null 2>&1
 }
 
 speak_summary() {
@@ -496,6 +498,7 @@ speak_summary() {
     event=$4
     log=$5
     haiku_timeout=$6
+    sid=$7
     # $EPOCHREALTIME → "1736000000.123456"; strip the dot to get microseconds
     # (bash 5+). Integer math avoids awk/bc and stays accurate to 1ms.
     start_us=${EPOCHREALTIME/./}
@@ -521,9 +524,9 @@ speak_summary() {
     # aware (not byte-based) under LC_ALL=C.UTF-8, so this never splits
     # a multi-byte sequence mid-codepoint.
     summary=${summary:0:40}
-    printf "%s %-14s %-13s %-11s %s\n" "$(date -Iseconds)" "$event" "haiku=$status" "dur=${dur_ms}ms" "$summary" >> "$log"
+    printf "%s %-14s sid=%s %-13s %-11s %s\n" "$(date -Iseconds)" "$event" "$sid" "haiku=$status" "dur=${dur_ms}ms" "$summary" >> "$log"
     flock "$vvox_lock" timeout "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS "$summary"
-  ' _ "$prompt" "$fallback" "$VVOX_LOCK" "$EVENT" "$SPOKEN_LOG" "$HAIKU_TIMEOUT" </dev/null >/dev/null 2>&1
+  ' _ "$prompt" "$fallback" "$VVOX_LOCK" "$EVENT" "$SPOKEN_LOG" "$HAIKU_TIMEOUT" "$SESSION_ID" </dev/null >/dev/null 2>&1
 }
 
 age_of() {
@@ -633,10 +636,10 @@ $LAST_MSG" "${EVENT_PHRASES[SubagentStop]}"
     speak_cached "${EVENT_PHRASES[ConfigChange]}"
     ;;
   PreCompact)
-    # bg は sessionId 込みで発話し、 spoken.log の text 列に残して後から照合可能にする
-    # (現行 log format には sessionId 専用列が無いため text に含める)。
+    # bg は発話を短縮 (UUID 読み上げが冗長になるため)、 sessionId は spoken.log の
+    # sid 列で照合する。
     if is_background_session; then
-      speak_cached "バックグラウンドセッション ${SESSION_ID} の圧縮を開始します。"
+      speak_cached "バックグラウンドセッションの圧縮を開始します。セッションIDをログを参照してください。"
     else
       speak_cached "${EVENT_PHRASES[PreCompact]}"
     fi
