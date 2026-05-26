@@ -292,15 +292,11 @@ def cmd_check(payload: dict) -> None:
         return
 
     # No Read/Write at current mtime → cache invalidated, must Read first.
-    # 簡潔指示形。 「hook は file を変更しない (mtime 観察のみ)」 という最小
-    # disambiguation を残しつつ、 corrective action を 1 文で書き下す。
+    # 簡潔指示形。 path は Edit input 側で既知なので reason に含めない。
     if not accesses:
-        reason = f"{path}: Edit には先に Read が必要 (本セッションで未 Read)。"
+        reason = "未 Read。 編集前に、 Read で内容の確認が必要。"
     else:
-        reason = (
-            f"{path}: 直前の Edit/Write で更新されたので、 該当 region を再 Read してから次の Edit へ "
-            "(hook は mtime 観察のみで file は変更しない)。"
-        )
+        reason = "前回の Read から内容が変化。 編集前に、 再 Read で現内容の確認が必要。"
     _emit_deny(reason)
 
 
