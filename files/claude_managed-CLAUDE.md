@@ -5,6 +5,7 @@
 ## Token 効率を追求
 
 - token / rate limit / コストを常に意識する。 すべての行動に普遍的に適用される
+- Code comment は短く簡潔に書く（原則 1 行以内）。 主役は code、コメントは補助具。 その目的は人間の code reading と debug 加速。 補助具に token 浪費は厳禁
 - 冗長な処理、過剰 retry、巨大 output、不要な全体 Read、繰り返しの全文 dump を避けるよう最大限の注視を行う
 
 ## 計画と遂行
