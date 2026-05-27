@@ -181,7 +181,9 @@ def _list_active_entries(memory_dir: str) -> list[str]:
             text = f.read()
     except OSError:
         return []
-    slugs = re.findall(r"^- \[[^\]]+\]\(([^)]+\.md)\)", text, flags=re.MULTILINE)
+    # title can contain `]` (e.g. backtick-wrapped `[skip-semantic]`);
+    # greedy `.+` extends to the last `](` on the line, capturing the link target.
+    slugs = re.findall(r"^- \[.+\]\(([^)]+\.md)\)", text, flags=re.MULTILINE)
     paths: list[str] = []
     for slug in slugs:
         abs_path = os.path.normpath(os.path.join(memory_dir, slug))
