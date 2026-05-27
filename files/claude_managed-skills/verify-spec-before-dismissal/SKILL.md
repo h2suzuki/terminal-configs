@@ -1,7 +1,7 @@
 ---
 name: verify-spec-before-dismissal
 description: When about to assert a negation, verify against official primary sources before concluding; investigate without asking permission.
-when_to_use: TRIGGER when about to say "できない" / "ない" / "非対応" / "サポートされていない" / "未対応" / "機能が無い" / "使えない" / "知らないので別物だと思った" (any domain), when about to issue a claim depending on Claude hook / subagent / plugin / skill / Anthropic API or other official-ecosystem spec, or when about to suppress firing with "今回は別ケース" / "該当しない". SKIP only when basing the denial on a primary source you directly read (cite the URL / quoted excerpt in the body).
+when_to_use: TRIGGER when about to say "できない" / "ない" / "非対応" / "サポートされていない" / "未対応" / "機能が無い" / "使えない" / "知らないので別物だと思った" (any domain), when about to issue a claim depending on Claude hook / subagent / plugin / skill / Anthropic API or other official-ecosystem spec, when about to dismiss a subagent's bonus claim as "hallucinate 可能性" without verifying the cited URL / command output yourself, or when about to suppress firing with "今回は別ケース" / "該当しない". SKIP only when basing the denial on a primary source **you directly read yourself** (cite the URL / quoted excerpt in the body); subagent-relayed citations do not qualify as direct reading.
 ---
 
 # Verify Spec Before Dismissal
@@ -23,6 +23,10 @@ when_to_use: TRIGGER when about to say "できない" / "ない" / "非対応" /
 一次情報確認のための Read (公式 doc / source / 設定実体 / artifact 本体) と専門 agent (claude-code-guide 等) の spawn は **token 効率則・簡潔さ・anti-overreach の例外**。 token / コスト / scope を理由に確認を 「冗長・過剰・scope 外」 と自己抑制しない。
 
 **誤判断によるやり直しで消費するコストは、 read や spawn コストより遥かに甚大** (局所最適に陥らない)。 判定・推奨・結論の前提となる確認は token 効率に優先する。
+
+### Subagent bonus claim も自分で verify
+
+subagent (claude-code-guide 等) が primary source URL 引用付きで出した bonus claim を 「hallucinate 可能性」 と推定して verify せず dismiss しない。 URL fetch / command 実行 (`--help` 等) で primary verify した上で accept / reject する。 SKIP 条件の 「primary source を直接読んで cite」 は **自分が直接 fetch / 実行する** ことを意味し、 subagent 越しの引用は該当しない。 否定主張 ("X はない") に倒す前は特に必須。 2026-05-26 起票 (claude-code-guide subagent が `claude agents` mode を URL 付き claim、 dismiss → user 指摘で `claude agents --help` 実行で実存判明、 verify 1 step で防げた事例)。
 
 ## Sources
 
