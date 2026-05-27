@@ -59,7 +59,7 @@ memory / doc / commit message / todos / handoff 等の **durable artifact** に 
 - **`code.claude.com`** — Claude Code 公式 docs
 - **`github.com/anthropics/*`** — Anthropic OSS repos (source code 本体)
 - **`claude.com/plugins`** — plugin marketplace
-- **`${XDG_CACHE_HOME:-~/.cache}/claude-code-feature-cache/findings.md`** — `claude-code-feature-cache` SessionStart hook が cutoff 以降の delta を bg research して累積。 不明 spec 点に当たった時 Read で参照 (最上位 `## v<X.Y.Z>` heading と `claude --version` を突き合わせ、 cover 状況を確認)
+- **`${XDG_CACHE_HOME:-~/.cache}/claude-code-feature-research/findings.md`** — `claude-code-feature-research` SessionStart hook が cutoff 以降の delta を bg research して累積。 不明 spec 点に当たった時 Read で参照 (最上位 `## v<X.Y.Z>` heading と `claude --version` を突き合わせ、 cover 状況を確認)
 
 出典 **2 点以上** で結論の裏を取り、 うち **最低 1 点は公式・一次情報** (公式 doc / 公式サイト / source code / artifact 本体 / 設定実体 / cache file のいずれか)。 Reddit / 個人ブログ等は点数に算入してよいが公式 1 点の要件は満たさない。
 

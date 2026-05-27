@@ -1,9 +1,10 @@
 #!/bin/bash
-# /etc/claude-code/hooks/claude-code-feature-cache.sh
+# /etc/claude-code/hooks/claude-code-feature-research.sh
 #
-# SessionStart hook — keeps a versioned cache of Claude Code feature
-# deltas (hook events / subagent / plugin / skill / settings / MCP / CLI)
-# at ${XDG_CACHE_HOME:-~/.cache}/claude-code-feature-cache/findings.md.
+# SessionStart hook — keeps a versioned research log of Claude Code
+# feature deltas (hook events / subagent / plugin / skill / settings /
+# MCP / CLI) at
+# ${XDG_CACHE_HOME:-~/.cache}/claude-code-feature-research/findings.md.
 # Other skills (writing-skills / make-plan-before-coding) Read that
 # file when they hit an unfamiliar Claude Code spec point. The hook
 # itself surfaces nothing in additionalContext — the file exists for
@@ -14,7 +15,7 @@
 #                     version (last "## v<X.Y.Z>" heading == claude
 #                     --version). Exit 0 silently, no model call.
 #   - Version MISS  → dispatch a detached `claude --bg` research
-#                     session whose job is to compare the last cached
+#                     session whose job is to compare the last logged
 #                     version against the current CLI, write only a
 #                     new section body to a per-key staging file, and
 #                     exit. The reaper later prepends that section to
@@ -30,15 +31,27 @@
 #     acts solely on ids this hook recorded.
 #   - A per-key in-flight marker dedups concurrent dispatches.
 #
-# Recursion guard: CLAUDE_CODE_FEATURE_CACHE_PARENT is exported into
+# CLI introspection model:
+#   - The hook itself runs `claude --help` and `claude <subcmd> --help`
+#     for every subcommand surface, and embeds the captured dump into
+#     the bg session's user_prompt as `## CLI introspection dump`.
+#   - This means the bg session never needs the `Bash` tool to call
+#     `claude` — it treats the dump as ground truth and compares it
+#     against the public docs via WebFetch. Keeping `Bash` out of the
+#     bg session's tool set eliminates the permission-ask escalation
+#     observed when `acceptEdits` was combined with `Bash`: detached
+#     sessions cannot respond to permission prompts and the prompt
+#     bubbled up to the user's interactive session.
+#
+# Recursion guard: CLAUDE_CODE_FEATURE_RESEARCH_PARENT is exported into
 # the child and `--setting-sources ""` keeps the child from loading
 # the settings file that registers this hook.
 #
 # The methodology prompt
-# (/etc/claude-code/hooks/claude-code-feature-cache-prompt.md) is
+# (/etc/claude-code/hooks/claude-code-feature-research-prompt.md) is
 # injected via --append-system-prompt so the bg session gets the
 # research protocol; the child does its own fetches with the Read /
-# WebFetch / Bash tools.
+# WebFetch tools.
 #
 # Stdin : SessionStart payload JSON (unused, drained for hygiene).
 # Stdout: always empty. This hook never surfaces findings via
@@ -52,10 +65,10 @@ readonly CACHE_DIR="${XDG_CACHE_HOME:-${HOME}/.cache}/${PROG_NAME}"
 readonly INFLIGHT_DIR="${CACHE_DIR}/.inflight"
 readonly STAGING_DIR="${CACHE_DIR}/.staging"
 readonly FINDINGS_MD="${CACHE_DIR}/findings.md"
-readonly PROMPT_MD="/etc/claude-code/hooks/claude-code-feature-cache-prompt.md"
+readonly PROMPT_MD="/etc/claude-code/hooks/claude-code-feature-research-prompt.md"
 # Identifies this hook's background sessions. The reaper only stops/rm's
 # a session whose jobs/<id>/state.json "name" equals this exact string.
-readonly BG_NAME="claude-code-feature-cache"
+readonly BG_NAME="claude-code-feature-research"
 # Bounds only the dispatch call (cold-starting the per-user supervisor
 # can take tens of seconds); the research session then runs detached.
 readonly BG_DISPATCH_TIMEOUT_S=60
@@ -147,6 +160,43 @@ reap_inflight() {
   done
 }
 
+# --- CLI introspection capture ---------------------------------------------
+#
+# Build the dump that the bg session uses as ground truth. The hook runs
+# every `claude <sub> --help` itself so the dispatched session does not
+# need the `Bash` tool. Subcommands are parsed from the top-level
+# `Commands:` section (commander.js format: 2-space indent, identifier,
+# padding, description, blank line ends the section). Each line of the
+# dump is prefixed with a fenced `=== claude <sub> --help ===` heading
+# so the LLM can locate per-subcommand surfaces inside the prompt.
+capture_cli_dump() {
+  local top_help line cand sub
+  local -a subcommands=()
+  top_help="$(claude --help 2>&1 || true)"
+  printf '=== claude --help ===\n%s\n' "$top_help"
+  local in_commands=0
+  while IFS= read -r line; do
+    if [[ "$line" == "Commands:" ]]; then
+      in_commands=1
+      continue
+    fi
+    if (( in_commands )); then
+      [[ -z "${line//[[:space:]]/}" ]] && break
+      if [[ "$line" =~ ^[[:space:]]+([a-zA-Z][a-zA-Z0-9_-]*) ]]; then
+        cand="${BASH_REMATCH[1]}"
+        # Skip the auto-generated `help` entry — `claude help --help`
+        # just re-prints the top-level help and adds no surface.
+        [[ "$cand" == "help" ]] && continue
+        subcommands+=("$cand")
+      fi
+    fi
+  done <<<"$top_help"
+  for sub in "${subcommands[@]}"; do
+    printf '\n\n=== claude %s --help ===\n' "$sub"
+    claude "$sub" --help 2>&1 || true
+  done
+}
+
 # --- detached self-reap entry ----------------------------------------------
 #
 # The dispatcher spawns `"$0" --reap-pass` via setsid after a delay. This
@@ -159,7 +209,7 @@ fi
 
 # --- re-entry guard ---------------------------------------------------------
 
-if [[ -n "${CLAUDE_CODE_FEATURE_CACHE_PARENT:-}" ]]; then
+if [[ -n "${CLAUDE_CODE_FEATURE_RESEARCH_PARENT:-}" ]]; then
   exit 0
 fi
 
@@ -228,33 +278,39 @@ staging="${STAGING_DIR}/${key}.md"
 rm -f "$staging" 2>/dev/null
 
 prompt_body="$(cat "$PROMPT_MD" 2>/dev/null)"
+cli_dump="$(capture_cli_dump)"
 
 # The methodology prompt is injected via --append-system-prompt. The
 # user-prompt block carries the variables the prompt references
-# (current / last version, the staging path to Write to). The cutoff
-# string ("2026-01") is the assistant knowledge cutoff and is what the
-# "from-cutoff scan" path should compare against on initial seed.
+# (current / last version, the staging path to Write to) and the
+# pre-captured `## CLI introspection dump` so the bg session has the
+# ground truth without a Bash call. The cutoff string ("2026-01") is
+# the assistant knowledge cutoff and is what the "from-cutoff scan"
+# path should compare against on initial seed.
 if [[ -z "$last_version" ]]; then
   delta_descr="initial seed: research from the Anthropic Claude Code knowledge cutoff (2026-01) up through v${current_version}. tag the section as the first scan."
 else
   delta_descr="delta research: list everything that changed between v${last_version} and v${current_version}."
 fi
 
-user_prompt=$'Claude Code feature-delta research session.\n\n'"$delta_descr"$'\n\nWrite ONLY the new section body (single `## v<current> (researched YYYY-MM-DD)` heading followed by the four subsections defined in the methodology prompt) with the Write tool to:\n\n'"$staging"$'\n\nDo not echo to stdout. Do not write anything besides the staging file. No JSON envelope, no prose before/after the staging Write call.\n\ncurrent_version: '"$current_version"$'\nlast_version: '"${last_version:-<none — initial seed>}"$'\nstaging_file: '"$staging"
+user_prompt=$'Claude Code feature-delta research session.\n\n'"$delta_descr"$'\n\nWrite ONLY the new section body (single `## v<current> (researched YYYY-MM-DD)` heading followed by the four subsections defined in the methodology prompt) with the Write tool to:\n\n'"$staging"$'\n\nDo not echo to stdout. Do not write anything besides the staging file. No JSON envelope, no prose before/after the staging Write call.\n\ncurrent_version: '"$current_version"$'\nlast_version: '"${last_version:-<none — initial seed>}"$'\nstaging_file: '"$staging"$'\n\n## CLI introspection dump (pre-captured by the SessionStart hook)\n\n'"$cli_dump"
 
 # `claude --bg`: detached, subscription-billed. acceptEdits auto-allows
 # Write non-interactively. --setting-sources "" keeps the child from
-# re-registering this hook. WebFetch is required for primary-source
-# verify (docs.claude.com / code.claude.com / github.com).
+# re-registering this hook. The `Bash` tool is deliberately omitted:
+# every `claude <sub> --help` invocation is pre-captured into
+# `cli_dump` above, so the bg session has the ground truth without
+# needing Bash, and the permission-ask path that would escalate to
+# the user's interactive session is closed.
 out="$(
-  CLAUDE_CODE_FEATURE_CACHE_PARENT=1 timeout "$BG_DISPATCH_TIMEOUT_S" \
+  CLAUDE_CODE_FEATURE_RESEARCH_PARENT=1 timeout "$BG_DISPATCH_TIMEOUT_S" \
     claude --bg \
       --name "$BG_NAME" \
       --model claude-sonnet-4-5-20250929 \
       --effort high \
       --setting-sources "" \
       --strict-mcp-config \
-      --tools Read,Write,WebFetch,Bash \
+      --tools Read,Write,WebFetch \
       --add-dir "$STAGING_DIR" \
       --permission-mode acceptEdits \
       --append-system-prompt "$prompt_body" \

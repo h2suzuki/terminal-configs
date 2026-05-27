@@ -1,7 +1,7 @@
-# Claude Code Feature Cache — Research Methodology
+# Claude Code Feature Research — Methodology
 
 You are a background research session dispatched by the
-`claude-code-feature-cache` SessionStart hook. Your job is to compare
+`claude-code-feature-research` SessionStart hook. Your job is to compare
 **`last_version`** against **`current_version`** (both injected in the
 user prompt) and write a single new section to **`staging_file`** that
 captures what changed in Claude Code's user-facing surface area in
@@ -19,7 +19,7 @@ Claude Code itself:
 
 - hook events / payload shape / `permissionDecisionReason` / exit codes
 - subagent / agent invocation / `claude --bg` / `claude -p` / job
-  lifecycle (`claude jobs`, `claude stop`, `claude rm`)
+  lifecycle (`claude agents`, `claude stop`, `claude rm`)
 - plugin / marketplace / plugin manifest
 - skill SKILL.md frontmatter fields (`name`, `description`,
   `when_to_use`, `context: fork`, `argument-hint`, `arguments`,
@@ -41,11 +41,14 @@ Claude Code itself:
 
 ## Sources (priority order)
 
-1. **CLI `--help` output**: `claude --help`, `claude <subcommand>
-   --help` for every subcommand (`agents`, `mcp`, `plugin`, `jobs`,
-   `stop`, `rm`, `bg`, `p`, ...). Use the `Bash` tool. This is the
-   ground truth for "what shipped" — docs lag, releases lie, but
-   `--help` is generated from the current binary.
+1. **CLI `--help` output**: pre-captured by the SessionStart hook and
+   appended to the user prompt under `## CLI introspection dump`
+   (top-level help plus every `claude <subcommand> --help`). This is
+   the ground truth for "what shipped" — docs lag, releases lie, but
+   `--help` is generated from the current binary. You do **not** need
+   to (and cannot) invoke `claude` yourself; the bg session has no
+   `Bash` tool. If a subcommand's surface needs cross-verification,
+   use WebFetch against the docs in 2-5 below.
 2. **`https://docs.claude.com`** — Anthropic public docs.
 3. **`https://code.claude.com/docs`** — Claude Code-specific docs
    (hooks reference, skills reference, settings reference).
@@ -55,8 +58,9 @@ Claude Code itself:
 5. **`https://claude.com/plugins`** — plugin marketplace.
 
 **Cross-verify rule**: at least one official source (1-5) plus one
-other path. CLI `--help` alone is enough only when the docs are
-genuinely silent — note that case in **Conflicting / unclear**.
+other path. The pre-captured CLI dump alone is enough only when the
+docs are genuinely silent — note that case in **Conflicting /
+unclear**.
 
 Community sources (blog / Reddit / X) do **not** satisfy the official
 requirement and are recorded only as supporting context.
@@ -125,23 +129,26 @@ Otherwise the section header has no suffix.
 
 ## Process
 
-1. Run `claude --help` and `claude --version` via `Bash` first to
-   confirm the running CLI and capture the top-level flag list.
-2. For each subcommand surface, run `claude <subcommand> --help` and
-   diff against your memory of `last_version`.
+1. Read the `## CLI introspection dump` section in the user prompt.
+   Its top-level `=== claude --help ===` block plus every
+   `=== claude <sub> --help ===` block is the binary's current
+   surface, captured at the moment this session was dispatched.
+2. For each subcommand surface in the dump, diff it against your
+   memory of `last_version` (or the cutoff for initial seed).
 3. Fetch the GitHub releases page for tags between `v{last_version}`
    and `v{current_version}` (inclusive of the newer endpoint) and
-   read each release body.
+   read each release body via WebFetch.
 4. Fetch the hooks / skills / settings reference pages on
-   `code.claude.com/docs` for current schema.
+   `code.claude.com/docs` for current schema via WebFetch.
 5. Compose the section in the format above. Be concise — one bullet
    per item.
 6. Write to `staging_file` and exit. Do not output anything else.
 
 ## Failure modes (record under Conflicting / unclear, do not abort)
 
-- `claude --help` empty or errors → note "CLI introspection
-  unavailable in this env" and proceed with doc-only sources.
+- The CLI dump in the user prompt is empty or shows
+  `claude: command not found` → note "CLI introspection unavailable
+  in this env" and proceed with doc-only sources.
 - A GitHub release page 404s → note the tag is missing from the
   release feed and rely on the changelog / commit log.
 - Cross-verify fails for an item → keep the item but file under
