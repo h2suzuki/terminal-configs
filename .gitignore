@@ -2,3 +2,5 @@
 tasks/
 __pycache__/
 *.pyc
+drafts/
+last-session-handoff.md
