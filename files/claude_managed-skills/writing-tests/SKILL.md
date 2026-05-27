@@ -1,7 +1,7 @@
 ---
-name: test-writing
+name: writing-tests
 description: Rules for designing / editing tests (TDD discipline, design-claim enumeration, intent encoding, coverage techniques, observability, verify target expansion).
-when_to_use: TRIGGER when designing or editing test code, including proposing test classes or cases in chat, enumerating design claims to assert, sketching tests in drafts/, planning TDD red phase, or sweeping existing tests against design docs. SKIP for production code (use code-writing).
+when_to_use: TRIGGER when designing or editing test code, including proposing test classes or cases in chat, enumerating design claims to assert, sketching tests in drafts/, planning TDD red phase, or sweeping existing tests against design docs. SKIP for production code (use writing-code).
 paths: "**/test_*.py, **/*_test.py, **/tests/**, **/__tests__/**, **/*.test.ts, **/*.test.tsx, **/*.test.js, **/*.spec.ts, **/*.spec.tsx, **/*.spec.js, **/*_test.go, **/*_spec.rb, **/spec/**, **/*Test.java, **/*Tests.cs"
 ---
 
@@ -78,7 +78,7 @@ business logic が変われば必ず fail するように書く。 implementatio
 
 ### No dangling-prone references in persistent files
 
-test code / docstring / fixture comment に **dangling reference** を入れない: repo deploy 範囲外の path (`~/.claude/global-memory/`, `~/.claude/projects/.../memory/` 等)、 ephemeral tag (Action Item 番号 / Plan C 等の一時ラベル <!-- dangling-ref-check: allow -->)、 「先ほどのテスト」 系の会話文脈依存 reference 等。 判定基準: 新規環境で repo install したとき参照解決できない reference。 詳細: `code-writing` Rules 参照。
+test code / docstring / fixture comment に **dangling reference** を入れない: repo deploy 範囲外の path (`~/.claude/global-memory/`, `~/.claude/projects/.../memory/` 等)、 ephemeral tag (Action Item 番号 / Plan C 等の一時ラベル <!-- dangling-ref-check: allow -->)、 「先ほどのテスト」 系の会話文脈依存 reference 等。 判定基準: 新規環境で repo install したとき参照解決できない reference。 詳細: `writing-code` Rules 参照。
 
 ## Related
 

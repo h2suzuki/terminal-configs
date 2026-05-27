@@ -47,12 +47,12 @@ skill 実行後の出力 / 振る舞いの形式 (該当する場合)。
 ## Related
 
 - `sibling-skill-1` — 隣接 scope の skill
-- `code-writing` — 永続ファイル汎用 rule (例: 「No dangling-prone references in persistent files」)
+- `writing-code` — 永続ファイル汎用 rule (例: 「No dangling-prone references in persistent files」)
 
 <!--
 === Writing Convention Cheatsheet ===
 
-(永続ファイルから dangling-prone reference [repo deploy 範囲外 path / skill dir 外 file への file path citation / ephemeral tag 等] を入れない — `code-writing` Rules「No dangling-prone references in persistent files」 参照)
+(永続ファイルから dangling-prone reference [repo deploy 範囲外 path / skill dir 外 file への file path citation / ephemeral tag 等] を入れない — `writing-code` Rules「No dangling-prone references in persistent files」 参照)
 
 frontmatter:
   - description: 1 文英語、 文末 `.`、 quote `"..."`

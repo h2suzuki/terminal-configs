@@ -184,5 +184,5 @@ skill が新規導入された環境では、 既存 memory file 全件を一度
 
 ## Related
 
-- `code-writing` — Rules「No dangling-prone references in persistent files」 (memory dir 外 file への path 引用禁止)
-- `skill-writing` — skill SKILL.md の format / writing convention
+- `writing-code` — Rules「No dangling-prone references in persistent files」 (memory dir 外 file への path 引用禁止)
+- `writing-skills` — skill SKILL.md の format / writing convention

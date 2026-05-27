@@ -1,5 +1,5 @@
 ---
-name: bash-writing-rules
+name: writing-bash
 description: Rules for writing bash scripts and shell functions.
 when_to_use: TRIGGER when editing or creating a .sh file, or when writing a shell script / bash function / multi-line shell pipeline. SKIP for Python, Ruby, fish, or other non-bash scripts.
 ---

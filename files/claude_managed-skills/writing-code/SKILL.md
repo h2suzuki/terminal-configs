@@ -1,6 +1,6 @@
 ---
-name: code-writing
-description: Universal source code rules (mode classification, convention compliance, wasteful pattern avoidance, LLM API restrictions). Applies to any language; language-specific add-ons (bash-writing-rules, test-writing) layer on top.
+name: writing-code
+description: Universal source code rules (mode classification, convention compliance, wasteful pattern avoidance, LLM API restrictions). Applies to any language; language-specific add-ons (writing-bash, writing-tests) layer on top.
 when_to_use: TRIGGER when editing source code in any language (including bash, tests). Stacks additively with language-specific add-on skills — do not treat add-ons as replacements.
 ---
 
@@ -84,22 +84,22 @@ deterministic ならコードを書いて、毎回それを呼び出す。
 
 | Role | 例 | 適用範囲 |
 |---|---|---|
-| Universal | `code-writing` | 全 source code (any language) |
-| Language-specific add-on | `bash-writing-rules` | bash 固有の追加 rule |
-| File-kind add-on | `test-writing` | test file 固有の追加 rule |
+| Universal | `writing-code` | 全 source code (any language) |
+| Language-specific add-on | `writing-bash` | bash 固有の追加 rule |
+| File-kind add-on | `writing-tests` | test file 固有の追加 rule |
 
-これらは **layered (additive)**: bash test script を編集する時は code-writing + bash-writing-rules + test-writing の 3 つすべて fire する。 add-on は universal を replace するのではなく、 上に積む。
+これらは **layered (additive)**: bash test script を編集する時は writing-code + writing-bash + writing-tests の 3 つすべて fire する。 add-on は universal を replace するのではなく、 上に積む。
 
 #### Frontmatter design rules
 
 設計の本質は frontmatter で表現する (body で Wrong/Right を text 説明しない):
 
-- **universal の `when_to_use`**: broad に書く (任意 language を含む、 add-on を SKIP に列挙しない)。 「stacks additively with language-specific add-ons」 のような layered 明示を入れる。 live 例は本 skill (`code-writing`) の frontmatter
+- **universal の `when_to_use`**: broad に書く (任意 language を含む、 add-on を SKIP に列挙しない)。 「stacks additively with language-specific add-ons」 のような layered 明示を入れる。 live 例は本 skill (`writing-code`) の frontmatter
 - **universal の `paths`** (指定するなら): 全 source extension を網羅 (add-on 対象の `.sh` 等も含む)
-- **add-on の `when_to_use`**: 自 skill の適用外を SKIP で明示 (universal を SKIP に入れない)。 live 例は `bash-writing-rules` の frontmatter
+- **add-on の `when_to_use`**: 自 skill の適用外を SKIP で明示 (universal を SKIP に入れない)。 live 例は `writing-bash` の frontmatter
 - **universal の `description`**: `Universal` prefix で role を明示
 
-これにより universal と add-on が両方 fire し、 add-on は universal を replace せず上に積む構造になる。 詳細な skill format は `skill-writing` skill 参照。
+これにより universal と add-on が両方 fire し、 add-on は universal を replace せず上に積む構造になる。 詳細な skill format は `writing-skills` skill 参照。
 
 ### No dangling-prone references in persistent files
 
@@ -120,7 +120,7 @@ deterministic ならコードを書いて、毎回それを呼び出す。
 
 - 内容を該当 file の body に **inline で明文化** する (rationale を doc 内で完結)
 - 必要な context を文章で説明: 「個人 device の memory に X という rule あり」 ではなく「X という rule に従う」 と直接書く
-- 他 skill 間 reference は **skill 名 symbolic** (例: `code-writing`) で。 Claude Code が auto-discover する spec に依存する OK pattern (skill 名は file path ではない)
+- 他 skill 間 reference は **skill 名 symbolic** (例: `writing-code`) で。 Claude Code が auto-discover する spec に依存する OK pattern (skill 名は file path ではない)
 
 **例外 (許容される機械 reference):**
 
