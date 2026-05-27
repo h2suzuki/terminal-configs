@@ -78,6 +78,32 @@ deterministic ならコードを書いて、毎回それを呼び出す。
 - 無限 loop / 過剰 polling / 重複計算 / 巨大 output / 想定外の高頻度実行
 - 並列化時は特に 「同じ前提で複数 worker が重複計算」 に陥っていないか確認
 
+### Universal vs add-on skill layering
+
+複数 skill が同じ file kind を対象にする時、 役割が **universal** か **add-on** かで設計が変わる:
+
+| Role | 例 | 適用範囲 |
+|---|---|---|
+| Universal | `code-writing` | 全 source code (any language) |
+| Language-specific add-on | `bash-writing-rules` | bash 固有の追加 rule |
+| File-kind add-on | `test-writing` | test file 固有の追加 rule |
+
+これらは **layered (additive)**: bash test script を編集する時は code-writing + bash-writing-rules + test-writing の 3 つすべて fire する。 add-on は universal を replace するのではなく、 上に積む。
+
+**Wrong design (replacement model 誤解を生む)**:
+
+- 悪い: universal の when_to_use に `SKIP for bash (use bash-writing-rules) and tests (use test-writing)` — 「bash は別 skill が代替するから universal は skip」 と読める。 実際は両方 fire してほしい
+- 悪い: universal の paths が language-specific add-on の対象 extension (例 `.sh`) を含まない — paths で auto-trigger が切られると universal の rule が bash file 編集時に発火しない
+
+**Right design (layered model)**:
+
+- 良い: universal の when_to_use は broad に書く: `TRIGGER when editing source code (any language; stacks with language-specific add-ons).`
+- 良い: universal の paths は全 source extension を網羅: `.py, .ts, .go, .rb, ..., .sh, .bash, .zsh, .fish`
+- 良い: add-on の when_to_use では `SKIP for non-{kind} files (handled elsewhere)` のように自 skill の適用外を明示。 universal は SKIP に書かない (universal を SKIP リストに入れると逆方向の競合宣言になる)
+- 良い: universal の description に `Universal` prefix を付けて role を明示
+
+新規 universal / add-on skill 作成・編集時は本節を参照。 詳細な skill format は `skill-writing` skill 参照。
+
 ### No dangling-prone references in persistent files
 
 <!-- dangling-ref-check: allow (本 section は rule 説明として dangling pattern を例示する) -->
