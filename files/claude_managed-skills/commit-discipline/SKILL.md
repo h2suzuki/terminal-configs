@@ -39,7 +39,7 @@ permission のフォーマット: 「次に X するつもりです、 よろし
 - 悪い (不催促宣言): 「push は催促しません」「push 話題は出さない」 (不催促宣言も push 話題を能動的に持ち出す行為)
 - 良い: silent でいる (user が指示するまで一切触れない)
 
-一般化原則として、 rule 遵守の meta-announce 全般 (「省略しません」「触りません」 等の不実施宣言含む) を抑止する。 push 以外の compliance-announcement 系にも同じ silent rule を適用する。
+push 以外の rule-compliance meta-announce (「省略しません」「触りません」 等) 全般は `meta-announce-silence` skill を参照。
 
 ### Session end
 
