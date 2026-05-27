@@ -33,6 +33,8 @@ current content は `$file` を Read して subagent が取得する。
 <!-- dangling-ref-check: allow (next bullet は rule 説明として ephemeral label を例示) -->
 - **family-sweep 義務 (reader-hostile-artifact のクラス対応)**: 1 件でも flag された応答内で、 同 family の他箇所も網羅 sweep する。 family = letter/option/ledger ラベル (Plan C / Phase γ / Option B 等) / `M##` `H##` `C##` 等 ephemeral 台帳 ID / 旧/以前/従来/observed 等 changelog narration triggers / `Phase` 文字。 stated scope だけ忠実にこなして全掃を出さないと、 scope 拡大を user に N 回 driving させる regression (partial-fix の過小一般化より上位の受け身さ)。 (a) pattern family を認識して全 canonical artifact を grep-sweep し、 (b) 名指し increment だけでなく family 全体の網羅修正を proactively 提案 or (bounded・低リスクなら) 実行する。 AskUserQuestion で scope を問う場合も、 選択肢に必ず「family 全体・全 canonical file」 案を含める。
 
+- **established terminology の保存**: skill SKILL.md / canonical doc で繰り返し参照される用語 (= bold-labeled 項目 / frontmatter 繰返し term / section heading) は doc 構造の anchor。 説明文が外部事実と矛盾しているように見えても、 **label 自体を rename / 削除しない** (cross-link dangling 化 / mental model disrupt / API-level breaking change 相当)。 説明文 (描写) だけを事実整合に修正する。 例外: 用語自体が誤りと user / handoff で agreed の場合のみ rename / 削除 OK。
+
 ## Output
 
 fork 内で **対象 file を直接 Edit/Write** して書き戻す。 main session への返却は **主な変更の 1 行要約 list のみ** (artifact 本文は file に書き戻し済みなので main の context に再 load しない — これが fork による context 肥大対策の本質)。

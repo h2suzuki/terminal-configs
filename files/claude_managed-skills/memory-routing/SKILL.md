@@ -10,6 +10,27 @@ memory entry の保存先 (user vs project-local) と保存タイミングの ru
 
 ## Process
 
+### Where to place a new rule
+
+**Default rule**: 新 rule は **CLAUDE.md に追加しない**。 まず skill / hook / memory のいずれかで実装する。
+
+CLAUDE.md は session 毎 token を食う auto-load file。 肥大化すると個別 rule の attention 分散・compliance 連鎖低下 (cascade regression)。 追加すべき理由 (例: hook / skill 発動前の参照が必須、 trigger phrase 化できない普遍前提) が明確な case のみ、 **ユーザー承諾を得てから** CLAUDE.md に追加する。
+
+#### Placement priority (CLAUDE.md は最終手段)
+
+| 問い | 配置先 |
+|---|---|
+| 機械 enforce 可能? | **hook** (PreToolUse 等) |
+| trigger phrase で発火可能? | **skill** (when_to_use) |
+| LLM の behavioral correction? | **skill** (autonomous trigger) |
+| 単発の経緯 / 過去事例 / preference? | **memory** (entry 1 件) |
+| 上記いずれでも不可で、 全 session で必須? | **CLAUDE.md** — ただし user 承諾要 |
+
+- **skill**: trigger phrase で on-demand 発火、 token 効率高い (発火時のみ context 占有)
+- **hook**: mechanical enforce (LLM 自律ではなく shell script)、 確実だが flexibility 低い
+- **memory**: cross-session の reference value、 memory_surface hook で trigger 時 surface
+- **CLAUDE.md**: 上記いずれでも実現不可な、 全 session で必須の前提のみ。 **default NG、 user 承諾要**
+
 ### Routing decision (priority 1 → 3)
 
 #### 1. User (`~/.claude/memory/`) — cross-project scope
