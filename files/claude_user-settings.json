@@ -10,6 +10,7 @@
   },
   "tui": "fullscreen",
   "skipAutoPermissionPrompt": true,
+  "autoMemoryEnabled": false,
   "hooks": {
     "PreToolUse": [
       {
