@@ -1,7 +1,7 @@
 ---
 name: claude-code-guide
 description: Verify Claude Code specs (hook / subagent / plugin / skill / settings / MCP / CLI) against primary sources in a fork.
-when_to_use: 'TRIGGER when about to make design or adoption decisions in these areas, when about to issue a negation claim within Claude Code scope ("feature が無い" / "該当 event が無い" etc.), or when about to make a specific positive assertion about Claude Code spec ("`UserPromptSubmit` hook で X" / "`context: fork` は Y" / "`disable-model-invocation` は Z" etc.). Manual invocation: `/claude-code-guide <topic>`. SKIP for Claude API / SDK / other Anthropic products / model pricing / non-Claude-Code tools (return as out-of-scope).'
+when_to_use: 'TRIGGER on Claude Code spec design decisions, negations ("feature が無い" etc) or positive assertions ("`context: fork` は Y" etc). Manual: `/claude-code-guide <topic>`. SKIP for Claude API / SDK.'
 argument-hint: <topic>
 arguments: topic
 context: fork

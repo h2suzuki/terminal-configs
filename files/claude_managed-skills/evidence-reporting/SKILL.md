@@ -1,7 +1,7 @@
 ---
 name: evidence-reporting
 description: Rules to consult before asserting judgment / recommendation / conclusion / scale-impact assessment / behavior claim / resource cost estimate / defect classification.
-when_to_use: TRIGGER when about to use evaluative terms like "大改造" / "軽微" / "影響大" / "リスクが高い" / "具体的" / "必要範囲" / "アーキテクチャ見直し", when about to cite source location for an actual code behavior claim (the citation must be `file:line` of the code, not the design doc), when about to estimate resource cost (token / wall-clock — must distinguish active generation from idle / stalled), or when about to classify a defect as "gap" vs "bug" (leaks / security / corruption are bugs by definition — never gaps). SKIP for mechanical tool output reports.
+when_to_use: TRIGGER when about to use evaluative terms ("大改造" / "影響大" etc), cite source for a code behavior claim, estimate resource cost, or classify a defect as "gap" vs "bug". SKIP for mechanical tool output reports.
 ---
 
 # Evidence Reporting

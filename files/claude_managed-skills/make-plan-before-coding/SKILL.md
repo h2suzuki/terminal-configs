@@ -1,7 +1,7 @@
 ---
 name: make-plan-before-coding
 description: Align design space exploration, agreement, and documented rationale inheritance before entering implementation.
-when_to_use: TRIGGER when about to propose a design / approach / 方針, when about to start substantive Edit / Write after research, or when about to ask "X にしますか?" for already-documented choices. SKIP for trivial / mechanical changes or when the user has explicitly approved the design in this session.
+when_to_use: TRIGGER when about to propose a design / 方針, start substantive Edit / Write after research, or ask "X にしますか?" for already-documented choices. SKIP for mechanical changes or when user has approved the design.
 ---
 
 # Make Plan Before Coding

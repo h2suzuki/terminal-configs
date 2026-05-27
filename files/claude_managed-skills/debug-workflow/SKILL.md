@@ -1,7 +1,7 @@
 ---
 name: debug-workflow
 description: For inexplicable phenomena, form 2-3 hypotheses, back them with code / log, land on artifact-level fix; verify fix is not algebraically identical to the bug before locking.
-when_to_use: TRIGGER when user reports or self-says "動かない" / "効かない" / "失敗した" / "うまくいかない" / "エラーが出る" / "期待と違う", when about to propose workarounds like "とりあえず手動で〜" / "session 再起動で〜", when about to answer with "たぶん〜だと思う" without root-cause backing, or when about to write fix-locking statements like 「これで直る」 / 「これで fix」 / 「X が governing」 before verifying fix vs bug equivalence (fix-lock gate). SKIP for typos / syntax errors where the error message directly indicates the cause, when user explicitly requests "とりあえず動かして" workaround, when root cause is agreed to be out of scope, or for trivial 1-character fixes.
+when_to_use: TRIGGER on "動かない" / "失敗した" reports, propose workarounds, answer "たぶん〜" without root-cause backing, or write fix-locking statements before verifying fix vs bug equivalence. SKIP for typos / syntax errors.
 ---
 
 # Debug Workflow

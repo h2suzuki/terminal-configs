@@ -1,7 +1,7 @@
 ---
 name: verbalize-before-action
 description: Verbalize judgment / recommendation / impact assessment in one sentence and self-rebut before action; alternative to silent intent inference.
-when_to_use: TRIGGER when about to issue a judgment / recommendation / proposal (e.g. "〜すべき" / "〜が良い" / "次は〜" / "〜が正しい" / "〜と思う"), when noticing a divergence from expected behavior and deciding next steps (error chain detection), or when about to propose a workaround / shortcut / deferral. SKIP for simple fact reports, tool-result relays, mechanical execution of already-agreed procedures, state reports like "〜できました" / "〜になりました", or when the user has explicitly waived verbalize.
+when_to_use: TRIGGER when about to issue a judgment ("〜すべき" / "〜が良い" etc), notice a divergence from expected behavior, or propose a workaround / deferral. SKIP for fact reports, tool-result relays, or mechanical execution of agreed procedures.
 ---
 
 # Verbalize Before Action

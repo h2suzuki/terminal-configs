@@ -1,7 +1,7 @@
 ---
 name: document-editor
 description: Edit persistent artifacts (README / public doc / tutorial / spec / canonical guide / design doc / library API doc / 5+ line code comments / housekeeping prose) in a fork with verbalize-before-edit discipline; write the file back inside the fork and return only a change-summary to main (context bloat protection).
-when_to_use: TRIGGER when about to Edit / Write a persistent artifact, when about to write red-flag phrases ("このドキュメントが解決した" / "旧 X との差分" / "以前は…だった" / "矛盾していたので一本化" / "執筆経緯" etc.) into the artifact body, or when about to leave a discussion label (Plan C / Phase γ) in a finalized doc. SKIP for ephemeral text (chat reply / todos.md / drafts/*) or code comments of 4 lines or fewer (fork overhead is not worth it — apply inline).
+when_to_use: TRIGGER when about to Edit / Write a persistent artifact, or write red-flag phrases ("旧 X との差分" / "執筆経緯" etc) into the body. SKIP for ephemeral text (chat / todos.md / drafts/*) or code comments of 4 lines or fewer.
 argument-hint: <file-path> <edit-intent>
 arguments: file edit_intent
 context: fork

@@ -1,7 +1,7 @@
 ---
 name: copy-paste-commands
 description: user が手動実行する必要があるコマンド (host 側 cp / git checkout / git push / claude invocation / curl 等) は、 毎回そのままコピペで使える形 — 独立 fenced code block + 完全 path (絶対 or repo 相対) + 余分な inline prose なし — で提示する
-when_to_use: TRIGGER when about to instruct the user to run a command manually (host 側 / ホスト側ターミナル / ユーザー手動で / 手動実行 / お手元で / cp / git checkout / git push / claude invocation / curl など), or when about to write prose like 「以下のコマンドを実行してください」 / 「次のコマンドを打ってください」 / 「これを ~/.claude/ にコピーして」. SKIP when describing a command for explanation (not user execution), or when the command is part of a longer narrative where independent fencing would fragment the flow.
+when_to_use: TRIGGER when about to instruct user to run a command manually (host 側 / cp / git push etc), or write prose like "以下のコマンドを実行" etc. SKIP when describing a command for explanation only.
 ---
 
 # Copy-Paste Commands

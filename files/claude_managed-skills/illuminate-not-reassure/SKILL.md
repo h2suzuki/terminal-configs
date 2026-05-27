@@ -1,7 +1,7 @@
 ---
 name: illuminate-not-reassure
 description: ユーザーの懸念に対し reassurance (「大丈夫」「安全」「guard が N 個」「実証済」 等) や正しげな論理での説得 / ねじ伏せ をしない。 (1) 核心の言い直し → (2) 可能性の本気の深掘り → (3) 周辺の実機構 / state を中立に晒す の 3 ステップ。 解消の鍵は状況の明示
-when_to_use: TRIGGER when the user voices a concern / worried / 懸念 / 不安 / 疑問 about a design or behavior, or when about to write reassurance phrases like 「大丈夫」 / 「安全です」 / 「guard が N 個」 / 「実証済」 / 「問題ない」 / 「心配ない」 / 「保証される」 / 「rest assured」 / 「不整合なし」 / 「soundness 保持」 in response to a concern. SKIP when the user explicitly asks for a verdict / safety claim, when the question is mechanical / factual rather than concern-driven, or when emitting a one-shot safety conclusion after the 3-step illumination has been performed.
+when_to_use: TRIGGER when user voices a 懸念 / 不安 about a design, or about to write reassurance phrases ("大丈夫" / "安全" / "guard が N 個" etc). SKIP when user explicitly asks for a verdict, or after the 3-step illumination has run.
 ---
 
 # Illuminate, Don't Reassure

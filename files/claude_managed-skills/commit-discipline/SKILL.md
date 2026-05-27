@@ -1,7 +1,7 @@
 ---
 name: commit-discipline
 description: Execute commit granularity / timing / hold-judgment autonomously; require user permission only for destructive ops (push / force / reset --hard / branch delete); do not proactively bring up push; do not knowingly leave uncommitted changes at session end.
-when_to_use: TRIGGER when an edit is logically complete and a commit decision is due, when about to execute a destructive git op, when about to proactively raise push (direct or indirect), or when the user says session wind-down phrases ("handoff" / "お疲れさま" / "ありがとう" etc.). SKIP for the granularity / timing aspect when the user has given an explicit commit plan (still apply the other rules — push silence, session-end).
+when_to_use: TRIGGER when an edit is logically complete, about to execute a destructive git op or proactively raise push, or user says session wind-down phrases. SKIP for granularity / timing when user gave an explicit commit plan.
 ---
 
 # Commit Discipline

@@ -1,7 +1,7 @@
 ---
 name: auto-mode-denial-recovery
 description: auto mode (permission mode = auto) の denial / blocked は classifier 自体が gate なので、 settings.json の permissions 追加で迂回できない (denial message が 「settings に追加すれば許可」 と書いていても無効)。 有効な回避は `! 手動実行` / skip / user 明示再依頼 の 3 択
-when_to_use: TRIGGER when auto mode で a tool call (Bash / claude invocation / sensitive file edit 等) is denied / blocked / rejected, or when about to suggest 「settings.json に permission rule 追加すれば許可される」 / 「~/.claude/settings.json に X を追加」 to bypass an auto-mode denial. SKIP when the denial is in non-auto permission mode (default / plan), or when the user has explicitly approved a settings.json change.
+when_to_use: TRIGGER when auto mode で a tool call is denied / blocked, or about to suggest 「settings.json に permission 追加で迂回」 etc. SKIP for non-auto permission mode or when user explicitly approved a settings.json change.
 ---
 
 # Auto-Mode Denial Recovery

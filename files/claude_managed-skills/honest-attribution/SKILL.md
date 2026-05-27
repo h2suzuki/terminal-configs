@@ -1,7 +1,7 @@
 ---
 name: honest-attribution
 description: persisted text (commit message body / memory entry / SKILL.md / CLAUDE.md / doc) で 自分が今 session で踏襲・追加した wrong pattern を 「既存」「繰り越し」「以前から」「reasonable default」「段階的拡張」「気付かなかった」 等で attribute しない。 honest framing で「私が X 追加時に既存 Y wrong pattern を踏襲」 と書く
-when_to_use: TRIGGER when about to write persisted text (commit message body / memory entry / SKILL.md / CLAUDE.md / doc) explaining a wrong pattern / bug / regression, or when about to use attribution phrases like 「既存」 / 「繰り越し」 / 「以前から」 / 「従来は」 / 「reasonable default」 / 「standard pattern」 / 「段階的拡張」 / 「気付かなかった」 / 「気付きませんでした」 in a way that blurs the current session's contribution. SKIP for ephemeral chat replies (not persisted), or when the wrong pattern is genuinely pre-existing AND the current session did not touch / extend it.
+when_to_use: TRIGGER when about to write persisted text explaining a wrong pattern with phrases ("既存" / "reasonable default" etc) that blur current session's contribution. SKIP when pattern is pre-existing AND current session untouched.
 ---
 
 # Honest Attribution

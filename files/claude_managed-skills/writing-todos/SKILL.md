@@ -1,7 +1,7 @@
 ---
 name: writing-todos
 description: Format and operate todos.md (priority-bucketed task ledger at the repo root) — Goal + Exit Criteria per parent task, block-level deletion on completion, verify-before-flip, three-question gate before any scope reduction.
-when_to_use: TRIGGER when about to Read / Edit / Write todos.md, when about to append a new task or flip a checkbox to "[x]", when about to delete or shrink a parent task block, when about to utter scope-reduction phrases like "終わり" / "素材化済" / "scope 外" / "役割終了" against a todos.md entry or its work files, or when noticing leftover legacy sections (e.g. "修正済" / "Done") in todos.md. SKIP for projects without a todos.md ledger, for TODO comments inside source code, or for one-off ad-hoc task lists that are not committed to the repo.
+when_to_use: TRIGGER when about to Read / Edit / Write todos.md, flip a checkbox to "[x]", delete / shrink a parent block, or utter scope-reduction phrases ("終わり" / "scope 外" etc). SKIP for projects without todos.md or TODO comments in source code.
 ---
 
 # Todo Writing

@@ -1,7 +1,7 @@
 ---
 name: rejection-via-actual-cost
 description: design 代替案の rejection rationale は 「採用したら何が増えるか」 の actual cost (component 数 / LoC / lifecycle 管理点 / IO size / 既存 path overlap / 機構面積) で論じる。 「実機 verify が要る」「公式 spec 確認が要る」「未検証」 等の着手前に解消できる verify cost は却下理由にしない (やればいいだけ)
-when_to_use: TRIGGER when about to reject a design alternative / 代替案 / approach / 案 with reasons like 「実機 verify が要る」 / 「公式 spec 確認が要る」 / 「未検証」 / 「リスクがある」 / 「動作が読めない」 / 「version drift リスク」 / "speculative concern", or when about to write a comparison table / rejection rationale 節 for design alternatives. SKIP when the verify cost is genuinely decisive and explicitly quantified (e.g., 「実機 verify に N 日かかる、 期限まで M 日」), or when the user explicitly waives verify and asks for a forecast-only call.
+when_to_use: TRIGGER when about to reject a design alternative with reasons like "実機 verify が要る" / "未検証" / "動作が読めない" etc, or write a rejection rationale 節. SKIP when verify cost is decisive and quantified, or user waives verify.
 ---
 
 # Rejection via Actual Cost

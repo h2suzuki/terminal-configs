@@ -1,7 +1,7 @@
 ---
 name: handoff
 description: Produce a session-boundary handoff document with fixed schema so next-me can resume within 5 minutes.
-when_to_use: TRIGGER when user signals session end with phrases like "handoff して" / "セッションリセット" / "お疲れさまでした" / "終わります" / "おわります" / "sign off" / "今日はここまで" / "また明日", or when about to wind down a session with non-trivial state to carry over. SKIP for mid-session task updates, simple todos.md progress flips, or commit message drafting within an ongoing session.
+when_to_use: TRIGGER when user signals session end ("handoff" / "セッションリセット" / "お疲れさま" etc), or about to wind down a session with non-trivial state. SKIP for mid-session task updates or todos.md progress flips.
 ---
 
 # Session Handoff

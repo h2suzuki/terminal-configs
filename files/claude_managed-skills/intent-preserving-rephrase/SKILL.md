@@ -1,7 +1,7 @@
 ---
 name: intent-preserving-rephrase
 description: CLAUDE.md / ルール / spec / handoff / SKILL.md の言い換え (compliance 目的の否定形→肯定形変換 / 整理リライト / 翻訳) は意味を 1mm も変えない。 真の論理反転で同義になる時のみ変換し、 そうでなければ否定形のまま維持する。 指摘されたサンプルだけ直さず、 全変換を同じ drift class で self-audit する
-when_to_use: TRIGGER when about to rephrase / rewrite / 言い換え / 整理 / translate a rule / CLAUDE.md / spec / handoff / SKILL.md (compliance 目的の否定形→肯定形 / 「より自然な書き方」 / 「簡潔化」 等), or when about to claim 「意味は同じ」 / 「同義です」 for a rule rewording. SKIP for new content creation (no prior intent to preserve) or for purely typographical fixes (spacing / punctuation / typo) that do not touch semantics.
+when_to_use: TRIGGER when about to rephrase / rewrite / translate a rule / CLAUDE.md / spec / SKILL.md (否定形→肯定形 / "簡潔化" etc), or claim "意味は同じ". SKIP for new content creation or typographical fixes.
 ---
 
 # Intent-Preserving Rephrase

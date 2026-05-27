@@ -1,7 +1,7 @@
 ---
 name: verify-before-claim
 description: Verify supporting evidence (primary source / actual code / exhaustively traversed pointers) before uttering a positive or negative claim.
-when_to_use: TRIGGER when about to make a positive claim ("詳しく見た" / "網羅した" / "全件読んだ" / "reasonable default" etc.) or a negative claim ("できない" / "ない" / "非対応" / "未対応" etc.). SKIP when basing it on a primary source you directly verified yourself with citation (URL / file:line / quoted excerpt).
+when_to_use: TRIGGER when about to make a positive claim ("網羅した" / "reasonable default" etc) or negative claim ("できない" / "非対応" etc). SKIP when basing on a primary source you directly verified with citation.
 ---
 
 # Verify Before Claim

@@ -1,7 +1,7 @@
 ---
 name: memory-routing
 description: Decide memory entry save location (user vs project-local), generation (MEMORY.md vs OLD-MEMORY.md), save timing, and absolute date format; retire entries to OLD-MEMORY.md when fully covered by a Managed skill / hook / CLAUDE.md rule.
-when_to_use: TRIGGER when the user gives a correction / feedback (memory check fires every time), when receiving a déjà-vu correction (same point said before — must memorize), when about to say "memory に書く / 保存" / "entry を追加 / 更新", when uncertain whether to route to user (cross-project) or project-local memory dir, when about to Edit / Write a memory entry (date-format gate), or when a feedback entry becomes covered by a newly-added Managed skill / hook / CLAUDE.md rule (retire to OLD-MEMORY.md).
+when_to_use: TRIGGER when user gives a correction / feedback, about to say "memory に書く / 保存" etc, uncertain about user vs project-local routing, or a feedback entry becomes covered by a new skill / hook / CLAUDE.md rule.
 ---
 
 # Memory Routing

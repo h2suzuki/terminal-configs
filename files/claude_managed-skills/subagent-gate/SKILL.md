@@ -1,7 +1,7 @@
 ---
 name: subagent-gate
 description: Before spawning a subagent, verify one of four conditions holds (parallelizable / large output / 3+ query exploration / specialized agent domain); avoid for lookups smaller than the spawn overhead.
-when_to_use: TRIGGER when about to spawn an Agent / Task tool, when about to say "subagent で" / "並列に分けて" / "Explore / code-reviewer / security-review / general-purpose を起動", or when uncertain whether to route a large-output task through main or via a subagent. SKIP for single-file Read, single-query grep / find, or any direct intermediate-state inspection ("git status" / "ls -la" etc.).
+when_to_use: TRIGGER when about to spawn an Agent / Task tool, say "subagent で" / "並列に分けて" etc, or uncertain whether to route a large-output task via subagent. SKIP for single-file Read, single-query grep / find, or direct state inspection.
 ---
 
 # Subagent Gate

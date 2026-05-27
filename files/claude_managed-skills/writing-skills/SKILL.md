@@ -1,7 +1,7 @@
 ---
 name: writing-skills
 description: Meta-skill for writing or editing skills and hooks consistently — frontmatter format, section structure, language convention, deploy locations.
-when_to_use: TRIGGER when about to Write / Edit a skill SKILL.md or a hook script, when designing a new skill / hook from scratch, when reviewing skill format consistency, or when about to ask "skill のフォーマットは合ってる?" type question to user. SKIP for ephemeral text or one-off scripts that will not be registered as a Claude Code skill / hook.
+when_to_use: TRIGGER when about to Write / Edit a skill SKILL.md or hook script, design a new skill / hook, or review format consistency. SKIP for one-off scripts not registered as a Claude Code skill / hook.
 ---
 
 # Skill Writing

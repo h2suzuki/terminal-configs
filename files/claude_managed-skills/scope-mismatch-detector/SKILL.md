@@ -1,7 +1,7 @@
 ---
 name: scope-mismatch-detector
 description: Before reusing a rule / past experience / skill in a different situation, verify trigger and scope match; detect both Overapplied and Underapplied (LLM calibration error correction).
-when_to_use: TRIGGER when about to apply a known rule / past experience / another skill to the current situation, when about to say "これは前にやった〜と同じ" / "あの時の〜が使える" / "経験から〜だ", or when about to suppress firing with "このケースは別" / "文脈が違う". SKIP for first-time rule definition or initial application, or when the user explicitly says "別件として扱え".
+when_to_use: TRIGGER when about to apply a known rule / past experience to current situation, say "前にやった〜と同じ" etc, or suppress firing with "このケースは別". SKIP for first-time rule definition.
 ---
 
 # Scope Mismatch Detector
