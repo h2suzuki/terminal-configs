@@ -90,19 +90,16 @@ deterministic ならコードを書いて、毎回それを呼び出す。
 
 これらは **layered (additive)**: bash test script を編集する時は code-writing + bash-writing-rules + test-writing の 3 つすべて fire する。 add-on は universal を replace するのではなく、 上に積む。
 
-**Wrong design (replacement model 誤解を生む)**:
+#### Frontmatter design rules
 
-- 悪い: universal の when_to_use に `SKIP for bash (use bash-writing-rules) and tests (use test-writing)` — 「bash は別 skill が代替するから universal は skip」 と読める。 実際は両方 fire してほしい
-- 悪い: universal の paths が language-specific add-on の対象 extension (例 `.sh`) を含まない — paths で auto-trigger が切られると universal の rule が bash file 編集時に発火しない
+設計の本質は frontmatter で表現する (body で Wrong/Right を text 説明しない):
 
-**Right design (layered model)**:
+- **universal の `when_to_use`**: broad に書く (任意 language を含む、 add-on を SKIP に列挙しない)。 「stacks additively with language-specific add-ons」 のような layered 明示を入れる。 live 例は本 skill (`code-writing`) の frontmatter
+- **universal の `paths`** (指定するなら): 全 source extension を網羅 (add-on 対象の `.sh` 等も含む)
+- **add-on の `when_to_use`**: 自 skill の適用外を SKIP で明示 (universal を SKIP に入れない)。 live 例は `bash-writing-rules` の frontmatter
+- **universal の `description`**: `Universal` prefix で role を明示
 
-- 良い: universal の when_to_use は broad に書く: `TRIGGER when editing source code (any language; stacks with language-specific add-ons).`
-- 良い: universal の paths は全 source extension を網羅: `.py, .ts, .go, .rb, ..., .sh, .bash, .zsh, .fish`
-- 良い: add-on の when_to_use では `SKIP for non-{kind} files (handled elsewhere)` のように自 skill の適用外を明示。 universal は SKIP に書かない (universal を SKIP リストに入れると逆方向の競合宣言になる)
-- 良い: universal の description に `Universal` prefix を付けて role を明示
-
-新規 universal / add-on skill 作成・編集時は本節を参照。 詳細な skill format は `skill-writing` skill 参照。
+これにより universal と add-on が両方 fire し、 add-on は universal を replace せず上に積む構造になる。 詳細な skill format は `skill-writing` skill 参照。
 
 ### No dangling-prone references in persistent files
 
