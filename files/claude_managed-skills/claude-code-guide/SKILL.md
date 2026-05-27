@@ -53,6 +53,10 @@ agent: general-purpose
 - モデル料金 / pricing
 - Claude Code 以外のツール (Cursor / Aider / Codex 等)
 
+## Reference notes
+
+- **Claude Code の system prompt 本文は非公開** (binary 内 minify 埋込、 版別 checksum も非公開)。 Anthropic が verbatim 公開しているのは claude.ai consumer (web / iOS / Android) のみで Claude Code / API は対象外 (`platform.claude.com/docs/en/release-notes/system-prompts` 明記)。 第三者の reverse-engineered dump は非公式。 verify 対象が prompt 本文自体の case では 「非公開」 と明示し、 dump を根拠にしない (2026-05-17 一次情報検証)
+
 ## Related
 
 - **Legacy:** user CLAUDE.md「一次情報の確認」 より
