@@ -76,6 +76,77 @@ user CLAUDE.md (`~/.claude/CLAUDE.md`) / project CLAUDE.md (`<repo>/.claude/CLAU
 
 未 cover 範囲を Managed skill / hook 化する場合は user と相談しながら段階的に。 完全に Managed cover された時点で Retirement protocol へ。
 
+### oneline_summary leading line in feedback body
+
+各 feedback entry の本文先頭 (frontmatter 直後) に `oneline_summary:` 1 行を置く。 UserPromptSubmit hook が match した時に inject する文。
+
+```markdown
+---
+name: foo
+description: ...
+metadata:
+  type: feedback
+---
+
+oneline_summary: <user prompt が用いそうな keyword (3+ 字 CJK と英単語) を含む 1 文>
+
+<本文 Why / How>
+```
+
+書き方:
+
+- **要約ではなく trigger 用に書く** — user が当該事象に遭遇した時の prompt に出そうな keyword を意図的に含める。 純粋な要約 (description との重複) ではなく hook trigger 効率を最大化する文面
+- **3+ 字 CJK keyword を盛る** — FTS5 trigram tokenizer は 2 字 CJK では match できない (「編集」 単独は不可、 「ファイル編集」 「Edit 連続発行」 等で 3+ 字 run を作る)
+- **bilingual で書く** — 同概念の英 ・日両方の表現を入れると hit 率が上がる (例 「Edit ・編集」 「fix ・修正」)
+- **1 文に収める** — hook output は 1 行で出力されるので長い文は injection が verbose になる
+- **絶対日付・固有名詞・error code を含めると hit しやすい** — 「2026-05-26」 「`bg_collect_verdict`」 「`stuck (max attempts)`」 等
+
+migration されていない既存 entry は本文の先頭非空行が fallback として使われる (劣化動作、 過渡的)。
+
+### Hook DB sync after entry write or retire
+
+memory entry を write / retire したら **同一セッション内で hook DB を sync** する。 さもないと UserPromptSubmit hook が新 entry を surface できない、 または退役済 entry を引き続き surface する。
+
+#### After saving or updating a feedback entry
+
+```bash
+# user (cross-project) memory
+~/.claude/hooks/memory_surface.py --upsert <abs_path>
+
+# project-local memory (cwd-encoded project_id)
+~/.claude/hooks/memory_surface.py --upsert <abs_path> <encoded-cwd>
+# encoded-cwd 例: /home/h2suzuki/foo → -home-h2suzuki-foo
+```
+
+#### After retiring to OLD-MEMORY.md
+
+```bash
+~/.claude/hooks/memory_surface.py --delete <abs_path> [encoded-cwd]
+```
+
+退役 entry は `OLD-MEMORY.md` 移動と本文末尾の `Covered by:` 行追加 (既存 protocol) に加えて、 hook DB からの除去まで含めて 1 単位とする。 さもないと query が retired entry を surface する。
+
+#### Bulk re-index for disaster recovery
+
+```bash
+# user memory
+~/.claude/hooks/memory_surface.py --rebuild
+
+# project memory
+~/.claude/hooks/memory_surface.py --rebuild ~/.claude/projects/<encoded>/memory <encoded>
+```
+
+`--rebuild` は MEMORY.md を読み、 listed な全 `*.md` を upsert する (OLD-MEMORY.md 由来の退役 entry は対象外)。
+
+### Initial bootstrap
+
+skill が新規導入された環境では、 既存 memory file 全件を一度 `--rebuild` で index に取り込む:
+
+```bash
+~/.claude/hooks/memory_surface.py --rebuild
+# project memory がある場合は project_id を指定して個別 rebuild
+```
+
 ## Rules
 
 ### Save timing
