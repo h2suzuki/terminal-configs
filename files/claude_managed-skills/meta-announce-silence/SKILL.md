@@ -12,17 +12,24 @@ when_to_use: TRIGGER when about to declare non-execution of a rule with phrases 
 
 ### Trigger phrases (silent でいる)
 
-以下のような不実施宣言を発しそうになったら、 **silent でいる** (発話そのものを止める):
+以下のような **不実施宣言 (「しません」 系)** を発しそうになったら、 **silent でいる** (発話そのものを止める):
 
 - 「省略しません」「回避しません」「後回しにしません」 (回避・省略・後回し忌避則 系)
 - 「触りません」「scope 外は触りません」「指示外のことはしません」「対象外として扱います」 (scope 制限系)
 - 「推測で〜と書きません」「想像で埋めません」「unverified なまま断定しません」 (verify 系)
-- 「mock しません」「skip しません」「テストでは実 DB を使います」 (test 規律 系)
+- 「mock しません」「skip しません」 (test 規律 系)
 - 「〜の話題は出しません」「催促しません」「push を促しません」 (能動言及禁止系)
 - 「ここでは〜の判断は保留します」 (判断保留宣言)
 - 「rule 通り 〜 を控えます」「scope に従って 〜 は触れません」 (rule 名 + 不実施宣言)
 
 これらは行動 (silent / 不実施) で示すべきもの。 発話自体が rule の趣旨を裏切る。
+
+### 「しません」 vs 「します」 — 抑止対象は negation のみ
+
+本 skill が silent 化を求めるのは **negative announcement (不実施宣言、 「しません」 系)** のみ。 **positive declaration (行動宣言、 「します」 系)** は逆に **明示すべき** (silent に実行すると user が見落とし、 副作用や重要 action の場合は信用失墜)。
+
+- 「テストで実 DB を使う」「設定 file を rewrite する」「production に deploy する」「外部 API に書き込む」 等の **副作用ある行動** は silent 不可。 事前に user に告知し、 承認を得てから実行。
+- 「mock しません」 = test 規律遵守の宣言 (silent 対象) ↔ 「実 DB を使う」 = 副作用ある行動 (明示対象)。 同じ「test 規律」 文脈でも、 mock 不実施 (negation) と 実 DB 使用 (action) は別カテゴリ。
 
 ### One-step generalization
 
