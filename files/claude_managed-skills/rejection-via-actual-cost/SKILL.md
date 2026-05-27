@@ -50,6 +50,6 @@ verify cost を回避することは 「楽な選択」 の正当化であり、
 ## Related
 
 - `evidence-reporting`: 判定 / 推奨 / 影響評価を発話する前に根拠を示す。 本 skill の actual cost wording と family
-- `verify-spec-before-dismissal`: 否定形断定前に primary source verify。 本 skill が 「verify は やればいいだけ」 と言うのと同根
-- `investigate-before-design`: design proposal の前段。 verify-cost-as-rejection は調査不足の reflective signal でもある
+- `verify-before-claim`: 否定形断定前に primary source verify。 本 skill が 「verify は やればいいだけ」 と言うのと同根
+- `make-plan-before-coding`: design proposal の前段。 verify-cost-as-rejection は調査不足の reflective signal でもある
 - **Legacy:** user memory `feedback_design_rejection_actual_cost.md` (2026-05-27 checking-style bg watchdog 起票) より昇格

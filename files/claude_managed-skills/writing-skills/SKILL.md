@@ -11,7 +11,7 @@ skill SKILL.md / hook script を書く時の format 統一・writing convention 
 ## Process
 
 1. **Read the templates first** — `template-skill.md` (skill 用) と `template-hook.md` (hook 用) を SKILL.md の隣 (本 skill dir 内) から Read で読む。 frontmatter field 全列挙と writing convention の inline reminder が入っている。
-2. **Cross-reference an existing skill** — 同じ project 内の既存 skill を 1-2 個 sample で Read する (例: `verify-before-asserting`, `subagent-gate`, `writing-code`)。 frontmatter pattern と section 構成が template 通りか実例で確認。
+2. **Cross-reference an existing skill** — 同じ project 内の既存 skill を 1-2 個 sample で Read する (例: `verify-before-claim`, `subagent-gate`, `writing-code`)。 frontmatter pattern と section 構成が template 通りか実例で確認。
 3. **Apply writing convention** — frontmatter description / when_to_use / headers は **英語**、 body は **日本語可**。 trigger keyword だけ quoted 日本語 OK。 詳細は `template-skill.md` の commented cheatsheet (本 skill dir 内) を参照。
 4. **Verify the deploy path** — managed (org-wide) vs user (個人) を意識:
    - managed: `files/claude_managed-skills/<name>/` → `/etc/claude-code/skills/<name>/` + symlink to `~/.claude/skills/<name>`

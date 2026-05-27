@@ -39,5 +39,5 @@ user がサンプルで指摘したら、 残り全件を同じ class で **self
 
 - `document-editor`: 永続 artifact 編集規律 (intent change を伴う書き換えは scope 外)。 本 skill は intent 保存の **判定基準** を提供
 - `honest-attribution`: 「段階的拡張」 等の framing で responsibility を blur しない (rule 言い換えの honest attribution と同根)
-- `verify-before-asserting`: 「同義です」 と言う前に before/after diff で verify
+- `verify-before-claim`: 「同義です」 と言う前に before/after diff で verify
 - **Legacy:** project memory `feedback_intent_preserving_rephrase.md` (2026-05-16 起票) より昇格

@@ -2,45 +2,53 @@
 """
 Combined Stop hook for org-managed Claude Code:
 
-  H1 empty-learning (enforcement, exit 2):
-    Detect 「学習した」「次回から気をつけ」「反省」 系 assistant text;
-    block unless a memory subtree write (under ~/.claude/global-memory/
-    or */memory/, any extension) was recorded in this turn.
+  M1 meta-announce-silence (enforcement, exit 2):
+    「省略しません」「触りません」「mock しません」「催促しません」 系の
+    compliance-non-execution 宣言を block。 silent compliance の rule 趣旨に反する
+    (rule 遵守を発話で能動的に話題化する自体が rule 違反)。 phrase hit のみで block、
+    persistence pairing 不要。
+
+  H1 hollow-claims (enforcement, exit 2):
+    「学習しました」「反省」「申し訳」「次回から気をつけ」 系の introspective phrase
+    は、 同 turn 内に memory subtree / skill dir / hook dir / CLAUDE.md への Write/Edit
+    記録が無ければ block。 session reset で虚偽化するため persistence 行動とのペアを
+    要求する。
+
+  M3 recognize-own-work (enforcement, exit 2):
+    「想定外」「知らなかった」「あれ?」 系の surprise phrase を、 同 turn 内に
+    git log / git show / git diff の Bash 呼出が無ければ block。 LLM session 揮発で
+    前 session の自作業が unfamiliar に見える錯覚 対策。
 
   H7 deferral (warning-only, exit 0):
-    Detect 「後で対処」「別タスクに切り出」「TODO として」 系 text;
-    warn unless a TaskCreate/TaskUpdate/TodoWrite call OR Write/Edit
-    on todos.md happened in this turn.
+    「後で対処」「別タスクに切り出」「TODO として」 系 phrase は、 同 turn 内に
+    TaskCreate / TaskUpdate / TodoWrite または todos.md への Write/Edit が無ければ
+    warn (block しない)。
 
   H8 claim-without-evidence (warning-only, exit 0):
-    Detect 「不明」「該当なし」「未確認」「わかりません」 系 text;
-    warn unless any of Read/Grep/Glob/WebSearch/WebFetch was used
-    in this turn.
+    「不明」「該当なし」「未確認」 系 phrase は、 同 turn 内に Read / Grep / Glob /
+    WebSearch / WebFetch のいずれも使われていなければ warn。
 
-Legacy: org CLAUDE.md §報告・応答 (空学習禁止 + claim-without-evidence)
-+ §計画と遂行 (deferral) より
+Origin: meta-announce-silence / no-hollow-claims / recognize-own-work の 3 skill +
+org CLAUDE.md §報告・応答 / §計画と遂行 を集約した enforcer。 skill SKILL.md 本体は
+別途残置するが、 Stop event での mechanical detection は本 hook が担う。
 
 Stop hook input: JSON via stdin with session_id, transcript_path,
 hook_event_name = "Stop".
 
-Transcript format: JSONL where each line is a dict with `type`
-(user / assistant / system / ...) and `message` (containing role,
-content). For user entries, content is a str when it is a human
-prompt and a list (of tool_result blocks) when it is a tool
-result. For assistant entries, content is a list of text /
-thinking / tool_use blocks.
+Transcript format: JSONL。 user / assistant / system / ... の type 列。 user entry は
+human prompt なら content が str、 tool_result なら list。 assistant entry は text /
+thinking / tool_use blocks の list。
 
-Current-turn boundary: walk backwards in the transcript to the
-most recent user entry whose content is a str (= human prompt),
-then consider all assistant entries after that index as the
-current turn. If no such entry is found (corrupted / partial
-transcript), return empty values rather than fall-broad scan.
+Current-turn boundary: 直近の human-input user entry (content が str の entry) を
+boundary とし、 そこ以降の assistant entry を current turn とみなす。 corrupted /
+partial transcript の場合は空値を返して fall-broad scan しない。
 
 Exit:
   0: no enforcement triggered (warnings may be emitted on stderr)
-  2: H1 triggered (empty-learning without memory persistence)
+  2: one of M1 / H1 / M3 triggered
 
-Always exits 0 on any parse / IO error (fail-open).
+parse / IO error は fail-open (exit 0) — Stop hook で誤 block して user 作業を
+止めないことを優先する。
 """
 
 from __future__ import annotations
@@ -49,41 +57,107 @@ import json
 import re
 import sys
 
-# `反省し(た|ました|て(い|ます)|ています)` is anchored to positive
-# conjugations to avoid matching negation forms (反省しない /
-# 反省しません / 反省しなければ) — H1 is enforcement (exit 2) so a
-# false match would block legitimate non-blame text.
-# `今後(は)?気をつけ` mirrors the optional は in `次回(から)?(は)?気をつけ`.
-EMPTY_LEARNING_RE = re.compile(
-    r"学習した|次回(から)?(は)?気をつけ|もう間違え(ない|ません)|反省し(た|ました|て(い|ます)|ています)|今後(は)?気をつけ"
-)
+# --- Pattern: M1 meta-announce-silence (block on hit, no pairing) ---
+# 不実施宣言系 — rule 遵守を発話で能動的に話題化する pattern。
+META_ANNOUNCE_PATTERNS: list[str] = [
+    # 省略系
+    r"省略(は)?しません",
+    r"省略(は)?控えます",
+    # 触れません系 (scope 制限)
+    r"触りません",
+    r"触らないでおきます",
+    r"(には|は)触れません",
+    # mock / dummy / skip 系
+    r"mock\s?しません",
+    r"ダミー(は)?入れません",
+    # 催促・能動言及禁止系
+    r"催促(は)?しません",
+    r"再催促(は)?しません",
+    # 推測・想像系
+    r"推測で.{0,10}書きません",
+    r"想像で.{0,10}埋めません",
+    r"unverified.{0,10}断定しません",
+    # rule 名 + 不実施宣言 (compliance 表明)
+    r"rule\s?(に従って|通り).{0,20}控えます",
+    r"rule\s?(に従って|通り).{0,20}触れません",
+    r"scope\s?に従って.{0,20}触れません",
+    # 判断保留宣言
+    r"判断(は)?保留します",
+]
+META_ANNOUNCE_RE = re.compile("|".join(META_ANNOUNCE_PATTERNS), re.IGNORECASE)
+
+# --- Pattern: H1 hollow-claims (block on hit unless persistence in same turn) ---
+# introspective phrase — 「学習」「改善宣言」「省察」「formal apology」 の 4 系統。
+# 否定形 / 中立形を match させないよう conjugation を anchor (反省し → 反省しない を
+# excludable)。 false-positive 抑制のため 「気をつけます」「以降は」「sorry」「すみません」
+# 等の broad phrase は除外している (観測ベースで pattern 追加可能)。
+HOLLOW_CLAIM_PATTERNS: list[str] = [
+    # Learning / memorization
+    r"学習し(た|ました)",
+    r"勉強になっ(た|ました)",
+    r"脳に刻ん(だ|でます|でいます)",
+    # Reform commitment
+    r"次回(から)?(は)?気をつけ",
+    r"今後(は)?気をつけ",
+    r"もう間違え(ない|ません)",
+    r"もう繰り返しません",
+    # Reflection / retrospection
+    r"反省し(た|ました|て(い|ます)|ています)",
+    r"振り返(り|って)(ます|ました|みます|みました)",
+    # Formal apology
+    r"申し訳(ありません|ございません)",
+]
+HOLLOW_CLAIM_RE = re.compile("|".join(HOLLOW_CLAIM_PATTERNS), re.IGNORECASE)
+
+# --- Pattern: M3 recognize-own-work (block on hit unless git verify in same turn) ---
+SURPRISE_PATTERNS: list[str] = [
+    r"想定外",
+    r"予想外",
+    r"思っていなかった",
+    r"思ってませんでした",
+    r"思ってもいなかった",
+    r"知らなかった",
+    r"あれ[?？]",
+    r"そんな構造に",
+    r"そんな構造になっていたっけ",
+    r"自分の知らない変更",
+]
+SURPRISE_RE = re.compile("|".join(SURPRISE_PATTERNS), re.IGNORECASE)
+
+# git log / show / diff の Bash invocation を「実 verify 行動」 とみなす。
+GIT_VERIFY_RE = re.compile(r"\bgit\s+(log|show|diff)\b", re.IGNORECASE)
+
+# --- Pattern: H7 deferral (warning, no block) ---
 DEFERRAL_RE = re.compile(
-    r"後で(対処|やる|考える)|別タスクに(切り出|分け)|今は(処置|対処)しません|後回し|TODO として|次回(に)?(対応|やる)"
+    r"後で(対処|やる|考える)|別タスクに(切り出|分け)|今は(処置|対処)しません|"
+    r"後回し|TODO として|次回(に)?(対応|やる)"
 )
+
+# --- Pattern: H8 claim-without-evidence (warning, no block) ---
 CLAIM_RE = re.compile(
     r"不明|該当なし|存在しません|未確認|わかりません|分かりません"
 )
 
-# Memory subtree heuristics. Matches both the global memory dir
-# (`~/.claude/global-memory/...`) and per-project memory subtrees
-# (`.../memory/...`). Any file extension under these subtrees is
-# treated as memory persistence (convention: markdown but the
-# subtree itself is the marker).
-MEMORY_PATH_RE = re.compile(r"(global-memory|/memory/)")
+# --- Persistence path (broader than memory only) ---
+# memory subtree / skill dir / hook dir / CLAUDE.md への Write/Edit が hollow-claims の
+# pairing を満たす。 「claude_managed-skills/」「claude_managed-hooks/」 等の
+# hyphen separated dir 名も拾うため skills?[-_/] / hooks?[-_/] とする。
+PERSISTENCE_PATH_RE = re.compile(
+    r"(global-memory|/memory/|skills?[-_/]|hooks?[-_/]|CLAUDE\.md$)",
+    re.IGNORECASE,
+)
 
-# A todos.md anywhere in the path counts as a deferral sink.
+# todos.md path (H7 deferral pairing)
 TODOS_PATH_RE = re.compile(r"todos\.md$")
 
-# Tools that constitute "evidence collection" for claim-without-evidence.
+# Evidence tools (H8 claim-without-evidence pairing)
 EVIDENCE_TOOLS = {"Read", "Grep", "Glob", "WebSearch", "WebFetch"}
 
-# Tools that constitute "deferral registration" for the H7 check
-# (TodoWrite is kept for legacy transcripts).
+# Task tools (H7 deferral pairing; TodoWrite kept for legacy transcripts)
 TASK_TOOLS = {"TaskCreate", "TaskUpdate", "TodoWrite"}
 
-# Tools whose file_path / notebook_path inputs are recorded for
-# memory- and todos-path matching.
-PATH_RECORDING_TOOLS = {"Write", "Edit", "MultiEdit"}
+# Tools whose file_path / notebook_path inputs are recorded for path matching.
+PATH_RECORDING_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
 
 def _load_transcript(path: str) -> list[dict]:
@@ -103,13 +177,18 @@ def _load_transcript(path: str) -> list[dict]:
     return out
 
 
-def _current_turn(entries: list[dict]) -> tuple[str, set[str], list[str]]:
-    """Return (assistant_text, tool_names, tool_paths) for the current turn.
+def _current_turn(
+    entries: list[dict],
+) -> tuple[str, set[str], list[str], bool]:
+    """Return (assistant_text, tool_names, tool_paths, has_git_verify).
 
     Current turn starts after the most recent user entry whose
     `message.content` is a string (= human prompt; tool_result entries
     use a list of content blocks). If no such entry is found, return
     empty values (avoids fail-broad scanning of the whole transcript).
+
+    has_git_verify: True if any Bash tool_use in this turn invokes
+    git log / git show / git diff (for M3 recognize-own-work pairing).
     """
     start_idx = -1
     for i in range(len(entries) - 1, -1, -1):
@@ -121,11 +200,12 @@ def _current_turn(entries: list[dict]) -> tuple[str, set[str], list[str]]:
             start_idx = i + 1
             break
     if start_idx == -1:
-        return "", set(), []
+        return "", set(), [], False
 
     text_parts: list[str] = []
     tool_names: set[str] = set()
     tool_paths: list[str] = []
+    has_git_verify = False
 
     for obj in entries[start_idx:]:
         if obj.get("type") != "assistant":
@@ -144,35 +224,68 @@ def _current_turn(entries: list[dict]) -> tuple[str, set[str], list[str]]:
                 name = str(block.get("name", ""))
                 if name:
                     tool_names.add(name)
+                inp = block.get("input") or {}
+                if not isinstance(inp, dict):
+                    continue
                 if name in PATH_RECORDING_TOOLS:
-                    inp = block.get("input") or {}
-                    if isinstance(inp, dict):
-                        fp = inp.get("file_path") or inp.get("notebook_path")
-                        if isinstance(fp, str):
-                            tool_paths.append(fp)
+                    fp = inp.get("file_path") or inp.get("notebook_path")
+                    if isinstance(fp, str):
+                        tool_paths.append(fp)
+                if name == "Bash":
+                    cmd = inp.get("command", "")
+                    if isinstance(cmd, str) and GIT_VERIFY_RE.search(cmd):
+                        has_git_verify = True
 
-    return "\n".join(text_parts), tool_names, tool_paths
+    return "\n".join(text_parts), tool_names, tool_paths, has_git_verify
 
 
 def _check(
-    text: str, tool_names: set[str], tool_paths: list[str]
+    text: str,
+    tool_names: set[str],
+    tool_paths: list[str],
+    has_git_verify: bool,
 ) -> tuple[int, list[str]]:
     """Return (exit_code, stderr_lines)."""
     warnings: list[str] = []
     blocking: list[str] = []
 
-    # H1 empty-learning (enforcement)
-    m = EMPTY_LEARNING_RE.search(text)
+    # M1 meta-announce-silence (block, no pairing)
+    m = META_ANNOUNCE_RE.search(text)
     if m:
-        memory_updated = any(MEMORY_PATH_RE.search(p) for p in tool_paths)
-        if not memory_updated:
+        blocking.append(
+            f"meta-announce-silence: 「{m.group(0)}」 と発話。 "
+            f"不実施宣言自体が rule の silent compliance 趣旨に反する。 "
+            f"該当文を delete して再出力してください。 silent / 不実施で示すのが本筋で、 "
+            f"「rule に従って〜しません」 と meta-announce すること自体が rule 違反になる。"
+        )
+
+    # H1 hollow-claims (block unless persistence-path Write/Edit in turn)
+    m = HOLLOW_CLAIM_RE.search(text)
+    if m:
+        persistence_recorded = any(
+            PERSISTENCE_PATH_RE.search(p) for p in tool_paths
+        )
+        if not persistence_recorded:
             blocking.append(
-                f"empty-learning: 「{m.group(0)}」 と発話したが当ターンで "
-                f"memory subtree (~/.claude/global-memory/ または */memory/) "
-                f"への Write/Edit/MultiEdit が記録されていません (System §報告・応答)。 "
-                f"memory-routing skill を起動して persistence を行うか、 "
-                f"該当発話を取り消して再応答してください。"
+                f"hollow-claims: 「{m.group(0)}」 と発話したが当ターンで "
+                f"memory / skill / hook / CLAUDE.md への Write/Edit が記録されていません "
+                f"(System §報告・応答)。 introspective phrase は persistence と "
+                f"セットでない時 session reset で虚偽化する。 該当 phrase を delete "
+                f"するか、 対応する persistence action を同 response 内で行ってから "
+                f"再出力してください。"
             )
+
+    # M3 recognize-own-work (block unless git verify in turn)
+    m = SURPRISE_RE.search(text)
+    if m and not has_git_verify:
+        blocking.append(
+            f"recognize-own-work: 「{m.group(0)}」 と surprise 表現を発したが、 "
+            f"同 turn 内に git log / git show / git diff の呼出が無い。 LLM session "
+            f"は揮発的で前 session の自作業が unfamiliar に見える錯覚が起きる。 "
+            f"git log <path> で関連 commit を確認し、 commit message から背景を "
+            f"理解した上で 「想定外」 ではなく 「<hash> で <理由> により導入」 と "
+            f"事実 framing に書き換えてから再出力してください。"
+        )
 
     # H7 deferral (warning-only)
     m = DEFERRAL_RE.search(text)
@@ -194,7 +307,7 @@ def _check(
             warnings.append(
                 f"claim-without-evidence: 「{m.group(0)}」 と発話したが当ターンで "
                 f"Read / Grep / Glob / WebSearch / WebFetch のいずれも使われていません "
-                f"(System §報告・応答)。 verify-spec-before-dismissal skill 参照。"
+                f"(System §報告・応答)。 verify-before-claim skill 参照。"
             )
 
     out_lines = warnings + blocking
@@ -211,10 +324,10 @@ def _run(payload: dict) -> int:
     entries = _load_transcript(transcript_path)
     if not entries:
         return 0
-    text, tool_names, tool_paths = _current_turn(entries)
+    text, tool_names, tool_paths, has_git_verify = _current_turn(entries)
     if not text:
         return 0
-    exit_code, lines = _check(text, tool_names, tool_paths)
+    exit_code, lines = _check(text, tool_names, tool_paths, has_git_verify)
     for line in lines:
         sys.stderr.write(line + "\n")
     return exit_code
