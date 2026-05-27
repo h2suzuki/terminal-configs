@@ -17,6 +17,10 @@
           { "type": "command", "command": "/etc/claude-code/hooks/deny_compound_git_commit.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/check_commit_format.py" }
         ]
+      },
+      {
+        "matcher": "^(Task|Agent)$",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/subagent_gate_warn.py" } ]
       }
     ],
     "PostToolUse": [
@@ -33,6 +37,7 @@
     ],
     "SessionStart": [
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/claude-md-lint.sh", "timeout": 120 } ] },
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/claude-code-feature-cache.sh", "timeout": 120 } ] },
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/session_resume_context.py" } ] }
     ],
     "UserPromptSubmit": [

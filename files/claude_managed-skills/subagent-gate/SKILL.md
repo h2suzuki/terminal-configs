@@ -26,3 +26,4 @@ subagent 起動には context 切り替え / 結果統合 / token コストの o
 ## Related
 
 - **Legacy:** org CLAUDE.md ワークフローの統制 § 4. サブエージェント より
+- **Hook 補助:** mechanical proxy 判定は `subagent_gate_warn.py` (PreToolUse:^(Task|Agent)$) / `subagent_gate_suggest.py` (UserPromptSubmit) が補助。 hook reminder を見たら本 skill 4 条件 (a-d) のいずれが該当か verbalize する。

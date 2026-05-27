@@ -22,7 +22,8 @@
       { "hooks": [ { "type": "command", "command": "~/.claude/hooks/push_prompting_check.py" } ] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/memory_surface.py" } ] }
+      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/memory_surface.py" } ] },
+      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/subagent_gate_suggest.py" } ] }
     ]
   },
   "spinnerVerbs": {

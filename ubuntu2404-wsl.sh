@@ -323,6 +323,7 @@ copy --nobackup claude_user-settings.json                   ~/.claude/settings.j
 copy --nobackup claude_user-hooks/check_commit_author.py    ~/.claude/hooks/check_commit_author.py
 copy --nobackup claude_user-hooks/push_prompting_check.py   ~/.claude/hooks/push_prompting_check.py
 copy --nobackup claude_user-hooks/memory_surface.py         ~/.claude/hooks/memory_surface.py
+copy --nobackup claude_user-hooks/subagent_gate_suggest.py  ~/.claude/hooks/subagent_gate_suggest.py
 
 # Install the user skills
 pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
@@ -449,6 +450,7 @@ EOF
     copy --nobackup claude_user-hooks/check_commit_author.py    ~$LOGIN_USER/.claude/hooks/check_commit_author.py  --owner $LOGIN_USER --group $LOGIN_GROUP
     copy --nobackup claude_user-hooks/push_prompting_check.py   ~$LOGIN_USER/.claude/hooks/push_prompting_check.py --owner $LOGIN_USER --group $LOGIN_GROUP
     copy --nobackup claude_user-hooks/memory_surface.py         ~$LOGIN_USER/.claude/hooks/memory_surface.py       --owner $LOGIN_USER --group $LOGIN_GROUP
+    copy --nobackup claude_user-hooks/subagent_gate_suggest.py  ~$LOGIN_USER/.claude/hooks/subagent_gate_suggest.py --owner $LOGIN_USER --group $LOGIN_GROUP
 
     # Install the user skills
     pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
