@@ -101,5 +101,5 @@ documented rationale 継承 case:
 
 - `verify-before-claim` — 否定形断定前の primary source verify (Phase 1 「一次情報で mechanism 確認」 と family)
 - `verbalize-before-action` — 判断 / 推奨を発話前に self-rebut (Phase 2 の verbalize 規律)
-- `evidence-reporting` — 判定 / 推奨 / 影響評価の根拠提示
+- `report-by-evidence` — 判定 / 推奨 / 影響評価の根拠提示
 - `commit-discipline` — 実装後の commit 規律

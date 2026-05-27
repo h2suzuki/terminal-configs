@@ -1,6 +1,6 @@
 ---
 name: rejection-via-actual-cost
-description: design 代替案の rejection rationale は 「採用したら何が増えるか」 の actual cost (component 数 / LoC / lifecycle 管理点 / IO size / 既存 path overlap / 機構面積) で論じる。 「実機 verify が要る」「公式 spec 確認が要る」「未検証」 等の着手前に解消できる verify cost は却下理由にしない (やればいいだけ)
+description: Argue the rejection rationale for a design alternative in terms of actual cost — what would be added if adopted (component count / LoC / lifecycle management points / IO size / overlap with existing paths / mechanism surface area); do not use as a rejection reason verify costs that can be resolved before commitment (need real-machine verify / need official spec verify / unverified), since those just need to be done.
 when_to_use: TRIGGER when about to reject a design alternative with reasons like "実機 verify が要る" / "未検証" / "動作が読めない" etc, or write a rejection rationale 節. SKIP when verify cost is decisive and quantified, or user waives verify.
 ---
 
@@ -49,7 +49,7 @@ verify cost を回避することは 「楽な選択」 の正当化であり、
 
 ## Related
 
-- `evidence-reporting`: 判定 / 推奨 / 影響評価を発話する前に根拠を示す。 本 skill の actual cost wording と family
+- `report-by-evidence`: 判定 / 推奨 / 影響評価を発話する前に根拠を示す。 本 skill の actual cost wording と family
 - `verify-before-claim`: 否定形断定前に primary source verify。 本 skill が 「verify は やればいいだけ」 と言うのと同根
 - `make-plan-before-coding`: design proposal の前段。 verify-cost-as-rejection は調査不足の reflective signal でもある
 - **Legacy:** user memory `feedback_design_rejection_actual_cost.md` (2026-05-27 checking-style bg watchdog 起票) より昇格

@@ -1,10 +1,10 @@
 ---
-name: rule-extraction-workflow
-description: CLAUDE.md ルールを hook / skill 化する繰り返し session で適用する workflow — implement + smoke + pair commit (code + CLAUDE.md 削除) + /code-review skill を `claude --bg -p` で background spawn + 次アイテム並走 + bg idle 後 findings triage + fixup-autosquash
+name: skill-and-hook-extraction-workflow
+description: Workflow applied across iterative sessions that extract CLAUDE.md rules into hooks / skills — implement + smoke + pair commit (code + CLAUDE.md deletion) + spawn /code-review skill in background via `claude --bg -p` + run next item in parallel + triage bg findings once idle + fixup-autosquash.
 when_to_use: TRIGGER when user instructs "CLAUDE.md ルール X を hook / skill 化" repeated extraction work, or about to write a hook / skill that extracts a CLAUDE.md section. SKIP for single-shot creation or skill / hook unrelated to CLAUDE.md.
 ---
 
-# Rule Extraction Workflow
+# Skill and Hook Extraction Workflow
 
 CLAUDE.md ルールを hook / skill 化する繰り返し session の workflow。 pair commit + background `/code-review` + 次アイテム並走で iteration を高速化する。
 

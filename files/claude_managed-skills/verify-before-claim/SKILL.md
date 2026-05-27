@@ -83,5 +83,5 @@ scope / 根拠 を明示すれば、 reader は何が確認済み / 何が未確
 ## Related
 
 - `writing-code` — durable artifact での「No dangling-prone references」
-- `evidence-reporting` — 判定・推奨・結論を発する前の根拠提示 rule (隣接 scope)
-- `debug-workflow` — hypothesis を code / log で裏付ける workflow
+- `report-by-evidence` — 判定・推奨・結論を発する前の根拠提示 rule (隣接 scope)
+- `debug-guardrail` — hypothesis を code / log で裏付ける workflow

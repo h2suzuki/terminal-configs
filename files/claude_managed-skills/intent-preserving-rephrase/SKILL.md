@@ -1,6 +1,6 @@
 ---
 name: intent-preserving-rephrase
-description: CLAUDE.md / ルール / spec / handoff / SKILL.md の言い換え (compliance 目的の否定形→肯定形変換 / 整理リライト / 翻訳) は意味を 1mm も変えない。 真の論理反転で同義になる時のみ変換し、 そうでなければ否定形のまま維持する。 指摘されたサンプルだけ直さず、 全変換を同じ drift class で self-audit する
+description: When rephrasing a CLAUDE.md rule / spec / handoff / SKILL.md (compliance-driven negative-to-positive rewrite, reorganization, or translation), preserve the meaning exactly; only convert when true logical inversion is synonymous, otherwise keep the negative form; do not fix only the cited sample but self-audit every conversion in the same drift class.
 when_to_use: TRIGGER when about to rephrase / rewrite / translate a rule / CLAUDE.md / spec / SKILL.md (否定形→肯定形 / "簡潔化" etc), or claim "意味は同じ". SKIP for new content creation or typographical fixes.
 ---
 
@@ -38,6 +38,6 @@ user がサンプルで指摘したら、 残り全件を同じ class で **self
 ## Related
 
 - `document-editor`: 永続 artifact 編集規律 (intent change を伴う書き換えは scope 外)。 本 skill は intent 保存の **判定基準** を提供
-- `honest-attribution`: 「段階的拡張」 等の framing で responsibility を blur しない (rule 言い換えの honest attribution と同根)
+- `attribute-existing-issues`: 「段階的拡張」 等の framing で responsibility を blur しない (rule 言い換えの honest attribution と同根)
 - `verify-before-claim`: 「同義です」 と言う前に before/after diff で verify
 - **Legacy:** project memory `feedback_intent_preserving_rephrase.md` (2026-05-16 起票) より昇格

@@ -1,10 +1,10 @@
 ---
-name: lost-track-recover
+name: lost-track-recovery
 description: Recovery procedure for Claude lost-track state. USER-INVOKED only (auto-trigger disabled).
 disable-model-invocation: true
 ---
 
-# Lost-Track Recover
+# Lost Track Recovery
 
 Claude が lost track 状態 (現状を 1 文で restate しようとして describe back できない、 直近指示を失念、 文脈散逸) に陥ったときの復旧手順。
 

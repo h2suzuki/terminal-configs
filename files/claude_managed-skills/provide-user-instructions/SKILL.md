@@ -1,10 +1,10 @@
 ---
-name: copy-paste-commands
-description: user が手動実行する必要があるコマンド (host 側 cp / git checkout / git push / claude invocation / curl 等) は、 毎回そのままコピペで使える形 — 独立 fenced code block + 完全 path (絶対 or repo 相対) + 余分な inline prose なし — で提示する
+name: provide-user-instructions
+description: Present commands the user must run manually (host-side cp / git checkout / git push / claude invocation / curl, etc.) in a directly copy-paste-runnable form — standalone fenced code block, complete path (absolute or repo-relative), no inline prose mixed in.
 when_to_use: TRIGGER when about to instruct user to run a command manually (host 側 / cp / git push etc), or write prose like "以下のコマンドを実行" etc. SKIP when describing a command for explanation only.
 ---
 
-# Copy-Paste Commands
+# Provide User Instructions
 
 user に手動実行を依頼するコマンドは、 毎回そのままコピペで実行できる形で提示する。
 

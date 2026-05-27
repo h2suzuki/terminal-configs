@@ -1,10 +1,10 @@
 ---
-name: debug-workflow
+name: debug-guardrail
 description: For inexplicable phenomena, form 2-3 hypotheses, back them with code / log, land on artifact-level fix; verify fix is not algebraically identical to the bug before locking.
 when_to_use: TRIGGER on "動かない" / "失敗した" reports, propose workarounds, answer "たぶん〜" without root-cause backing, or write fix-locking statements before verifying fix vs bug equivalence. SKIP for typos / syntax errors.
 ---
 
-# Debug Workflow
+# Debug Guardrail
 
 不可解な現象に出会ったときに根本原因へ着地するための手順。 仮説 → 裏付け → fix lock 直前の equivalence verify までを一貫した規律として扱う。
 
@@ -37,5 +37,5 @@ LLM は 「fix した」 感覚が先行し、 新旧の量が同値であるこ
 ## Related
 
 - `verify-before-claim` — positive self-verification claim の exhaustiveness。 fix correctness verify は specific instance
-- `evidence-reporting` — 判定 / 推奨 を発話する前に根拠を示す
+- `report-by-evidence` — 判定 / 推奨 を発話する前に根拠を示す
 - **Legacy:** org CLAUDE.md 開発 § c. デバッグ より

@@ -1,10 +1,10 @@
 ---
-name: evidence-reporting
+name: report-by-evidence
 description: Rules to consult before asserting judgment / recommendation / conclusion / scale-impact assessment / behavior claim / resource cost estimate / defect classification.
 when_to_use: TRIGGER when about to use evaluative terms ("大改造" / "影響大" etc), cite source for a code behavior claim, estimate resource cost, or classify a defect as "gap" vs "bug". SKIP for mechanical tool output reports.
 ---
 
-# Evidence Reporting
+# Report by Evidence
 
 判定・推奨・結論・規模影響評価・挙動 claim・リソースコスト見積・欠陥分類を発話する直前に参照するルール。 抽象的なフレーズに precise meaning を与え、 friction を減らす。
 
