@@ -2,29 +2,29 @@
 """
 Combined Stop hook for org-managed Claude Code:
 
-  M1 meta-announce-silence (enforcement, exit 2):
+  meta-announce-silence (enforcement, exit 2):
     「省略しません」「触りません」「mock しません」「催促しません」 系の
     compliance-non-execution 宣言を block。 silent compliance の rule 趣旨に反する
     (rule 遵守を発話で能動的に話題化する自体が rule 違反)。 phrase hit のみで block、
     persistence pairing 不要。
 
-  H1 hollow-claims (enforcement, exit 2):
+  hollow-claims (enforcement, exit 2):
     「学習しました」「反省」「申し訳」「次回から気をつけ」 系の introspective phrase
     は、 同 turn 内に memory subtree / skill dir / hook dir / CLAUDE.md への Write/Edit
     記録が無ければ block。 session reset で虚偽化するため persistence 行動とのペアを
     要求する。
 
-  M3 recognize-own-work (enforcement, exit 2):
+  recognize-own-work (enforcement, exit 2):
     「想定外」「知らなかった」「あれ?」 系の surprise phrase を、 同 turn 内に
     git log / git show / git diff の Bash 呼出が無ければ block。 LLM session 揮発で
     前 session の自作業が unfamiliar に見える錯覚 対策。
 
-  H7 deferral (warning-only, exit 0):
+  deferral (warning-only, exit 0):
     「後で対処」「別タスクに切り出」「TODO として」 系 phrase は、 同 turn 内に
     TaskCreate / TaskUpdate / TodoWrite または todos.md への Write/Edit が無ければ
     warn (block しない)。
 
-  H8 claim-without-evidence (warning-only, exit 0):
+  claim-without-evidence (warning-only, exit 0):
     「不明」「該当なし」「未確認」 系 phrase は、 同 turn 内に Read / Grep / Glob /
     WebSearch / WebFetch のいずれも使われていなければ warn。
 
@@ -45,7 +45,7 @@ partial transcript の場合は空値を返して fall-broad scan しない。
 
 Exit:
   0: no enforcement triggered (warnings may be emitted on stderr)
-  2: one of M1 / H1 / M3 triggered
+  2: one of meta-announce-silence / hollow-claims / recognize-own-work triggered
 
 parse / IO error は fail-open (exit 0) — Stop hook で誤 block して user 作業を
 止めないことを優先する。
@@ -57,7 +57,7 @@ import json
 import re
 import sys
 
-# --- Pattern: M1 meta-announce-silence (block on hit, no pairing) ---
+# --- Pattern: meta-announce-silence (block on hit, no pairing) ---
 # 不実施宣言系 — rule 遵守を発話で能動的に話題化する pattern。
 META_ANNOUNCE_PATTERNS: list[str] = [
     # 省略系
@@ -86,7 +86,7 @@ META_ANNOUNCE_PATTERNS: list[str] = [
 ]
 META_ANNOUNCE_RE = re.compile("|".join(META_ANNOUNCE_PATTERNS), re.IGNORECASE)
 
-# --- Pattern: H1 hollow-claims (block on hit unless persistence in same turn) ---
+# --- Pattern: hollow-claims (block on hit unless persistence in same turn) ---
 # introspective phrase — 「学習」「改善宣言」「省察」「formal apology」 の 4 系統。
 # 否定形 / 中立形を match させないよう conjugation を anchor (反省し → 反省しない を
 # excludable)。 false-positive 抑制のため 「気をつけます」「以降は」「sorry」「すみません」
@@ -109,7 +109,7 @@ HOLLOW_CLAIM_PATTERNS: list[str] = [
 ]
 HOLLOW_CLAIM_RE = re.compile("|".join(HOLLOW_CLAIM_PATTERNS), re.IGNORECASE)
 
-# --- Pattern: M3 recognize-own-work (block on hit unless git verify in same turn) ---
+# --- Pattern: recognize-own-work (block on hit unless git verify in same turn) ---
 SURPRISE_PATTERNS: list[str] = [
     r"想定外",
     r"予想外",
@@ -127,13 +127,13 @@ SURPRISE_RE = re.compile("|".join(SURPRISE_PATTERNS), re.IGNORECASE)
 # git log / show / diff の Bash invocation を「実 verify 行動」 とみなす。
 GIT_VERIFY_RE = re.compile(r"\bgit\s+(log|show|diff)\b", re.IGNORECASE)
 
-# --- Pattern: H7 deferral (warning, no block) ---
+# --- Pattern: deferral (warning, no block) ---
 DEFERRAL_RE = re.compile(
     r"後で(対処|やる|考える)|別タスクに(切り出|分け)|今は(処置|対処)しません|"
     r"後回し|TODO として|次回(に)?(対応|やる)"
 )
 
-# --- Pattern: H8 claim-without-evidence (warning, no block) ---
+# --- Pattern: claim-without-evidence (warning, no block) ---
 CLAIM_RE = re.compile(
     r"不明|該当なし|存在しません|未確認|わかりません|分かりません"
 )
@@ -147,13 +147,13 @@ PERSISTENCE_PATH_RE = re.compile(
     re.IGNORECASE,
 )
 
-# todos.md path (H7 deferral pairing)
+# todos.md path (deferral pairing)
 TODOS_PATH_RE = re.compile(r"todos\.md$")
 
-# Evidence tools (H8 claim-without-evidence pairing)
+# Evidence tools (claim-without-evidence pairing)
 EVIDENCE_TOOLS = {"Read", "Grep", "Glob", "WebSearch", "WebFetch"}
 
-# Task tools (H7 deferral pairing; TodoWrite kept for legacy transcripts)
+# Task tools (deferral pairing; TodoWrite kept for legacy transcripts)
 TASK_TOOLS = {"TaskCreate", "TaskUpdate", "TodoWrite"}
 
 # Tools whose file_path / notebook_path inputs are recorded for path matching.
@@ -188,7 +188,7 @@ def _current_turn(
     empty values (avoids fail-broad scanning of the whole transcript).
 
     has_git_verify: True if any Bash tool_use in this turn invokes
-    git log / git show / git diff (for M3 recognize-own-work pairing).
+    git log / git show / git diff (for recognize-own-work pairing).
     """
     start_idx = -1
     for i in range(len(entries) - 1, -1, -1):
@@ -249,7 +249,7 @@ def _check(
     warnings: list[str] = []
     blocking: list[str] = []
 
-    # M1 meta-announce-silence (block, no pairing)
+    # meta-announce-silence (block, no pairing)
     m = META_ANNOUNCE_RE.search(text)
     if m:
         blocking.append(
@@ -259,7 +259,7 @@ def _check(
             f"「rule に従って〜しません」 と meta-announce すること自体が rule 違反になる。"
         )
 
-    # H1 hollow-claims (block unless persistence-path Write/Edit in turn)
+    # hollow-claims (block unless persistence-path Write/Edit in turn)
     m = HOLLOW_CLAIM_RE.search(text)
     if m:
         persistence_recorded = any(
@@ -275,7 +275,7 @@ def _check(
                 f"再出力してください。"
             )
 
-    # M3 recognize-own-work (block unless git verify in turn)
+    # recognize-own-work (block unless git verify in turn)
     m = SURPRISE_RE.search(text)
     if m and not has_git_verify:
         blocking.append(
@@ -287,7 +287,7 @@ def _check(
             f"事実 framing に書き換えてから再出力してください。"
         )
 
-    # H7 deferral (warning-only)
+    # deferral (warning-only)
     m = DEFERRAL_RE.search(text)
     if m:
         todos_via_path = any(TODOS_PATH_RE.search(p) for p in tool_paths)
@@ -299,7 +299,7 @@ def _check(
                 f"への Write/Edit が記録されていません (System §計画と遂行)。"
             )
 
-    # H8 claim-without-evidence (warning-only)
+    # claim-without-evidence (warning-only)
     m = CLAIM_RE.search(text)
     if m:
         evidence_used = bool(tool_names & EVIDENCE_TOOLS)

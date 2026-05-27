@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # dangling-ref-check: allow (this hook's function is to scan that path).
-"""UserPromptSubmit hook surfacing top-1 memory entry via SQLite FTS5 BM25 (M78).
+"""UserPromptSubmit hook surfacing top-1 memory entry via SQLite FTS5 BM25.
 
 Modes:
 
