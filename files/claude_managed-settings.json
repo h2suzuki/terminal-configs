@@ -35,9 +35,7 @@
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/detect_cwd_pollution.py" } ]
       }
     ],
-    "SessionStart": [
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/session_resume_context.py" } ] }
-    ],
+    "SessionStart": [],
     "UserPromptSubmit": [
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/handoff_uncommitted_check.py" } ] }
     ],
