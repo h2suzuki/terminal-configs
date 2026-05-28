@@ -39,31 +39,29 @@ Claude Code itself:
   Claude Code default*)
 - third-party tools (Cursor / Aider / Codex)
 
-## Sources (priority order)
+## Sources
 
-1. **CLI `--help` output**: pre-captured by the SessionStart hook and
-   appended to the user prompt under `## CLI introspection dump`
-   (top-level help plus every `claude <subcommand> --help`). This is
-   the ground truth for "what shipped" — docs lag, releases lie, but
-   `--help` is generated from the current binary. You do **not** need
-   to (and cannot) invoke `claude` yourself; the bg session has no
-   `Bash` tool. If a subcommand's surface needs cross-verification,
-   use WebFetch against the docs in 2-5 below.
-2. **`https://docs.claude.com`** — Anthropic public docs.
-3. **`https://code.claude.com/docs`** — Claude Code-specific docs
-   (hooks reference, skills reference, settings reference).
-4. **`https://github.com/anthropics/claude-code`** — issues,
-   discussions, changelog, releases tagged between `v{last_version}`
-   and `v{current_version}`. Releases page is the primary delta surface.
-5. **`https://claude.com/plugins`** — plugin marketplace.
+Two pre-captured surfaces in the user prompt — the bg session has no
+`Bash` or `WebFetch` tool and cannot fetch anything itself:
 
-**Cross-verify rule**: at least one official source (1-5) plus one
-other path. The pre-captured CLI dump alone is enough only when the
-docs are genuinely silent — note that case in **Conflicting /
-unclear**.
+1. **`## CLI introspection dump`**: top-level `claude --help` plus every
+   `claude <subcommand> --help`, captured at dispatch time. The ground
+   truth for "what shipped" — docs lag, releases lie, but `--help` is
+   generated from the current binary.
+2. **`## CHANGELOG.md dump`**: the upstream `CHANGELOG.md` (raw
+   markdown from `github.com/anthropics/claude-code`), captured at
+   dispatch time. The primary delta surface — every release's
+   user-facing changes are inline under `<Update label="X.Y.Z">`
+   blocks.
 
-Community sources (blog / Reddit / X) do **not** satisfy the official
-requirement and are recorded only as supporting context.
+**Cross-verify rule**: an item belongs in **New features /
+Deprecated / removed** when it appears in either source for the delta
+range (`v{last_version}` → `v{current_version}`). When both sources
+mention it, cite both. When only the CHANGELOG mentions it (e.g. a
+skill / hook / behavior change with no CLI surface), cite the
+CHANGELOG bullet alone. When only the CLI dump shows it (added /
+removed flag) and the CHANGELOG is silent, record it under
+**Conflicting / unclear** with the CLI cite.
 
 ## Output format
 
@@ -133,27 +131,30 @@ Otherwise the section header has no suffix.
    Its top-level `=== claude --help ===` block plus every
    `=== claude <sub> --help ===` block is the binary's current
    surface, captured at the moment this session was dispatched.
-2. For each subcommand surface in the dump, diff it against your
-   memory of `last_version` (or the cutoff for initial seed).
-3. Fetch the GitHub releases page for tags between `v{last_version}`
-   and `v{current_version}` (inclusive of the newer endpoint) and
-   read each release body via WebFetch.
-4. Fetch the hooks / skills / settings reference pages on
-   `code.claude.com/docs` for current schema via WebFetch.
-5. Compose the section in the format above. Be concise — one bullet
+2. Read the `## CHANGELOG.md dump` section in the user prompt. Extract
+   the `<Update label="X.Y.Z">` blocks whose version falls in the
+   delta range (`v{last_version}` → `v{current_version}`, or
+   knowledge cutoff `2026-01` → `v{current_version}` for initial seed).
+3. For each subcommand surface in the CLI dump, diff it against your
+   memory of `last_version` (or cutoff). For each CHANGELOG entry in
+   the delta range, group bullets under the four output subsections.
+4. Compose the section in the format above. Be concise — one bullet
    per item.
-6. Write to `staging_file` and exit. Do not output anything else.
+5. Write to `staging_file` and exit. Do not output anything else.
 
 ## Failure modes (record under Conflicting / unclear, do not abort)
 
 - The CLI dump in the user prompt is empty or shows
   `claude: command not found` → note "CLI introspection unavailable
-  in this env" and proceed with doc-only sources.
-- A GitHub release page 404s → note the tag is missing from the
-  release feed and rely on the changelog / commit log.
-- Cross-verify fails for an item → keep the item but file under
-  **Conflicting / unclear** with both citations.
+  in this env" and work from the CHANGELOG dump alone.
+- The CHANGELOG dump shows `(CHANGELOG fetch failed — work from CLI
+  dump alone)` or is otherwise empty → record the affected delta
+  range under **Conflicting / unclear** and rely on the CLI dump.
+- Cross-verify fails for an item (CLI dump shows it, CHANGELOG does
+  not, or vice versa) → keep the item under **Conflicting /
+  unclear** with the available citation.
 
-Fail-open everywhere else: a partial section is better than no
-section. The hook treats an empty staging file as a no-op, so write at
-least the heading + four `なし` subsections rather than nothing.
+Fail-open (= on error, emit a partial result instead of aborting)
+everywhere else: a partial section is better than no section. The hook
+treats an empty staging file as a no-op, so write at least the heading
++ four `なし` subsections rather than nothing.

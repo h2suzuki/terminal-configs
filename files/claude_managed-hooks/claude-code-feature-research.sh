@@ -197,6 +197,19 @@ capture_cli_dump() {
   done
 }
 
+# --- changelog capture (CHANGELOG-driven research source) ------------------
+#
+# Fetch the upstream raw CHANGELOG.md so the bg session has version-delta
+# context without WebFetch. Raw GitHub URL is anonymous and plain markdown,
+# so no HTML parse. Fail-open: an empty / failed fetch is annotated in the
+# dump body and the bg session works from CLI dump alone.
+capture_changelog() {
+  local url='https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md'
+  printf '=== CHANGELOG.md (raw) ===\n'
+  timeout 30 curl -fsSL "$url" 2>/dev/null \
+    || printf '(CHANGELOG fetch failed — work from CLI dump alone)\n'
+}
+
 # --- detached self-reap entry ----------------------------------------------
 #
 # The dispatcher spawns `"$0" --reap-pass` via setsid after a delay. This
@@ -279,6 +292,7 @@ rm -f "$staging" 2>/dev/null
 
 prompt_body="$(cat "$PROMPT_MD" 2>/dev/null)"
 cli_dump="$(capture_cli_dump)"
+changelog_dump="$(capture_changelog)"
 
 # The methodology prompt is injected via --append-system-prompt. The
 # user-prompt block carries the variables the prompt references
@@ -293,15 +307,18 @@ else
   delta_descr="delta research: list everything that changed between v${last_version} and v${current_version}."
 fi
 
-user_prompt=$'Claude Code feature-delta research session.\n\n'"$delta_descr"$'\n\nWrite ONLY the new section body (single `## v<current> (researched YYYY-MM-DD)` heading followed by the four subsections defined in the methodology prompt) with the Write tool to:\n\n'"$staging"$'\n\nDo not echo to stdout. Do not write anything besides the staging file. No JSON envelope, no prose before/after the staging Write call.\n\ncurrent_version: '"$current_version"$'\nlast_version: '"${last_version:-<none — initial seed>}"$'\nstaging_file: '"$staging"$'\n\n## CLI introspection dump (pre-captured by the SessionStart hook)\n\n'"$cli_dump"
+user_prompt=$'Claude Code feature-delta research session.\n\n'"$delta_descr"$'\n\nWrite ONLY the new section body (single `## v<current> (researched YYYY-MM-DD)` heading followed by the four subsections defined in the methodology prompt) with the Write tool to:\n\n'"$staging"$'\n\nDo not echo to stdout. Do not write anything besides the staging file. No JSON envelope, no prose before/after the staging Write call.\n\ncurrent_version: '"$current_version"$'\nlast_version: '"${last_version:-<none — initial seed>}"$'\nstaging_file: '"$staging"$'\n\n## CLI introspection dump (pre-captured by the SessionStart hook)\n\n'"$cli_dump"$'\n\n## CHANGELOG.md dump (pre-captured by the SessionStart hook)\n\n'"$changelog_dump"
 
 # `claude --bg`: detached, subscription-billed. acceptEdits auto-allows
 # Write non-interactively. --setting-sources "" keeps the child from
-# re-registering this hook. The `Bash` tool is deliberately omitted:
-# every `claude <sub> --help` invocation is pre-captured into
-# `cli_dump` above, so the bg session has the ground truth without
-# needing Bash, and the permission-ask path that would escalate to
-# the user's interactive session is closed.
+# re-registering this hook. Both `Bash` and `WebFetch` are deliberately
+# omitted: `claude <sub> --help` and the upstream `CHANGELOG.md` are
+# pre-captured into `cli_dump` / `changelog_dump` above, so the bg
+# session has the binary surface and the version-delta source without
+# needing Bash or WebFetch. The permission-ask path that would
+# escalate to the user's interactive session is closed (acceptEdits
+# covers Write only — a WebFetch in the bg session would have
+# escalated and stalled the dispatch).
 out="$(
   CLAUDE_CODE_FEATURE_RESEARCH_PARENT=1 timeout "$BG_DISPATCH_TIMEOUT_S" \
     claude --bg \
@@ -310,7 +327,7 @@ out="$(
       --effort high \
       --setting-sources "" \
       --strict-mcp-config \
-      --tools Read,Write,WebFetch \
+      --tools Read,Write \
       --add-dir "$STAGING_DIR" \
       --permission-mode acceptEdits \
       --append-system-prompt "$prompt_body" \
