@@ -1,23 +1,30 @@
 #!/usr/bin/env python3
 # /etc/claude-code/hooks/turn_counter.py
 #
-# UserPromptSubmit hook: shows a per-session turn marker to the USER —
-# wall-clock time, turn count, context size, elapsed since the previous
-# turn — without ever entering the model context. Emitted via the JSON
-# `systemMessage` field ("A systemMessage field is shown to you, not to
-# Claude" — code.claude.com/docs/en/hooks), NOT stdout/additionalContext
-# (which on UserPromptSubmit WOULD be fed to the model).
+# Stop hook: shows a per-turn marker to the USER at turn end — wall-clock
+# time, turn count, context size, elapsed since the previous turn — without
+# ever entering the model context. Emitted via the JSON `systemMessage`
+# field ("shown to the user", not to Claude — code.claude.com/docs/en/hooks).
+# On Stop, plain stdout goes only to the debug log (invisible to user AND
+# model), so `systemMessage` is the one channel that reaches the user while
+# staying out of context. additionalContext does not apply to Stop.
+#
+# Was a UserPromptSubmit hook (marker printed before the response); moved to
+# Stop so it prints when the turn finishes. `stop_hook_active` is honored: a
+# Stop re-entry caused by another Stop hook forcing a continuation (e.g.
+# stop_checks.py exit 2) is skipped, so each turn counts exactly once at its
+# first stop, matching the old one-per-prompt semantics.
 #
 # Turn count + last-turn epoch live in `<transcript>.turns`, flock-guarded
 # for the RMW. Context size and the session-start epoch both come from the
 # per-session statusline cache that statusline.sh writes
 # (.../claude-tui-statusline/<session_id>.json: .stdin.context_window
 # .total_input_tokens and .session_started_epoch). The context field is
-# omitted if that file is absent; the first prompt shows time since the
-# session start (falling back to "(first prompt)" if unknown). Output is
+# omitted if that file is absent; the first turn shows time since the
+# session start (falling back to "(first turn)" if unknown). Output is
 # pure ASCII — earlier "⟳N · …" glyphs garbled in some terminals. Fail-open
 # everywhere: any error drops the field or emits nothing and exits 0, so a
-# glitch never blocks prompt submission.
+# glitch never blocks turn completion.
 
 import fcntl
 import json
@@ -93,6 +100,10 @@ def _gap(elapsed):
 
 def main():
     payload = json.load(sys.stdin)
+    # Skip a Stop re-entry from a hook-forced continuation: it is the same
+    # turn resuming, not a new turn end, so it must not bump or re-display.
+    if payload.get("stop_hook_active"):
+        return
     path = _counter_path(payload)
     if not path:
         return
@@ -104,13 +115,13 @@ def main():
     if isinstance(ctx, (int, float)) and ctx >= 0:
         parts.append("Context %dK" % round(ctx / 1000.0))
     if last > 0:
-        parts.append("(%s passed since the last prompt)" % _gap(now - last))
+        parts.append("(%s passed since the last turn)" % _gap(now - last))
     else:
         started = sl.get("session_started_epoch")
         if isinstance(started, (int, float)) and 0 < started <= now:
             parts.append("(%s passed since the session start)" % _gap(now - int(started)))
         else:
-            parts.append("(first prompt)")
+            parts.append("(first turn)")
     print(json.dumps({"systemMessage": " ".join(parts)}))
 
 
@@ -118,5 +129,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:
-        pass  # fail-open: never block prompt submission
+        pass  # fail-open: never block turn completion
     sys.exit(0)

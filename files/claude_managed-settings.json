@@ -41,11 +41,11 @@
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/session_resume_context.py" } ] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/handoff_uncommitted_check.py" } ] },
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/turn_counter.py" } ] }
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/handoff_uncommitted_check.py" } ] }
     ],
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/stop_checks.py" } ] }
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/stop_checks.py" } ] },
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/turn_counter.py" } ] }
     ],
     "SessionEnd": [
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/session_cleanup.py" } ] }
