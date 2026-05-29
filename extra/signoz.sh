@@ -159,7 +159,11 @@ run echo "source /etc/claude-code/env.sh" '>>' ~/.bashrc
 LOGIN_USER="$(logname)"
 [ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
 if [ -n "$LOGIN_USER" ]; then
-    BASHRC="~$LOGIN_USER/.bashrc"
+    # Resolve home explicitly: `~$LOGIN_USER` only tilde-expands inside run()'s
+    # eval, so any non-run use would leave it a literal path (see debian12.sh).
+    LOGIN_HOME="$(getent passwd "$LOGIN_USER" | cut -d: -f6)"
+    [ -n "$LOGIN_HOME" ] || LOGIN_HOME="/home/$LOGIN_USER"
+    BASHRC="$LOGIN_HOME/.bashrc"
     run [ -s $BASHRC ]
     run sed -i $BASHRC \
             -e '/source\ \\/etc\\/claude-code\\/env\\.sh/d'
