@@ -9,8 +9,9 @@ Goal: 2026-05-28 の lint hook cascade (daemon.log day total 179 `bg claimed-spa
 Exit Criteria:
 - [x] settings.json SessionStart 元 3 entry 復元 (canonical edit + sudo cp deploy)、 `diff` で source / deploy 同期確認 (2026-05-29)
 - [x] 修正確認: cache reset + `claude --bg "Hello, briefly introduce yourself..."` 起動 → daemon.log delta=2 (dummy + 1 lint child)、 child 内で再 dispatch なし = **cascade 防止確認** (2026-05-29 12:38、 evidence: daemon.log `bg claimed-spare a22a7c38 / c37a6787` の 2 event のみ)
-- [ ] cascade root cause mechanism (= env-based guard が daemon 経由 spawn で非発火する詳細 — 推測領域として `feedback_setting_sources_does_not_disable_managed.md` 「推測領域」 section に列挙) を一次資料 (claude code source / agent-view doc 詳細) または実機実験 (env propagation 確認用 minimal script) で verify、 memory entry の「推測領域」 section を 「直接 evidence」 に格上げ
-- [ ] 修正確認 followup: 2026-05-29 verify で child SessionStart hook を exit させた guard が env-based か file-based か判別 (= 修正確認 = cascade なし確認まで、 mechanism 判別は別 verify、 ただし「どちらの guard が effective か」 不明のまま file-based 設計の妥当性 主張不可)
+- [x] cascade root cause mechanism verify **完了 (2026-05-30)**: claude-code-guide doc 調査で確定 — daemon worker は dispatch client の inline env 非継承 (agent-view.md、 E9) / managed hook は `--setting-sources` 不可侵 (settings.md・hooks.md「What Cannot Be Disabled via CLI」、 E10) / git で両 guard が cascade 前 (`eaa9d4d` 05-25) から存在し無効と独立裏付け (E11)。 ledger 「推測領域」→「## mechanism (直接 evidence)」 に格上げ済
+- [x] env-vs-file guard 判別 **完了 (2026-05-30)**: E9 より env guard は child に届かず不発火 = 再 dispatch を停めたのは **file-based LOCK_FILE guard** (C4)。 file-based 設計の妥当性を一次資料で裏付け
+- [x] guard 実効性 両パス実証 **完了 (2026-05-30、 H.S. 要件)**: 原 cascade は hook 起点でなく私の直接 `claude --bg` 起点 (H.S. 記憶、 E3 と整合) のため hook 起点と直接実行の双方で実証。 (A) offline stub 4 ケース全 PASS (cold→1 / fresh-lock→0 / env→0 / stale→1+refresh) / (B) live probe `claude --bg` → daemon.log claimed-spare 2 件 (probe+lint child) で頭打ち・3 件目なし・adopt/respawn/dead=0・cascade なし (E12)
 - [x] feature-research dispatch fail: **root cause 確定 + fix 完了・実機検証済 (2026-05-29 session2、commit `0b0fe9b`、rebase 前 c6bb0db)** — `user_prompt` に inline 埋込んだ CHANGELOG (341,668 byte) が Linux `MAX_ARG_STRLEN` (131072 固定) 超過で `execve` E2BIG → `claude --bg` が起動前失敗。hook は `\|\| true` + `2>/dev/null` + exit code 非チェックで完全 silent 化 (commit `5a3b96f`「Capture CHANGELOG inline」起因)。fix: dump を `--add-dir` 配下 file へ出し Read させ argv 縮小 + CHANGELOG を awk で delta range trim (342KB→~15KB) + `trap EXIT`/reaper で context file cleanup 徹底 + dispatch stderr/rc を `dispatch.log` 記録。verify: cache clear → deployed hook 実行で id `c948e50f` 取得・508KB context file 生成・`dispatch.log` 空・child reap・cascade なし
 
 > **2026-05-30 session (originSessionId 793504ee) update — emergency-stop 廃止**: emergency-stop script を multi-agent audit にかけ致命的欠陥多数を確認 (step1 が誤 path `/etc/claude-code/settings.json` で no-op / step4 が step3 で停止した daemon を respawn / step2 が daemon stop 前で race / step5 pkill が無関係プロセス誤爆 / そもそも未 deploy・未 invocable)。 H.S. 判断で:
@@ -45,7 +46,7 @@ Work files:
 - `last-session-handoff.md` (handoff doc、 次 session 再開 5 分以内)
 
 Notes:
-- 修正確認の verify は 2026-05-29 完了、 daemon.log delta=2 で cascade 防止確認。 ただし「どちらの guard が効いたか」 (env vs file) は未判別、 root cause mechanism 同様に推測領域として残置
+- 修正確認 verify: 2026-05-29 (delta=2) + 2026-05-30 offline 4 ケース / live probe で cascade 防止再実証。 「どちらの guard が効いたか」 は file-based と判別済 (C4)、 root cause mechanism も verify 済 (ledger ## mechanism)。 残置 2 点 (過去非発火理由 / adopt の SessionStart 発火) は file guard が理由不問で防ぐため実効性低と判断し未 verify
 - 退避 hook (`/tmp/{claude-md-lint,claude-code-feature-research,claude-code-feature-research-prompt,session_resume_context}.{sh,md,py}.disabled`) は復元 sudo cp で /etc 上書き済、 退避 file は session 末まで残置 (rollback evidence 用)、 別 session で cleanup
 
 ## High
