@@ -97,9 +97,9 @@ user CLAUDE.md (`~/.claude/CLAUDE.md`) / project CLAUDE.md (`<repo>/.claude/CLAU
 
 未 cover 範囲を Managed skill / hook 化する場合は user と相談しながら段階的に。 完全に Managed cover された時点で Retirement protocol へ。
 
-### oneline_summary leading line in feedback body
+### reminder + keywords lines in feedback body
 
-各 feedback entry の本文先頭 (frontmatter 直後) に `oneline_summary:` 1 行を置く。 UserPromptSubmit hook が match した時に inject する文。
+各 feedback entry の本文先頭 (frontmatter 直後) に **2 行** を置く。 UserPromptSubmit の SQLite hook が、 prompt に **keywords** が match した entry の **reminder** 文を inject する。 reminder (表示) と keywords (match) を分離するのは、 表示文を keyword 詰めにして「要約」化させない (= 過去の drift) ため。
 
 ```markdown
 ---
@@ -109,20 +109,26 @@ metadata:
   type: feedback
 ---
 
-oneline_summary: <user prompt が用いそうな keyword (3+ 字 CJK と英単語) を含む 1 文>
+reminder: <同じミスを二度としないための actionable な是正指示。 1 文>
+keywords: <その状況が再発した時の prompt に出る選択的な match 語>
 
 <本文 Why / How>
 ```
 
-書き方:
+**reminder (surface 時に表示・inject される文)**:
 
-- **要約ではなく trigger 用に書く** — user が当該事象に遭遇した時の prompt に出そうな keyword を意図的に含める。 純粋な要約 (description との重複) ではなく hook trigger 効率を最大化する文面
-- **3+ 字 CJK keyword を盛る** — FTS5 trigram tokenizer は 2 字 CJK では match できない (「編集」 単独は不可、 「ファイル編集」 「Edit 連続発行」 等で 3+ 字 run を作る)
-- **bilingual で書く** — 同概念の英 ・日両方の表現を入れると hit 率が上がる (例 「Edit ・編集」 「fix ・修正」)
-- **1 文に収める** — hook output は 1 行で出力されるので長い文は injection が verbose になる
-- **絶対日付・固有名詞・error code を含めると hit しやすい** — 「2026-05-26」 「`bg_collect_verdict`」 「`stuck (max attempts)`」 等
+- **要約でなく「是正指示」** — incident の叙述や description 再述でなく、 「X する前に Y せよ」 「Z するな (理由)」 等、 読んだ瞬間に再発を止める rule を先頭に置く
+- **keyword を盛らない** — match は keywords 行が担うので reminder は自然文で読みやすく
+- **1 文** — hook output は 1 行、 長文は verbose
 
-migration されていない既存 entry は本文の先頭非空行が fallback として使われる (劣化動作、 過渡的)。
+**keywords (match 専用。 reminder とは別行)**:
+
+- **選択的に** — その状況が**本当に再発した時だけ** prompt に出る固有語 (tool 名 ・path ・error code ・固有名詞) を選ぶ。 過度に広い語 (する ・ファイル ・error 等) は無関係 prompt に hit して context を flood し、 結局無視される (CLAUDE.md ・skill が量で無視されたのと同じ失敗を hook で繰り返す)
+- **3+ 字 CJK** — FTS5 trigram tokenizer は 2 字 CJK で match 不可 (「ファイル編集」 等で 3+ 字 run を作る)
+- **bilingual** — 英 ・日両方 (例 「Edit ・編集」)
+- **固有名詞 ・error code ・絶対日付を含める** — 「`bg_collect_verdict`」 「`stuck (max attempts)`」 等
+
+reminder: 行が無い entry は本文先頭非空行が fallback (劣化、 必ず reminder: を置く)。 旧 `oneline_summary:` は廃止 (read されない)。
 
 ### Hook DB sync after entry write or retire
 
