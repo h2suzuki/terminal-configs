@@ -384,7 +384,11 @@ LOGIN_USER="$(logname)"
 [ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
 if [ -n "$LOGIN_USER" ]; then
     LOGIN_GROUP="$(id -gn "$LOGIN_USER")"
-    BASHRC="~$LOGIN_USER/.bashrc"
+    # Resolve home explicitly: `$LOGIN_HOME` only tilde-expands inside run()'s
+    # eval, so non-run uses ([ -e ], rm -rf) would leave it a literal path.
+    LOGIN_HOME="$(getent passwd "$LOGIN_USER" | cut -d: -f6)"
+    [ -n "$LOGIN_HOME" ] || LOGIN_HOME="/home/$LOGIN_USER"
+    BASHRC="$LOGIN_HOME/.bashrc"
     run [ -s $BASHRC ]
     run sed -i $BASHRC \
             -e '/^\ *PS1=/s/32m/35m/' \
@@ -424,8 +428,8 @@ if [ -n "$LOGIN_USER" ]; then
     # Set the default browser as the one on the Windows host
     run echo 'export BROWSER=\"$BROWSER\"' '>>' $BASHRC
 
-    run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory ~$LOGIN_USER/.nvm
-    run install --mode 0644 --owner $LOGIN_USER --group $LOGIN_GROUP "$HOME/.nvm/nvm.sh" ~$LOGIN_USER/.nvm/nvm.sh
+    run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory $LOGIN_HOME/.nvm
+    run install --mode 0644 --owner $LOGIN_USER --group $LOGIN_GROUP "$HOME/.nvm/nvm.sh" $LOGIN_HOME/.nvm/nvm.sh
 
     # Append auto-loading of nvm.sh
     run cat ">>" $BASHRC <<"EOF"
@@ -442,25 +446,25 @@ EOF
     run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g @openai/codex"'
 
     # Pre-create user-owned parents — `install -D/-d --owner` only owners the final component.
-    run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory ~$LOGIN_USER/.claude
-    run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory ~$LOGIN_USER/.claude/hooks
-    run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory ~$LOGIN_USER/.claude/skills
+    run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory $LOGIN_HOME/.claude
+    run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory $LOGIN_HOME/.claude/hooks
+    run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory $LOGIN_HOME/.claude/skills
 
-    # Populate ~$LOGIN_USER/.claude/ (try to preserve the existing contents)
-    [ -e ~$LOGIN_USER/.claude/CLAUDE.md ] ||
-    copy --nobackup claude_user-CLAUDE.md                       ~$LOGIN_USER/.claude/CLAUDE.md --owner $LOGIN_USER --group $LOGIN_GROUP
-    copy --nobackup claude_user-settings.json                   ~$LOGIN_USER/.claude/settings.json --owner $LOGIN_USER --group $LOGIN_GROUP
-    copy --nobackup claude_user-hooks/check_commit_author.py    ~$LOGIN_USER/.claude/hooks/check_commit_author.py  --owner $LOGIN_USER --group $LOGIN_GROUP
-    copy --nobackup claude_user-hooks/push_prompting_check.py   ~$LOGIN_USER/.claude/hooks/push_prompting_check.py --owner $LOGIN_USER --group $LOGIN_GROUP
-    copy --nobackup claude_user-hooks/memory_surface.py         ~$LOGIN_USER/.claude/hooks/memory_surface.py       --owner $LOGIN_USER --group $LOGIN_GROUP
-    copy --nobackup claude_user-hooks/subagent_gate_suggest.py  ~$LOGIN_USER/.claude/hooks/subagent_gate_suggest.py --owner $LOGIN_USER --group $LOGIN_GROUP
+    # Populate $LOGIN_HOME/.claude/ (try to preserve the existing contents)
+    [ -e $LOGIN_HOME/.claude/CLAUDE.md ] ||
+    copy --nobackup claude_user-CLAUDE.md                       $LOGIN_HOME/.claude/CLAUDE.md --owner $LOGIN_USER --group $LOGIN_GROUP
+    copy --nobackup claude_user-settings.json                   $LOGIN_HOME/.claude/settings.json --owner $LOGIN_USER --group $LOGIN_GROUP
+    copy --nobackup claude_user-hooks/check_commit_author.py    $LOGIN_HOME/.claude/hooks/check_commit_author.py  --owner $LOGIN_USER --group $LOGIN_GROUP
+    copy --nobackup claude_user-hooks/push_prompting_check.py   $LOGIN_HOME/.claude/hooks/push_prompting_check.py --owner $LOGIN_USER --group $LOGIN_GROUP
+    copy --nobackup claude_user-hooks/memory_surface.py         $LOGIN_HOME/.claude/hooks/memory_surface.py       --owner $LOGIN_USER --group $LOGIN_GROUP
+    copy --nobackup claude_user-hooks/subagent_gate_suggest.py  $LOGIN_HOME/.claude/hooks/subagent_gate_suggest.py --owner $LOGIN_USER --group $LOGIN_GROUP
 
     # Install the user skills (dir absent when no user skills exist)
     if [ -d "$TOP_DIR"/files/claude_user-skills ]; then
         pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
         for skill_dir in */; do
             [ -d "$skill_dir" ] || continue
-            copy_dir "claude_user-skills/$skill_dir" ~$LOGIN_USER/.claude/skills/$skill_dir --owner $LOGIN_USER --group $LOGIN_GROUP
+            copy_dir "claude_user-skills/$skill_dir" $LOGIN_HOME/.claude/skills/$skill_dir --owner $LOGIN_USER --group $LOGIN_GROUP
         done
         popd >/dev/null
     fi
@@ -468,9 +472,9 @@ EOF
     # Symlink the org skills
     for skill_dir in /etc/claude-code/skills/*; do
         [ -d "$skill_dir" ] || continue
-        rm -rf ~$LOGIN_USER/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
-        run ln -sfn "$skill_dir" ~$LOGIN_USER/.claude/skills/
-        run chown -h $LOGIN_USER: ~$LOGIN_USER/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
+        rm -rf $LOGIN_HOME/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
+        run ln -sfn "$skill_dir" $LOGIN_HOME/.claude/skills/
+        run chown -h $LOGIN_USER: $LOGIN_HOME/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
     done
 
 else
