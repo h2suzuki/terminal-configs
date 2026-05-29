@@ -41,7 +41,8 @@ Claude Code itself:
 
 ## Sources
 
-Two pre-captured surfaces in the user prompt — the bg session has no
+Two pre-captured surfaces live in the **`ground_truth_file`** whose path
+is given in the user prompt — Read that file first. The bg session has no
 `Bash` or `WebFetch` tool and cannot fetch anything itself:
 
 1. **`## CLI introspection dump`**: top-level `claude --help` plus every
@@ -50,9 +51,10 @@ Two pre-captured surfaces in the user prompt — the bg session has no
    generated from the current binary.
 2. **`## CHANGELOG.md dump`**: the upstream `CHANGELOG.md` (raw
    markdown from `github.com/anthropics/claude-code`), captured at
-   dispatch time. The primary delta surface — every release's
-   user-facing changes are inline under `<Update label="X.Y.Z">`
-   blocks.
+   dispatch time and pre-trimmed to the delta range (entries older than
+   `last_version` are dropped). The primary delta surface — every
+   release's user-facing changes sit under `## X.Y.Z` markdown headings,
+   newest first.
 
 **Cross-verify rule**: an item belongs in **New features /
 Deprecated / removed** when it appears in either source for the delta
@@ -127,14 +129,15 @@ Otherwise the section header has no suffix.
 
 ## Process
 
-1. Read the `## CLI introspection dump` section in the user prompt.
-   Its top-level `=== claude --help ===` block plus every
-   `=== claude <sub> --help ===` block is the binary's current
-   surface, captured at the moment this session was dispatched.
-2. Read the `## CHANGELOG.md dump` section in the user prompt. Extract
-   the `<Update label="X.Y.Z">` blocks whose version falls in the
-   delta range (`v{last_version}` → `v{current_version}`, or
-   knowledge cutoff `2026-01` → `v{current_version}` for initial seed).
+1. Read the `ground_truth_file` (its path is in the user prompt). Its
+   `## CLI introspection dump` section — the top-level
+   `=== claude --help ===` block plus every `=== claude <sub> --help ===`
+   block — is the binary's current surface, captured at the moment this
+   session was dispatched.
+2. In the same file, read the `## CHANGELOG.md dump` section. Extract
+   the `## X.Y.Z` sections whose version falls in the delta range
+   (`v{last_version}` → `v{current_version}`, or knowledge cutoff
+   `2026-01` → `v{current_version}` for initial seed).
 3. For each subcommand surface in the CLI dump, diff it against your
    memory of `last_version` (or cutoff). For each CHANGELOG entry in
    the delta range, group bullets under the four output subsections.
@@ -144,7 +147,7 @@ Otherwise the section header has no suffix.
 
 ## Failure modes (record under Conflicting / unclear, do not abort)
 
-- The CLI dump in the user prompt is empty or shows
+- The CLI dump in the ground-truth file is empty or shows
   `claude: command not found` → note "CLI introspection unavailable
   in this env" and work from the CHANGELOG dump alone.
 - The CHANGELOG dump shows `(CHANGELOG fetch failed — work from CLI

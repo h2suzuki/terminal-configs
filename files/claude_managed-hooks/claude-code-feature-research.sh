@@ -32,16 +32,17 @@
 #   - A per-key in-flight marker dedups concurrent dispatches.
 #
 # CLI introspection model:
-#   - The hook itself runs `claude --help` and `claude <subcmd> --help`
-#     for every subcommand surface, and embeds the captured dump into
-#     the bg session's user_prompt as `## CLI introspection dump`.
-#   - This means the bg session never needs the `Bash` tool to call
-#     `claude` — it treats the dump as ground truth and compares it
-#     against the public docs via WebFetch. Keeping `Bash` out of the
-#     bg session's tool set eliminates the permission-ask escalation
-#     observed when `acceptEdits` was combined with `Bash`: detached
-#     sessions cannot respond to permission prompts and the prompt
-#     bubbled up to the user's interactive session.
+#   - The hook runs `claude --help` and `claude <subcmd> --help` for
+#     every subcommand surface, plus fetches the upstream CHANGELOG, and
+#     writes both to a per-key ground-truth file under STAGING_DIR that
+#     the bg session Reads. Only the file PATH goes in the user_prompt —
+#     embedding the dumps inline blew the Linux 128KB single-arg cap
+#     (E2BIG), so `claude --bg` silently produced no session.
+#   - The bg session has neither `Bash` nor `WebFetch`; it works purely
+#     from that pre-captured file. Keeping `Bash` out eliminates the
+#     permission-ask escalation seen when `acceptEdits` was combined with
+#     `Bash`: detached sessions cannot answer permission prompts and the
+#     prompt bubbled up to the user's interactive session.
 #
 # Recursion guard: CLAUDE_CODE_FEATURE_RESEARCH_PARENT is exported into
 # the child and `--setting-sources ""` keeps the child from loading
@@ -50,8 +51,8 @@
 # The methodology prompt
 # (/etc/claude-code/hooks/claude-code-feature-research-prompt.md) is
 # injected via --append-system-prompt so the bg session gets the
-# research protocol; the child does its own fetches with the Read /
-# WebFetch tools.
+# research protocol; the child Reads the pre-captured ground-truth file
+# (Read tool only — no Bash / WebFetch).
 #
 # Stdin : SessionStart payload JSON (unused, drained for hygiene).
 # Stdout: always empty. This hook never surfaces findings via
@@ -119,9 +120,10 @@ reap_inflight() {
     IFS=$'\t' read -r iid iname its <"$f" 2>/dev/null || true
     if [[ -z "$iid" ]]; then
       # Claimed but no id recorded (crash between claim and write).
-      # Drop the marker once clearly stale so dispatch can retry.
+      # Drop the marker (and any orphaned context file) once clearly
+      # stale so dispatch can retry.
       fmt="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
-      (( now - ${fmt:-0} > BG_STALE_S )) && rm -f "$f" 2>/dev/null
+      (( now - ${fmt:-0} > BG_STALE_S )) && rm -f "${STAGING_DIR}/${ik}.context.md" "$f" 2>/dev/null
       continue
     fi
     staging="${STAGING_DIR}/${ik}.md"
@@ -149,12 +151,12 @@ reap_inflight() {
         fi
       fi
       _reap_session "$iid" "$iname"
-      rm -f "$staging" "$f" 2>/dev/null
+      rm -f "$staging" "${STAGING_DIR}/${ik}.context.md" "$f" 2>/dev/null
     else
       age=$(( now - ${its:-0} ))
       if (( ${its:-0} > 0 && age > BG_STALE_S )); then
         _reap_session "$iid" "$iname"
-        rm -f "$f" 2>/dev/null
+        rm -f "${STAGING_DIR}/${ik}.context.md" "$f" 2>/dev/null
       fi
     fi
   done
@@ -203,11 +205,19 @@ capture_cli_dump() {
 # context without WebFetch. Raw GitHub URL is anonymous and plain markdown,
 # so no HTML parse. Fail-open: an empty / failed fetch is annotated in the
 # dump body and the bg session works from CLI dump alone.
+# $1 = last researched version (empty on seed). Changelog is newest-first,
+# so dropping from the last-researched heading down keeps only the delta.
 capture_changelog() {
-  local url='https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md'
-  printf '=== CHANGELOG.md (raw) ===\n'
-  timeout 30 curl -fsSL "$url" 2>/dev/null \
-    || printf '(CHANGELOG fetch failed — work from CLI dump alone)\n'
+  local last="$1" raw url='https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md'
+  printf '=== CHANGELOG.md (raw'
+  [[ -n "$last" ]] && printf ', trimmed to versions newer than %s' "$last"
+  printf ') ===\n'
+  raw="$(timeout 30 curl -fsSL "$url" 2>/dev/null)"
+  if [[ -z "$raw" ]]; then
+    printf '(CHANGELOG fetch failed — work from CLI dump alone)\n'
+    return 0
+  fi
+  awk -v last="$last" '/^## / { if (last != "" && $2 == last) exit } { print }' <<< "$raw"
 }
 
 # --- detached self-reap entry ----------------------------------------------
@@ -314,26 +324,33 @@ fi
 : >"$LOCK_FILE" 2>/dev/null
 
 staging="${STAGING_DIR}/${key}.md"
-rm -f "$staging" 2>/dev/null
+context="${STAGING_DIR}/${key}.context.md"
+rm -f "$staging" "$context" 2>/dev/null
+
+# Drop the context file on any exit until dispatch succeeds; afterwards
+# the child owns it (Reads it) and the reaper clears it.
+trap 'rm -f "$context" 2>/dev/null' EXIT
 
 prompt_body="$(cat "$PROMPT_MD" 2>/dev/null)"
-cli_dump="$(capture_cli_dump)"
-changelog_dump="$(capture_changelog)"
 
-# The methodology prompt is injected via --append-system-prompt. The
-# user-prompt block carries the variables the prompt references
-# (current / last version, the staging path to Write to) and the
-# pre-captured `## CLI introspection dump` so the bg session has the
-# ground truth without a Bash call. The cutoff string ("2026-01") is
-# the assistant knowledge cutoff and is what the "from-cutoff scan"
-# path should compare against on initial seed.
+# Cutoff string ("2026-01") is the assistant knowledge cutoff the
+# "from-cutoff scan" path compares against on initial seed.
 if [[ -z "$last_version" ]]; then
   delta_descr="initial seed: research from the Anthropic Claude Code knowledge cutoff (2026-01) up through v${current_version}. tag the section as the first scan."
 else
   delta_descr="delta research: list everything that changed between v${last_version} and v${current_version}."
 fi
 
-user_prompt=$'Claude Code feature-delta research session.\n\n'"$delta_descr"$'\n\nWrite ONLY the new section body (single `## v<current> (researched YYYY-MM-DD)` heading followed by the four subsections defined in the methodology prompt) with the Write tool to:\n\n'"$staging"$'\n\nDo not echo to stdout. Do not write anything besides the staging file. No JSON envelope, no prose before/after the staging Write call.\n\ncurrent_version: '"$current_version"$'\nlast_version: '"${last_version:-<none — initial seed>}"$'\nstaging_file: '"$staging"$'\n\n## CLI introspection dump (pre-captured by the SessionStart hook)\n\n'"$cli_dump"$'\n\n## CHANGELOG.md dump (pre-captured by the SessionStart hook)\n\n'"$changelog_dump"
+# Ground truth → file the bg session Reads, not argv: embedding it inline
+# blew the Linux 128KB single-arg cap (E2BIG) once the CHANGELOG was added.
+{
+  printf '## CLI introspection dump (pre-captured by the SessionStart hook)\n\n'
+  capture_cli_dump
+  printf '\n\n## CHANGELOG.md dump (pre-captured by the SessionStart hook)\n\n'
+  capture_changelog "$last_version"
+} >"$context" 2>/dev/null
+
+user_prompt=$'Claude Code feature-delta research session.\n\n'"$delta_descr"$'\n\nFirst Read the pre-captured ground-truth file (it holds the `## CLI introspection dump` and `## CHANGELOG.md dump` sections):\n\n'"$context"$'\n\nThen write ONLY the new section body (single `## v<current> (researched YYYY-MM-DD)` heading followed by the four subsections defined in the methodology prompt) with the Write tool to:\n\n'"$staging"$'\n\nDo not echo to stdout. Do not write anything besides the staging file. No JSON envelope, no prose before/after the staging Write call.\n\ncurrent_version: '"$current_version"$'\nlast_version: '"${last_version:-<none — initial seed>}"$'\nground_truth_file: '"$context"$'\nstaging_file: '"$staging"
 
 # `claude --bg`: detached, subscription-billed. acceptEdits auto-allows
 # Write non-interactively. --setting-sources "" keeps the child from
@@ -345,6 +362,7 @@ user_prompt=$'Claude Code feature-delta research session.\n\n'"$delta_descr"$'\n
 # escalate to the user's interactive session is closed (acceptEdits
 # covers Write only — a WebFetch in the bg session would have
 # escalated and stalled the dispatch).
+err="${CACHE_DIR}/.last-dispatch.err"
 out="$(
   CLAUDE_CODE_FEATURE_RESEARCH_PARENT=1 timeout "$BG_DISPATCH_TIMEOUT_S" \
     claude --bg \
@@ -357,8 +375,9 @@ out="$(
       --add-dir "$STAGING_DIR" \
       --permission-mode acceptEdits \
       --append-system-prompt "$prompt_body" \
-      "$user_prompt" </dev/null 2>/dev/null || true
+      "$user_prompt" </dev/null 2>"$err"
 )"
+rc=$?
 
 bid=""
 if [[ "$out" =~ backgrounded[^0-9a-fA-F]*([0-9a-fA-F]{8}) ]]; then
@@ -367,6 +386,8 @@ fi
 if [[ -n "$bid" ]]; then
   printf -v dts '%(%s)T' -1
   printf '%s\t%s\t%s\n' "$bid" "$BG_NAME" "$dts" >"$inflight" 2>/dev/null
+  trap - EXIT
+  rm -f "$err" 2>/dev/null
   # Detached self-reap: one delayed safe pass so a finished bg session
   # is torn down within ~BG_SELF_REAP_S even if no new session starts.
   self="$(realpath -e "$0" 2>/dev/null || printf '%s' "$0")"
@@ -378,9 +399,14 @@ if [[ -n "$bid" ]]; then
     disown
   fi
 else
-  # Dispatch produced no id → release the claim so a later session
-  # can retry instead of the key being stuck in-flight forever.
-  rm -f "$inflight" 2>/dev/null
+  # No id: log why (rc + stderr) instead of swallowing it, release the
+  # claim, and let the EXIT trap drop the context file.
+  printf -v ets '%(%FT%TZ)T' -1
+  {
+    printf '[%s] dispatch FAILED rc=%s key=%s\n' "$ets" "$rc" "$key"
+    [[ -s "$err" ]] && printf '  stderr: %.500s\n' "$(<"$err")"
+  } >>"${CACHE_DIR}/dispatch.log" 2>/dev/null
+  rm -f "$inflight" "$err" 2>/dev/null
 fi
 
 exit 0
