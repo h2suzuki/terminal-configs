@@ -56,7 +56,7 @@ def _connect() -> sqlite3.Connection | None:
         con.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5("
             "file_path UNINDEXED, project_id UNINDEXED, "
-            "oneline_summary, body, "
+            "reminder UNINDEXED, keywords, body, "
             "last_modified UNINDEXED, "
             "tokenize='trigram')"
         )
@@ -88,8 +88,14 @@ def _encoded_project_id(cwd: str) -> str:
     return cwd.replace("/", "-")
 
 
-def _parse_entry(file_path: str) -> tuple[str, str] | None:
-    """Return (oneline_summary, body_for_search). Strips YAML frontmatter."""
+def _parse_entry(file_path: str) -> tuple[str, str, str] | None:
+    """Return (reminder, keywords, body_for_search). Strips YAML frontmatter.
+
+    New format: a `reminder:` line (the actionable past-mistake reminder shown
+    on surface) plus an optional `keywords:` line (match terms kept separate so
+    the reminder need not be keyword-stuffed). Falls back to the legacy
+    `oneline_summary:` line as the reminder so un-migrated entries keep working.
+    """
     try:
         size = os.path.getsize(file_path)
     except OSError:
@@ -107,19 +113,21 @@ def _parse_entry(file_path: str) -> tuple[str, str] | None:
         if end != -1:
             nl = text.find("\n", end + 4)
             body = text[nl + 1:] if nl != -1 else ""
-    summary_match = re.search(
-        r"^oneline_summary:\s*(.+)$", body, flags=re.MULTILINE,
-    )
-    if summary_match:
-        oneline = summary_match.group(1).strip()
-    else:
-        oneline = ""
+    m = re.search(r"^reminder:\s*(.+)$", body, flags=re.MULTILINE)
+    if not m:
+        m = re.search(r"^oneline_summary:\s*(.+)$", body, flags=re.MULTILINE)
+    reminder = m.group(1).strip() if m else ""
+    mk = re.search(r"^keywords:\s*(.+)$", body, flags=re.MULTILINE)
+    keywords = mk.group(1).strip() if mk else ""
+    if not reminder:
         for line in body.splitlines():
             stripped = line.strip()
-            if stripped and not stripped.startswith("oneline_summary:"):
-                oneline = stripped
+            if stripped and not stripped.startswith(
+                ("reminder:", "keywords:", "oneline_summary:")
+            ):
+                reminder = stripped
                 break
-    return oneline, body
+    return reminder, keywords, body
 
 
 def _upsert_entry(
@@ -131,7 +139,7 @@ def _upsert_entry(
     parsed = _parse_entry(file_path)
     if parsed is None:
         return 1
-    oneline, body = parsed
+    reminder, keywords, body = parsed
     try:
         mtime = os.path.getmtime(file_path)
     except OSError:
@@ -144,8 +152,9 @@ def _upsert_entry(
         )
         con.execute(
             "INSERT INTO entries_fts(file_path, project_id, "
-            "oneline_summary, body, last_modified) VALUES (?, ?, ?, ?, ?)",
-            (file_path, project_id, oneline, body, mtime),
+            "reminder, keywords, body, last_modified) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (file_path, project_id, reminder, keywords, body, mtime),
         )
         con.commit()
     except sqlite3.Error:
@@ -250,15 +259,59 @@ def _record_inject(
     con.commit()
 
 
-def _main_query() -> int:
-    """UserPromptSubmit handler — always exit 0 (fail-open)."""
+def _gap(elapsed: int) -> str:
+    if elapsed >= 3600:
+        return "%d hr %d min" % (elapsed // 3600, (elapsed % 3600) // 60)
+    if elapsed >= 60:
+        return "%d min" % (elapsed // 60)
+    return "%d sec" % elapsed
+
+
+def _counter_path(payload: dict) -> str | None:
+    # Mirror stop_checks.py:_counter_path so we read the SAME file Stop writes.
+    # Read-only here — Stop owns the increment, so we never double-count.
+    transcript = payload.get("transcript_path") or ""
+    if transcript:
+        base = transcript[:-6] if transcript.endswith(".jsonl") else transcript
+        return base + ".turns"
+    session_id = payload.get("session_id") or ""
+    if not session_id:
+        return None
+    cache = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    return os.path.join(cache, "claude-turn-counter", session_id + ".turns")
+
+
+def _turn_marker(payload: dict) -> str | None:
+    # Read-only view of the Stop-owned turn counter. At this UserPromptSubmit
+    # the file still holds the previous turn's (count, last-stop epoch): the
+    # turn now starting is count+1 and the idle gap is now - last-stop. We do
+    # not write, so Stop's own "since the previous turn ended" stays correct.
+    path = _counter_path(payload)
+    if not path:
+        return None
+    count = last = 0
     try:
-        payload = json.loads(sys.stdin.read() or "{}")
-    except Exception:
-        return 0
+        with open(path, encoding="utf-8") as f:
+            parts = f.read().split()
+        if len(parts) >= 2:
+            count, last = int(parts[0]), int(parts[1])
+    except (OSError, ValueError):
+        count = last = 0
+    now = int(time.time())
+    out = [time.strftime("%H:%M:%S", time.localtime(now)),
+           "Turn #%d starting" % (count + 1)]
+    if last > 0:
+        out.append("(%s passed since the last stop)" % _gap(now - last))
+    else:
+        out.append("(session start)")
+    return " ".join(out)
+
+
+def _memory_surface(payload: dict) -> str | None:
+    # Top-1 FTS5 BM25 match (global + current project), session-throttled.
     prompt = payload.get("prompt") or ""
     if not isinstance(prompt, str) or not prompt.strip():
-        return 0
+        return None
     session_id = payload.get("session_id") or ""
     cwd = payload.get("cwd") or os.getcwd()
     if not isinstance(cwd, str):
@@ -266,36 +319,69 @@ def _main_query() -> int:
     project_id = _encoded_project_id(cwd)
     con = _connect()
     if con is None:
-        return 0
+        return None
     try:
         query = _build_query(prompt)
         if query is None:
-            return 0
+            return None
         try:
             row = con.execute(
-                "SELECT file_path, oneline_summary, bm25(entries_fts) "
+                "SELECT file_path, reminder, bm25(entries_fts) "
                 "FROM entries_fts WHERE entries_fts MATCH ? "
                 "AND (project_id IS NULL OR project_id = ?) "
                 "ORDER BY bm25(entries_fts) LIMIT 1",
                 (query, project_id),
             ).fetchone()
         except sqlite3.Error:
-            return 0
+            return None
         if not row:
-            return 0
-        file_path, oneline, score = row
+            return None
+        file_path, reminder, score = row
         now = time.time()
         if _throttle_check(con, file_path, session_id, now):
-            return 0
+            return None
         _record_inject(con, file_path, project_id, session_id, now, score, prompt)
-        display = (oneline or "(oneline_summary 未設定)").rstrip("。．.!?！？ \t")
-        sys.stdout.write(
+        display = (reminder or "(reminder 未設定)").rstrip("。．.!?！？ \t")
+        return (
             "<memory-surface>\n"
             f"過去にこんな事例あり: {display}。 詳細: {file_path}\n"
-            "</memory-surface>\n"
+            "</memory-surface>"
         )
     finally:
         con.close()
+
+
+def _main_query() -> int:
+    """UserPromptSubmit handler — always exit 0 (fail-open).
+
+    One JSON object, two independent channels:
+    - systemMessage: per-turn start marker shown to the USER, not Claude
+      (universal hook field, code.claude.com/docs/en/hooks). Every turn.
+    - hookSpecificOutput.additionalContext: matched memory entry injected
+      into Claude's context. Only on a non-throttled match.
+    """
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+    except Exception:
+        return 0
+    try:
+        marker = _turn_marker(payload)
+    except Exception:
+        marker = None
+    try:
+        additional = _memory_surface(payload)
+    except Exception:
+        additional = None
+    out: dict = {}
+    if marker:
+        out["systemMessage"] = marker
+    if additional:
+        out["hookSpecificOutput"] = {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": additional,
+        }
+    if out:
+        sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
     return 0
 
 
