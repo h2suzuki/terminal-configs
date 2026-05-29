@@ -1,0 +1,2 @@
+# Keep this dir tracked even when no user skills exist.
+# Deploy scripts iterate `*/` here; a plain file is ignored by `[ -d ]`.

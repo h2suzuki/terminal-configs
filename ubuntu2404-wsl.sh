@@ -115,6 +115,7 @@ copy_dir()
     [ -d "$DST" ] || { rm -rf "$DST"; run install --directory "$@" "$DST"; }
     rm -rf "$DST"/*
     for child in "$TOP_DIR/$DNAME"/*; do
+        [ -e "$child" ] || continue   # empty source dir: glob stays literal
         [ "${child##*/}" = __pycache__ ] && continue
         run cp -r "$child" "$DST/"
     done
