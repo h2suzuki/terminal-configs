@@ -8,28 +8,27 @@ Goal: 2026-05-28 の lint hook cascade (daemon.log day total 179 `bg claimed-spa
 
 Exit Criteria:
 - [x] settings.json SessionStart 元 3 entry 復元 (canonical edit + sudo cp deploy)、 `diff` で source / deploy 同期確認 (2026-05-29)
-- [x] 緊急 hook (`files/claude-emergency-stop`) を `/usr/local/bin/` に sudo install (mode 755) + `.claude/settings.local.json` allowlist に `Bash(claude-emergency-stop)` 追加 + `command -v claude-emergency-stop` で path 検証 (2026-05-29)
 - [x] 修正確認: cache reset + `claude --bg "Hello, briefly introduce yourself..."` 起動 → daemon.log delta=2 (dummy + 1 lint child)、 child 内で再 dispatch なし = **cascade 防止確認** (2026-05-29 12:38、 evidence: daemon.log `bg claimed-spare a22a7c38 / c37a6787` の 2 event のみ)
-- [ ] (今後の cascade 発生時 safety net) 緊急 hook を実機実行 → step 1 (file mv) で agents=0 + daemon=not running 観測、 hook 効果 verify
 - [ ] cascade root cause mechanism (= env-based guard が daemon 経由 spawn で非発火する詳細 — 推測領域として `feedback_setting_sources_does_not_disable_managed.md` 「推測領域」 section に列挙) を一次資料 (claude code source / agent-view doc 詳細) または実機実験 (env propagation 確認用 minimal script) で verify、 memory entry の「推測領域」 section を 「直接 evidence」 に格上げ
 - [ ] 修正確認 followup: 2026-05-29 verify で child SessionStart hook を exit させた guard が env-based か file-based か判別 (= 修正確認 = cascade なし確認まで、 mechanism 判別は別 verify、 ただし「どちらの guard が effective か」 不明のまま file-based 設計の妥当性 主張不可)
 - [x] feature-research dispatch fail: **root cause 確定 + fix 完了・実機検証済 (2026-05-29 session2、commit `0b0fe9b`、rebase 前 c6bb0db)** — `user_prompt` に inline 埋込んだ CHANGELOG (341,668 byte) が Linux `MAX_ARG_STRLEN` (131072 固定) 超過で `execve` E2BIG → `claude --bg` が起動前失敗。hook は `\|\| true` + `2>/dev/null` + exit code 非チェックで完全 silent 化 (commit `5a3b96f`「Capture CHANGELOG inline」起因)。fix: dump を `--add-dir` 配下 file へ出し Read させ argv 縮小 + CHANGELOG を awk で delta range trim (342KB→~15KB) + `trap EXIT`/reaper で context file cleanup 徹底 + dispatch stderr/rc を `dispatch.log` 記録。verify: cache clear → deployed hook 実行で id `c948e50f` 取得・508KB context file 生成・`dispatch.log` 空・child reap・cascade なし
-- [ ] **deploy script integration** (`ubuntu2404-wsl.sh` / `debian12.sh` に `files/claude-emergency-stop` → `/usr/local/bin/claude-emergency-stop` の install 行追加、 CLAUDE.md 「deploy 先だけ編集して repo を放置するな」 厳守)
 
-> **2026-05-29 session2 user 指示**:
-> - **#1 (env vs file guard 判別、上記 L15 criterion) は保留** — risky な bg 再trigger 実験の safety net である emergency-stop が **未承認 + 有効性に疑義**。承認・有効性検証 (上記 L13 criterion) が済むまで #1 着手不可。
-> - **deploy script integration も「このまま」不可** — emergency-stop の内容が未承認のため、install 行追加の前に emergency-stop の **内容レビュー + 有効性検証 (L13) + user 承認** が前提。
-> - 着手順: **feature-research fix (root cause 確定済) → deploy 統合 (emergency-stop 承認後)**。
+> **2026-05-30 session (originSessionId 793504ee) update — emergency-stop 廃止**: emergency-stop script を multi-agent audit にかけ致命的欠陥多数を確認 (step1 が誤 path `/etc/claude-code/settings.json` で no-op / step4 が step3 で停止した daemon を respawn / step2 が daemon stop 前で race / step5 pkill が無関係プロセス誤爆 / そもそも未 deploy・未 invocable)。 H.S. 判断で:
+> - deployed binary (`/usr/local/bin/claude-emergency-stop`) 削除 + `.claude/settings.local.json` allowlist entry 除去、 canonical source (`files/claude-emergency-stop`) も `git rm` 済
+> - 正しい最小手順を **manual runbook** 化し ledger `feedback_setting_sources_does_not_disable_managed.md` の 対策(C) + 「緊急停止 runbook」 section に保存
+> - 旧 Exit Criteria 「緊急 hook install」「緊急 hook 実機 verify」「deploy script integration」 を退役 (検証 / deploy 対象が消滅)
+> - 副次発見: audit で本 cascade ledger の citation 誤り 3 件 (E6 path / C2 欠番 E5 / C3 誤引用 E6) を修正。 過去「evidence-grounded」と判定された script が依拠した台帳自体に誤記があった
+> - 残 open criterion: cascade root cause mechanism verify と env-vs-file guard 判別 の 2 件。 旧 instruction の「emergency-stop 承認まで guard 判別を保留」 は前提消滅。 risky な再trigger 実験の safety-net は manual runbook に置換。 再着手是非は H.S. 判断
 
 進捗 (本 session 完了分):
 - [x] cascade 物理停止 (hook file mv to /tmp 後 agents=0、 2026-05-28T03:23:29Z)
 - [x] root cause partial 究明 (env-based guard 不発火 = 直接 evidence、 daemon adopt 機構 = daemon.log で確認、 hook file 物理不在 が決定的 = E7)
 - [x] hook script に file-based recursion guard 追加 (lint + feature-research、 canonical edit 完了、 `/etc/claude-code/hooks/` deploy 済)
 - [x] findings.md restore (backup `findings.md.bak.before-fix-verify` から)
-- [x] 緊急 hook `claude-emergency-stop` 実装 (canonical: `files/claude-emergency-stop`、 step 順 evidence-based に訂正済、 subagent review で「evidence-grounded, not vibes」 判定)
+- [x] 緊急 hook `claude-emergency-stop` 実装 (2026-05-29) → **2026-05-30 audit で欠陥多数と判明し削除**。 当時の subagent review 「evidence-grounded, not vibes」 判定は誤りだった (依拠 ledger に E6 誤 path / C3 誤引用、 step1 が実環境で no-op)
 - [x] memory entry 5 + 1 file (4 user + 2 project) を memory-routing rule に従い整備 + hook DB sync (--upsert 個別 + --rebuild 整合)
 - [x] settings.json SessionStart 復元 + deploy + diff sync 確認
-- [x] 緊急 hook install + allowlist + path 検証
+- [x] 緊急 hook install + allowlist + path 検証 (2026-05-29) → **2026-05-30 削除・allowlist 除去**
 - [x] 修正確認 実機 verify (cache reset + 再 trigger + delta=2 観測、 cascade 防止確認、 ただし mechanism 判別未了)
 
 Work files:
@@ -39,7 +38,6 @@ Work files:
 - `/home/h2suzuki/.claude/memory/feedback_under_report_and_speculation_in_painful_situations.md` (報告 honesty 規律)
 - `/home/h2suzuki/.claude/memory/feedback_memory_entry_written_without_verify.md` (durable artifact verify 規律)
 - `/home/h2suzuki/.claude/memory/feedback_try_host_ops_before_delegating.md` (host-side ops 試行 規律)
-- `files/claude-emergency-stop` (緊急停止 script)
 - `files/claude_managed-hooks/claude-md-lint.sh` (file-based guard 追加版)
 - `files/claude_managed-hooks/claude-code-feature-research.sh` (file-based guard 追加版)
 - `~/.claude/daemon.log` (cascade source-of-truth log、 cascade 期間: 2026-05-28T03:03-03:23 UTC)
