@@ -91,10 +91,11 @@ def _encoded_project_id(cwd: str) -> str:
 def _parse_entry(file_path: str) -> tuple[str, str, str] | None:
     """Return (reminder, keywords, body_for_search). Strips YAML frontmatter.
 
-    New format: a `reminder:` line (the actionable past-mistake reminder shown
-    on surface) plus an optional `keywords:` line (match terms kept separate so
-    the reminder need not be keyword-stuffed). Falls back to the legacy
-    `oneline_summary:` line as the reminder so un-migrated entries keep working.
+    Format: a `reminder:` line (the actionable past-mistake reminder shown on
+    surface — write it to prevent repeating the mistake, not as a summary) plus
+    a `keywords:` line (match terms kept separate so the reminder need not be
+    keyword-stuffed). `keywords` is what the FTS5 index matches; `reminder` is
+    display-only. The retired `oneline_summary:` is no longer read.
     """
     try:
         size = os.path.getsize(file_path)
@@ -114,17 +115,13 @@ def _parse_entry(file_path: str) -> tuple[str, str, str] | None:
             nl = text.find("\n", end + 4)
             body = text[nl + 1:] if nl != -1 else ""
     m = re.search(r"^reminder:\s*(.+)$", body, flags=re.MULTILINE)
-    if not m:
-        m = re.search(r"^oneline_summary:\s*(.+)$", body, flags=re.MULTILINE)
     reminder = m.group(1).strip() if m else ""
     mk = re.search(r"^keywords:\s*(.+)$", body, flags=re.MULTILINE)
     keywords = mk.group(1).strip() if mk else ""
     if not reminder:
         for line in body.splitlines():
             stripped = line.strip()
-            if stripped and not stripped.startswith(
-                ("reminder:", "keywords:", "oneline_summary:")
-            ):
+            if stripped and not stripped.startswith(("reminder:", "keywords:")):
                 reminder = stripped
                 break
     return reminder, keywords, body
