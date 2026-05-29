@@ -13,8 +13,13 @@ Exit Criteria:
 - [ ] (今後の cascade 発生時 safety net) 緊急 hook を実機実行 → step 1 (file mv) で agents=0 + daemon=not running 観測、 hook 効果 verify
 - [ ] cascade root cause mechanism (= env-based guard が daemon 経由 spawn で非発火する詳細 — 推測領域として `feedback_setting_sources_does_not_disable_managed.md` 「推測領域」 section に列挙) を一次資料 (claude code source / agent-view doc 詳細) または実機実験 (env propagation 確認用 minimal script) で verify、 memory entry の「推測領域」 section を 「直接 evidence」 に格上げ
 - [ ] 修正確認 followup: 2026-05-29 verify で child SessionStart hook を exit させた guard が env-based か file-based か判別 (= 修正確認 = cascade なし確認まで、 mechanism 判別は別 verify、 ただし「どちらの guard が effective か」 不明のまま file-based 設計の妥当性 主張不可)
-- [ ] feature-research dispatch fail investigation: 2026-05-29 verify で lint child は spawn したが feature-research child spawn 観測なし (daemon.log delta 2 のうち 1 が lint child)、 feature dispatch path で claude --bg call が failed した可能性、 `~/.cache/claude-code-feature-research/.inflight/` の release 経路 (line 393-394 相当) の起動原因を究明
+- [x] feature-research dispatch fail: **root cause 確定 + fix 完了・実機検証済 (2026-05-29 session2、commit `c6bb0db`)** — `user_prompt` に inline 埋込んだ CHANGELOG (341,668 byte) が Linux `MAX_ARG_STRLEN` (131072 固定) 超過で `execve` E2BIG → `claude --bg` が起動前失敗。hook は `\|\| true` + `2>/dev/null` + exit code 非チェックで完全 silent 化 (commit `5a3b96f`「Capture CHANGELOG inline」起因)。fix: dump を `--add-dir` 配下 file へ出し Read させ argv 縮小 + CHANGELOG を awk で delta range trim (342KB→~15KB) + `trap EXIT`/reaper で context file cleanup 徹底 + dispatch stderr/rc を `dispatch.log` 記録。verify: cache clear → deployed hook 実行で id `c948e50f` 取得・508KB context file 生成・`dispatch.log` 空・child reap・cascade なし
 - [ ] **deploy script integration** (`ubuntu2404-wsl.sh` / `debian12.sh` に `files/claude-emergency-stop` → `/usr/local/bin/claude-emergency-stop` の install 行追加、 CLAUDE.md 「deploy 先だけ編集して repo を放置するな」 厳守)
+
+> **2026-05-29 session2 user 指示**:
+> - **#1 (env vs file guard 判別、上記 L15 criterion) は保留** — risky な bg 再trigger 実験の safety net である emergency-stop が **未承認 + 有効性に疑義**。承認・有効性検証 (上記 L13 criterion) が済むまで #1 着手不可。
+> - **deploy script integration も「このまま」不可** — emergency-stop の内容が未承認のため、install 行追加の前に emergency-stop の **内容レビュー + 有効性検証 (L13) + user 承認** が前提。
+> - 着手順: **feature-research fix (root cause 確定済) → deploy 統合 (emergency-stop 承認後)**。
 
 進捗 (本 session 完了分):
 - [x] cascade 物理停止 (hook file mv to /tmp 後 agents=0、 2026-05-28T03:23:29Z)
@@ -75,6 +80,18 @@ Exit Criteria:
 経緯: 2026-05-28 session で「大改造」 を実コード未読で発話 → user 指摘で `report-by-evidence` skill 違反確定。 既存 skill の trigger は文末 judgment 想定で structured doc (table cell) の評価語混入が射程外。 user 指針「skill 減・hook 増・trigger 単純化」 に従い hook 化で対応。
 
 Work file: 現 session の議論 (本 entry が単独 reference)
+
+### statusline にターン数表示 (2026-05-29 session2 user 要望)
+
+Goal: 現在のセッションの **ターン数 + 現在時刻 + 前回ターンからの経過時間** を、 LLM context に渡らない形でチャット画面に表示する (user: statusline は 1 行幅が厳しいので chat 挿入に変更)。
+
+Exit Criteria:
+- [x] 仕様調査完了 (workflow `wf_7b53c4e1-0d4` + `wf_309fe061-3dc`、 source `code.claude.com/docs/en/hooks`): (1) statusLine payload に直接 turn-count field 無し、 JSONL parse は render 毎 slurp で重い; (2) hook 出力チャネルの LLM 可視性 — **`systemMessage` は user 表示・LLM 非可視** (docs verbatim "A systemMessage field is shown to you, not to Claude")、 `additionalContext` は逆 (LLM 可視・chat 非表示) → **chat 挿入は systemMessage を使う**
+- [ ] 設計確定: `UserPromptSubmit` hook (turn 毎 1 回・非 re-entrant・`session_id`/`transcript_path`/`cwd` 取得可) が transcript と同 dir の per-session counter file を flock→read→count+1+last-epoch→write し、 `{"systemMessage":"⟳N · HH:MM:SS · +Δs"}` を exit 0 で emit (chat 表示・LLM 非可視)。 statusline.sh は変更不要
+- [ ] 実装: canonical hook (`files/claude_managed-hooks/`) + settings.json `UserPromptSubmit` wiring + deploy script `copy` 行 + 実機確認 (systemMessage の rendering style が煩くないか含む、 CLAUDE.md deploy 同期厳守)
+- [ ] commit
+
+Work file: hook (`files/claude_managed-hooks/`)、 workflow `wf_7b53c4e1-0d4` (statusLine 仕様) / `wf_309fe061-3dc` (hook 出力チャネル仕様) の結果
 
 ## Medium
 
