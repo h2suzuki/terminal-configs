@@ -11,69 +11,43 @@
 #   .rate_limits.seven_day.{used_percentage,resets_at}   (Pro/Max only)
 #   .workspace.project_dir   (falls back to .cwd)
 #
-# Cache: ${XDG_CACHE_HOME:-~/.cache}/claude-tui-statusline/stdin.json
-#   Wrapped as {stdin: <original>, timestamp: <ISO8601>}. Written atomically.
-#   Race-condition guard: only overwrites if same session_id OR file is ≥60s old.
+# Cache: ${XDG_CACHE_HOME:-~/.cache}/claude-tui-statusline/<session_id>.json
+#   Wrapped as {stdin, timestamp <ISO8601>, session_started_epoch}. Written atomically.
+#   Per-session file (no cross-session race). A SessionEnd hook deletes it.
 
 set -o pipefail
 
 input="$(cat)"
 get() { printf '%s' "$input" | jq -r "$1 // empty"; }
 
-# -- Cache dump --
-if [ -n "${XDG_CACHE_HOME:-}" ]; then
-    _cache_dir="${XDG_CACHE_HOME}/claude-tui-statusline"
-else
-    _cache_dir="${HOME}/.cache/claude-tui-statusline"
-fi
-_cache_file="${_cache_dir}/stdin.json"
-mkdir -p "$_cache_dir"
-
+# -- Cache dump (per session) --
+# Dump this session's statusline stdin to
+# <cache>/claude-tui-statusline/<session_id>.json, wrapped as
+# {stdin, timestamp, session_started_epoch}. Per-session files mean no
+# cross-session overwrite race, so the old staleness / same-session guards are gone.
+# session_started_epoch is stamped on first render and preserved, letting readers
+# (turn_counter) show elapsed-since-session-start. A SessionEnd hook deletes the file.
+_cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/claude-tui-statusline"
 _cur_session="$(get '.session_id')"
-_now_iso="$(date -u '+%Y-%m-%dT%H:%M:%S.%3NZ')"
-_do_dump=1
-
-# Obsolete-data guard: if a rate-limit bucket is at 100% AND its resets_at is already
-# more than 60 s in the past, the messages API is paused and Claude Code has stopped
-# receiving fresh data. Writing this stale snapshot would overwrite a more up-to-date
-# entry from an active session, so skip the dump.
-# `// now` as default makes the condition false when a field is absent.
-# Uses jq's built-in `now` to avoid an extra date(1) spawn.
-if jq -e '
-  ((.rate_limits.five_hour.used_percentage // 0) >= 100 and (.rate_limits.five_hour.resets_at // now) < now - 60) or
-  ((.rate_limits.seven_day.used_percentage // 0) >= 100 and (.rate_limits.seven_day.resets_at // now) < now - 60)
-' >/dev/null 2>&1 <<< "$input"; then
-    _do_dump=0
-fi
-
-if [ -f "$_cache_file" ]; then
-    _ex="$(cat "$_cache_file" 2>/dev/null)"
-    if [ -n "$_ex" ]; then
-        _ex_session="$(jq -r '.stdin.session_id // empty' 2>/dev/null <<< "$_ex")"
-        _ex_ts="$(jq -r '.timestamp // empty' 2>/dev/null <<< "$_ex")"
-        if [ -n "$_cur_session" ] && [ "$_ex_session" = "$_cur_session" ]; then
-            : # (i) same session → dump
-        elif [ -n "$_ex_ts" ]; then
-            _ex_epoch="$(date -d "$_ex_ts" +%s 2>/dev/null)"
-            _now_epoch="$(date +%s)"
-            if (( _now_epoch - _ex_epoch < 60 )); then
-                _do_dump=0
-            fi
-        fi
-    fi
-fi
-
-if (( _do_dump )); then
-    _tmp="$(mktemp "${_cache_dir}/.stdin.XXXXXX.json" 2>/dev/null)" || _tmp=""
+if [ -n "$_cur_session" ]; then
+    mkdir -p "$_cache_dir"
+    _cache_file="${_cache_dir}/${_cur_session}.json"
+    _now_iso="$(date -u '+%Y-%m-%dT%H:%M:%S.%3NZ')"
+    # Carry the first-render epoch forward; stamp now only on first creation.
+    _started="$(jq -r '.session_started_epoch // empty' "$_cache_file" 2>/dev/null)"
+    [ -n "$_started" ] || _started="$(date +%s)"
+    _tmp="$(mktemp "${_cache_dir}/.${_cur_session}.XXXXXX.json" 2>/dev/null)" || _tmp=""
     if [ -n "$_tmp" ]; then
         trap 'rm -f "$_tmp"' EXIT
-        if jq -S --arg ts "$_now_iso" '{stdin: ., timestamp: $ts}' \
+        if jq -S --arg ts "$_now_iso" --argjson st "$_started" \
+                '{stdin: ., timestamp: $ts, session_started_epoch: $st}' \
                 > "$_tmp" 2>/dev/null <<< "$input"; then
             mv "$_tmp" "$_cache_file" 2>/dev/null && trap - EXIT
         fi
     fi
+    unset _cache_file _now_iso _started
 fi
-unset _cache_dir _cache_file _cur_session _now_iso _do_dump _ex _ex_session _ex_ts _ex_epoch _now_epoch
+unset _cache_dir _cur_session
 
 bar() {
     local width=10 pct filled empty out='[' i

@@ -46,6 +46,9 @@
     ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/stop_checks.py" } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/session_cleanup.py" } ] }
     ]
   }
 }

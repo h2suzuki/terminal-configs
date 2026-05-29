@@ -9,12 +9,15 @@
 # (which on UserPromptSubmit WOULD be fed to the model).
 #
 # Turn count + last-turn epoch live in `<transcript>.turns`, flock-guarded
-# for the RMW. Context size comes from the statusline cache that
-# statusline.sh writes (.../claude-tui-statusline/stdin.json,
-# .stdin.context_window.total_input_tokens); the field is omitted if that
-# file is absent. Output is pure ASCII — earlier "⟳N · …" glyphs garbled
-# in some terminals. Fail-open everywhere: any error drops the field or
-# emits nothing and exits 0, so a glitch never blocks prompt submission.
+# for the RMW. Context size and the session-start epoch both come from the
+# per-session statusline cache that statusline.sh writes
+# (.../claude-tui-statusline/<session_id>.json: .stdin.context_window
+# .total_input_tokens and .session_started_epoch). The context field is
+# omitted if that file is absent; the first prompt shows time since the
+# session start (falling back to "(first prompt)" if unknown). Output is
+# pure ASCII — earlier "⟳N · …" glyphs garbled in some terminals. Fail-open
+# everywhere: any error drops the field or emits nothing and exits 0, so a
+# glitch never blocks prompt submission.
 
 import fcntl
 import json
@@ -56,25 +59,28 @@ def _bump(path, now):
     return count, last
 
 
-def _context_size():
-    # Context window size = total input tokens, taken from the statusline
-    # cache that statusline.sh writes each render. None if the file is
-    # absent/unreadable so the caller omits the field.
+def _statusline(session_id):
+    # Parsed per-session statusline cache, or {} if absent/unreadable.
+    if not session_id:
+        return {}
     cache = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
-    path = os.path.join(cache, "claude-tui-statusline", "stdin.json")
-    if not os.path.exists(path):
-        return None
+    path = os.path.join(cache, "claude-tui-statusline", session_id + ".json")
     try:
         with open(path) as f:
-            cw = (json.load(f).get("stdin") or {}).get("context_window") or {}
-        n = cw.get("total_input_tokens")
-        if n is None:
-            cu = cw.get("current_usage") or {}
-            n = (cu.get("input_tokens", 0) + cu.get("cache_read_input_tokens", 0)
-                 + cu.get("cache_creation_input_tokens", 0)) or None
-        return n
+            return json.load(f)
     except Exception:
-        return None
+        return {}
+
+
+def _context_size(sl):
+    # Context window size = total input tokens, from the statusline cache.
+    cw = (sl.get("stdin") or {}).get("context_window") or {}
+    n = cw.get("total_input_tokens")
+    if n is None:
+        cu = cw.get("current_usage") or {}
+        n = (cu.get("input_tokens", 0) + cu.get("cache_read_input_tokens", 0)
+             + cu.get("cache_creation_input_tokens", 0)) or None
+    return n
 
 
 def _gap(elapsed):
@@ -92,12 +98,19 @@ def main():
         return
     now = int(time.time())
     count, last = _bump(path, now)
+    sl = _statusline(payload.get("session_id"))
     parts = [time.strftime("%H:%M:%S", time.localtime(now)), "Turn #%d" % count]
-    ctx = _context_size()
+    ctx = _context_size(sl)
     if ctx is not None:
         parts.append("Context %dK" % round(ctx / 1000.0))
-    parts.append("(%s passed since the last prompt)" % _gap(now - last)
-                 if last > 0 else "(first prompt)")
+    if last > 0:
+        parts.append("(%s passed since the last prompt)" % _gap(now - last))
+    else:
+        started = sl.get("session_started_epoch")
+        if isinstance(started, (int, float)) and 0 < started <= now:
+            parts.append("(%s passed since the session start)" % _gap(now - int(started)))
+        else:
+            parts.append("(first prompt)")
     print(json.dumps({"systemMessage": " ".join(parts)}))
 
 
