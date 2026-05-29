@@ -290,9 +290,9 @@ def _main_query() -> int:
         _record_inject(con, file_path, project_id, session_id, now, score, prompt)
         display = (oneline or "(oneline_summary 未設定)").rstrip("。．.!?！？ \t")
         sys.stdout.write(
-            "<global-memory-surface>\n"
+            "<memory-surface>\n"
             f"過去にこんな事例あり: {display}。 詳細: {file_path}\n"
-            "</global-memory-surface>\n"
+            "</memory-surface>\n"
         )
     finally:
         con.close()
