@@ -4,7 +4,7 @@
 
 ## High
 
-### memory entry 書式の決定論的 enforcement hook (Core 実装済・unit 検証済 / Haiku layer deferred)
+### memory entry 書式の決定論的 enforcement hook (Core 完成・deploy・実機検証済 / Haiku layer deferred)
 
 Goal: memory-routing skill 非発火時も、 memory entry の正書式 (reminder:/keywords:) と DB 同期が決定論的に担保される managed hook。 retrieval 層 (reminder/keywords surface, commit 済) の上の hard enforcement 層。
 
@@ -18,8 +18,9 @@ Goal: memory-routing skill 非発火時も、 memory entry の正書式 (reminde
 実装状況:
 - [x] Layer A 実装: memory_routing_gate.py (PreToolUse guard + PostToolUse sync) + settings 登録 + SKILL.md 改訂 (grant mint 節 + skill 経由必須の警告 + 退役 footer の Edit→Write 注記)
 - [x] Layer A unit-smoke: 25/25 PASS (path 判定/内容 check/Edit deny/no-grant deny/grant+不備 deny 保持/grant+正常 allow consume/sync filter)。 Write tool の親 dir 自動作成も確認
-- [ ] Layer A 実機統合: deploy (copy to /etc/...) + fresh session で「skill 無し Write→deny / skill 経由→allow」を end-to-end 確認 (現 session は settings reload 前なので未検証)
-- [ ] commit (Core: hook+settings+skill+todos)
+- [x] commit fa12009 (hook+settings+skill+todos)
+- [x] deploy 済 (sudo install で /etc/claude-code/ へ hook+settings+skill)。 managed-settings は mid-session hot-reload されるため即 live active
+- [x] Layer A 実機統合検証 (2026-05-30 deploy 後 同 session): grant 無し直接 Write→deny / grant mint→allow / grant 有り Write→allow+consume / live PostToolUse sync→DB upsert / Edit→deny、 全 PASS (throwaway entry で実施・後始末済)。 LIKE クエリは FTS5 UNINDEXED 列で誤動作するので DB 確認は exact / instr を使う
 
 DEFERRED — Layer B (reminder actionability の Haiku 判定):
 - H.S. は actionability の Haiku 判定を希望 (Q3)・async 配信を選択 (bg+surface-later)。 だが後続の「一発 Write・warn 廃止」原則と衝突: async は「翌 turn warn → 直す → Edit(=deny)」の詰みを生む。
