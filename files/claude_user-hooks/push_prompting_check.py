@@ -28,15 +28,20 @@ import json
 import re
 import sys
 
-# Case-insensitive: catches `Push しますか?`, `PUSH しましょうか`,
-# sentence-initial `Push する予定` etc. The 4th alternation from the
-# original spec (`push\s?(し|を)?(る|ます)予定`) was dropped — it
-# matched grammatically invalid Japanese and added no useful coverage
-# beyond alternation 3 (`push\s?する(予定|つもり)`).
+# Case-insensitive. Catches proactive push-prompting in its common forms:
+# interrogative (`push しますか?`, `push しましょうか`), plan/timing/condition
+# (`push する予定/つもり/タイミング/時/なら/べき`), permission
+# (`push してもいいですか`), and soliciting the user to signal a push
+# (`push する…お知らせ/教えて/指示/連絡ください`). The notification form is the
+# one that slipped through earlier (`push するタイミングでお知らせください`).
+# Factual reports (`push しました`, `未 push です`) are deliberately NOT matched —
+# the same-clause `[^。、\n]` bound keeps the solicitation alternation tight.
 PUSH_PROMPT_RE = re.compile(
     r"(次に)?push\s?(し|を)?ますか[?？]"
     r"|push\s?しま(しょう|す)か"
-    r"|push\s?する(予定|つもり)",
+    r"|push\s?する(予定|つもり|タイミング|時|とき|なら|べき|か[?？])"
+    r"|push\s?して?も?(い|良|よ)い?ですか"
+    r"|push\s?(する|して)[^。、\n]{0,16}(お知らせ|教えて|指示|連絡|おっしゃって)",
     re.IGNORECASE,
 )
 
