@@ -2,16 +2,19 @@
 # /etc/claude-code/hooks/turn_counter.py
 #
 # UserPromptSubmit hook: shows a per-session turn marker to the USER —
-# turn count, wall-clock time, elapsed since the previous turn — without
-# ever entering the model context. It emits the line via the JSON
+# wall-clock time, turn count, context size, elapsed since the previous
+# turn — without ever entering the model context. Emitted via the JSON
 # `systemMessage` field ("A systemMessage field is shown to you, not to
-# Claude" — code.claude.com/docs/en/hooks), NOT via stdout/additionalContext
+# Claude" — code.claude.com/docs/en/hooks), NOT stdout/additionalContext
 # (which on UserPromptSubmit WOULD be fed to the model).
 #
-# State lives in a per-session counter file next to the transcript
-# (`<transcript>.turns`, two ints: count + last-turn epoch), guarded by
-# flock for the read-modify-write. Fail-open everywhere: any error emits
-# nothing and exits 0, so a counter glitch never blocks prompt submission.
+# Turn count + last-turn epoch live in `<transcript>.turns`, flock-guarded
+# for the RMW. Context size comes from the statusline cache that
+# statusline.sh writes (.../claude-tui-statusline/stdin.json,
+# .stdin.context_window.total_input_tokens); the field is omitted if that
+# file is absent. Output is pure ASCII — earlier "⟳N · …" glyphs garbled
+# in some terminals. Fail-open everywhere: any error drops the field or
+# emits nothing and exits 0, so a glitch never blocks prompt submission.
 
 import fcntl
 import json
@@ -53,12 +56,33 @@ def _bump(path, now):
     return count, last
 
 
+def _context_size():
+    # Context window size = total input tokens, taken from the statusline
+    # cache that statusline.sh writes each render. None if the file is
+    # absent/unreadable so the caller omits the field.
+    cache = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    path = os.path.join(cache, "claude-tui-statusline", "stdin.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            cw = (json.load(f).get("stdin") or {}).get("context_window") or {}
+        n = cw.get("total_input_tokens")
+        if n is None:
+            cu = cw.get("current_usage") or {}
+            n = (cu.get("input_tokens", 0) + cu.get("cache_read_input_tokens", 0)
+                 + cu.get("cache_creation_input_tokens", 0)) or None
+        return n
+    except Exception:
+        return None
+
+
 def _gap(elapsed):
     if elapsed >= 3600:
-        return "+%dh%02dm" % (elapsed // 3600, (elapsed % 3600) // 60)
+        return "%d hr %d min" % (elapsed // 3600, (elapsed % 3600) // 60)
     if elapsed >= 60:
-        return "+%dm%02ds" % (elapsed // 60, elapsed % 60)
-    return "+%ds" % elapsed
+        return "%d min" % (elapsed // 60)
+    return "%d sec" % elapsed
 
 
 def main():
@@ -68,9 +92,13 @@ def main():
         return
     now = int(time.time())
     count, last = _bump(path, now)
-    clock = time.strftime("%H:%M:%S", time.localtime(now))
-    gap = _gap(now - last) if last > 0 else "start"
-    print(json.dumps({"systemMessage": "⟳%d · %s · %s" % (count, clock, gap)}))
+    parts = [time.strftime("%H:%M:%S", time.localtime(now)), "Turn #%d" % count]
+    ctx = _context_size()
+    if ctx is not None:
+        parts.append("Context %dK" % round(ctx / 1000.0))
+    parts.append("(%s passed since the last prompt)" % _gap(now - last)
+                 if last > 0 else "(first prompt)")
+    print(json.dumps({"systemMessage": " ".join(parts)}))
 
 
 if __name__ == "__main__":
