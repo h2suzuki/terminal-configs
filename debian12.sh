@@ -299,6 +299,7 @@ if [ -d "$TOP_DIR"/files/claude_user-skills ]; then
 fi
 
 # Symlink the org skills
+run install --directory ~/.claude/skills/
 for skill_dir in /etc/claude-code/skills/*; do
     [ -d "$skill_dir" ] || continue
     rm -rf ~/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
@@ -343,8 +344,6 @@ LOGIN_USER="$(logname)"
 [ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
 if [ -n "$LOGIN_USER" ]; then
     LOGIN_GROUP="$(id -gn "$LOGIN_USER")"
-    # Resolve home explicitly: `$LOGIN_HOME` only tilde-expands inside run()'s
-    # eval, so non-run uses ([ -e ], rm -rf) would leave it a literal path.
     LOGIN_HOME="$(getent passwd "$LOGIN_USER" | cut -d: -f6)"
     [ -n "$LOGIN_HOME" ] || LOGIN_HOME="/home/$LOGIN_USER"
     BASHRC="$LOGIN_HOME/.bashrc"
@@ -425,11 +424,12 @@ EOF
     fi
 
     # Symlink the org skills
+    run install --directory $LOGIN_HOME/.claude/skills/ --owner $LOGIN_USER --group $LOGIN_GROUP
     for skill_dir in /etc/claude-code/skills/*; do
         [ -d "$skill_dir" ] || continue
         rm -rf $LOGIN_HOME/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
         run ln -sfn "$skill_dir" $LOGIN_HOME/.claude/skills/
-        run chown -h $LOGIN_USER: $LOGIN_HOME/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
+        run chown -h $LOGIN_USER:$LOGIN_GROUP $LOGIN_HOME/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
     done
 
 else
