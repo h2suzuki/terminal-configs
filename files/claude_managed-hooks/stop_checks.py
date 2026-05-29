@@ -426,7 +426,7 @@ def _emit_turn_marker(payload: dict) -> None:
     if isinstance(ctx, (int, float)) and ctx >= 0:
         parts.append("Context %dK" % round(ctx / 1000.0))
     if last > 0:
-        parts.append("(%s passed since the last turn)" % _gap(now - last))
+        parts.append("(%s passed since the previous turn ended)" % _gap(now - last))
     else:
         started = sl.get("session_started_epoch")
         if isinstance(started, (int, float)) and 0 < started <= now:
