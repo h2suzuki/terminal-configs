@@ -25,9 +25,13 @@
 #     ~/.claude/jobs/*; it acts solely on ids this hook recorded.
 #   - A per-key in-flight marker dedups concurrent dispatches.
 #
-# Recursion guard: CLAUDE_MD_LINT_PARENT is exported into the child and
-# `--setting-sources ""` keeps the child from loading the settings file
-# that registers this hook (verified primary defence under `--bg`).
+# Recursion guard: the file-based LOCK_FILE check below is the
+# authoritative defence. The env var (CLAUDE_MD_LINT_PARENT) and
+# `--setting-sources ""` are best-effort and do NOT reach the `--bg`
+# child — the worker inherits the daemon env (not this client's inline
+# assignment), and `--setting-sources` cannot drop the *managed* settings
+# file that registers this hook. Both were present when the 2026-05-28
+# cascade fired; primary-source confirmation in the env-guard memory entry.
 #
 # The skill body (/etc/claude-code/skills/claude-md-lint/SKILL.md) is injected via
 # --append-system-prompt so the child gets the evaluation criteria; the
@@ -376,8 +380,9 @@ else
   # `claude --bg`: detached, subscription-billed. acceptEdits auto-allows
   # the Write tool non-interactively (bypassPermissions needs a one-time
   # interactive disclaimer that a hook cannot give). --setting-sources ""
-  # keeps the child from re-registering this hook. The dispatch call
-  # returns a short id and exits; the lint runs under the supervisor.
+  # drops the child's user/project/local config but NOT the managed hook
+  # (recursion is stopped by LOCK_FILE above, not this flag). The dispatch
+  # call returns a short id and exits; the lint runs under the supervisor.
   out="$(
     CLAUDE_MD_LINT_PARENT=1 timeout "$BG_DISPATCH_TIMEOUT_S" \
       claude --bg \

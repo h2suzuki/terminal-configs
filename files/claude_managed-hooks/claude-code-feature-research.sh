@@ -44,9 +44,12 @@
 #     `Bash`: detached sessions cannot answer permission prompts and the
 #     prompt bubbled up to the user's interactive session.
 #
-# Recursion guard: CLAUDE_CODE_FEATURE_RESEARCH_PARENT is exported into
-# the child and `--setting-sources ""` keeps the child from loading
-# the settings file that registers this hook.
+# Recursion guard: the file-based LOCK_FILE check below is the
+# authoritative defence. The env var (CLAUDE_CODE_FEATURE_RESEARCH_PARENT)
+# and `--setting-sources ""` are best-effort and do NOT reach the `--bg`
+# child — the worker inherits the daemon env (not this client's inline
+# assignment), and `--setting-sources` cannot drop the *managed* settings
+# file that registers this hook.
 #
 # The methodology prompt
 # (/etc/claude-code/hooks/claude-code-feature-research-prompt.md) is
@@ -353,8 +356,9 @@ fi
 user_prompt=$'Claude Code feature-delta research session.\n\n'"$delta_descr"$'\n\nFirst Read the pre-captured ground-truth file (it holds the `## CLI introspection dump` and `## CHANGELOG.md dump` sections):\n\n'"$context"$'\n\nThen write ONLY the new section body (single `## v<current> (researched YYYY-MM-DD)` heading followed by the four subsections defined in the methodology prompt) with the Write tool to:\n\n'"$staging"$'\n\nDo not echo to stdout. Do not write anything besides the staging file. No JSON envelope, no prose before/after the staging Write call.\n\ncurrent_version: '"$current_version"$'\nlast_version: '"${last_version:-<none — initial seed>}"$'\nground_truth_file: '"$context"$'\nstaging_file: '"$staging"
 
 # `claude --bg`: detached, subscription-billed. acceptEdits auto-allows
-# Write non-interactively. --setting-sources "" keeps the child from
-# re-registering this hook. Both `Bash` and `WebFetch` are deliberately
+# Write non-interactively. --setting-sources "" drops the child's
+# user/project/local config but NOT the managed hook (recursion is
+# stopped by LOCK_FILE above). Both `Bash` and `WebFetch` are deliberately
 # omitted: `claude <sub> --help` and the upstream `CHANGELOG.md` are
 # pre-captured into `cli_dump` / `changelog_dump` above, so the bg
 # session has the binary surface and the version-delta source without
