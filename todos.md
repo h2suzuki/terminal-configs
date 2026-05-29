@@ -39,6 +39,7 @@ Work files:
 - `files/claude_managed-hooks/claude-code-feature-research.sh` (file-based guard 追加版)
 - `~/.claude/daemon.log` (cascade source-of-truth log、 cascade 期間: 2026-05-28T03:03-03:23 UTC)
 - chat log: `/home/h2suzuki/.claude/projects/-home-h2suzuki-terminal-configs/b188f677-a99f-4ab0-a225-2f73aa4e13a3.jsonl`
+- `last-session-handoff.md` (handoff doc、 次 session 再開 5 分以内)
 
 Notes:
 - 修正確認の verify は 2026-05-29 完了、 daemon.log delta=2 で cascade 防止確認。 ただし「どちらの guard が効いたか」 (env vs file) は未判別、 root cause mechanism 同様に推測領域として残置
