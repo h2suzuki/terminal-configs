@@ -4,6 +4,28 @@
 
 ## High
 
+### memory entry 書式の決定論的 enforcement hook (設計検討中・詳細未合意)
+
+Goal: memory-routing を使わず (skill self-invoke 漏れで) memory entry を直接 Write/Edit しても、 正しい書式 (reminder:/keywords:) と DB 同期が決定論的に担保される hook を設計・実装。 今 session 完成の retrieval 層 (reminder/keywords surface) の上に乗る hard enforcement 層。
+
+現状: たたき台スケッチのみで H.S. と**詳細未合意** (次 session で詰めてから実装)。 たたき台 = PreToolUse deny (Write が reminder:/keywords: 不在なら block) + PostToolUse auto-upsert (DB sync self-heal) / warn のハイブリッド。
+
+詰める論点 (次 session):
+- deny vs warn のバランス (hard block の false-positive risk vs 確実性)、 deny を Write のみに絞るか
+- Edit の扱い (差分しか来ず最終 format 判定不確実 → warn 止まりか file 再構成して判定か)
+- keyword 選択性 (過度に広い語) を機械判定して warn するか・閾値化
+- deny field の正確な spec (`code.claude.com/docs/en/hooks`: permissionDecision:deny / exit 2)
+- path 判定範囲 (`~/.claude/memory/*.md` ・`projects/*/memory/{feedback,reference,project}_*.md`、 MEMORY.md/OLD-MEMORY.md 除外)
+
+Exit Criteria (合意後):
+- [ ] 上記論点を H.S. と解決し設計合意
+- [ ] hook 実装 (`files/claude_managed-hooks/`) + `files/claude_managed-settings.json` の Pre/PostToolUse 登録 + deploy script copy 行
+- [ ] 実機 smoke (deny / 通過+auto-upsert / Edit warn / fail-open)
+
+経緯: 2026-05-30 session (793504ee) で reminder/keywords 移行 (retrieval 層) 完成後、 H.S.「memory-routing 未使用で書いた時 detect/deny できるか」提起。 broad「skill 発火率 system 対策」の memory 特化・skill 起動非依存の決定論的 enforcement 具体例。
+
+Work file: last-session-handoff.md
+
 ### skill 発火率 system 対策
 
 Goal: 既存 skill (verify-before-claim / report-by-evidence / scope-mismatch-detector / illuminate-not-reassure / 他) と 本 session で追加した user memory entry 4 個が、 LLM の「trigger 該当時の self-invoke」 に依存して発火率低い問題への system 対策を設計 + 実装。
