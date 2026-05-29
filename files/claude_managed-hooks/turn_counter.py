@@ -101,7 +101,7 @@ def main():
     sl = _statusline(payload.get("session_id"))
     parts = [time.strftime("%H:%M:%S", time.localtime(now)), "Turn #%d" % count]
     ctx = _context_size(sl)
-    if ctx is not None:
+    if isinstance(ctx, (int, float)) and ctx >= 0:
         parts.append("Context %dK" % round(ctx / 1000.0))
     if last > 0:
         parts.append("(%s passed since the last prompt)" % _gap(now - last))

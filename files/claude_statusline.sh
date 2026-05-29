@@ -33,9 +33,11 @@ if [ -n "$_cur_session" ]; then
     mkdir -p "$_cache_dir"
     _cache_file="${_cache_dir}/${_cur_session}.json"
     _now_iso="$(date -u '+%Y-%m-%dT%H:%M:%S.%3NZ')"
-    # Carry the first-render epoch forward; stamp now only on first creation.
+    # Carry the first-render epoch forward; stamp now on first creation or if
+    # the stored value is missing/non-numeric (else --argjson would abort the
+    # write every render, freezing the cache for the session).
     _started="$(jq -r '.session_started_epoch // empty' "$_cache_file" 2>/dev/null)"
-    [ -n "$_started" ] || _started="$(date +%s)"
+    case "$_started" in ''|*[!0-9]*) _started="$(date +%s)" ;; esac
     _tmp="$(mktemp "${_cache_dir}/.${_cur_session}.XXXXXX.json" 2>/dev/null)" || _tmp=""
     if [ -n "$_tmp" ]; then
         trap 'rm -f "$_tmp"' EXIT
