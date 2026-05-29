@@ -9,7 +9,8 @@ Combined Stop hook for org-managed Claude Code:
     persistence pairing 不要。
 
   hollow-claims (enforcement, exit 2):
-    「学習しました」「反省」「申し訳」「次回から気をつけ」 系の introspective phrase
+    「学習しました」「記憶します」「肝に銘じ/留意します」「教訓/反省点として」「反省」
+    「申し訳」「次回(は)…気をつけ/注意し」 系の introspective phrase
     は、 同 turn 内に memory subtree / skill dir / hook dir / CLAUDE.md への Write/Edit
     記録が無ければ block。 session reset で虚偽化するため persistence 行動とのペアを
     要求する。
@@ -98,23 +99,35 @@ META_ANNOUNCE_PATTERNS: list[str] = [
 META_ANNOUNCE_RE = re.compile("|".join(META_ANNOUNCE_PATTERNS), re.IGNORECASE)
 
 # --- Pattern: hollow-claims (block on hit unless persistence in same turn) ---
-# introspective phrase — 「学習」「改善宣言」「省察」「formal apology」 の 4 系統。
-# 否定形 / 中立形を match させないよう conjugation を anchor (反省し → 反省しない を
-# excludable)。 false-positive 抑制のため 「気をつけます」「以降は」「sorry」「すみません」
-# 等の broad phrase は除外している (観測ベースで pattern 追加可能)。
+# introspective phrase — 「学習・記銘」「改善宣言」「留意・省察」「教訓framing」
+# 「formal apology」 系統。 否定形 / 中立形 / 記述用法を match させないよう
+# conjugation を anchor (反省し → 反省しない を excludable)。 false-positive 抑制:
+# 「記憶」 は記述的「X を記憶します」 を を-lookbehind で除外、 次回 は自己矯正動詞
+# (気をつけ/注意/改め) に限定し task 動詞 (実装/着手 等) を除外、 「として」 で
+# 名詞単体 (反省点の指摘) を除外。 broad phrase は引き続き除外 (観測ベースで追加可)。
 HOLLOW_CLAIM_PATTERNS: list[str] = [
     # Learning / memorization
     r"学習し(た|ました)",
     r"勉強になっ(た|ました)",
     r"脳に刻ん(だ|でます|でいます)",
-    # Reform commitment
-    r"次回(から)?(は)?気をつけ",
+    # 記銘宣言「記憶します」系。 記述的「X を記憶します」(hook 等が主語) を弾くため
+    # を の直後を除外 (negative lookbehind)。
+    r"(?<!を)記憶し(ます|ました|ておきます|ておく)",
+    # Keep-in-mind commitment
+    r"肝に銘じ(ます|ました|ておきます|ています)",
+    r"心に留め(ます|ました|ておきます)",
+    r"留意し(ます|ました)",
+    # Reform commitment。 次回 は自己矯正動詞限定 + 介在句を許す窓 ({0,15}) で
+    # 「次回は…注意します」も拾う。 task 動詞 (実装/着手/確認 等) は入れない。
+    r"次回(から)?(は)?[^。\n]{0,15}(気をつけ|注意し(ます|ました)|改め(ます|ました))",
     r"今後(は)?気をつけ",
     r"もう間違え(ない|ません)",
     r"もう繰り返しません",
     # Reflection / retrospection
     r"反省し(た|ました|て(い|ます)|ています)",
     r"振り返(り|って)(ます|ました|みます|みました)",
+    # 「教訓として / 反省点として」 の framing。 「として」 で名詞単体を除外。
+    r"(教訓|反省点)として",
     # Formal apology
     r"申し訳(ありません|ございません)",
 ]
