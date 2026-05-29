@@ -11,6 +11,8 @@
   "tui": "fullscreen",
   "skipAutoPermissionPrompt": true,
   "autoMemoryEnabled": false,
+  "inputNeededNotifEnabled": true,
+  "effortLevel": "xhigh",
   "hooks": {
     "PreToolUse": [
       {
