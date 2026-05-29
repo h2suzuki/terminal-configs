@@ -78,6 +78,16 @@ deterministic ならコードを書いて、毎回それを呼び出す。
 - 無限 loop / 過剰 polling / 重複計算 / 巨大 output / 想定外の高頻度実行
 - 並列化時は特に 「同じ前提で複数 worker が重複計算」 に陥っていないか確認
 
+### Check external command exit status
+
+外部コマンド / subprocess を呼んだら、 出力の中身だけで判断せず **exit status を必ず確認する**。 成否を握り潰さない。
+
+- bash の anti-pattern: `cmd ... 2>/dev/null || true` で stderr を捨て exit code を 0 に潰し、 stdout の中身だけで成否判定する。 起動失敗 (E2BIG / not found / timeout) しても無言で「結果なし」として進み、 障害が不可視になる
+- 代わりに: stderr を捨てず file / log に取り、 `rc=$?` で実 exit を捕捉し、 失敗時は診断ログに rc + stderr を残す。 fail-open する場合も「握り潰す」 のでなく「記録した上で続行」 する
+- 他言語も同様: subprocess の returncode / stderr、 HTTP status、 LLM 呼び出しの error を無視せず check する
+
+**Why:** 巨大 argv で `claude --bg` が E2BIG 失敗した hook が `|| true` + `2>/dev/null` + exit code 非チェックで silent fail し、 原因究明が遅れた。 外部呼び出しの失敗を不可視にしない。
+
 ### Universal vs add-on skill layering
 
 複数 skill が同じ file kind を対象にする時、 役割が **universal** か **add-on** かで設計が変わる:
