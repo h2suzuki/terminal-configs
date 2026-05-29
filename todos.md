@@ -81,17 +81,17 @@ Exit Criteria:
 
 Work file: 現 session の議論 (本 entry が単独 reference)
 
-### statusline にターン数表示 (2026-05-29 session2 user 要望)
+### ターン数の chat 表示 hook (UserPromptSubmit) (2026-05-29 session2 user 要望)
 
-Goal: 現在のセッションの **ターン数 + 現在時刻 + 前回ターンからの経過時間** を、 LLM context に渡らない形でチャット画面に表示する (user: statusline は 1 行幅が厳しいので chat 挿入に変更)。
+Goal: 現在のセッションの **ターン数 + 現在時刻 + 前回ターンからの経過時間** を、 LLM context に渡らない形でチャット画面に表示する (旧称「statusline にターン数」は obsolete — statusline は 1 行幅が厳しく chat 挿入に変更)。
 
 Exit Criteria:
-- [x] 仕様調査完了 (workflow `wf_7b53c4e1-0d4` + `wf_309fe061-3dc`、 source `code.claude.com/docs/en/hooks`): (1) statusLine payload に直接 turn-count field 無し、 JSONL parse は render 毎 slurp で重い; (2) hook 出力チャネルの LLM 可視性 — **`systemMessage` は user 表示・LLM 非可視** (docs verbatim "A systemMessage field is shown to you, not to Claude")、 `additionalContext` は逆 (LLM 可視・chat 非表示) → **chat 挿入は systemMessage を使う**
-- [ ] 設計確定: `UserPromptSubmit` hook (turn 毎 1 回・非 re-entrant・`session_id`/`transcript_path`/`cwd` 取得可) が transcript と同 dir の per-session counter file を flock→read→count+1+last-epoch→write し、 `{"systemMessage":"⟳N · HH:MM:SS · +Δs"}` を exit 0 で emit (chat 表示・LLM 非可視)。 statusline.sh は変更不要
-- [ ] 実装: canonical hook (`files/claude_managed-hooks/`) + settings.json `UserPromptSubmit` wiring + deploy script `copy` 行 + 実機確認 (systemMessage の rendering style が煩くないか含む、 CLAUDE.md deploy 同期厳守)
-- [ ] commit
+- [x] 仕様調査完了 (workflow `wf_7b53c4e1-0d4` + `wf_309fe061-3dc`、 source `code.claude.com/docs/en/hooks`): (1) statusLine payload に直接 turn-count field 無し; (2) hook 出力チャネルの LLM 可視性 — **`systemMessage` は user 表示・LLM 非可視** (docs verbatim "A systemMessage field is shown to you, not to Claude")、 `additionalContext` は逆 (LLM 可視・chat 非表示) → **chat 挿入は systemMessage を使う**
+- [x] 設計確定: `UserPromptSubmit` hook (turn 毎 1 回・非 re-entrant・`session_id`/`transcript_path`/`cwd` 取得可) が transcript と同 dir の per-session counter file を flock→read→count+1+last-epoch→write し、 `{"systemMessage":"⟳N · HH:MM:SS · +Δs"}` を exit 0 で emit
+- [x] 実装 + smoke + deploy + commit (`b8ad39d`): `turn_counter.py` (`<transcript>.turns` を flock RMW、 fail-open で prompt を絶対 block しない) + managed-settings の `UserPromptSubmit` に登録 + /etc deploy sync。 smoke: count 増分・初回 start・seed 65s で +1m05s・systemMessage のみ (LLM 非可視)・malformed→無出力 exit 0
+- [ ] **次 session で実機確認**: 新 session で hook が load され systemMessage が chat に表示されるか + rendering が煩くないか。 OK なら close、 不満なら format/event 調整
 
-Work file: hook (`files/claude_managed-hooks/`)、 workflow `wf_7b53c4e1-0d4` (statusLine 仕様) / `wf_309fe061-3dc` (hook 出力チャネル仕様) の結果
+Work file: `files/claude_managed-hooks/turn_counter.py`、 `files/claude_managed-settings.json`、 workflow `wf_7b53c4e1-0d4` / `wf_309fe061-3dc` の結果
 
 ## Medium
 
