@@ -226,6 +226,25 @@ if [[ -n "${CLAUDE_CODE_FEATURE_RESEARCH_PARENT:-}" ]]; then
   exit 0
 fi
 
+# File-based recursion guard (authoritative; env-based above is
+# best-effort). Observed 2026-05-28 in claude-md-lint that env-based
+# guard did not fire in daemon-spawned worker chains, leading to 35+
+# cascaded bg sessions. This hook uses the same dispatcher pattern,
+# so apply the same guard. The dispatcher touches LOCK_FILE just
+# before `claude --bg`; while LOCK_FILE exists with mtime within
+# BG_STALE_S, any later SessionStart invocation of this hook —
+# including from inside the dispatched child bg session — exits
+# without spawning a second dispatch. Stale locks are ignored so a
+# crashed dispatcher does not block subsequent runs forever.
+LOCK_FILE="${CACHE_DIR}/.dispatch.lock"
+if [[ -f "$LOCK_FILE" ]]; then
+  lock_mtime="$(stat -c %Y "$LOCK_FILE" 2>/dev/null || echo 0)"
+  printf -v _now '%(%s)T' -1
+  if (( _now - lock_mtime < BG_STALE_S )); then
+    exit 0
+  fi
+fi
+
 # Without the methodology prompt file there is nothing to inject — bail
 # out silently rather than dispatching a degraded research session.
 [[ -s "$PROMPT_MD" && -r "$PROMPT_MD" ]] || exit 0
@@ -286,6 +305,13 @@ inflight="${INFLIGHT_DIR}/${key}"
 if ! ( set -o noclobber; : >"$inflight" ) 2>/dev/null; then
   exit 0
 fi
+
+# File-based recursion guard (write): touch the lock file so any
+# SessionStart invocation inside the dispatched child bg session
+# sees an active dispatch and exits at the re-entry guard above.
+# Stale (> BG_STALE_S) locks are ignored upstream, so a crashed
+# dispatcher does not block subsequent runs.
+: >"$LOCK_FILE" 2>/dev/null
 
 staging="${STAGING_DIR}/${key}.md"
 rm -f "$staging" 2>/dev/null
