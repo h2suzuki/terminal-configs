@@ -81,7 +81,7 @@ user CLAUDE.md (`~/.claude/CLAUDE.md`) / project CLAUDE.md (`<repo>/.claude/CLAU
    - [短縮 title](feedback_<name>.md) YYYY-MM-DD OLD移動 (<type>: <cover 元>)
    ```
    `<type>` は `skill` / `hook` / `CLAUDE.md` のいずれか (Managed 限定)
-3. **feedback_*.md 本文末尾に cover 元への言及 1 行を追加**:
+3. **feedback_*.md 本文末尾に cover 元への言及 1 行を追加** (entry 本体への追記も Edit 不可 → grant を mint してから full content を Write し直す。 step 1・2 の index file 編集は gate 対象外で Edit 可):
    ```
    **Covered by:** <cover 元> — YYYY-MM-DD OLD-MEMORY.md 移動
    ```
@@ -89,7 +89,7 @@ user CLAUDE.md (`~/.claude/CLAUDE.md`) / project CLAUDE.md (`<repo>/.claude/CLAU
 
 ### Partial coverage
 
-部分 cover (Managed skill / hook が一部 cover、 entry の core angle / provenance / 事例が固有) の場合は **MEMORY.md 残置**、 feedback_*.md 本文末尾に 1 行言及:
+部分 cover (Managed skill / hook が一部 cover、 entry の core angle / provenance / 事例が固有) の場合は **MEMORY.md 残置**、 feedback_*.md 本文末尾に 1 行言及 (同じく Edit 不可 → grant + full content Write):
 
 ```
 **Partially covered by:** <cover 元> (本 entry は <固有 angle> が固有)
@@ -130,28 +130,31 @@ keywords: <その状況が再発した時の prompt に出る選択的な match 
 
 reminder: 行が無い entry は本文先頭非空行が fallback (劣化、 必ず reminder: を置く)。 旧 `oneline_summary:` は廃止 (read されない)。
 
+### Write gate: entry を書く前に grant を mint
+
+memory entry (`~/.claude/memory/*.md` ・ `~/.claude/projects/<enc>/memory/*.md`) への書込は managed hook (`memory_routing_gate.py`) が gate する。 **この skill を経由せず直接 Write した entry は deny される** (Edit/MultiEdit も deny → 必ず full content で Write し直す)。 index file (MEMORY.md / OLD-MEMORY.md) は gate 対象外。
+
+hook を通すには、 entry を Write する **直前に** grant ファイルを Write tool で作る:
+
+1. grant path: `~/.claude/hooks/state/memory-routing/grants/<basename(entry)>`、 中身は entry の絶対パス。 例: entry `~/.claude/memory/feedback_foo.md` → grant `~/.claude/hooks/state/memory-routing/grants/feedback_foo.md`。
+2. 直後に entry 本体を Write する (grant は hook が消費 = 1 回限り)。
+3. 複数 entry を書くなら各 entry の直前にそれぞれ grant を作る。
+
+内容も hook が検査し、 不備なら deny する (warn は無い → **一発で受理される内容を Write**): 非空の `reminder:` / `keywords:` 行が必須、 `oneline_summary:` 禁止、 keywords は FTS で match する固有語を含む (一般語のみ ・空は不可)。 書式は上記「reminder + keywords」に従う。
+
 ### Hook DB sync after entry write or retire
 
-memory entry を write / retire したら **同一セッション内で hook DB を sync** する。 さもないと UserPromptSubmit hook が新 entry を surface できない、 または退役済 entry を引き続き surface する。
-
-#### After saving or updating a feedback entry
-
-```bash
-# user (cross-project) memory
-~/.claude/hooks/memory_surface.py --upsert <abs_path>
-
-# project-local memory (cwd-encoded project_id)
-~/.claude/hooks/memory_surface.py --upsert <abs_path> <encoded-cwd>
-# encoded-cwd 例: /home/h2suzuki/foo → -home-h2suzuki-foo
-```
+entry を **Write** すると PostToolUse の sync hook (`memory_routing_gate.py sync`) が自動で `memory_surface.py --upsert` を実行し FTS DB に反映する (project-local は path から project_id を導出)。 **保存・更新後の手動 `--upsert` は不要** (gate を通った Write は必ず sync される)。
 
 #### After retiring to OLD-MEMORY.md
+
+退役は DB から **手動で `--delete`** する (auto-sync は upsert のみで delete しない):
 
 ```bash
 ~/.claude/hooks/memory_surface.py --delete <abs_path> [encoded-cwd]
 ```
 
-退役 entry は `OLD-MEMORY.md` 移動と本文末尾の `Covered by:` 行追加 (既存 protocol) に加えて、 hook DB からの除去まで含めて 1 単位とする。 さもないと query が retired entry を surface する。
+順序注意: 退役 protocol の `Covered by:` footer 追記は (Edit 不可ゆえ) Write になり、 その Write で auto-upsert が走って DB に再登録される。 **`--delete` は footer Write の後に実行** する (逆順だと再登録が残り query が retired entry を surface する)。 退役は `OLD-MEMORY.md` 移動 + footer Write + `--delete` までで 1 単位。
 
 #### Bulk re-index for disaster recovery
 
