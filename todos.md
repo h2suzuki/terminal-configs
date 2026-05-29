@@ -35,19 +35,6 @@ Work file: 現 session の議論 (本 entry が単独 reference)
 
 ## Medium
 
-### oneline_summary 1-文 規定違反の是正
-
-Goal: memory-routing skill (SKILL.md:112「oneline_summary: …含む 1 文」) に反して多文・長尺化した memory entry の oneline_summary を 1 文へ圧縮し、 UserPromptSubmit surface の壁テキスト化を解消。
-
-Exit Criteria:
-- [ ] 長尺 entry を特定 (DB oneline_summary length 降順。 >350字 の 3 本: cascade ledger 539 / permission_modes 397 / memory_entry_written_without_verify 379)
-- [ ] 各 oneline を keyword 保持のまま 1 文へ圧縮 (詳細は body に残し oneline は要約に徹する)
-- [ ] `memory_surface.py --upsert` で DB 再同期、 length 短縮を確認
-
-skill 未適用事例 (High「skill 発火率」へのデータ): memory-routing は oneline=1 文 を規定するが write 時に未適用で長尺化が常態化。 本 session で私自身も cascade ledger の oneline に verify 状況を追記し多文のまま延ばした (= 規定を適用しそびれた当事者、 既存のせいにしない)。 trigger 該当時の skill self-invoke 漏れの新規実例。
-
-Work file: 本 entry + ledger feedback_setting_sources_does_not_disable_managed.md (oneline 539 字 の当該)
-
 ### memory entry: evaluative term in table cell の違反事例
 
 Goal: 2026-05-28 session で発生した「比較表 cell に評価形容詞 (`大改造`) を ungrounded で混入」 事例を memory entry に save、 advisory hook 完成までの reminder とする。
