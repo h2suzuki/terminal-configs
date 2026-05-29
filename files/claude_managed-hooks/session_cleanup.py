@@ -5,7 +5,7 @@
 # statusline cache (<cache>/claude-tui-statusline/<session_id>.json, written
 # by statusline.sh) and the turn counter (<transcript>.turns, plus the
 # session-keyed fallback <cache>/claude-turn-counter/<session_id>.turns,
-# written by turn_counter.py).
+# written by stop_checks.py's turn marker, formerly turn_counter.py).
 #
 # SessionEnd does not fire on crash/kill, so abnormally-ended sessions would
 # otherwise leak their files forever. To bound both cache dirs we ALSO sweep

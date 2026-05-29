@@ -26,7 +26,7 @@ get() { printf '%s' "$input" | jq -r "$1 // empty"; }
 # {stdin, timestamp, session_started_epoch}. Per-session files mean no
 # cross-session overwrite race, so the old staleness / same-session guards are gone.
 # session_started_epoch is stamped on first render and preserved, letting readers
-# (turn_counter) show elapsed-since-session-start. A SessionEnd hook deletes the file.
+# (stop_checks.py turn marker) show elapsed-since-session-start. A SessionEnd hook deletes the file.
 _cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/claude-tui-statusline"
 _cur_session="$(get '.session_id')"
 if [ -n "$_cur_session" ]; then
