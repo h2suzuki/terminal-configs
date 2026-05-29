@@ -91,7 +91,7 @@ Exit Criteria:
 - [x] 実装 + smoke + deploy + commit (`b8ad39d`): `turn_counter.py` (`<transcript>.turns` を flock RMW、 fail-open で prompt を絶対 block しない) + managed-settings の `UserPromptSubmit` に登録 + /etc deploy sync。 smoke: count 増分・初回 start・seed 65s で +1m05s・systemMessage のみ (LLM 非可視)・malformed→無出力 exit 0
 - [ ] **次 session で実機確認**: 新 session で hook が load され systemMessage が chat に表示されるか + rendering が煩くないか。 OK なら close、 不満なら format/event 調整
 
-Work file: `files/claude_managed-hooks/turn_counter.py`、 `files/claude_managed-settings.json`、 workflow `wf_7b53c4e1-0d4` / `wf_309fe061-3dc` の結果
+Work file: `files/claude_managed-hooks/turn_counter.py`、 `files/claude_managed-settings.json`、 `last-session-handoff.md`(次 session の実機確認 step)、 workflow `wf_7b53c4e1-0d4` / `wf_309fe061-3dc` の結果
 
 ## Medium
 
