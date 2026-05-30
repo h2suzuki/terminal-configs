@@ -1,0 +1,489 @@
+#!/usr/bin/env python3
+r"""
+Skill-active gate hook for Claude Code.
+
+Origin: 「skill 発火率 system 対策」 task の最優先機構 = skill-active gate
+(2026-05-28/29 H.S. 提起 — 信用向上のため作った skill 群が self-invoke 依存で
+発火率低い問題への機構対策)。
+本 hook は CLAUDE.md section の抽出ではなく、 writing-* skill の invoke を編集の
+前提として機械 enforce する新規機構である (writing-* skill 自体は org CLAUDE.md
+由来だが、 本 hook はその enforcement 層)。
+
+Purpose
+=======
+writing-* skill (writing-code / writing-python / writing-bash / writing-tests /
+writing-skills / writing-todos) は LLM の self-invoke 発火依存で発火率が低い。
+本 hook は Edit/Write/MultiEdit を 「関連 skill が **当 turn で invoke 済か**」 で
+gate する。正規ルート (skill 発動 → 同 turn で編集) は通し、 skip = detour は
+deny → 正しい kind を declare → skill invoke → 編集、 へ誘導する。
+
+mechanism
+=========
+2 mode (argv[1] で dispatch):
+
+  gate    PreToolUse(^(Edit|Write|MultiEdit)$) hook。下記 flow で allow/deny。
+  declare model が Bash で実行する CLI:
+            skill_reminder_gate.py declare <ABS-path> <kind>[,<kind>...]
+          拡張子なし file の kind 真実源を session state に記録する。sid は env
+          $CLAUDE_CODE_SESSION_ID (== payload session_id、 実証済) から取る。
+          path は **絶対 path 必須** — gate は payload.cwd で、 declare は shell
+          cwd で解決するため、 相対 path だと cwd drift 時に hash 不一致で永久に
+          match せず deny loop になる。同じ絶対 path を後続 Edit でも使う。
+
+gate flow:
+  declared(sid, path) あり:
+      拡張子あり → required = relevant_skills(path) ∪ ∪(宣言 kind の skill)
+                   (declare は **追加のみ**。 else 等で auto-detect を下回れない —
+                    .py を else 宣言して恒久的に gating を無効化する穴を塞ぐ)
+      拡張子なし → required = ∪(宣言 kind の skill)  (declare が唯一の真実源)
+  elif 拡張子あり → required = relevant_skills(path)
+  else (拡張子なし・未宣言) → DENY「絶対 path で kind を declare せよ」; return
+  required が空            → ALLOW (skill-less file。transcript は読まない)
+  active = 当 turn の Skill invoke 集合 (transcript current-turn scan)
+  active 判定不能 (corrupted) → ALLOW (fail-open)
+  required ⊆ active        → ALLOW (skill 当 turn invoke 済)
+  else                    → DENY「<missing> を invoke してから編集」
+
+kind 語彙 → skill (additive。else 必須):
+  code   → writing-code
+  python → writing-code + writing-python
+  bash   → writing-code + writing-bash
+  test   → writing-code + writing-tests   (lang は別 kind で additive 宣言)
+  skills → writing-skills
+  todos  → writing-todos
+  memory → memory-routing  (実 gate は既存 memory_routing_gate、本 hook は通す)
+  else   → ∅  (skill の無い file。これが無いと拡張子なし file が Write 不能)
+
+current-turn (time-TTL なし) の根拠
+===================================
+skill guidance は invoke した turn の context にある。同 turn の編集なら fresh、
+turn を跨げば再 invoke で再確立が要る。time-TTL は 「いつ context から消えるか」
+を時間で近似できず (compaction は size 駆動)、 長いと無関係後続 turn で通って
+目的が崩れる。
+
+turn boundary 判定 (load-bearing — 変更時は false-allow/deny を再発させる)
+=========================================================================
+直近の human-input user entry を boundary とする。boundary 判定:
+  - isMeta==True の user entry は除外 (Skill invoke 後に付く skill 展開 injection。
+    boundary 扱いすると Skill invoke を turn から弾いて誤 deny する)
+  - content が str → boundary (典型 human prompt)
+  - content が list で **非 tool_result block を 1 つ以上含む** → boundary
+    (画像+テキスト / steering 等の list 形 human prompt。 これを取りこぼすと前
+     turn の skill が active に leak して誤 allow する)
+  - content が list で全 tool_result → 継続 (boundary でない)
+boundary が見つからない corrupted transcript では None → fail-open ALLOW。
+
+deny 方式・fail-open
+====================
+deny は JSON permissionDecision: "deny" (exit 0) — memory_routing_gate /
+read_before_edit と同様、 hook bug が誤って tool を block しない。全例外を握り潰し
+exit 0 (fail-open)。transcript が読めない / boundary 不在のときも ALLOW に倒す。
+
+residual (閉じない・既知)
+=========================
+- 拡張子なし file の kind 語彙選択は model 判断 (bash script を else 誤宣言すれば
+  すり抜け)。detour deny で declare を強制できるが語彙は model が選ぶ。
+- 未収載の exotic 言語拡張子 (CODE_EXTENSIONS 外) は skill-less 扱い (要なら 1 行追加)。
+- .j2/.in/.tmpl 等 templating 拡張子は多くが config ゆえ skill-less 許容 (.bak/.orig/
+  .swp/~ の backup/swap は元拡張子を復元して gate する)。
+- symlink: _canonical の realpath が skill/hook-dir segment を解決し分類が変わり得る
+  (現 deploy の symlink は skills→/etc/.../skills で分類保存、 SKILL.md は basename
+   判定ゆえ realpath 不変 = 現状未発火。latent)。
+
+canonical source: files/claude_managed-hooks/skill_reminder_gate.py
+deploy: /etc/claude-code/hooks/ (copy_dir で自動)。両者を同 session で同内容に保つ。
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import sys
+import time
+
+HOME = os.path.expanduser("~")
+STATE_DIR = os.path.join(HOME, ".claude", "hooks", "state", "skill_reminder")
+DECL_STALE_SECONDS = 7 * 24 * 3600   # 放置宣言 session dir の自己掃除閾値
+GATE_TOOLS = ("Edit", "Write", "MultiEdit")
+
+# kind → 当該 kind が要求する skill 集合 (additive。else は ∅)。
+KIND_SKILLS: dict[str, set[str]] = {
+    "code": {"writing-code"},
+    "python": {"writing-code", "writing-python"},
+    "bash": {"writing-code", "writing-bash"},
+    "test": {"writing-code", "writing-tests"},
+    "skills": {"writing-skills"},
+    "todos": {"writing-todos"},
+    "memory": {"memory-routing"},
+    "else": set(),
+}
+
+# source code 拡張子 (any language) → writing-code (universal) を要求。広めに列挙し
+# 未収載は skill-less (residual)。LANGUAGES の managed add-on を上に積む。
+CODE_EXTENSIONS: set[str] = {
+    ".py", ".pyi", ".pyw",
+    ".sh", ".bash", ".zsh", ".ksh", ".fish",
+    ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".cts", ".mts",
+    ".go", ".rs", ".rb", ".rake", ".php", ".pl", ".pm", ".lua", ".tcl",
+    ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx", ".m", ".mm",
+    ".java", ".kt", ".kts", ".scala", ".groovy", ".gradle",
+    ".clj", ".cljs", ".cljc", ".cs", ".fs", ".fsx", ".vb",
+    ".swift", ".dart", ".r", ".jl", ".ex", ".exs", ".erl", ".hrl",
+    ".hs", ".ml", ".mli", ".nim", ".zig",
+    ".sql", ".vim", ".el", ".lisp", ".scm",
+    ".html", ".htm", ".css", ".scss", ".sass", ".less",
+    ".vue", ".svelte", ".astro",
+    ".proto", ".thrift", ".tf", ".tfvars", ".hcl", ".bicep", ".sol",
+}
+
+# managed language add-on skill (writing-code の上に積む)。bash add-on は bash 系
+# のみ (writing-bash は zsh/fish を SKIP)。
+LANGUAGES: dict[str, str] = {
+    ".py": "writing-python",
+    ".pyi": "writing-python",
+    ".pyw": "writing-python",
+    ".sh": "writing-bash",
+    ".bash": "writing-bash",
+}
+
+# hook script として writing-skills を要求する拡張子 (hook dir 内のみ)。
+HOOK_SCRIPT_EXTS = {".py", ".pyi", ".pyw", ".sh", ".bash"}
+
+# backup/swap suffix。剥いで元拡張子で再判定 (script.py.bak → .py、 foo.bash~ → .bash)。
+STRIP_SUFFIXES = (".bak", ".orig", ".swp", ".rej")
+
+# CC hook dir anchor (hook script 編集 → writing-skills)。
+HOOK_DIR_RE = re.compile(
+    r"/(claude_managed-hooks|claude_user-hooks)/|"
+    r"/etc/claude-code/hooks/|/\.claude/hooks/"
+)
+
+# test file 判定 (code file にのみ writing-tests を足す)。anchored で誤検出抑制。
+TEST_NAME_RE = re.compile(
+    r"^test_.+\.[a-z0-9]+$"      # test_foo.py
+    r"|.+_test\.[a-z0-9]+$"      # foo_test.go / foo_test.py
+    r"|.+_spec\.[a-z0-9]+$"      # foo_spec.rb
+    r"|.+\.test\.[a-z0-9]+$"     # foo.test.ts
+    r"|.+\.spec\.[a-z0-9]+$",    # foo.spec.js
+    re.IGNORECASE,
+)
+TEST_DIR_RE = re.compile(r"/(tests?|__tests__|spec)/")
+
+
+def _canonical(raw_path: str, cwd: str) -> str:
+    if not isinstance(raw_path, str) or not raw_path:
+        return ""
+    expanded = os.path.expanduser(raw_path)
+    if not os.path.isabs(expanded):
+        base = cwd if cwd else os.getcwd()
+        expanded = os.path.join(base, expanded)
+    return os.path.realpath(expanded)
+
+
+def _has_extension(path: str) -> bool:
+    return bool(os.path.splitext(os.path.basename(path))[1])
+
+
+def _effective_ext(base: str) -> str:
+    """backup/swap suffix を剥いだ後の拡張子 (lower)。script.py.bak → .py。"""
+    name = base[:-1] if base.endswith("~") else base
+    stem, sfx = os.path.splitext(name)
+    if sfx.lower() in STRIP_SUFFIXES:
+        name = stem
+    return os.path.splitext(name)[1].lower()
+
+
+def _is_test(path: str) -> bool:
+    return bool(TEST_NAME_RE.match(os.path.basename(path)) or TEST_DIR_RE.search(path))
+
+
+def relevant_skills(path: str) -> set[str]:
+    """拡張子あり file の auto-detect。skill 不要なら空集合。"""
+    base = os.path.basename(path)
+    low = base.lower()
+    if low == "todos.md":
+        return {"writing-todos"}
+    skills: set[str] = set()
+    ext = _effective_ext(base)
+    if low == "skill.md" or (HOOK_DIR_RE.search(path) and ext in HOOK_SCRIPT_EXTS):
+        skills.add("writing-skills")
+    if ext in CODE_EXTENSIONS:
+        skills.add("writing-code")
+        lang = LANGUAGES.get(ext)
+        if lang:
+            skills.add(lang)
+        if _is_test(path):
+            skills.add("writing-tests")
+    return skills
+
+
+# --- declare state (拡張子なし file 用・session persistent) ---
+
+def _session_dir(sid: str) -> str:
+    return os.path.join(STATE_DIR, sid)
+
+
+def _decl_path(sid: str, path: str) -> str:
+    h = hashlib.sha256(path.encode("utf-8")).hexdigest()[:16]
+    return os.path.join(_session_dir(sid), "decl-" + h)
+
+
+def _declared_kinds(sid: str, path: str) -> list[str] | None:
+    """記録済の宣言 kind list。未宣言なら None。"""
+    if not sid:
+        return None
+    try:
+        with open(_decl_path(sid, path), encoding="utf-8") as f:
+            first = f.readline().strip()
+    except OSError:
+        return None
+    return [k for k in first.split(",") if k]
+
+
+def _prune_old_sessions() -> None:
+    cutoff = time.time() - DECL_STALE_SECONDS
+    try:
+        names = os.listdir(STATE_DIR)
+    except OSError:
+        return
+    for name in names:
+        d = os.path.join(STATE_DIR, name)
+        try:
+            if os.path.getmtime(d) < cutoff:
+                for f in os.listdir(d):
+                    try:
+                        os.remove(os.path.join(d, f))
+                    except OSError:
+                        pass
+                os.rmdir(d)
+        except OSError:
+            pass
+
+
+# --- current-turn skill scan (stop_checks.py の current-turn 解析を流用・拡張) ---
+
+def _load_transcript(path: str) -> list[dict]:
+    out: list[dict] = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return []
+    return out
+
+
+def _is_turn_boundary(obj: dict) -> bool:
+    """human-input turn の起点か。isMeta(skill 展開) と tool_result 継続は起点でない。"""
+    if obj.get("type") != "user" or obj.get("isMeta"):
+        return False
+    msg = obj.get("message", {})
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(content, str):
+        return True
+    if isinstance(content, list):
+        return any(
+            isinstance(b, dict) and b.get("type") != "tool_result" for b in content
+        )
+    return False
+
+
+def _current_turn_skills(entries: list[dict]) -> set[str] | None:
+    """直近 turn boundary 以降の assistant の Skill invoke 集合。boundary 不在は None。
+
+    Skill 呼出の transcript 形: assistant tool_use, name=="Skill",
+    input=={"skill":"<name>"} (実証済)。
+    """
+    start_idx = -1
+    for i in range(len(entries) - 1, -1, -1):
+        if _is_turn_boundary(entries[i]):
+            start_idx = i + 1
+            break
+    if start_idx == -1:
+        return None
+
+    active: set[str] = set()
+    for obj in entries[start_idx:]:
+        if obj.get("type") != "assistant":
+            continue
+        msg = obj.get("message", {})
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            if block.get("name") != "Skill":
+                continue
+            inp = block.get("input") or {}
+            name = inp.get("skill") if isinstance(inp, dict) else None
+            if isinstance(name, str) and name:
+                active.add(name)
+    return active
+
+
+# --- deny emission (writing-skills の deny-wording 規律。文面は意図的に冗長・trim 禁止) ---
+
+def _emit_deny(reason: str) -> None:
+    payload = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    }
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+_VOCAB = "python / bash / code / test / skills / todos / memory / else"
+
+
+def _deny_declare(basename: str) -> None:
+    _emit_deny(
+        f"拡張子の無い file 「{basename}」 は kind を自動判定できません。 "
+        f"編集前に **絶対 path** で kind を declare してください: "
+        f"`/etc/claude-code/hooks/skill_reminder_gate.py declare <絶対path> <kind>` "
+        f"(kind = {_VOCAB}、 複数なら comma 区切り)。 相対 path は gate と解決基準が "
+        f"ずれて match しないため必ず絶対 path で、 後続の Edit/Write でも同じ絶対 "
+        f"path を使ってください。 skill の不要な file は `else` を declare すれば "
+        f"通ります。 declare 後そのまま編集が通ります (hook 自身は file を変更しません)。"
+    )
+
+
+def _deny_missing(missing: set[str]) -> None:
+    names = " / ".join(sorted(missing))
+    _emit_deny(
+        f"この編集には {names} skill を当 turn 内で invoke してから入って "
+        f"ください (正規ルート = skill 発動 → 同 turn で編集)。 skill を skip "
+        f"して編集に入る detour を gate しています。 該当 skill を invoke 後、 "
+        f"そのまま編集が通ります (hook 自身は file を変更しません)。 skill が "
+        f"不要な file なら `declare <絶対path> else` で宣言してください。"
+    )
+
+
+# --- modes ---
+
+def cmd_gate(payload: dict) -> None:
+    if not isinstance(payload, dict):
+        return
+    if payload.get("tool_name") not in GATE_TOOLS:
+        return
+    inp = payload.get("tool_input") or {}
+    if not isinstance(inp, dict):
+        return
+    cwd = payload.get("cwd") or ""
+    path = _canonical(inp.get("file_path") or "", cwd)
+    if not path:
+        return
+    sid = payload.get("session_id") or ""
+
+    declared = _declared_kinds(sid, path)
+    if declared is not None:
+        declared_skills: set[str] = set()
+        for k in declared:
+            declared_skills |= KIND_SKILLS.get(k, set())
+        # 拡張子あり: declare は追加のみ (auto-detect を下回れない)。なし: declare が唯一源。
+        if _has_extension(path):
+            required = relevant_skills(path) | declared_skills
+        else:
+            required = declared_skills
+    elif _has_extension(path):
+        required = relevant_skills(path)
+    else:
+        _deny_declare(os.path.basename(path))
+        return
+
+    if not required:
+        return  # skill-less file。transcript 非読込。
+
+    transcript_path = payload.get("transcript_path")
+    if not isinstance(transcript_path, str) or not transcript_path:
+        return  # fail-open: enforce 不能なら止めない
+    entries = _load_transcript(transcript_path)
+    if not entries:
+        return  # fail-open
+    active = _current_turn_skills(entries)
+    if active is None:
+        return  # fail-open: boundary 不在
+
+    missing = required - active
+    if missing:
+        _deny_missing(missing)
+
+
+def cmd_declare(argv: list[str]) -> int:
+    if len(argv) < 2:
+        sys.stderr.write(
+            "usage: skill_reminder_gate.py declare <ABS-path> <kind>[,<kind>...]\n"
+            f"  kind = {_VOCAB}\n"
+        )
+        return 2
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    if not sid:
+        sys.stderr.write(
+            "declare: $CLAUDE_CODE_SESSION_ID が未設定で session を特定でき"
+            "ません。\n"
+        )
+        return 2
+    expanded = os.path.expanduser(argv[0])
+    if not os.path.isabs(expanded):
+        sys.stderr.write(
+            "declare: 絶対 path を指定してください。 gate は session cwd で、 declare "
+            "は shell cwd で path を解決するため、 相対 path だと cwd drift 時に "
+            "hash 不一致で永久に match しません。 後続の Edit/Write と同じ絶対 path "
+            "を使ってください。\n"
+        )
+        return 2
+    path = os.path.realpath(expanded)
+    kinds = [k.strip() for k in argv[1].split(",") if k.strip()]
+    unknown = [k for k in kinds if k not in KIND_SKILLS]
+    if not kinds or unknown:
+        bad = ", ".join(unknown) if unknown else "(空)"
+        sys.stderr.write(
+            f"declare: 未知の kind {bad}。 使える kind = {_VOCAB}。\n"
+        )
+        return 2
+    try:
+        os.makedirs(_session_dir(sid), exist_ok=True)
+        with open(_decl_path(sid, path), "w", encoding="utf-8") as f:
+            f.write(",".join(kinds) + "\n" + path + "\n")
+    except OSError as e:
+        sys.stderr.write(f"declare: 記録に失敗 ({e}).\n")
+        return 1
+    _prune_old_sessions()
+    return 0
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        return 0
+    sub = sys.argv[1]
+    if sub == "declare":
+        try:
+            return cmd_declare(sys.argv[2:])
+        except Exception as e:
+            sys.stderr.write(f"declare: {e}\n")
+            return 1
+    if sub == "gate":
+        try:
+            payload = json.loads(sys.stdin.read() or "{}")
+        except json.JSONDecodeError:
+            return 0
+        try:
+            cmd_gate(payload)
+        except Exception:
+            pass  # fail-open: hook bug が tool を block しない
+        return 0
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
