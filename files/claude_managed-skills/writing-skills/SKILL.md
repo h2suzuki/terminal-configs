@@ -20,7 +20,7 @@ skill SKILL.md / hook script を書く時の format 統一・writing convention 
 
 ## Rules
 
-- **不明な Claude Code 仕様は feature cache で delta 確認**: skill / hook 設計時に frontmatter field (`context: fork` / `disable-model-invocation` 等) / hook event / `claude --bg` 等 hidden flag が cutoff 以降に変わったかを `${XDG_CACHE_HOME:-~/.cache}/claude-code-feature-research/findings.md` を Read して check する。 最上位 `## v<X.Y.Z>` section が current CLI delta を覆っているかを最初に判定 (`claude --version` と heading 突き合わせ)。 file 未生成 / outdated なら ` claude-code-feature-research` SessionStart hook が bg dispatch 中なので、 そのまま既存知識で進めて良いが negation / positive 断定は後追い verify
+- **不明な Claude Code 仕様は feature cache で delta 確認**: skill / hook 設計時に frontmatter field (`context: fork` / `disable-model-invocation` 等) / hook event / `claude --bg` 等 hidden flag が cutoff 以降に変わったかを `${XDG_CACHE_HOME:-~/.cache}/claude-code-feature-research/findings.md` を Read して check する。 最上位 `## v<X.Y.Z>` section が current CLI delta を覆っているかを最初に判定 (`claude --version` と heading 突き合わせ)。 file 未生成 / outdated なら `feature_findings_build.py` SessionStart hook が version 変化時に決定的 rebuild する (detached・高速) ので、 そのまま既存知識で進めて良いが negation / positive 断定は後追い verify
 - **frontmatter は英語、 body は日本語可**: 中途半端な日英 mix は禁止 (例: `description: Rules for X (categories 日本語).` は NG)
 - **TRIGGER + SKIP の pair**: when_to_use は両方明示。 片方だけは ambiguous
 - **`##` headers は Process / Rules / Output / Related 優先**: 内容に合わない場合のみ他の英語名 (Sources / Examples / Definitions / Red flags 等)
@@ -51,5 +51,5 @@ PreToolUse hook の `permissionDecisionReason` (deny 文面) を書くときの 
 
 - `template-skill.md` (本 skill dir 内) — skill SKILL.md の commented template
 - `template-hook.md` (本 skill dir 内) — hook script + settings.json entry の template
-- `claude-code-feature-research.sh` hook → `${XDG_CACHE_HOME:-~/.cache}/claude-code-feature-research/findings.md` — Claude Code 仕様 delta を SessionStart bg research で蓄積。 不明 spec 点に当たった時 Read で参照
+- `feature_findings_build.py` hook → `${XDG_CACHE_HOME:-~/.cache}/claude-code-feature-research/findings.md` — Claude Code 仕様 delta を SessionStart で公式 changelog から決定的に build (no LLM)。 不明 spec 点に当たった時 Read で参照
 - `writing-code` — Rules に「No dangling-prone references in persistent files」 (新規環境 deploy で参照解決できない reference を永続 file に入れない: repo 範囲外 path / skill dir 外 file path / ephemeral tag / 会話文脈依存)
