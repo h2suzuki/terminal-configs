@@ -1,36 +1,39 @@
 #!/usr/bin/env python3
 r"""
-Deterministic feature-research findings builder for Claude Code.
+Deterministic feature-research findings builder + SessionStart hook.
 
 Legacy: org CLAUDE.md §開発 (deterministic transform は LLM でなく code に)。
 
-Replaces the former LLM background-research path. The official changelog
-(code.claude.com/docs/en/changelog.md) is structured MDX —
-`<Update label="X.Y.Z" description="<Mon DD, YYYY>">` blocks of `  * bullet`
-lines — so the whole pipeline is deterministic: parse → keep post-cutoff
-(by the in-source DATE, no model judgement) → keyword-bucket → emit verbatim.
-No LLM means no summarization, so features can never be silently compressed
-away (the bug that made the old findings untrustworthy), and a rebuild is a
-single fast script run.
+This single file both BUILDS the findings and IS the SessionStart hook —
+there is no LLM and no `claude` subprocess in the build, so it cannot
+re-trigger SessionStart, which is why the old `.sh` dispatcher's recursion
+guard / reaper / staging / in-flight machinery is all gone (that complexity
+existed only to tame the `claude --bg` LLM spawn).
+
+The official changelog (code.claude.com/docs/en/changelog.md) is structured
+MDX — `<Update label="X.Y.Z" description="<Mon DD, YYYY>">` blocks of `  * `
+bullets — so the build is a plain parse → keep post-cutoff (by the in-source
+DATE, no model judgement) → keyword-bucket → emit verbatim. No summarization
+means features can never be silently dropped (the bug that made the old
+findings untrustworthy).
 
 (The RSS feed code.claude.com/docs/en/changelog/rss.xml is cleaner XML but only
-carries ~15 recent items, so it cannot cover the full post-cutoff range — the
-MDX page, generated from the GitHub CHANGELOG, is the one source with history.)
+carries ~15 recent items, too few for the post-cutoff range; the MDX page,
+generated from the GitHub CHANGELOG, is the one source with full history.)
 
-Cutoff: a bullet is kept when its version's date is >= CUTOFF_YM (the assistant
-knowledge cutoff). The date lives in the changelog, so the boundary needs no
-subagent. Bump CUTOFF_YM when the model's cutoff moves.
+Cutoff: a bullet is kept when its version's date is >= CUTOFF_YM. The date is
+in the source, so the boundary needs no subagent. Bump CUTOFF_YM when the
+model's cutoff moves. Features/skills/deprecations are verbatim; fixes are
+consolidated to the clean CLI/config identifiers they name (keyword-less fixes
+dropped).
 
-Buckets are a keyword heuristic (scan aid, not load-bearing): deprecations,
-skill/hook/agent items, fixes, else feature/change. Bug fixes are NOT listed
-verbatim — they are consolidated to the clean CLI/config identifiers they name
-(`--flag` / `/command` / env / dotted-setting), newest version each. A fix that
-names no such identifier carries no spec signal a reader would query and is
-dropped.
-
-Usage:
-  feature_findings_build.py [--input FILE] [--output FILE] [--stdout]
-  default: fetch the official changelog, write FINDINGS_PATH atomically.
+Modes:
+  (no args)        SessionStart hook: fast local version-check; if findings.md
+                   is missing or its top version != `claude --version`, detach
+                   a `--force` child to rebuild. Never blocks/breaks startup.
+  --force          fetch + rebuild + write FINDINGS_PATH atomically.
+  --input F        build from a local changelog file instead of fetching.
+  --stdout         print instead of writing (with --input, for tests).
 
 canonical source: files/claude_managed-hooks/feature_findings_build.py
 deploy: /etc/claude-code/hooks/ (copy_dir で自動)。両者を同 session で同内容に保つ。
@@ -42,16 +45,19 @@ import argparse
 import datetime
 import os
 import re
+import subprocess
 import sys
+import time
 import urllib.request
 
 SOURCE_URL = "https://code.claude.com/docs/en/changelog.md"
 CUTOFF_YM = (2026, 1)   # assistant knowledge cutoff (year, month); keep dates >= this
 FETCH_TIMEOUT_S = 30
-FINDINGS_PATH = os.path.join(
+CACHE_DIR = os.path.join(
     os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
-    "claude-code-feature-research", "findings.md",
-)
+    "claude-code-feature-research")
+FINDINGS_PATH = os.path.join(CACHE_DIR, "findings.md")
+ERR_LOG = os.path.join(CACHE_DIR, "build-errors.log")
 
 _UPDATE_RE = re.compile(r'<Update\s+label="([^"]+)"\s+description="([^"]+)"')
 _BULLET_RE = re.compile(r"^\s*\*\s+(.*\S)\s*$")
@@ -61,6 +67,7 @@ _ID_RE = re.compile(r"`[^`]+`")   # backtick token in a bullet
 # dotted setting, or a tool/command word. Rejects snippets with spaces, mid-path
 # slashes, and bare version tokens (those start with a digit).
 _IDENT_SHAPE_RE = re.compile(r"(--?|/)?[A-Za-z][A-Za-z0-9_.\-]*")
+_TOP_VER_RE = re.compile(r"^## v(\d+\.\d+\.\d+)")
 _MONTHS = {m: i for i, m in enumerate(
     ["", "January", "February", "March", "April", "May", "June",
      "July", "August", "September", "October", "November", "December"])}
@@ -113,15 +120,14 @@ def parse(text: str) -> list[dict]:
 
 
 def _post_cutoff(rec: dict) -> bool:
-    # Keep when the version date is at/after the cutoff. Unparseable date or a
-    # version-less recent label is kept (fail toward inclusion, never drop).
+    # Keep when the version date is at/after the cutoff. Unparseable date is kept
+    # (fail toward inclusion, never drop a real delta).
     return rec["ym"] is None or rec["ym"] >= CUTOFF_YM
 
 
 def _fix_identifiers(fixes: list[dict]) -> list[tuple[str, str]]:
     """Consolidate fixes to the clean identifiers they name: identifier ->
-    newest version. Drops keyword-less fixes and noisy tokens. Returns
-    [(identifier, version)] newest-first."""
+    newest version. Drops keyword-less fixes and noisy tokens. Newest-first."""
     best: dict[str, str] = {}
     for r in fixes:
         for tok in _ID_RE.findall(r["bullet"]):
@@ -160,9 +166,9 @@ def build(text: str, today: str) -> str:
         "> Generated deterministically from the official Claude Code changelog",
         f"> ({SOURCE_URL}) — every post-cutoff feature bullet verbatim,",
         "> keyword-bucketed, no LLM so nothing is summarized away. Rebuild: run",
-        "> feature_findings_build.py. The SessionStart hook regenerates this on a",
-        f"> version change. {len(versions)} versions ({lo}..{hi}); buckets: "
-        + ", ".join(f"{counts[k]} {k}" for k, _ in _SECTIONS)
+        "> feature_findings_build.py --force. The SessionStart hook regenerates",
+        f"> this on a version change. {len(versions)} versions ({lo}..{hi}); "
+        + "buckets: " + ", ".join(f"{counts[k]} {k}" for k, _ in _SECTIONS)
         + f". Fixes consolidated to the {len(fix_ids)} CLI/config identifiers "
         + f"they name (from {len(fixes_all)} fix bullets); keyword-less fixes dropped.",
     ]
@@ -183,31 +189,93 @@ def _fetch(url: str) -> str:
         return resp.read().decode("utf-8")
 
 
+def _write_atomic(path: str, content: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(content)
+    os.replace(tmp, path)
+
+
+def cmd_force(output: str) -> int:
+    """Fetch + rebuild + write. On failure, log (never silently swallow)."""
+    try:
+        text = _fetch(SOURCE_URL)
+        _write_atomic(output, build(text, datetime.date.today().isoformat()))
+        return 0
+    except Exception as e:
+        try:
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            with open(ERR_LOG, "a", encoding="utf-8") as f:
+                f.write(f"[{time.strftime('%FT%TZ', time.gmtime())}] build failed: {e!r}\n")
+        except OSError:
+            pass
+        sys.stderr.write(f"feature_findings_build: {e}\n")
+        return 1
+
+
+def _cli_version() -> str | None:
+    try:
+        r = subprocess.run(["claude", "--version"], capture_output=True,
+                           text=True, timeout=5)
+    except Exception:
+        return None
+    m = re.search(r"\d+\.\d+\.\d+", r.stdout or "")
+    return m.group(0) if (r.returncode == 0 and m) else None
+
+
+def _findings_version(path: str) -> str | None:
+    try:
+        with open(path, encoding="utf-8") as f:
+            m = _TOP_VER_RE.match(f.readline())
+    except OSError:
+        return None
+    return m.group(1) if m else None
+
+
+def cmd_hook(output: str) -> int:
+    """SessionStart: local version-check, detach a --force rebuild on a miss.
+
+    The rebuild child runs plain python (no `claude` spawn) so it cannot
+    re-trigger SessionStart — no recursion guard needed. Always exits 0:
+    a feature-cache refresh must never block or break session startup.
+    """
+    try:
+        sys.stdin.read()   # drain the SessionStart payload (unused)
+    except Exception:
+        pass
+    cur = _cli_version()
+    if cur and os.path.exists(output) and _findings_version(output) == cur:
+        return 0   # already current — no fetch
+    try:
+        subprocess.Popen(
+            [sys.executable, os.path.realpath(__file__), "--force", "--output", output],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True)
+    except Exception:
+        pass
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", help="read changelog from FILE instead of fetching")
     ap.add_argument("--output", default=FINDINGS_PATH)
     ap.add_argument("--stdout", action="store_true", help="print instead of writing")
+    ap.add_argument("--force", action="store_true", help="fetch + rebuild now")
     a = ap.parse_args()
 
-    if a.input:
-        with open(a.input, encoding="utf-8") as f:
-            text = f.read()
-    else:
-        text = _fetch(SOURCE_URL)   # raises (exit 1) on failure — never write a stale file
-
-    findings = build(text, datetime.date.today().isoformat())
-
-    if a.stdout:
-        sys.stdout.write(findings)
+    if a.input or a.stdout:
+        text = open(a.input, encoding="utf-8").read() if a.input else _fetch(SOURCE_URL)
+        findings = build(text, datetime.date.today().isoformat())
+        if a.stdout:
+            sys.stdout.write(findings)
+        else:
+            _write_atomic(a.output, findings)
         return 0
-    os.makedirs(os.path.dirname(a.output), exist_ok=True)
-    tmp = a.output + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(findings)
-    os.replace(tmp, a.output)   # atomic
-    sys.stderr.write(f"wrote {a.output}\n")
-    return 0
+    if a.force:
+        return cmd_force(a.output)
+    return cmd_hook(a.output)   # default = SessionStart hook mode
 
 
 if __name__ == "__main__":
