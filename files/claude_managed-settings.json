@@ -25,6 +25,10 @@
       {
         "matcher": "^(Task|Agent)$",
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/subagent_gate_warn.py" } ]
+      },
+      {
+        "matcher": "^AskUserQuestion$",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/declare_and_proceed_gate.py" } ]
       }
     ],
     "PostToolUse": [
