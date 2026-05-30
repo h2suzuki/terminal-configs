@@ -279,6 +279,11 @@ def _counter_path(payload: dict) -> str | None:
 
 
 def _turn_marker(payload: dict) -> str | None:
+    # Skip synthetic re-entry prompts: a dynamic-workflow completion injects a
+    # <task-notification> through the prompt path, which is not a real turn.
+    prompt = payload.get("prompt")
+    if isinstance(prompt, str) and prompt.lstrip().startswith("<task-notification>"):
+        return None
     # Read-only view of the Stop-owned turn counter. At this UserPromptSubmit
     # the file still holds the previous turn's (count, last-stop epoch): the
     # turn now starting is count+1 and the idle gap is now - last-stop. We do
@@ -351,11 +356,10 @@ def _memory_surface(payload: dict) -> str | None:
 def _main_query() -> int:
     """UserPromptSubmit handler — always exit 0 (fail-open).
 
-    One JSON object, two independent channels:
-    - systemMessage: per-turn start marker shown to the USER, not Claude
-      (universal hook field, code.claude.com/docs/en/hooks). Every turn.
-    - hookSpecificOutput.additionalContext: matched memory entry injected
-      into Claude's context. Only on a non-throttled match.
+    Turn marker and any matched memory entry ride one
+    hookSpecificOutput.additionalContext. UserPromptSubmit systemMessage is
+    not painted by the fullscreen TUI (an undocumented CC rendering gap), so
+    the marker uses the model-visible context channel instead of systemMessage.
     """
     try:
         payload = json.loads(sys.stdin.read() or "{}")
@@ -369,15 +373,12 @@ def _main_query() -> int:
         additional = _memory_surface(payload)
     except Exception:
         additional = None
-    out: dict = {}
-    if marker:
-        out["systemMessage"] = marker
-    if additional:
-        out["hookSpecificOutput"] = {
+    parts = [p for p in (marker, additional) if p]
+    if parts:
+        out = {"hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
-            "additionalContext": additional,
-        }
-    if out:
+            "additionalContext": "\n".join(parts),
+        }}
         sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
     return 0
 
