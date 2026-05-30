@@ -10,7 +10,7 @@ Goal: 既存 skill (verify-before-claim / report-by-evidence / scope-mismatch-de
 
 Exit Criteria:
 - [x] system 設計: 4 機構の設計を adversarial 監査込みで確定 (2026-05-30 workflow w3zrkuwwh)。 核心原則 = 「trigger が機構的に検出できる skill は check を hook に移して発火依存を消す」 (raise でなく eliminate)。 (**最優先機構 = skill-active gate (`skill_reminder_gate.py`) は 2026-05-30 に pivot・plan 承認済。 当初の additionalContext advisory 案は破棄**。 他 3 機構は据置)
-- [x] skill-active gate `skill_reminder_gate.py` (最優先・本 session の writing-code/python 漏れを直撃) 実装・deploy 済 (2026-05-30 commit c585671 / smoke 51/51 / adversarial review 5 confirmed fix 反映 / `/etc/claude-code/hooks/` deploy mode 0755 / 当 session で `.sh` write が writing-bash 要求 deny される live 実機確認)。 PreToolUse(Edit|Write|MultiEdit) で「関連 writing-* skill が**当 turn に invoke 済か**」を gate — 正規ルート (skill 発動→同 turn で edit) は通し、 skip=detour は JSON deny → 正しい kind を `declare` → skill invoke → edit。 kind は sniff でなく **model の declare が真実源** (語彙 python/bash/code/test/skills/todos/memory/**else**、 else=skill 無し file で Write 不能を防ぐ)。 skill-active は **current-turn transcript scan のみ (time-TTL 流用しない)**。 拡張子あり file は auto-detect、 拡張子なし file のみ declare 要。 memory_routing_gate の JSON-deny/fail-open 継承・stop_checks の current-turn 解析流用。 **spike (advisory 版) は誤設計ゆえ破棄済**。 full 設計は plan file 参照
+- [x] skill-active gate `skill_reminder_gate.py` (最優先・本 session の writing-code/python 漏れを直撃) 実装・deploy 済 (2026-05-30 commit c585671 / smoke 51/51 / adversarial review 5 confirmed fix 反映 / `/etc/claude-code/hooks/` deploy mode 0755 / 当 session で `.sh` write が writing-bash 要求 deny される live 実機確認)。 PreToolUse(Edit|Write|MultiEdit) で「関連 writing-* skill が**当 turn に invoke 済か**」を gate — 正規ルート (skill 発動→同 turn で edit) は通し、 skip=detour は JSON deny → 正しい kind を `declare` → skill invoke → edit。 kind は sniff でなく **model の declare が真実源** (語彙 python/bash/code/test/skills/todos/memory/**else**、 else=skill 無し file で Write 不能を防ぐ)。 skill-active は **現 turn ∪ 直近 5 分の timestamp 窓** (2026-05-31 commit 1267bd0 で H.S. 指定により current-turn-only から拡張、 毎 turn 再 invoke の friction 解消)。 拡張子あり file は auto-detect、 拡張子なし file のみ declare 要。 memory_routing_gate の JSON-deny/fail-open 継承・stop_checks の current-turn 解析流用。 **spike (advisory 版) は誤設計ゆえ破棄済**。 full 設計は plan file 参照
 - [ ] declare-and-proceed gate: PreToolUse(`^AskUserQuestion$`) `declare_and_proceed_gate.py` (`subagent_gate_warn.py` の twin、 additionalContext で /declare-and-proceed)
 - [ ] stop_checks 拡張: provide-user-instructions family (host-command phrase が fenced block 外、 warn) + verify-before-claim positive side (網羅した 等、 warn)。 既存 family+pairing+advise-once 再利用
 - [ ] UserPromptSubmit concern/correction injector (任意・観測後・最低 leverage・最大 noise risk): `memory_surface.py` に **1 block 統合** (tight phrase set)。 illuminate-not-reassure/memory-routing の trigger 半分のみ raise、 discipline body は semantic 残
@@ -45,10 +45,12 @@ Work file: `last-session-handoff.md` + commit f1dab94。 残 = deploy (別 sessi
 Goal: `claude-code-feature-research.sh` 生成の `findings.md` (= H.S. の言う「features.md」、`${XDG_CACHE_HOME:-~/.cache}/claude-code-feature-research/findings.md`) が CHANGELOG 記載の主要機能を取りこぼす root cause を、compression を構造的に排除する形で機構修正し、findings.md を破棄して全面 rebuild する。
 
 Exit Criteria:
-- [ ] compression 構造排除 (H.S. 必須要件): 単一 agent が多数 version を 4 subsection に要約する方式を廃止。CHANGELOG delta を version / 小 chunk 単位で fan-out し各 agent が bounded 範囲のみ処理 → 脱落を構造的に不可能化。bound だけでは不十分 (bounded 範囲でも 1 agent 要約は compress して脱落するため、要約方式自体を排除)
-- [ ] findings.md 破棄 + 全面 rebuild (H.S. 必須要件): 既存の不完全 content を信用せず捨てて作り直す (incremental patch 禁止)
-- [ ] incompleteness recovery: version-MATCH gate で frozen にならず再生成 / 手動 re-run できる経路を用意・明文化
-- [ ] 実機確認: rebuild 後の findings.md に dynamic workflows / `/reload-skills` / `/simplify` cleanup-only / `/code-review --fix` 等 (v2.1.152–158) が全て反映されていることを確認
+- [x] compression 構造排除 (H.S. 必須要件): LLM を完全撤廃し決定的 script 化 (要約 agent 自体が無いので圧縮不可能)
+- [x] findings.md 破棄 + 全面 rebuild (H.S. 必須要件): 決定的に再生成、旧版は `.prebuild.bak` 保全
+- [x] incompleteness recovery: `feature_findings_build.py --force` 一発で再生成 (durable)
+- [x] 実機確認: rebuild 後の findings.md に dynamic workflows / `/reload-skills` / `/simplify` / `/code-review --fix` の present を grep 確認
+
+完了 (2026-05-31): H.S. の「構造化 Markdown は programmatic 処理可」指摘で LLM fan-out から**決定的 script へ pivot**。`feature_findings_build.py` が公式 MDX changelog を parse→post-cutoff(date>=2026-01)→keyword-bucket→verbatim emit、SessionStart hook 兼務 (LLM 非 spawn ゆえ再帰なし・bg machinery 退役)。fix は backtick identifier に consolidate。findings.md 1440 行 (819 feat/197 skill/82 deprecated/323 fix-id)。commit ba7ad5d (builder) / 4939be3 (hook 配線) / 8698361 (旧 bg-LLM hook 退役)、全 deploy 済。
 
 root cause (2026-05-30 確認・CHANGELOG 一次資料で裏取り): 欠落機能は全て v2.1.152–154 = first-scan (cutoff→2.1.156) の担当範囲内。`capture_changelog` は `last=""` (first-scan) のとき trim 条件 (`$2==last`) が永久に不発で CHANGELOG 全 302 version (2.1.158→0.2.21) を dump → 1 agent が巨大範囲を compression し中間 version の主要機能を脱落。加えて version-MATCH gate (current==last) で同 version は再研究されず frozen。
 
