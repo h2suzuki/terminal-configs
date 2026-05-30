@@ -9,17 +9,17 @@
 Goal: 既存 skill (verify-before-claim / report-by-evidence / scope-mismatch-detector / illuminate-not-reassure / 他) と 本 session で追加した user memory entry 4 個が、 LLM の「trigger 該当時の self-invoke」 に依存して発火率低い問題への system 対策を設計 + 実装。
 
 Exit Criteria:
-- [x] system 設計: 4-layer 設計を adversarial 監査込みで確定 (2026-05-30 workflow w3zrkuwwh)。 核心原則 = 「trigger が機構的に検出できる skill は check を hook に移して発火依存を消す」 (raise でなく eliminate)。 (**L1 は 2026-05-30 に skill-active gate 方式へ pivot・plan 承認済。 当初の additionalContext advisory 案は破棄**。 L2-L4 は据置)
-- [ ] L1 (最優先・本 session の writing-code/python 漏れを直撃): `skill_reminder_gate.py` を **skill-active gate** で実装。 PreToolUse(Edit|Write|MultiEdit) で「関連 writing-* skill が**当 turn に invoke 済か**」を gate — 正規ルート (skill 発動→同 turn で edit) は通し、 skip=detour は JSON deny → 正しい kind を `declare` → skill invoke → edit。 kind は sniff でなく **model の declare が真実源** (語彙 python/bash/code/test/skills/todos/memory/**else**、 else=skill 無し file で Write 不能を防ぐ)。 skill-active は **current-turn transcript scan のみ (time-TTL 流用しない)**。 拡張子あり file は auto-detect、 拡張子なし file のみ declare 要。 memory_routing_gate の JSON-deny/fail-open 継承・stop_checks の current-turn 解析流用。 **spike (advisory 版) は誤設計ゆえ破棄済**。 full 設計は plan file 参照
-- [ ] L2: PreToolUse(`^AskUserQuestion$`) `declare_and_proceed_gate.py` (`subagent_gate_warn.py` の twin、 additionalContext で /declare-and-proceed)
-- [ ] L3: `stop_checks.py` 拡張 — provide-user-instructions family (host-command phrase が fenced block 外、 warn) + verify-before-claim positive side (網羅した 等、 warn)。 既存 family+pairing+advise-once 再利用
-- [ ] L4 (任意・観測後・最低 leverage・最大 noise risk): UserPromptSubmit concern/correction injector を `memory_surface.py` に **1 block 統合** (tight phrase set)。 illuminate-not-reassure/memory-routing の trigger 半分のみ raise、 discipline body は semantic 残
+- [x] system 設計: 4 機構の設計を adversarial 監査込みで確定 (2026-05-30 workflow w3zrkuwwh)。 核心原則 = 「trigger が機構的に検出できる skill は check を hook に移して発火依存を消す」 (raise でなく eliminate)。 (**最優先機構 = skill-active gate (`skill_reminder_gate.py`) は 2026-05-30 に pivot・plan 承認済。 当初の additionalContext advisory 案は破棄**。 他 3 機構は据置)
+- [ ] skill-active gate `skill_reminder_gate.py` (最優先・本 session の writing-code/python 漏れを直撃) 実装。 PreToolUse(Edit|Write|MultiEdit) で「関連 writing-* skill が**当 turn に invoke 済か**」を gate — 正規ルート (skill 発動→同 turn で edit) は通し、 skip=detour は JSON deny → 正しい kind を `declare` → skill invoke → edit。 kind は sniff でなく **model の declare が真実源** (語彙 python/bash/code/test/skills/todos/memory/**else**、 else=skill 無し file で Write 不能を防ぐ)。 skill-active は **current-turn transcript scan のみ (time-TTL 流用しない)**。 拡張子あり file は auto-detect、 拡張子なし file のみ declare 要。 memory_routing_gate の JSON-deny/fail-open 継承・stop_checks の current-turn 解析流用。 **spike (advisory 版) は誤設計ゆえ破棄済**。 full 設計は plan file 参照
+- [ ] declare-and-proceed gate: PreToolUse(`^AskUserQuestion$`) `declare_and_proceed_gate.py` (`subagent_gate_warn.py` の twin、 additionalContext で /declare-and-proceed)
+- [ ] stop_checks 拡張: provide-user-instructions family (host-command phrase が fenced block 外、 warn) + verify-before-claim positive side (網羅した 等、 warn)。 既存 family+pairing+advise-once 再利用
+- [ ] UserPromptSubmit concern/correction injector (任意・観測後・最低 leverage・最大 noise risk): `memory_surface.py` に **1 block 統合** (tight phrase set)。 illuminate-not-reassure/memory-routing の trigger 半分のみ raise、 discipline body は semantic 残
 - [ ] CUT: attribute-existing-issues の PreToolUse arm (SKIP 条件 = pattern が真に既存 AND session 未触、 git-blame 要で FP) → Stop warn のみに留める
-- [ ] 各 layer ごと smoke (emit-vs-comply 計測、 fail-open) → commit → cover された skill / memory entry を OLD 移動 (memory-routing)
+- [ ] 各機構ごと smoke (emit-vs-comply 計測、 fail-open) → commit → cover された skill / memory entry を OLD 移動 (memory-routing)
 
 経緯: 2026-05-28/29 session b188f677 で user 提起: 「信用を高めるためのスキルをたくさん作ったのだけれど、 それを高確率で発火できないシステム上の問題があるようだから、 そこをなんとかできると、 本当はベスト。 発火できなければ無価値」。 本 session でも writing-code/writing-python を .py hook 編集前に invoke 漏らした (= 本 task が解く問題の live 実例。 debug-guardrail 分析: ambient trigger 低 salience + 親 skill frame crowding + tool 層 enforcement 不在 = self-recall 構造不信頼)。
 
-Work file: `last-session-handoff.md` の 「skill 発火率 system 対策」 section ＋ plan `~/.claude/plans/breezy-bubbling-quiche.md` (L1 full 設計 + 本 session の訂正 7 点 + 次 session 手順の durable copy)
+Work file: `last-session-handoff.md` の 「skill 発火率 system 対策」 section ＋ plan `~/.claude/plans/breezy-bubbling-quiche.md` (skill-active gate の full 設計 + 本 session の訂正 + 次 session 手順の durable copy)
 
 ### advisory hook for evaluative term post-hoc check
 
@@ -29,16 +29,47 @@ Exit Criteria:
 - [x] Stop hook spec 一次資料確認 (stop_hook_active 意味論 / exit2・decision:block の 2 channel / additionalContext は Stop 非対応 / 8-block override cap)
 - [x] hook 実装: 評価語 family (bare-term, EVIDENCE_TOOLS free-pass) + 全 block family への advise-once gate + docstring rewrite (commit f1dab94, e2800b8 を rebase で rewrite)
 - [x] settings/copy 行は不要と確認 (`copy_dir claude_managed-hooks/` で hooks dir 丸ごと deploy 済、 既存 file 改造ゆえ新規 wiring 不要)
-- [x] smoke 12/12 (block / free-pass / 既存 family 無回帰 / stop_hook_active demote + marker 1-bump guard / F2 形容詞除外)
-- [x] bg `/code-review` triage 完了 (F1 confirm-intent=全 family advise-once は意図的・docstring に regression-proof 明記 / F2 影響大(?!き) で形容詞 影響大きい 除外 / F4 `_check` を warnings·blocking 分離返しに refactor → f1dab94 に fixup-autosquash / F3 accept-v1 / F5 no-defect)。 session 自己終了済
+- [x] smoke 12/12 (block / free-pass / 既存 family 無回帰 / stop_hook_active demote + marker 1-bump guard / 評価語 影響大(?!き) で形容詞除外)
+- [x] bg `/code-review` triage 完了 (confirm-intent: 全 family advise-once は意図的・docstring に regression-proof 明記 / 影響大(?!き) で形容詞 影響大きい 除外 / `_check` を warnings·blocking 分離返しに refactor → f1dab94 に fixup-autosquash / plan 文発火は accept (v1) / no-defect 確認)。 session 自己終了済
 - [ ] deploy: 別 session で `copy_dir claude_managed-hooks/` 再実行 (本 session は評価語討議中で live deploy = 即自己 block のため defer) → deploy で f1dab94 が live 化
 - [ ] 実機確認: deploy 後、 table cell に評価語 + 証拠なし → block、 retry で advise-once pass を観測
 - [ ] (candidate) `/tmp/smoke_stop_checks.py` を committed regression test 化するか判断 (現状 repo に hook test 基盤なし、 cross-hook 不変条件 = 価値あり)
-- [ ] (v1 known-FP, 観測ベース) F3: `アーキテクチャの見直しを行います` 等の plan 文も発火 (advise-once で 1 回 backstop)。 観測増えたら predicate-proximity で tighten 検討
+- [ ] (v1 known-FP, 観測ベース): `アーキテクチャの見直しを行います` 等の plan 文も発火 (advise-once で 1 回 backstop)。 観測増えたら predicate-proximity で tighten 検討
 
 経緯: 2026-05-28 session で「大改造」 を実コード未読で発話 → report-by-evidence 違反。 既存 skill trigger は文末 judgment 想定で structured doc (table cell) の評価語混入が射程外。 hook 化で補完。
 
 Work file: `last-session-handoff.md` + commit f1dab94。 残 = deploy (別 session) + 実機確認
+
+### feature-research findings.md 信頼性 bug 修正
+
+Goal: `claude-code-feature-research.sh` 生成の `findings.md` (= H.S. の言う「features.md」、`${XDG_CACHE_HOME:-~/.cache}/claude-code-feature-research/findings.md`) が CHANGELOG 記載の主要機能を取りこぼす root cause を、compression を構造的に排除する形で機構修正し、findings.md を破棄して全面 rebuild する。
+
+Exit Criteria:
+- [ ] compression 構造排除 (H.S. 必須要件): 単一 agent が多数 version を 4 subsection に要約する方式を廃止。CHANGELOG delta を version / 小 chunk 単位で fan-out し各 agent が bounded 範囲のみ処理 → 脱落を構造的に不可能化。bound だけでは不十分 (bounded 範囲でも 1 agent 要約は compress して脱落するため、要約方式自体を排除)
+- [ ] findings.md 破棄 + 全面 rebuild (H.S. 必須要件): 既存の不完全 content を信用せず捨てて作り直す (incremental patch 禁止)
+- [ ] incompleteness recovery: version-MATCH gate で frozen にならず再生成 / 手動 re-run できる経路を用意・明文化
+- [ ] 実機確認: rebuild 後の findings.md に dynamic workflows / `/reload-skills` / `/simplify` cleanup-only / `/code-review --fix` 等 (v2.1.152–158) が全て反映されていることを確認
+
+root cause (2026-05-30 確認・CHANGELOG 一次資料で裏取り): 欠落機能は全て v2.1.152–154 = first-scan (cutoff→2.1.156) の担当範囲内。`capture_changelog` は `last=""` (first-scan) のとき trim 条件 (`$2==last`) が永久に不発で CHANGELOG 全 302 version (2.1.158→0.2.21) を dump → 1 agent が巨大範囲を compression し中間 version の主要機能を脱落。加えて version-MATCH gate (current==last) で同 version は再研究されず frozen。
+
+経緯: 2026-05-30 H.S. 指摘「features.md の内容が全く信用できない (バグっている)。dynamic workflow・/reload-skills・/simplify 仕様変更・/code-review --fix の言及なし」。
+
+Work file: 現 session の CHANGELOG mapping 調査 (欠落機能 = v2.1.152–154、first-scan 範囲内)。canonical 機構 source = `files/claude_managed-hooks/claude-code-feature-research.sh` + `claude-code-feature-research-prompt.md`。
+
+### turn counter (UserPromptSubmit) 表示 regression
+
+Goal: `memory_surface.py` の UserPromptSubmit turn marker (`_turn_marker` → systemMessage「Turn #N starting」) が通常の prompt 送信時に表示されず workflow 完了通知等の変な箇所に紛れて出る regression を root-cause 究明し修正する (Stop hook 側 `stop_checks.py` `_emit_turn_marker` は正常表示)。
+
+Exit Criteria:
+- [ ] root cause 究明 (一次資料 / log で裏取り): UPS systemMessage が通常 prompt で出ず別イベントに紛れる原因 — CC version 変更で systemMessage / UserPromptSubmit hook output の rendering が変わった疑い / background task 完了の再起動経路 / `.turns` RMW 競合 のいずれか
+- [ ] 修正: UPS turn marker が prompt 送信時に正しい位置で表示される
+- [ ] 実機確認: 通常 prompt で UPS marker 表示、 workflow / background 完了通知に紛れない
+
+経緯: 2026-05-30 H.S. 観測「Stop hook の turn counter は表示されるが UserPromptSubmit hook の turn counter が出ていない (regression)。 start の turn counter が変な所に出た — Dynamic workflow completed 通知に『18:03:35 Turn #4 starting (3 sec passed since the last stop)』と紛れた」。H.S. 指定: **後で調査** (skill-active gate 完了後)。
+
+Note: feature-research findings.md bug (CC version 変更未追跡) と関連の可能性。turn marker は両 hook とも `<transcript>.turns` を共有 (stop_checks が bump、 memory_surface は read-only)。
+
+Work file: 現 session の H.S. 報告。canonical source = `files/claude_user-hooks/memory_surface.py` (`_turn_marker` / `_main_query`)、比較 = `files/claude_managed-hooks/stop_checks.py` (`_emit_turn_marker`)。
 
 ## Medium
 
@@ -63,6 +94,6 @@ Exit Criteria:
 - [ ] `SKILL_HOOK_CONTRACT.md` を repo 直下に作成。 含める実装 contract: capability-grant (skill/declare が mint・hook が check, fail-open) / permission semantics (additionalContext 省略=passthrough・deny は JSON・allow は auto-approve 回避) / session-keyed state (`$CLAUDE_CODE_SESSION_ID`==payload session_id) / transcript current-turn scan (stop_checks 方式) / fail-open (例外 exit0・deny は JSON) / deny-wording 規律 / extensible `LANGUAGES` dispatch table / **use-case 駆動の TTL 選定 (盲目流用しない)** / PostToolUse sync
 - [ ] **除外を厳守** (H.S. 指摘・種類が違う): deploy の決まり (`copy_dir`・exec-bit 0755・settings `copy`) は contract でなく **deploy ルール** ゆえ混ぜない
 
-Note: draft は L1 (skill_reminder_gate) 確定後が自然 (L1 が grant/declare パターンの最新例)。
+Note: draft は skill-active gate (`skill_reminder_gate.py`) 確定後が自然 (それが grant/declare パターンの最新例)。
 
 Work file: plan `~/.claude/plans/breezy-bubbling-quiche.md` の「並行 deliverable」節
