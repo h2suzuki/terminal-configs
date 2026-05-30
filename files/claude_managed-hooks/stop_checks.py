@@ -20,6 +20,14 @@ Combined Stop hook for org-managed Claude Code:
     git log / git show / git diff の Bash 呼出が無ければ block。 LLM session 揮発で
     前 session の自作業が unfamiliar に見える錯覚 対策。
 
+  evaluative-terms (enforcement, exit 2):
+    「大改造」「影響大」「アーキテクチャ(の)見直し/再設計/刷新」「改造が少ない」 系の
+    規模・影響評価語を、 同 turn 内に Read/Grep/Glob/WebSearch/WebFetch が無ければ
+    block。 report-by-evidence skill が射程外にした structured-doc (比較表 cell 等)
+    への ungrounded 評価語混入を補う。 bare-term match (table cell に述語は付かない
+    ため述語 anchor は張らない)。 v1 は compound/phrasal な高確度語のみ — 軽微/複雑/
+    大変/抜本的/リスクが高い は流文 false-positive が広く除外、 観測ベースで追加。
+
   deferral (warning-only, exit 0):
     「後で対処」「別タスクに切り出」「TODO として」 系 phrase は、 同 turn 内に
     TaskCreate / TaskUpdate / TodoWrite または todos.md への Write/Edit が無ければ
@@ -32,14 +40,18 @@ Combined Stop hook for org-managed Claude Code:
   turn-marker (bonus, exit 0 only — 旧 turn_counter.py を融合):
     enforcement が pass した turn 終了時のみ、 per-turn marker (時刻 / Turn #N /
     context size / 前 turn からの経過) を JSON `systemMessage` で USER に表示する
-    (Claude には非可視)。 block (exit 2) 時は turn が継続するので非表示。 1 turn に
-    exit-0 の Stop は 1 回だけ (pass したら turn 終了) なので stop_hook_active ガード
-    無しでちょうど 1 回カウント。 完全 fail-open で enforcement の exit code に影響
-    しない (= おまけ)。
+    (Claude には非可視)。 block (exit 2) 時は turn が継続するので非表示。 1 turn の
+    exit-0 Stop はちょうど 1 回 — block 無しの turn は clean な Stop が、 block した
+    turn は advise-once gate が retry (stop_hook_active=true) を exit 0 に降格させた
+    Stop が、 その 1 回。 どちらも marker を 1 回だけ載せる (= counter は turn 毎に
+    1 bump)。 この once-per-turn 不変条件は memory_surface.py / statusline.sh も同
+    .turns を読むので cross-hook で load-bearing。 完全 fail-open で enforcement の
+    exit code に影響しない (= おまけ)。
 
-Origin: meta-announce-silence / no-hollow-claims / recognize-own-work の 3 skill +
-org CLAUDE.md §報告・応答 / §計画と遂行 を集約した enforcer。 skill SKILL.md 本体は
-別途残置するが、 Stop event での mechanical detection は本 hook が担う。
+Origin: meta-announce-silence / no-hollow-claims / recognize-own-work /
+report-by-evidence の skill 群 + org CLAUDE.md §報告・応答 / §計画と遂行 を集約した
+enforcer。 skill SKILL.md 本体は別途残置するが、 Stop event での mechanical detection
+は本 hook が担う (評価語 family は report-by-evidence の structured-doc gap を補完)。
 
 Stop hook input: JSON via stdin with session_id, transcript_path,
 hook_event_name = "Stop".
@@ -53,8 +65,17 @@ boundary とし、 そこ以降の assistant entry を current turn とみなす
 partial transcript の場合は空値を返して fall-broad scan しない。
 
 Exit:
-  0: no enforcement triggered (warnings may be emitted on stderr)
-  2: one of meta-announce-silence / hollow-claims / recognize-own-work triggered
+  0: no enforcement triggered, OR a would-be re-block on a stop_hook_active
+     retry was demoted to a pass (advise-once). warnings may be emitted on stderr
+  2: one of meta-announce-silence / hollow-claims / recognize-own-work /
+     evaluative-terms triggered, on the turn's first Stop (stop_hook_active false)
+
+The advise-once gate lives in _run (shared), so it INTENTIONALLY demotes every
+block family — not just evaluative — to one-block-per-turn. All four families
+fire on their own discussed trigger words, so a turn working on this hook would
+otherwise self-block-loop until the harness's 8-block override, freezing the
+turn counter. Do NOT narrow the gate to evaluative-only: that reintroduces the
+loop for meta-announce / hollow-claims / recognize-own-work.
 
 parse / IO error は fail-open (exit 0) — Stop hook で誤 block して user 作業を
 止めないことを優先する。
@@ -150,6 +171,20 @@ SURPRISE_RE = re.compile("|".join(SURPRISE_PATTERNS), re.IGNORECASE)
 
 # git log / show / diff の Bash invocation を「実 verify 行動」 とみなす。
 GIT_VERIFY_RE = re.compile(r"\bgit\s+(log|show|diff)\b", re.IGNORECASE)
+
+# --- Pattern: evaluative-terms (block on hit unless evidence tool in same turn) ---
+# 規模・影響の評価語。 report-by-evidence skill の structured-doc gap (比較表 cell 等
+# への ungrounded 評価語混入 — 述語が付かないので skill の文末 judgment trigger が
+# 射程外) を補う。 bare-term match (table cell に述語 anchor を張れない)。 同 turn に
+# EVIDENCE_TOOLS が無ければ block。 v1 は compound/phrasal な高確度語のみ — 軽微/複雑/
+# 大変/抜本的/リスクが高い は流文 false-positive が広いため除外、 観測ベースで追加。
+EVALUATIVE_PATTERNS: list[str] = [
+    r"大改造",
+    r"影響大(?!き)",  # label 影響大 を拾い、 形容詞 影響大きい/大きく は除外
+    r"アーキテクチャ(の)?(見直し|再設計|刷新)",
+    r"改造が(少な|すくな)",
+]
+EVALUATIVE_RE = re.compile("|".join(EVALUATIVE_PATTERNS), re.IGNORECASE)
 
 # --- Pattern: deferral (warning, no block) ---
 DEFERRAL_RE = re.compile(
@@ -268,8 +303,8 @@ def _check(
     tool_names: set[str],
     tool_paths: list[str],
     has_git_verify: bool,
-) -> tuple[int, list[str]]:
-    """Return (exit_code, stderr_lines)."""
+) -> tuple[int, list[str], list[str]]:
+    """Return (exit_code, warnings, blocking)."""
     warnings: list[str] = []
     blocking: list[str] = []
 
@@ -311,6 +346,18 @@ def _check(
             f"事実 framing に書き換えてから再出力してください。"
         )
 
+    # evaluative-terms (block unless evidence tool in turn)
+    m = EVALUATIVE_RE.search(text)
+    if m and not (tool_names & EVIDENCE_TOOLS):
+        blocking.append(
+            f"evaluative-term: 「{m.group(0)}」 と規模・影響の評価語を発したが、 "
+            f"同 turn 内に Read / Grep / Glob / WebSearch / WebFetch が無い "
+            f"(System §報告・応答, report-by-evidence skill)。 評価語は実コード / "
+            f"一次資料を読んだ上で、 影響ファイル数・節・呼出元など定量で述べる。 "
+            f"該当語を delete するか、 根拠を読んでから 「N file / M 箇所」 等の "
+            f"定量表現に書き換えてから再出力してください。"
+        )
+
     # deferral (warning-only)
     m = DEFERRAL_RE.search(text)
     if m:
@@ -334,9 +381,8 @@ def _check(
                 f"(System §報告・応答)。 verify-before-claim skill 参照。"
             )
 
-    out_lines = warnings + blocking
     exit_code = 2 if blocking else 0
-    return exit_code, out_lines
+    return exit_code, warnings, blocking
 
 
 def _run(payload: dict) -> int:
@@ -351,18 +397,26 @@ def _run(payload: dict) -> int:
     text, tool_names, tool_paths, has_git_verify = _current_turn(entries)
     if not text:
         return 0
-    exit_code, lines = _check(text, tool_names, tool_paths, has_git_verify)
-    for line in lines:
+    exit_code, warnings, blocking = _check(text, tool_names, tool_paths, has_git_verify)
+    # advise-once: a stop_hook_active retry never re-blocks — demote to pass (see docstring turn-marker / Exit).
+    if exit_code == 2 and payload.get("stop_hook_active"):
+        for line in blocking:
+            sys.stderr.write("advise-once (block demoted to pass): " + line + "\n")
+        for line in warnings:
+            sys.stderr.write(line + "\n")
+        return 0
+    for line in warnings + blocking:
         sys.stderr.write(line + "\n")
     return exit_code
 
 
 # --- Turn marker (bonus; merged from the former turn_counter.py) ---
 # Shown to the USER via systemMessage at turn end, never entering model
-# context. Emitted only on exit 0 (see main): a turn has exactly one
-# exit-0 Stop (its genuine end), so it counts once with no stop_hook_active
-# guard. Turn count + last-turn epoch live in <transcript>.turns (flock RMW);
-# context size / session-start epoch come from the statusline.sh cache.
+# context. Emitted only on exit 0 (see main): a turn has exactly one exit-0
+# Stop — the clean end, or the stop_hook_active retry that _run demotes from a
+# block to a pass (advise-once) — so it counts once per turn. Turn count +
+# last-turn epoch live in <transcript>.turns (flock RMW); context size /
+# session-start epoch come from the statusline.sh cache.
 
 def _counter_path(payload: dict) -> str | None:
     transcript = payload.get("transcript_path") or ""
