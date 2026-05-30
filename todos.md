@@ -9,15 +9,17 @@
 Goal: 既存 skill (verify-before-claim / report-by-evidence / scope-mismatch-detector / illuminate-not-reassure / 他) と 本 session で追加した user memory entry 4 個が、 LLM の「trigger 該当時の self-invoke」 に依存して発火率低い問題への system 対策を設計 + 実装。
 
 Exit Criteria:
-- [ ] system 設計案を 2-3 案 verbalize (例: Stop hook で output pattern match + advisory inject、 UserPromptSubmit hook で trigger keyword 強調、 等)、 各案の cost / 効果を `rejection-via-actual-cost` skill に従い評価
-- [ ] user に設計案提示 + 合意
-- [ ] 実装 (`files/claude_managed-hooks/` + settings.json wiring + deploy script) + smoke test (false positive / false negative の率を実機計測)
-- [ ] commit
-- [ ] hook で cover された skill / memory entry を OLD 移動 (= memory-routing rule 通り)
+- [x] system 設計: 4-layer 設計を adversarial 監査込みで確定 (2026-05-30 workflow w3zrkuwwh)。 核心原則 = 「trigger が機構的に検出できる skill は check を hook に移して発火依存を消す」 (raise でなく eliminate)。 23/27 skill が trigger 機構検出可、 真の semantic residual は 4 個。 全 layer / build order / must-have 3 性質 / cut / residual は handoff doc 参照
+- [ ] L1 (最優先・本 session の writing-code/python 漏れを直撃): PreToolUse(Edit|Write|MultiEdit) `skill_reminder_gate.py` — file_path → 該当 skill 名を additionalContext で **1 consolidated block** 提示 (source→writing-code / .py→+writing-python / .sh|shebang→+writing-bash / writing-tests の paths glob→+writing-tests / `*/skills/*/SKILL.md`・hook path→+writing-skills / todos.md→writing-todos)。 `read_before_edit.py` の _emit_allow/_canonical/_extract を clone、 allow-only、 同 file 同 session throttle (habituation 対策)。 既存 `^(Edit|Write|MultiEdit)$` matcher に append
+- [ ] L2: PreToolUse(`^AskUserQuestion$`) `declare_and_proceed_gate.py` (`subagent_gate_warn.py` の twin、 additionalContext で /declare-and-proceed)
+- [ ] L3: `stop_checks.py` 拡張 — provide-user-instructions family (host-command phrase が fenced block 外、 warn) + verify-before-claim positive side (網羅した 等、 warn)。 既存 family+pairing+advise-once 再利用
+- [ ] L4 (任意・観測後・最低 leverage・最大 noise risk): UserPromptSubmit concern/correction injector を `memory_surface.py` に **1 block 統合** (tight phrase set)。 illuminate-not-reassure/memory-routing の trigger 半分のみ raise、 discipline body は semantic 残
+- [ ] CUT: attribute-existing-issues の PreToolUse arm (SKIP 条件 = pattern が真に既存 AND session 未触、 git-blame 要で FP) → Stop warn のみに留める
+- [ ] 各 layer ごと smoke (emit-vs-comply 計測、 fail-open) → commit → cover された skill / memory entry を OLD 移動 (memory-routing)
 
-経緯: 2026-05-28/29 session b188f677 で user 提起: 「信用を高めるためのスキルをたくさん作ったのだけれど、 それを高確率で発火できないシステム上の問題があるようだから、 そこをなんとかできると、 本当はベスト。 今回の緊急対応も、 非常に良い経験になるフローで、 セッションを振り返ってスキル化できたとしても、 発火できなければ無価値」。 本 session 内で私が writing-todos / memory-routing / report-by-evidence 等の trigger 該当時に invoke 漏らした事例多数。
+経緯: 2026-05-28/29 session b188f677 で user 提起: 「信用を高めるためのスキルをたくさん作ったのだけれど、 それを高確率で発火できないシステム上の問題があるようだから、 そこをなんとかできると、 本当はベスト。 発火できなければ無価値」。 本 session でも writing-code/writing-python を .py hook 編集前に invoke 漏らした (= 本 task が解く問題の live 実例。 debug-guardrail 分析: ambient trigger 低 salience + 親 skill frame crowding + tool 層 enforcement 不在 = self-recall 構造不信頼)。
 
-Work file: 本 entry が単独 reference (chat log U[1155])
+Work file: `last-session-handoff.md` の 「skill 発火率 system 対策」 section
 
 ### advisory hook for evaluative term post-hoc check
 
