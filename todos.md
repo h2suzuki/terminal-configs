@@ -22,10 +22,10 @@ Goal: memory-routing skill 非発火時も、 memory entry の正書式 (reminde
 - [x] deploy 済 (sudo install で /etc/claude-code/ へ hook+settings+skill)。 managed-settings は mid-session hot-reload されるため即 live active
 - [x] Layer A 実機統合検証 (2026-05-30 deploy 後 同 session): grant 無し直接 Write→deny / grant mint→allow / grant 有り Write→allow+consume / live PostToolUse sync→DB upsert / Edit→deny、 全 PASS (throwaway entry で実施・後始末済)。 LIKE クエリは FTS5 UNINDEXED 列で誤動作するので DB 確認は exact / instr を使う
 
-DEFERRED — Layer B (reminder actionability の Haiku 判定):
-- H.S. は actionability の Haiku 判定を希望 (Q3)・async 配信を選択 (bg+surface-later)。 だが後続の「一発 Write・warn 廃止」原則と衝突: async は「翌 turn warn → 直す → Edit(=deny)」の詰みを生む。
-- 未解決の選択: (a) sync Haiku deny (timeout+fail-open) に倒す / (b) async を将来 write 向け advisory に留める / (c) drop。 Core land 後に H.S. と詰める。
-- 機構: `claude -p/--bg --model claude-haiku-4-5-20251001` (ANTHROPIC_API_KEY 無し)、 cascade 事故歴ゆえ再帰 guard 必須。
+RESOLVED — Layer B (reminder actionability の Haiku 判定): **drop** (H.S. 決定 2026-05-30)。
+- 判断根拠 (cost 分析): sync Haiku deny / async advisory は共に、 Layer A が意図的に脱した LLM 依存・非決定性 (fail-open) を、 actionability という品質グラデーション 1 点のため再導入する。 sync は毎 Write latency + cascade 事故歴のある hook→claude 起動、 async は「直すには Edit=deny」の詰みを抱える。
+- actionability の control point は SKILL.md の著者時 guidance に既存 (著者 = /memory-routing 実行中の Claude、 Haiku より高能力)。
+- 再訪条件: summary-drift な reminder が実際に surface して無価値と観測されたら、 evidence 付きで再検討。 今は未計測ゆえ投機実装しない。
 
 経緯: 2026-05-30 session で reminder/keywords 移行 (retrieval 層) 完成後、 H.S.「memory-routing 未使用で書いた時 detect/deny できるか」提起。 同 session で 4 論点 + 検出機構 (capability grant) まで詰め H.S. 承認、 Core 実装。 broad「skill 発火率 system 対策」の memory 特化・skill 起動非依存の決定論的 enforcement 具体例。
 
