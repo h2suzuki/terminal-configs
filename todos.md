@@ -63,8 +63,8 @@ Work file: `last-session-handoff.md` の turn counter section。canonical source
 Goal: writing-tests が `paths` frontmatter で path-scoped 化し always-on skill list から脱落 (Skill tool で Unknown) していた問題は commit 93b2616 で `paths` 削除・deploy・**本 session で invoke 成功を live 検証済**。 再発防止の follow-up を残す。
 
 Exit Criteria:
-- [ ] writing-code skill body 「Frontmatter design rules」の `paths` 言及が、 `paths`=path-scoping (always-on skill list から外れ Skill tool 非可視化、公式 doc v2.1.84+) の副作用を警告していない。 always-invocable であるべき skill には `paths` を付けない旨を writing-code / writing-skills に追記するか判断 (誤適用で同 regression 再発の温床)
-- [ ] (任意) spec lesson 「skill frontmatter `paths` は path-scoped 化」 を memory or writing-skills に durable 化するか判断 (memory-routing)
+- [x] H.S. 指示で **writing-skills** に注意喚起を追記 (commit 860903e・deploy 済): `paths`=path-scoping (always-on 一覧から外れ Skill tool/`/name` 非可視・公式 doc v2.1.84+)、 always-invocable skill には付けない旨を Rules bullet 化。 writing-code は H.S. scope 判断で据置
+- [x] spec lesson は上記 writing-skills bullet で durable 化済 (memory-routing: skill で cover ゆえ別 memory entry 不要)
 
 Note: 経緯 = 本 session で writing-tests を smoke 用に invoke しようとして Unknown 検出 → 監査で managed skill 27 個中 writing-tests のみ misconfig (他の脱落 claude-md-lint/lost-track-recovery は `disable-model-invocation` で意図的)。
 
