@@ -21,17 +21,21 @@ Work file: 本 entry が単独 reference (chat log U[1155])
 
 ### advisory hook for evaluative term post-hoc check
 
-Goal: LLM 最終 output 内の evaluative term (`大改造` / `軽微` / `影響大` / `アーキテクチャの見直し` 等) を Stop hook で pattern match して advisory feedback を返し、 次 turn の self-correction の材料にする (deny でなく soft、 false positive 許容)。 上記 High task (skill 発火率 system 対策) の特殊 case として、 統合候補。
+Goal: LLM output 内の評価語 (`大改造` / `影響大` / `アーキテクチャ再設計系` / `改造が少ない`) を Stop hook で捕捉し、 同 turn に証拠 tool (EVIDENCE_TOOLS) が無ければ block して report-by-evidence へ誘導する。 Stop の model 到達 channel は exit2 / decision:block の 2 つだけで両方 block と一次資料で確定 → soft 不可 → block route + `stop_hook_active` advise-once gate で自己 block loop を断つ設計に pivot 済 (H.S. 承認)。
 
 Exit Criteria:
-- [ ] Stop hook の event spec を一次資料で確認 (`code.claude.com/docs/en/hooks-guide`: payload 形、 `additionalContext` / `systemMessage` 出力規約)
-- [ ] hook script 実装 (`files/claude_managed-hooks/` 配下、 pattern match + advisory message 出力、 deny フィールドは設定しない)
-- [ ] `files/claude_managed-settings.json` に hook 登録、 deploy script (`ubuntu2404-wsl.sh` / `debian12.sh`) の `copy` 行追加
-- [ ] 実機で evaluative term を含む output → advisory が次 turn additionalContext に出ることを確認
+- [x] Stop hook spec 一次資料確認 (stop_hook_active 意味論 / exit2・decision:block の 2 channel / additionalContext は Stop 非対応 / 8-block override cap)
+- [x] hook 実装: 評価語 family (bare-term, EVIDENCE_TOOLS free-pass) + 全 block family への advise-once gate + docstring rewrite (commit e2800b8)
+- [x] settings/copy 行は不要と確認 (`copy_dir claude_managed-hooks/` で hooks dir 丸ごと deploy 済、 既存 file 改造ゆえ新規 wiring 不要)
+- [x] smoke 10/10 (block / free-pass / 既存 family 無回帰 / stop_hook_active demote + marker 1-bump guard)
+- [ ] deploy: 別 session で `copy_dir claude_managed-hooks/` 再実行 (本 session は評価語討議中で live deploy = 即自己 block のため defer) → deploy で e2800b8 が live 化
+- [ ] 実機確認: deploy 後、 table cell に評価語 + 証拠なし → block、 retry で advise-once pass を観測
+- [ ] (candidate) `/tmp/smoke_stop_checks.py` を committed regression test 化するか判断 (現状 repo に hook test 基盤なし、 cross-hook 不変条件 = 価値あり)
+- [ ] bg `/code-review` (session `b6d3ec1a`, findings `/tmp/code-review-e2800b8.json`) を idle 後 triage → CONFIRMED は fixup-autosquash
 
-経緯: 2026-05-28 session で「大改造」 を実コード未読で発話 → user 指摘で `report-by-evidence` skill 違反確定。 既存 skill の trigger は文末 judgment 想定で structured doc (table cell) の評価語混入が射程外。 user 指針「skill 減・hook 増・trigger 単純化」 に従い hook 化で対応。
+経緯: 2026-05-28 session で「大改造」 を実コード未読で発話 → report-by-evidence 違反。 既存 skill trigger は文末 judgment 想定で structured doc (table cell) の評価語混入が射程外。 hook 化で補完。
 
-Work file: `last-session-handoff.md` (2026-05-30 設計見直し: 上記 Goal/Exit Criteria の「soft advisory・additionalContext」は Stop spec 上不可と判明 → block route へ。 前回実装は regression を起こし reset 済、 設計から再着手。 詳細・Caveat は handoff doc 参照)
+Work file: `last-session-handoff.md` + commit e2800b8。 残 = deploy (別 session) + 実機確認 + bg review triage
 
 ## Medium
 
