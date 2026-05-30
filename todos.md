@@ -31,7 +31,7 @@ Exit Criteria:
 
 経緯: 2026-05-28 session で「大改造」 を実コード未読で発話 → user 指摘で `report-by-evidence` skill 違反確定。 既存 skill の trigger は文末 judgment 想定で structured doc (table cell) の評価語混入が射程外。 user 指針「skill 減・hook 増・trigger 単純化」 に従い hook 化で対応。
 
-Work file: 現 session の議論 (本 entry が単独 reference)
+Work file: `last-session-handoff.md` (2026-05-30 設計見直し: 上記 Goal/Exit Criteria の「soft advisory・additionalContext」は Stop spec 上不可と判明 → block route へ。 前回実装は regression を起こし reset 済、 設計から再着手。 詳細・Caveat は handoff doc 参照)
 
 ## Medium
 
