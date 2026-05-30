@@ -88,6 +88,13 @@ readonly BG_STALE_S=3600
 # session is torn down within this window even when no new session
 # starts. Research is slower than lint — give it 10 min default.
 readonly BG_SELF_REAP_S=600
+# First-scan (empty last_version) floor: keep only the most recent
+# FIRST_SCAN_FLOOR version sections instead of dumping the whole changelog
+# back to 0.2.x. The full ~300-version dump overwhelmed the single research
+# agent into compressing away mid-range features; the comprehensive
+# post-cutoff baseline is rebuilt out-of-band via a fan-out workflow, so this
+# floor is just a bounded safety net for a deleted findings.md.
+readonly FIRST_SCAN_FLOOR=30
 
 # --- session reap helpers ---------------------------------------------------
 
@@ -213,14 +220,28 @@ capture_cli_dump() {
 capture_changelog() {
   local last="$1" raw url='https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md'
   printf '=== CHANGELOG.md (raw'
-  [[ -n "$last" ]] && printf ', trimmed to versions newer than %s' "$last"
+  if [[ -n "$last" ]]; then
+    printf ', trimmed to versions newer than %s' "$last"
+  else
+    printf ', most recent %s version sections only (first-scan floor)' "$FIRST_SCAN_FLOOR"
+  fi
   printf ') ===\n'
   raw="$(timeout 30 curl -fsSL "$url" 2>/dev/null)"
   if [[ -z "$raw" ]]; then
     printf '(CHANGELOG fetch failed — work from CLI dump alone)\n'
     return 0
   fi
-  awk -v last="$last" '/^## / { if (last != "" && $2 == last) exit } { print }' <<< "$raw"
+  # Ongoing delta: keep from the top until the last-researched heading.
+  # First-scan (empty last): keep only the most recent FIRST_SCAN_FLOOR
+  # headings — never the whole changelog (that dump overwhelmed the single
+  # agent into compression; see the FIRST_SCAN_FLOOR const comment).
+  awk -v last="$last" -v floor="$FIRST_SCAN_FLOOR" '
+    /^## / {
+      if (last != "" && $2 == last) exit
+      if (last == "" && vc++ >= floor) exit
+    }
+    { print }
+  ' <<< "$raw"
 }
 
 # --- detached self-reap entry ----------------------------------------------
