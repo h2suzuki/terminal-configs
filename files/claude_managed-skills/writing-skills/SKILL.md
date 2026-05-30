@@ -21,6 +21,7 @@ skill SKILL.md / hook script を書く時の format 統一・writing convention 
 ## Rules
 
 - **不明な Claude Code 仕様は feature cache で delta 確認**: skill / hook 設計時に frontmatter field (`context: fork` / `disable-model-invocation` 等) / hook event / `claude --bg` 等 hidden flag が cutoff 以降に変わったかを `${XDG_CACHE_HOME:-~/.cache}/claude-code-feature-research/findings.md` を Read して check する。 最上位 `## v<X.Y.Z>` section が current CLI delta を覆っているかを最初に判定 (`claude --version` と heading 突き合わせ)。 file 未生成 / outdated なら `feature_findings_build.py` SessionStart hook が version 変化時に決定的 rebuild する (detached・高速) ので、 そのまま既存知識で進めて良いが negation / positive 断定は後追い verify
+- **`paths` frontmatter は skill を path-scoped 化する (副作用注意)**: `paths` を付けると skill は matching file を編集中の時だけ auto-load される (公式 doc v2.1.84+)。 副作用として **常時の skill 一覧から description が外れ、 Skill tool / `/name` から不可視**になる (writing-tests が `paths` 設定で Unknown 化した実例)。 常に invocable であるべき skill (writing-* add-on 等) には `paths` を付けない — file kind 限定は当該 skill の `when_to_use` + 編集 gate に委ね、 `paths` は真に path 限定が要る時のみ使う。 同様に `disable-model-invocation: true` は model 不可視・`user-invocable: false` は user 不可視 (意図しない限り付けない)
 - **frontmatter は英語、 body は日本語可**: 中途半端な日英 mix は禁止 (例: `description: Rules for X (categories 日本語).` は NG)
 - **TRIGGER + SKIP の pair**: when_to_use は両方明示。 片方だけは ambiguous
 - **`##` headers は Process / Rules / Output / Related 優先**: 内容に合わない場合のみ他の英語名 (Sources / Examples / Definitions / Red flags 等)
