@@ -40,24 +40,6 @@ Exit Criteria:
 
 Work file: `last-session-handoff.md` + commit f1dab94。 残 = deploy (別 session) + 実機確認
 
-### feature-research findings.md 信頼性 bug 修正
-
-Goal: `claude-code-feature-research.sh` 生成の `findings.md` (= H.S. の言う「features.md」、`${XDG_CACHE_HOME:-~/.cache}/claude-code-feature-research/findings.md`) が CHANGELOG 記載の主要機能を取りこぼす root cause を、compression を構造的に排除する形で機構修正し、findings.md を破棄して全面 rebuild する。
-
-Exit Criteria:
-- [x] compression 構造排除 (H.S. 必須要件): LLM を完全撤廃し決定的 script 化 (要約 agent 自体が無いので圧縮不可能)
-- [x] findings.md 破棄 + 全面 rebuild (H.S. 必須要件): 決定的に再生成、旧版は `.prebuild.bak` 保全
-- [x] incompleteness recovery: `feature_findings_build.py --force` 一発で再生成 (durable)
-- [x] 実機確認: rebuild 後の findings.md に dynamic workflows / `/reload-skills` / `/simplify` / `/code-review --fix` の present を grep 確認
-
-完了 (2026-05-31): H.S. の「構造化 Markdown は programmatic 処理可」指摘で LLM fan-out から**決定的 script へ pivot**。`feature_findings_build.py` が公式 MDX changelog を parse→post-cutoff(date>=2026-01)→keyword-bucket→verbatim emit、SessionStart hook 兼務 (LLM 非 spawn ゆえ再帰なし・bg machinery 退役)。fix は backtick identifier に consolidate。findings.md 1440 行 (819 feat/197 skill/82 deprecated/323 fix-id)。commit ba7ad5d (builder) / 4939be3 (hook 配線) / 8698361 (旧 bg-LLM hook 退役)、全 deploy 済。
-
-root cause (2026-05-30 確認・CHANGELOG 一次資料で裏取り): 欠落機能は全て v2.1.152–154 = first-scan (cutoff→2.1.156) の担当範囲内。`capture_changelog` は `last=""` (first-scan) のとき trim 条件 (`$2==last`) が永久に不発で CHANGELOG 全 302 version (2.1.158→0.2.21) を dump → 1 agent が巨大範囲を compression し中間 version の主要機能を脱落。加えて version-MATCH gate (current==last) で同 version は再研究されず frozen。
-
-経緯: 2026-05-30 H.S. 指摘「features.md の内容が全く信用できない (バグっている)。dynamic workflow・/reload-skills・/simplify 仕様変更・/code-review --fix の言及なし」。
-
-Work file: 現 session の CHANGELOG mapping 調査 (欠落機能 = v2.1.152–154、first-scan 範囲内)。canonical 機構 source = `files/claude_managed-hooks/claude-code-feature-research.sh` + `claude-code-feature-research-prompt.md`。
-
 ### turn counter (UserPromptSubmit) 表示 regression
 
 Goal: `memory_surface.py` の UserPromptSubmit turn marker (`_turn_marker` → systemMessage「Turn #N starting」) が通常の prompt 送信時に表示されず workflow 完了通知等の変な箇所に紛れて出る regression を root-cause 究明し修正する (Stop hook 側 `stop_checks.py` `_emit_turn_marker` は正常表示)。
