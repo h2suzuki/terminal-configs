@@ -2,7 +2,6 @@
 name: writing-tests
 description: Rules for designing / editing tests (TDD discipline, design-claim enumeration, intent encoding, coverage techniques, observability, verify target expansion).
 when_to_use: TRIGGER when designing or editing test code (proposing test cases in chat, enumerating design claims, sketching tests in drafts/, planning TDD red phase, sweeping existing tests against design docs). SKIP for production code.
-paths: "**/test_*.py, **/*_test.py, **/tests/**, **/__tests__/**, **/*.test.ts, **/*.test.tsx, **/*.test.js, **/*.spec.ts, **/*.spec.tsx, **/*.spec.js, **/*_test.go, **/*_spec.rb, **/spec/**, **/*Test.java, **/*Tests.cs"
 ---
 
 # Test Writing
