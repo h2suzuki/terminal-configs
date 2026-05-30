@@ -35,7 +35,23 @@ Combined Stop hook for org-managed Claude Code:
 
   claim-without-evidence (warning-only, exit 0):
     「不明」「該当なし」「未確認」 系 phrase は、 同 turn 内に Read / Grep / Glob /
-    WebSearch / WebFetch のいずれも使われていなければ warn。
+    WebSearch / WebFetch のいずれも使われていなければ warn (verify-before-claim の
+    negative side)。
+
+  provide-user-instructions (warning-only, exit 0):
+    「お手元で」「手動実行」「以下を実行」 系の manual-execution 文脈がありつつ、 host
+    コマンド (sudo cp/install, git push/checkout 等, gh pr, curl/wget+URL, claude
+    --bg, deploy-root への cp) が fenced code block の外 (= bare prose) に残れば warn。
+    strip_fences で fenced block と inline backtick span を除いた prose に host cmd が
+    残る = 未 fence の違反。 skill: 手動実行コマンドは独立 fence に置く・inline backtick
+    は実行用でない。 tool pairing 無しの純 text-shape 判定。
+
+  verify-before-claim positive (warning-only, exit 0):
+    「網羅した」「全部読んだ」「reasonable default」 系の completeness self-claim を、
+    同 turn 内に EVIDENCE_TOOLS (Read/Grep/Glob/WebSearch/WebFetch) が無ければ warn。
+    claim-without-evidence (negative side) と pairing 同一・polarity と message のみ別。
+    確認済み は meta-text 多数 + Bash-backed 多数で意図的に除外 (ungrounded 確認済み の
+    FN は承知)。
 
   turn-marker (bonus, exit 0 only — 旧 turn_counter.py を融合):
     enforcement が pass した turn 終了時のみ、 per-turn marker (時刻 / Turn #N /
@@ -197,6 +213,62 @@ CLAIM_RE = re.compile(
     r"不明|該当なし|存在しません|未確認|わかりません|分かりません"
 )
 
+# --- Pattern: provide-user-instructions (warning, no block) ---
+# manual-execution 文脈 (MANUAL_EXEC) がありつつ host コマンド (HOST_CMD) が fenced /
+# inline-backtick code span の外 (= bare prose) に残る時だけ warn。 skill: 手動実行
+# コマンドは独立 fence に置く・inline backtick は readability 用で実行用でない。 ゆえ
+# strip_fences で fence と inline span を除いた prose に host cmd が残れば未 fence の
+# 違反。 host_cmd は deploy repo の高頻度 verb 限定 (curl/wget は URL を要求し prose
+# 言及を除外)。 tool pairing 無しの純 text-shape 判定。 ホスト側 は exec 動詞を必須化
+# (裸 match だと当 repo 頻出の中立語「ホスト側」が全 turn で発火するため — bug review
+# 収束指摘)。 残留: pairing は turn-global ゆえ instruction phrase と無関係な
+# 過去形 host cmd が遠隔で同 turn に共存すると稀に発火しうる (観測極小・warn のみ)。
+HOST_CMD_PATTERNS: list[str] = [
+    r"sudo\s+(cp|install|tee|mv|rm|ln)\b",
+    r"\bgit\s+(push|pull|checkout|clone|fetch|reset|rebase|cherry-pick)\b",
+    r"\bgit\s+commit\s+-F\b",
+    r"\bgh\s+pr\s+(create|merge|checkout)\b",
+    r"\bclaude\s+--(bg|print|resume)\b",
+    r"\b(curl|wget)\s+(-[A-Za-z]+\s+)?https?://",
+    r"\bcp\s+\S+\s+(/etc/claude-code|~/\.claude|/usr/local/bin)\S*",
+]
+HOST_CMD_RE = re.compile("|".join(HOST_CMD_PATTERNS), re.IGNORECASE)
+
+MANUAL_EXEC_PATTERNS: list[str] = [
+    r"お手元で",
+    r"ホスト側(の)?(ターミナル|端末|シェル|プロンプト)?(で|から)(実行|叩いて|打って)",
+    r"ユーザー(さん)?(の)?手動で",
+    r"手動で(実行|叩いて|打って)",
+    r"手動実行(して|を行|が必要|してください)",
+    r"以下(の)?(コマンド)?を(手動で)?(実行|叩いて|打って)",
+    r"以下を(手動で)?実行",
+    r"次のコマンドを(手動で)?実行",
+    r"(端末|ターミナル)(で|から)(実行|叩いて|打って)",
+    r"コピペ(で|して)(実行|叩いて|流して)?",
+    r"貼り付けて(実行|流して)",
+]
+MANUAL_EXEC_RE = re.compile("|".join(MANUAL_EXEC_PATTERNS), re.IGNORECASE)
+
+# --- Pattern: verify-before-claim positive side (warning, no block) ---
+# completeness self-claim。 negative side (CLAIM_RE: 不明/該当なし) と pairing 同一
+# (EVIDENCE_TOOLS)・polarity と message のみ別。 確認済み は meta-text 多数 +
+# Bash-backed 多数 (EVIDENCE_TOOLS 外) ゆえ意図的に除外 (ungrounded 確認済み の FN
+# は承知)。 漏れはない/見落としはない の negative 形は CLAIM_RE 側に残し double-warn
+# を回避し、 ここは positive completeness のみ。 _check では strip_fences 後の text に
+# 当てる (Family A と一貫、 fence/inline 内に quote された claim 語を除外)。 reasonable
+# default は assertion anchor (として/を採用/で良い 等) を要求 (裸だと code default の
+# 議論「reasonable default を設定するか」で誤発火)。 lexeme は corpus 駆動で意図的に
+# tight — 完了/隅々まで/一通り/カバー/チェック済み 等の口語 completeness は broad 化
+# すると over-fire するため非対象 (FN 承知)。
+POS_CLAIM_PATTERNS: list[str] = [
+    r"(全部|全て|すべて)(の(ファイル|file|entry|箇所))?を?(読(んだ|みました|了|み終え)|確認しました)",
+    r"網羅(し(た|ました)|的に(確認|読了|チェック|調査)し(た|ました))",
+    r"漏れなく(確認|チェック|読)(した|しました)",
+    r"(全件|全箇所|全entry)(を)?(確認|チェック|読)(した|しました|済)",
+    r"reasonable\s+default\s*(として|を採用|で(良|い)|だと|です)",
+]
+POS_CLAIM_RE = re.compile("|".join(POS_CLAIM_PATTERNS), re.IGNORECASE)
+
 # --- Persistence path (broader than memory only) ---
 # memory subtree / skill dir / hook dir / CLAUDE.md への Write/Edit が hollow-claims の
 # pairing を満たす。 「claude_managed-skills/」「claude_managed-hooks/」 等の
@@ -217,6 +289,15 @@ TASK_TOOLS = {"TaskCreate", "TaskUpdate", "TodoWrite"}
 
 # Tools whose file_path / notebook_path inputs are recorded for path matching.
 PATH_RECORDING_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+
+
+def strip_fences(text: str) -> str:
+    # fenced block を先に除去し、 次に inline backtick span を除去 (順序が load-bearing:
+    # fence 先除去で inline pass が fence 区切りの裸 ``` を食わない)。 [^`\n] guard で
+    # inline pass を行内に限定し改行跨ぎの greedy strip を防ぐ (代償: 改行を含む
+    # malformed inline span は strip されず残る — 許容)。
+    text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
+    return re.sub(r"`[^`\n]*`", " ", text)
 
 
 def _load_transcript(path: str) -> list[dict]:
@@ -380,6 +461,31 @@ def _check(
                 f"Read / Grep / Glob / WebSearch / WebFetch のいずれも使われていません "
                 f"(System §報告・応答)。 verify-before-claim skill 参照。"
             )
+
+    # provide-user-instructions (warning-only): manual-exec 文脈 + 未 fence host cmd
+    instr = MANUAL_EXEC_RE.search(text)
+    if instr:
+        cmd = HOST_CMD_RE.search(strip_fences(text))
+        if cmd:
+            warnings.append(
+                f"provide-user-instructions: 手動実行を依頼する文脈 (「{instr.group(0)}」) "
+                f"がありますが host コマンド (「{cmd.group(0)}」) が fenced code block の "
+                f"外にあります (provide-user-instructions skill)。 独立した fenced code "
+                f"block に完全 path で置くと user がそのままコピペ実行できます。 inline "
+                f"backtick は readability 用で実行用ではありません。"
+            )
+
+    # verify-before-claim positive side (warning-only): completeness claim w/o evidence
+    m = POS_CLAIM_RE.search(strip_fences(text))
+    if m and not (tool_names & EVIDENCE_TOOLS):
+        warnings.append(
+            f"verify-before-claim (positive): 「{m.group(0)}」 と網羅・完了の self-claim "
+            f"を発したが当ターンで Read / Grep / Glob / WebSearch / WebFetch のいずれも "
+            f"使われていません (verify-before-claim skill)。 入口 file 1 本 / INDEX 行だけ "
+            f"読んで網羅と framing する LLM regression の典型です。 参照先の body file 群を "
+            f"実体まで読んだか self-check し、 未読があれば 「INDEX 上位 N entry のみ確認、 "
+            f"残りは未読」 等と scope を明示してください。"
+        )
 
     exit_code = 2 if blocking else 0
     return exit_code, warnings, blocking
