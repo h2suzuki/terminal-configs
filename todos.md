@@ -9,8 +9,8 @@
 Goal: 既存 skill (verify-before-claim / report-by-evidence / scope-mismatch-detector / illuminate-not-reassure / 他) と 本 session で追加した user memory entry 4 個が、 LLM の「trigger 該当時の self-invoke」 に依存して発火率低い問題への system 対策を設計 + 実装。
 
 Exit Criteria:
-- [x] system 設計: 4-layer 設計を adversarial 監査込みで確定 (2026-05-30 workflow w3zrkuwwh)。 核心原則 = 「trigger が機構的に検出できる skill は check を hook に移して発火依存を消す」 (raise でなく eliminate)。 23/27 skill が trigger 機構検出可、 真の semantic residual は 4 個。 全 layer / build order / must-have 3 性質 / cut / residual は handoff doc 参照
-- [ ] L1 (最優先・本 session の writing-code/python 漏れを直撃): PreToolUse(Edit|Write|MultiEdit) `skill_reminder_gate.py` — file_path → 該当 skill 名を additionalContext で **1 consolidated block** 提示 (source→writing-code / .py→+writing-python / .sh|shebang→+writing-bash / writing-tests の paths glob→+writing-tests / `*/skills/*/SKILL.md`・hook path→+writing-skills / todos.md→writing-todos)。 `read_before_edit.py` の _emit_allow/_canonical/_extract を clone、 allow-only、 同 file 同 session throttle (habituation 対策)。 既存 `^(Edit|Write|MultiEdit)$` matcher に append
+- [x] system 設計: 4-layer 設計を adversarial 監査込みで確定 (2026-05-30 workflow w3zrkuwwh)。 核心原則 = 「trigger が機構的に検出できる skill は check を hook に移して発火依存を消す」 (raise でなく eliminate)。 (**L1 は 2026-05-30 に skill-active gate 方式へ pivot・plan 承認済。 当初の additionalContext advisory 案は破棄**。 L2-L4 は据置)
+- [ ] L1 (最優先・本 session の writing-code/python 漏れを直撃): `skill_reminder_gate.py` を **skill-active gate** で実装。 PreToolUse(Edit|Write|MultiEdit) で「関連 writing-* skill が**当 turn に invoke 済か**」を gate — 正規ルート (skill 発動→同 turn で edit) は通し、 skip=detour は JSON deny → 正しい kind を `declare` → skill invoke → edit。 kind は sniff でなく **model の declare が真実源** (語彙 python/bash/code/test/skills/todos/memory/**else**、 else=skill 無し file で Write 不能を防ぐ)。 skill-active は **current-turn transcript scan のみ (time-TTL 流用しない)**。 拡張子あり file は auto-detect、 拡張子なし file のみ declare 要。 memory_routing_gate の JSON-deny/fail-open 継承・stop_checks の current-turn 解析流用。 **spike (advisory 版) は誤設計ゆえ破棄済**。 full 設計は plan file 参照
 - [ ] L2: PreToolUse(`^AskUserQuestion$`) `declare_and_proceed_gate.py` (`subagent_gate_warn.py` の twin、 additionalContext で /declare-and-proceed)
 - [ ] L3: `stop_checks.py` 拡張 — provide-user-instructions family (host-command phrase が fenced block 外、 warn) + verify-before-claim positive side (網羅した 等、 warn)。 既存 family+pairing+advise-once 再利用
 - [ ] L4 (任意・観測後・最低 leverage・最大 noise risk): UserPromptSubmit concern/correction injector を `memory_surface.py` に **1 block 統合** (tight phrase set)。 illuminate-not-reassure/memory-routing の trigger 半分のみ raise、 discipline body は semantic 残
@@ -19,7 +19,7 @@ Exit Criteria:
 
 経緯: 2026-05-28/29 session b188f677 で user 提起: 「信用を高めるためのスキルをたくさん作ったのだけれど、 それを高確率で発火できないシステム上の問題があるようだから、 そこをなんとかできると、 本当はベスト。 発火できなければ無価値」。 本 session でも writing-code/writing-python を .py hook 編集前に invoke 漏らした (= 本 task が解く問題の live 実例。 debug-guardrail 分析: ambient trigger 低 salience + 親 skill frame crowding + tool 層 enforcement 不在 = self-recall 構造不信頼)。
 
-Work file: `last-session-handoff.md` の 「skill 発火率 system 対策」 section
+Work file: `last-session-handoff.md` の 「skill 発火率 system 対策」 section ＋ plan `~/.claude/plans/breezy-bubbling-quiche.md` (L1 full 設計 + 本 session の訂正 7 点 + 次 session 手順の durable copy)
 
 ### advisory hook for evaluative term post-hoc check
 
@@ -54,3 +54,15 @@ Exit Criteria:
 Note: 上記 High task (advisory hook) 完成後は本 entry を `~/.claude/memory/OLD-MEMORY.md` に移動 (= memory-routing rule 通り、 Managed hook で cover された退役 entry)
 
 Work file: 現 session の議論
+
+### SKILL_HOOK_CONTRACT.md パターン集
+
+Goal: repo 直下に `SKILL_HOOK_CONTRACT.md` を作り、 hook/skill の**実装 contract** 再利用パターンを集約して一貫性を担保する (2026-05-30 H.S. 依頼)。
+
+Exit Criteria:
+- [ ] `SKILL_HOOK_CONTRACT.md` を repo 直下に作成。 含める実装 contract: capability-grant (skill/declare が mint・hook が check, fail-open) / permission semantics (additionalContext 省略=passthrough・deny は JSON・allow は auto-approve 回避) / session-keyed state (`$CLAUDE_CODE_SESSION_ID`==payload session_id) / transcript current-turn scan (stop_checks 方式) / fail-open (例外 exit0・deny は JSON) / deny-wording 規律 / extensible `LANGUAGES` dispatch table / **use-case 駆動の TTL 選定 (盲目流用しない)** / PostToolUse sync
+- [ ] **除外を厳守** (H.S. 指摘・種類が違う): deploy の決まり (`copy_dir`・exec-bit 0755・settings `copy`) は contract でなく **deploy ルール** ゆえ混ぜない
+
+Note: draft は L1 (skill_reminder_gate) 確定後が自然 (L1 が grant/declare パターンの最新例)。
+
+Work file: plan `~/.claude/plans/breezy-bubbling-quiche.md` の「並行 deliverable」節
