@@ -53,7 +53,7 @@ Exit Criteria:
 
 Note: feature-research findings.md bug (CC version 変更未追跡) と関連の可能性。turn marker は両 hook とも `<transcript>.turns` を共有 (stop_checks が bump、 memory_surface は read-only)。
 
-Work file: 現 session の H.S. 報告。canonical source = `files/claude_user-hooks/memory_surface.py` (`_turn_marker` / `_main_query`)、比較 = `files/claude_managed-hooks/stop_checks.py` (`_emit_turn_marker`)。
+Work file: `last-session-handoff.md` の turn counter section。canonical source = `files/claude_user-hooks/memory_surface.py` (`_turn_marker` / `_main_query`)、比較 = `files/claude_managed-hooks/stop_checks.py` (`_emit_turn_marker`)。
 
 ## Medium
 
