@@ -36,10 +36,9 @@ CONFIRM_PATTERNS: list[str] = [
     r"で(良|よ)い\s*[?？]",
     r"で問題(ありません|ない)\s*(か|ですか|でしょうか)",
     r"進めて(も)?(良|よ)い",
-    r"この(まま|style|形式|方針|案|内容|draft|wording)で(良|よ|問題な)",
+    r"この(まま|style|スタイル|形式|方針|案|内容|draft|wording)で(良|よ|問題な)",
     r"適用して(も)?(良|よ)い",
     r"してもよいですか",
-    r"このスタイルで",
 ]
 
 # Routing — investigation/execution route の binary/ternary。 "どちらから" /
