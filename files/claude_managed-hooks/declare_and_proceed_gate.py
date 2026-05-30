@@ -1,31 +1,39 @@
 #!/usr/bin/env python3
-"""PreToolUse:^AskUserQuestion$ hook — declare-and-proceed nudge (advisory).
+r"""PreToolUse:^AskUserQuestion$ deny-gate — declare-and-proceed enforcement.
 
-Fires before an AskUserQuestion call. When the question text looks like a
-DECIDABLE routing question ("A 経由 か B 経由 か" / "どちらから") or a
-per-unit/per-batch confirmation ("この style で良い?" / "進めて良い?"), emits a
-model-visible hookSpecificOutput.additionalContext nudge toward
-/declare-and-proceed. Always non-blocking (no permissionDecision) — the
-question still proceeds; this is judgment-aid, not a gate. The genuine
-exceptions (user-taste / design-level / destructive-op pre-approval) use
-open "which X?" phrasing and do not match these narrow patterns.
+Fires before an AskUserQuestion. When the question looks like a DECIDABLE
+routing question ("A経由かB経由か" / "どちらから調査") or a per-unit/per-batch
+confirmation ("この draft で良い?" / "進めて良い?"), the gate requires that the
+declare-and-proceed skill was invoked in the current turn (∪ recent 5 min). If
+not, it DENIES via JSON permissionDecision and routes the model to invoke the
+skill first — so the 3-check (material 取得可? / default 可? / parallel 両立可?)
+runs BEFORE the question is posed, not after (an advisory additionalContext was
+dead-on-arrival: it landed only after the user had already been asked).
 
-Twin of subagent_gate_warn.py (same narrow-recall / high-precision / fail-open
-philosophy), but routed through additionalContext (model-visible, injected next
-to the tool result) rather than stderr, so the nudge reaches Claude's judgment.
+After invoking declare-and-proceed the model either decides itself (skipping the
+ask) or, for a genuine exception (user-taste / design-level / unrecoverable
+destructive-op pre-approval), re-issues the question — now allowed because the
+skill is active. Those exceptions are phrased openly ("which X?") and do not
+match these narrow patterns, so they pass without ever needing the skill.
 
-Exit:
-  0: silent pass (no decidable-question pattern) or advisory emitted.
+Twin of skill_reminder_gate.py (turn-scan, 5-min window, JSON deny, fail-open),
+scoped to one tool and one skill. Narrow-recall/high-precision patterns: a
+false-positive only costs one skill invoke + re-ask, a slip lets a decidable
+question reach the user ungated.
 
-parse / IO error は fail-open (exit 0, 出力なし)。 block しない設計なので誤 block
-の懸念は無く、 advisory の取りこぼしを許容する側に倒す。
+deploy: /etc/claude-code/hooks/ (copy_dir で自動)。canonical source は
+files/claude_managed-hooks/。両者を同 session で同内容に保つ。
 """
 from __future__ import annotations
 
+import datetime
 import json
 import re
 import sys
+import time
 
+TARGET_SKILL = "declare-and-proceed"
+SKILL_WINDOW_SECONDS = 300  # 現 turn ∪ 直近 5 分 (skill_reminder_gate と同じ窓)
 
 # Per-unit / per-batch confirmation — "これで良い?" 系。 design 質問は通常
 # open form ("which X?") なので、 yes/no 承認を求める closed form のみ拾う。
@@ -43,7 +51,7 @@ CONFIRM_PATTERNS: list[str] = [
 
 # Routing — investigation/execution route の binary/ternary。 "どちらから" /
 # "A 経由 か B 経由 か" 系。 design-level の "which architecture" は除外したいので
-# route 語 (経由/から調査/から着手/どちら(から)) に anchor する。
+# route 語 (経由/から調査/から着手/どちら(から)/A するか B するか) に anchor する。
 ROUTING_PATTERNS: list[str] = [
     r"どちら(から|を先に|で進め|を調査)",
     r"どっち(から|を先に)",
@@ -52,6 +60,7 @@ ROUTING_PATTERNS: list[str] = [
     r"(から|を)\s*着手しますか",
     r"どこから\s*(調査|着手|始め|見)",
     r"先に\s*(調査|確認|読み?)\s*ますか",
+    r"[ぁ-んァ-ヶ一-鿿\w]+するか\s*[ぁ-んァ-ヶ一-鿿\w]+するか",  # SKILL の正典 trigger
 ]
 
 CONFIRM_RE = re.compile("|".join(CONFIRM_PATTERNS), re.IGNORECASE)
@@ -80,7 +89,7 @@ def _question_text(tool_input: dict) -> str:
 
 
 def _detect(text: str) -> str | None:
-    """Return a citation string for the matched pattern, or None."""
+    """Return a citation string for the matched decidable pattern, or None."""
     m = CONFIRM_RE.search(text)
     if m:
         return "per-unit 確認: 「%s」" % m.group(0)
@@ -90,51 +99,146 @@ def _detect(text: str) -> str | None:
     return None
 
 
-def _run(payload: dict) -> int:
-    if not isinstance(payload, dict):
-        return 0
-    if payload.get("tool_name") != "AskUserQuestion":
-        return 0
-    tool_input = payload.get("tool_input") or {}
-    if not isinstance(tool_input, dict):
-        return 0
-    text = _question_text(tool_input)
-    if not text:
-        return 0
-    hit = _detect(text)
-    if hit is None:
-        return 0
-    # advisory (writing-skills template-hook.md: hook を変更主体に誤読させず
-    # corrective を直接書き下す。 trim 抑止の冗長性は意図的)。
-    context = (
-        f"declare-and-proceed (nudge): この質問は {hit} を含み、 自分で決められる "
-        f"routing / per-batch 確認の可能性があります。 /declare-and-proceed の 1 拍 "
-        f"verbalize を行ってください — material が code/log/config/doc で取れるか、 "
-        f"default で進めるか、 parallel 実行で両立できるか。 いずれかで yes なら "
-        f"user に投げず自分で決め、 1 unit 目で方針を verbalize 宣言して proceed し、 "
-        f"事後 chat log review に委ねる。 genuine な user-taste / design-level "
-        f"(architecture / naming / priority / scope) / 不可逆 destructive op の "
-        f"pre-approval のみ ask に残す。 該当するならこの質問はそのまま続行で構いません。"
-    )
-    out = {
+# --- current-turn skill scan (skill_reminder_gate.py の turn 解析を流用) ---
+
+def _load_transcript(path: str) -> list[dict]:
+    out: list[dict] = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return []
+    return out
+
+
+def _is_turn_boundary(obj: dict) -> bool:
+    """human-input turn の起点か。isMeta(skill 展開) と tool_result 継続は起点でない。"""
+    if obj.get("type") != "user" or obj.get("isMeta"):
+        return False
+    msg = obj.get("message", {})
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(content, str):
+        return True
+    if isinstance(content, list):
+        return any(
+            isinstance(b, dict) and b.get("type") != "tool_result" for b in content
+        )
+    return False
+
+
+def _parse_ts(ts) -> float | None:
+    if not isinstance(ts, str) or not ts:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _skill_active(entries: list[dict], skill: str, now: float, window_s: int) -> bool | None:
+    """target skill が 現 turn ∪ 直近 window_s 秒 に invoke 済か。
+
+    boundary 不在の corrupted transcript は None (fail-open ALLOW)。Skill 呼出形:
+    assistant tool_use, name=="Skill", input=={"skill":"<name>"}.
+    """
+    start_idx = -1
+    for i in range(len(entries) - 1, -1, -1):
+        if _is_turn_boundary(entries[i]):
+            start_idx = i + 1
+            break
+    if start_idx == -1:
+        return None
+    cutoff = now - window_s
+    for idx, obj in enumerate(entries):
+        if obj.get("type") != "assistant":
+            continue
+        ep = _parse_ts(obj.get("timestamp"))
+        if not (idx >= start_idx or (ep is not None and ep >= cutoff)):
+            continue
+        msg = obj.get("message", {})
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            if block.get("name") != "Skill":
+                continue
+            inp = block.get("input") or {}
+            if isinstance(inp, dict) and inp.get("skill") == skill:
+                return True
+    return False
+
+
+# --- deny emission (writing-skills の deny-wording 規律。文面は意図的に冗長・trim 禁止) ---
+
+def _emit_deny(reason: str) -> None:
+    payload = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "additionalContext": context,
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
         }
     }
-    sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
-    return 0
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def _deny(hit: str) -> None:
+    _emit_deny(
+        f"この AskUserQuestion は {hit} を含み、 自分で決められる routing / per-batch "
+        f"確認に見えます。 編集前に /declare-and-proceed を当 turn で invoke して 3-check "
+        f"(material が code/log/config/doc で取れるか / default で進めるか / parallel 実行で "
+        f"両立できるか) を verbalize してください。 いずれか yes なら user に投げず自分で "
+        f"決め、 1 unit 目で方針を宣言して proceed します。 genuine な user-taste / "
+        f"design-level (architecture / naming / priority / scope) / 不可逆 destructive op "
+        f"の pre-approval なら、 skill invoke 後そのまま AskUserQuestion が通ります "
+        f"(hook 自身は質問を変更しません)。"
+    )
+
+
+def cmd_gate(payload: dict) -> None:
+    if not isinstance(payload, dict):
+        return
+    if payload.get("tool_name") != "AskUserQuestion":
+        return
+    tool_input = payload.get("tool_input") or {}
+    if not isinstance(tool_input, dict):
+        return
+    text = _question_text(tool_input)
+    if not text:
+        return
+    hit = _detect(text)
+    if hit is None:
+        return  # decidable でない質問は素通り (genuine 例外を含む)
+    transcript_path = payload.get("transcript_path")
+    if not isinstance(transcript_path, str) or not transcript_path:
+        return  # fail-open
+    entries = _load_transcript(transcript_path)
+    if not entries:
+        return  # fail-open
+    active = _skill_active(entries, TARGET_SKILL, time.time(), SKILL_WINDOW_SECONDS)
+    if active is None or active:
+        return  # fail-open (boundary 不在) / skill 当 turn invoke 済 → 通す
+    _deny(hit)
 
 
 def main() -> int:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
-    except Exception:
+    except json.JSONDecodeError:
         return 0
     try:
-        return _run(payload)
+        cmd_gate(payload)
     except Exception:
-        return 0
+        pass  # fail-open: hook bug が tool を block しない
+    return 0
 
 
 if __name__ == "__main__":
