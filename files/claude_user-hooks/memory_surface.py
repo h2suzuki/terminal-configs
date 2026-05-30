@@ -356,10 +356,11 @@ def _memory_surface(payload: dict) -> str | None:
 def _main_query() -> int:
     """UserPromptSubmit handler — always exit 0 (fail-open).
 
-    Turn marker and any matched memory entry ride one
-    hookSpecificOutput.additionalContext. UserPromptSubmit systemMessage is
-    not painted by the fullscreen TUI (an undocumented CC rendering gap), so
-    the marker uses the model-visible context channel instead of systemMessage.
+    The turn marker rides BOTH channels: systemMessage (user-visible) and
+    additionalContext (model-visible). The fullscreen TUI may not paint the UPS
+    systemMessage (an undocumented CC rendering gap), so additionalContext is
+    the reliable copy; emitting both lets either audience see it. A matched
+    memory entry rides additionalContext only.
     """
     try:
         payload = json.loads(sys.stdin.read() or "{}")
@@ -373,12 +374,16 @@ def _main_query() -> int:
         additional = _memory_surface(payload)
     except Exception:
         additional = None
-    parts = [p for p in (marker, additional) if p]
-    if parts:
-        out = {"hookSpecificOutput": {
+    out: dict = {}
+    ctx_parts = [p for p in (marker, additional) if p]
+    if ctx_parts:
+        out["hookSpecificOutput"] = {
             "hookEventName": "UserPromptSubmit",
-            "additionalContext": "\n".join(parts),
-        }}
+            "additionalContext": "\n".join(ctx_parts),
+        }
+    if marker:
+        out["systemMessage"] = marker
+    if out:
         sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
     return 0
 
