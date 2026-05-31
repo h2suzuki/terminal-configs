@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # dangling-ref-check: allow (this hook's function is to scan that path).
-"""UserPromptSubmit hook surfacing top-1 memory entry via SQLite FTS5 BM25.
+"""UserPromptSubmit hook surfacing the best-matching memory entry via FTS5 BM25.
 
 Modes:
 
 - (no argv) — UserPromptSubmit handler. Reads stdin JSON envelope, runs
-  FTS5 BM25 against the user prompt, picks top-1, applies a per-session
-  throttle (15 min same-entry suppression), and prints the entry's
-  oneline_summary as additional context. Fail-open: any error exits 0
+  FTS5 BM25 against the user prompt, picks top-1 (plus a 2nd only if it also
+  clears a strong bar), applies a confidence floor + per-session throttle
+  (15 min same-entry suppression), and prints each entry's reminder as
+  additional context. Fail-open: any error exits 0
   with no output so a hook bug never blocks the prompt.
 
 - `--upsert <abs_path> [project_id]` — replace one entry in entries_fts.
@@ -38,7 +39,8 @@ HOME = os.path.expanduser("~")
 USER_MEMORY_DIR = os.path.join(HOME, ".claude", "memory")
 DB_PATH = os.path.join(HOME, ".claude", "hooks", "state", "memory_index.sqlite3")
 THROTTLE_SECONDS = 900  # 15 min per (file_path, session_id)
-BM25_SURFACE_FLOOR = -1.0  # surface のみ top-1 bm25 <= floor (負が深いほど良 match、 ~0 は弱 noise)
+BM25_SURFACE_FLOOR = -1.0  # top-1 を surface する floor (負が深いほど良 match、 ~0 は弱 noise)
+BM25_STRONG_FLOOR = -3.0   # 2 件目は強候補 (bm25 <= これ) の時だけ追加。 大抵は top-1 のみ
 MIN_ASCII_LEN = 4
 MIN_CJK_RUN = 3
 QUERY_EXCERPT_LEN = 200
@@ -361,30 +363,30 @@ def _memory_surface(payload: dict) -> str | None:
         if query is None:
             return None
         try:
-            row = con.execute(
+            rows = con.execute(
                 "SELECT file_path, reminder, bm25(entries_fts) "
                 "FROM entries_fts WHERE entries_fts MATCH ? "
                 "AND (project_id IS NULL OR project_id = ?) "
-                "ORDER BY bm25(entries_fts) LIMIT 1",
+                "ORDER BY bm25(entries_fts) LIMIT 2",
                 (query, project_id),
-            ).fetchone()
+            ).fetchall()
         except sqlite3.Error:
             return None
-        if not row:
+        if not rows:
             return None
-        file_path, reminder, score = row
-        if score is None or score > BM25_SURFACE_FLOOR:
-            return None  # confidence floor: 弱すぎる top-1 (bm25 ~0) は noise ゆえ出さない
         now = time.time()
-        if _throttle_check(con, file_path, session_id, now):
-            return None
-        _record_inject(con, file_path, project_id, session_id, now, score, prompt)
-        display = reminder or "(reminder 未設定)"
-        return (
-            "<memory-surface>\n"
-            f"{display} 詳細: {file_path}\n"
-            "</memory-surface>"
-        )
+        blocks = []
+        for rank, (file_path, reminder, score) in enumerate(rows):
+            # rank0 (top-1) は弱 noise floor、 rank1 は強候補の時だけ追加 (大抵 1 件)。
+            floor = BM25_SURFACE_FLOOR if rank == 0 else BM25_STRONG_FLOOR
+            if score is None or score > floor:
+                continue
+            if _throttle_check(con, file_path, session_id, now):
+                continue
+            _record_inject(con, file_path, project_id, session_id, now, score, prompt)
+            display = reminder or "(reminder 未設定)"
+            blocks.append(f"<memory-surface>\n{display} 詳細: {file_path}\n</memory-surface>")
+        return "\n".join(blocks) if blocks else None
     finally:
         con.close()
 
