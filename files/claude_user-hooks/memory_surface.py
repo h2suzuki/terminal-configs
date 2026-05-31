@@ -433,7 +433,9 @@ def _main_query() -> int:
     additionalContext (model-visible). The fullscreen TUI may not paint the UPS
     systemMessage (an undocumented CC rendering gap), so additionalContext is
     the reliable copy; emitting both lets either audience see it. A matched
-    memory entry and any L4 concern/correction reminder ride additionalContext only.
+    memory entry rides both channels too (so the user can see what surfaced,
+    subject to the same TUI gap). The L4 concern/correction reminder rides
+    additionalContext only — a private model nudge, not user-facing.
     """
     try:
         payload = json.loads(sys.stdin.read() or "{}")
@@ -458,8 +460,10 @@ def _main_query() -> int:
             "hookEventName": "UserPromptSubmit",
             "additionalContext": "\n".join(ctx_parts),
         }
-    if marker:
-        out["systemMessage"] = marker
+    # memory-surface も systemMessage に出して user に見せる (concern/L4 は model 限定の nudge ゆえ additionalContext のみ)。
+    sys_parts = [p for p in (marker, additional) if p]
+    if sys_parts:
+        out["systemMessage"] = "\n".join(sys_parts)
     if out:
         sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
     return 0
