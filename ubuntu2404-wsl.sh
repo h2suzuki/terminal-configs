@@ -254,6 +254,10 @@ avahi-utils avahi-daemon avahi-autoipd libnss-mdns
 run apt install -y --no-install-recommends \
 openssh-server openssh-client
 
+# SSH keepalive so idle sessions survive the WSL2/Hyper-V NAT idle timeout
+copy ssh_keepalive.conf   /etc/ssh/ssh_config.d/10-keepalive.conf   -m 0644
+copy sshd_keepalive.conf  /etc/ssh/sshd_config.d/10-keepalive.conf  -m 0644
+
 
 # Chrome
 [ -s /tmp/google-chrome.deb ] ||
