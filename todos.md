@@ -22,28 +22,6 @@ Exit Criteria:
 
 Work file: `last-session-handoff.md` の 「skill 発火率 system 対策」 section ＋ plan `~/.claude/plans/breezy-bubbling-quiche.md` (skill-active gate の full 設計 + 本 session の訂正 + 次 session 手順の durable copy)
 
-### fact→code→inference 原則の skill 整合 (2026-05-31 H.S. 依頼)
-
-Goal: 「事実を推論より優先」原則に**コード化**を明示的に組込み、 関連 skill 全てを整合させる。 統一 claim = 「ゴールが与えられたら (1) まず事実を積む (事実に立脚しない推論=妄想・開発では有害)、 (2) 次にコード化を検討 (コード化可能を推論するのは Token 浪費・精度/再現性で劣る劣化版)、 (3) 最後に事実+コードが埋めぬ所を論理推論でブリッジ。 これが推論の最効果・最価値な運用」。
-
-Exit Criteria:
-- [x] survey (agent a4fa9fd9) で landscape 確定・primary home = `verify-before-claim` (Tier1 owner・常時 invocable・family hub)
-- [x] commit 1032cc2・deploy LIVE: verify-before-claim に `## Operating principle: facts → code → inference` 新設 (3-tier、 Tier2 は writing-code 参照で重複回避) + writing-code/report-by-evidence/debug-guardrail に cross-ref。 intent-preserving (既存 body は frame のみ・body rewrite 無し)
-- [x] CLAUDE.md 重複 (org:21 報告/根拠 = Tier1、 :23 前半) は skill 側集約済。 CLAUDE.md からの削除は下記 pruning task で扱う (verify-before-claim/report-by-evidence/debug-guardrail が cover)
-
-Work file: survey agent a4fa9fd9 — landscape + primary home + per-skill edit plan
-
-### 3 CLAUDE.md の hook 化で不要な部分を削除 (2026-05-31 H.S. 依頼)
-
-Goal: org (`files/claude_managed-CLAUDE.md`) / user (`files/claude_user-CLAUDE.md`) / project (`.claude/CLAUDE.md`) を読み直し、 新 hook/skill 駆動で不要化した文面を削除。 **判断基準** (H.S. nuance): hook 強制があっても予防的に動けて hook 発動を回避できる文面は価値あり保持。 system prompt 上書きを CLAUDE.md に書く類は不要ゆえ削除候補。
-
-Exit Criteria:
-- [x] 3 CLAUDE.md 各文面を分類 + 削除提案を H.S. に提示 → 3 件確認取得
-- [x] commit f54c65d・deploy LIVE (source==deploy): org `位置付け` の override/priority 2 文削除 (永続指示・anti-overreach 対象外は残す) / user `Commit 自律則` の override-framing 行削除 (自律 rule + commit-discipline 参照は残す) / user `System prompt 起因 pain` 節全体削除。 preventive-valuable な hook/skill enforce 文面は nuance 通り保持 (report根拠 L21・introspective L22 等)
-- [x] 保守的に surgical 削除・remaining coherent 確認・git revert 可
-
-Work file: 本 session inline 分析 + survey agent a4fa9fd9 の CLAUDE.md overlap note
-
 ### advisory hook for evaluative term post-hoc check
 
 Goal: LLM output 内の評価語 (`大改造` / `影響大` / `アーキテクチャ再設計系` / `改造が少ない`) を Stop hook で捕捉し、 同 turn に証拠 tool (EVIDENCE_TOOLS) が無ければ block して report-by-evidence へ誘導する。 Stop の model 到達 channel は exit2 / decision:block の 2 つだけで両方 block と一次資料で確定 → soft 不可 → block route + `stop_hook_active` advise-once gate で自己 block loop を断つ設計に pivot 済 (H.S. 承認)。
