@@ -132,6 +132,8 @@ keywords: <その状況が再発した時の prompt に出る選択的な match 
 
 **keywords (match 専用。 reminder とは別行)**:
 
+keywords は **ranking ノブ** — entry は keywords 無しでも body だけで match しうるが、 keywords は「その状況の prompt で本 entry を top-1 に選ばれやすく + 弱 match 足切り (bm25 floor) を超えやすくする」選択的 boost (SEO で重要語を前方に置くのに近い)。 広い語を盛ると無関係 prompt に hit して逆効果なのは下記。
+
 - **選択的に** — その状況が**本当に再発した時だけ** prompt に出る固有語 (tool 名 ・path ・error code ・固有名詞) を選ぶ。 過度に広い語 (する ・ファイル ・error 等) は無関係 prompt に hit して context を flood し、 結局無視される (CLAUDE.md ・skill が量で無視されたのと同じ失敗を hook で繰り返す)
 - **3+ 字 CJK** — FTS5 trigram tokenizer は 2 字 CJK で match 不可 (「ファイル編集」 等で 3+ 字 run を作る)
 - **bilingual** — 英 ・日両方 (例 「Edit ・編集」)

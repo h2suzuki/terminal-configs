@@ -38,6 +38,7 @@ HOME = os.path.expanduser("~")
 USER_MEMORY_DIR = os.path.join(HOME, ".claude", "memory")
 DB_PATH = os.path.join(HOME, ".claude", "hooks", "state", "memory_index.sqlite3")
 THROTTLE_SECONDS = 900  # 15 min per (file_path, session_id)
+BM25_SURFACE_FLOOR = -1.0  # surface のみ top-1 bm25 <= floor (負が深いほど良 match、 ~0 は弱 noise)
 MIN_ASCII_LEN = 4
 MIN_CJK_RUN = 3
 QUERY_EXCERPT_LEN = 200
@@ -372,6 +373,8 @@ def _memory_surface(payload: dict) -> str | None:
         if not row:
             return None
         file_path, reminder, score = row
+        if score is None or score > BM25_SURFACE_FLOOR:
+            return None  # confidence floor: 弱すぎる top-1 (bm25 ~0) は noise ゆえ出さない
         now = time.time()
         if _throttle_check(con, file_path, session_id, now):
             return None
