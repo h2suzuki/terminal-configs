@@ -43,6 +43,39 @@ MIN_CJK_RUN = 3
 QUERY_EXCERPT_LEN = 200
 MAX_ENTRY_SIZE = 50_000  # skip absurdly large feedback files
 
+# --- L4: concern / correction injector (UserPromptSubmit) ---
+# Raises (not enforces) illuminate-not-reassure / memory-routing by scanning the
+# user prompt for tight, corpus-calibrated phrases (precision over recall — a
+# noisy L4 is net-negative); throttled per channel via inject_log sentinels.
+# 間違 is intentionally excluded — it fires on generic "X is wrong" (code bugs /
+# rule-authoring prose), not assistant-correction, and is this repo's dominant FP.
+_L4_CONCERN_KEY = "<L4-concern>"
+_L4_CORRECTION_KEY = "<L4-correction>"
+_CONCERN_REMINDER = (
+    "<concern-detected>懸念/不安が表明された可能性。 illuminate-not-reassure: "
+    "「大丈夫/安全」で覆わず、 (1)核心を言い直し (2)起こり得る可能性を本気で深掘り "
+    "(3)実機構/state を中立に晒す。 結論は実態提示の後に 1 度だけ。</concern-detected>"
+)
+_CORRECTION_REMINDER = (
+    "<correction-detected>訂正/feedback が出た可能性。 memory-routing: 同じ指摘の "
+    "再発なら memory entry 化を検討 (user vs project-local を判断)。</correction-detected>"
+)
+_CONCERN_RES = [re.compile(p, re.IGNORECASE) for p in (
+    r"心配",
+    r"気がかり",
+    r"懸念(?!\s*もう少し)",
+    r"大丈夫(?:[?？]|なの|ですか|だろうか|でしょうか|かな)",
+    r"(?:壊れ|崩れ|破綻|消え|漏れ|デグレ|退行|regress).{0,8}(?:ない|しない)(?:か|の)?[?？]",
+    r"(?:恐れ|危険)が(?:ある|あり|高)",
+    r"(?:本当に|ほんとに|ちゃんと).{0,12}(?:動く|大丈夫|問題ない|いける)(?:の)?[?？]",
+)]
+_CORRECTION_RES = [re.compile(p, re.IGNORECASE) for p in (
+    r"じゃなくて",
+    r"(?:そう|それ)じゃ(?:なく|ない)",
+    r"勝手に",
+    r"(?:前|さっき|何度|毎回|以前)(?:に)?も(?:言|いっ|指摘|伝え)",
+)]
+
 
 def _connect() -> sqlite3.Connection | None:
     """Open DB, ensure schema, run idempotent migrations."""
@@ -353,6 +386,41 @@ def _memory_surface(payload: dict) -> str | None:
         con.close()
 
 
+def _concern_inject(payload: dict) -> str | None:
+    # Raise the two user-prompt-triggered skills; throttled per channel sentinel.
+    prompt = payload.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return None
+    # Skip synthetic re-entry prompts (task-notification / compaction continuation).
+    if prompt.lstrip().startswith(("<task-notification>", "This session is being continued")):
+        return None
+    hits = []
+    if any(r.search(prompt) for r in _CONCERN_RES):
+        hits.append((_L4_CONCERN_KEY, _CONCERN_REMINDER))
+    if any(r.search(prompt) for r in _CORRECTION_RES):
+        hits.append((_L4_CORRECTION_KEY, _CORRECTION_REMINDER))
+    if not hits:
+        return None
+    try:
+        con = _connect()
+    except Exception:
+        con = None
+    if con is None:
+        return None  # DB unavailable → drop (match _memory_surface; no unthrottled spam)
+    try:
+        session_id = payload.get("session_id") or ""
+        now = time.time()
+        out = []
+        for key, reminder in hits:
+            if _throttle_check(con, key, session_id, now):
+                continue
+            _record_inject(con, key, None, session_id, now, 0.0, prompt)
+            out.append(reminder)
+        return "\n".join(out) if out else None
+    finally:
+        con.close()
+
+
 def _main_query() -> int:
     """UserPromptSubmit handler — always exit 0 (fail-open).
 
@@ -360,7 +428,7 @@ def _main_query() -> int:
     additionalContext (model-visible). The fullscreen TUI may not paint the UPS
     systemMessage (an undocumented CC rendering gap), so additionalContext is
     the reliable copy; emitting both lets either audience see it. A matched
-    memory entry rides additionalContext only.
+    memory entry and any L4 concern/correction reminder ride additionalContext only.
     """
     try:
         payload = json.loads(sys.stdin.read() or "{}")
@@ -374,8 +442,12 @@ def _main_query() -> int:
         additional = _memory_surface(payload)
     except Exception:
         additional = None
+    try:
+        concern = _concern_inject(payload)
+    except Exception:
+        concern = None
     out: dict = {}
-    ctx_parts = [p for p in (marker, additional) if p]
+    ctx_parts = [p for p in (marker, additional, concern) if p]
     if ctx_parts:
         out["hookSpecificOutput"] = {
             "hookEventName": "UserPromptSubmit",
