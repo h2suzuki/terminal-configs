@@ -119,7 +119,8 @@ keywords: <その状況が再発した時の prompt に出る選択的な match 
 
 - **要約でなく「是正指示」** — incident の叙述や description 再述でなく、 「X する前に Y せよ」 「Z するな (理由)」 等、 読んだ瞬間に再発を止める rule を先頭に置く
 - **keyword を盛らない** — match は keywords 行が担うので reminder は自然文で読みやすく
-- **1 文** — hook output は 1 行、 長文は verbose
+- **事案名・jargon を入れない** — behavioral nudge は具体事案名や jargon を入れても効きにくい。 一般的な是正指示にする (個別事案・事例は entry 本文に書く)
+- **1 文・150 字以内** — hook output は 1 行、 長文は verbose で無視される。 `memory_routing_gate` が 150 字超を deny する (hard 化)
 
 **keywords (match 専用。 reminder とは別行)**:
 

@@ -188,6 +188,11 @@ def _content_problem(content: str) -> str | None:
     if not (m and m.group(1).strip()):
         return ("本文先頭に reminder: 行 (1 文の是正指示) が必要です。 "
                 "/memory-routing の書式に従ってください。")
+    if len(m.group(1).strip()) > 150:
+        return ("reminder が 150 字を超えています (1 文・150 字以内)。 surface 時の "
+                "injection が verbose になり無視されます。 具体事案名や jargon は "
+                "behavioral nudge に効かないので避け、 一般的な是正指示 1 文に縮めて "
+                "ください (個別事案・事例は entry 本文に書く)。")
     mk = re.search(r"^keywords:\s*(.+)$", body, flags=re.MULTILINE)
     if not (mk and mk.group(1).strip()):
         return ("本文に keywords: 行 (選択的な match 語) が必要です。 "
