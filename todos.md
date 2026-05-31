@@ -48,7 +48,7 @@ Goal: `memory_surface.py` の UserPromptSubmit turn marker (`_turn_marker` → s
 Exit Criteria:
 - [x] root cause 究明 (一次資料/log・workflow forensics wtd0adknm で確定): 原因は **systemMessage channel**。UPS marker は当初 (b8ad39d) から一貫して `systemMessage` 経由 (= channel regression は無し)。fullscreen TUI は UPS の systemMessage を inline 描画しない**未文書 CC rendering gap** (closed-as-stale issue #16289 SubagentStop と同型・changelog 2.1.139-158 に修正無し)。Stop は turn 末の安定スロットで描画されるため出る。「変な所に出た」= dynamic workflow 完了が合成 `<task-notification>` を prompt 経路注入し marker 発火 (forensics L421→L422)。throttle/RMW 競合は無関係と反証済 (marker は throttle 対象外・11/11 で 1:1)
 - [x] 修正 (commit 399a42e): marker を `systemMessage` → **`additionalContext`** (model 可視・TUI が実 surface する channel) に移動、memory-surface と 1 つに merge。`_turn_marker` に合成 `<task-notification>` prompt の gate 追加。smoke: real→marker via additionalContext / synthetic→gated / no-transcript→fail-open / combined merge OK。deploy 済 (`~/.claude/hooks/memory_surface.py` と diff 一致)
-- [ ] 実機確認: deploy は本 turn 実行ゆえ本 turn の hook は旧 code で発火済。**次 prompt 以降**で additionalContext に「Turn #N starting」が私の context に出るか H.S. と観察 (= H.S. 依頼の「しばらくデバッグ」)
+- [x] 実機確認 (2026-05-31 新 session turn #1 で両 channel verified): additionalContext 側=私が marker「19:43:20 Turn #1 starting (session start)」を実受信、 systemMessage 側=H.S. が TUI で同文字列を目視確認。 synthetic「変な所」発火は `_turn_marker:318-321` の `<task-notification>` gate で構造解消 (コード確認)。 documented rendering gap は本 prompt では非該当
 
 経緯: 2026-05-30 H.S. 観測「Stop hook の turn counter は表示されるが UserPromptSubmit hook の turn counter が出ていない (regression)。 start の turn counter が変な所に出た — Dynamic workflow completed 通知に『18:03:35 Turn #4 starting (3 sec passed since the last stop)』と紛れた」。H.S. 指定: **後で調査** (skill-active gate 完了後)。2026-05-31 究明・修正完了 (上記)。
 
