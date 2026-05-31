@@ -38,9 +38,9 @@ Work file: survey agent a4fa9fd9 — landscape + primary home + per-skill edit p
 Goal: org (`files/claude_managed-CLAUDE.md`) / user (`files/claude_user-CLAUDE.md`) / project (`.claude/CLAUDE.md`) を読み直し、 新 hook/skill 駆動で不要化した文面を削除。 **判断基準** (H.S. nuance): hook 強制があっても予防的に動けて hook 発動を回避できる文面は価値あり保持。 system prompt 上書きを CLAUDE.md に書く類は不要ゆえ削除候補。
 
 Exit Criteria:
-- [ ] 3 CLAUDE.md 各文面を分類 (hook-redundant / preventive-keep / system-override-delete / semantic-keep)
-- [ ] 削除確定 (borderline は H.S. 確認・clear-cut は適用) → source 編集 → deploy (org/user は sudo cp / project は直 commit) → commit
-- [ ] CLAUDE.md は user 永続指示ゆえ保守的に。 git 履歴で revert 可
+- [x] 3 CLAUDE.md 各文面を分類 + 削除提案を H.S. に提示 → 3 件確認取得
+- [x] commit f54c65d・deploy LIVE (source==deploy): org `位置付け` の override/priority 2 文削除 (永続指示・anti-overreach 対象外は残す) / user `Commit 自律則` の override-framing 行削除 (自律 rule + commit-discipline 参照は残す) / user `System prompt 起因 pain` 節全体削除。 preventive-valuable な hook/skill enforce 文面は nuance 通り保持 (report根拠 L21・introspective L22 等)
+- [x] 保守的に surgical 削除・remaining coherent 確認・git revert 可
 
 Work file: 本 session inline 分析 + survey agent a4fa9fd9 の CLAUDE.md overlap note
 
