@@ -22,6 +22,28 @@ Exit Criteria:
 
 Work file: `last-session-handoff.md` の 「skill 発火率 system 対策」 section ＋ plan `~/.claude/plans/breezy-bubbling-quiche.md` (skill-active gate の full 設計 + 本 session の訂正 + 次 session 手順の durable copy)
 
+### fact→code→inference 原則の skill 整合 (2026-05-31 H.S. 依頼)
+
+Goal: 「事実を推論より優先」原則に**コード化**を明示的に組込み、 関連 skill 全てを整合させる。 統一 claim = 「ゴールが与えられたら (1) まず事実を積む (事実に立脚しない推論=妄想・開発では有害)、 (2) 次にコード化を検討 (コード化可能を推論するのは Token 浪費・精度/再現性で劣る劣化版)、 (3) 最後に事実+コードが埋めぬ所を論理推論でブリッジ。 これが推論の最効果・最価値な運用」。
+
+Exit Criteria:
+- [x] survey (agent a4fa9fd9) で landscape 確定・primary home = `verify-before-claim` (Tier1 owner・常時 invocable・family hub)
+- [x] commit 1032cc2・deploy LIVE: verify-before-claim に `## Operating principle: facts → code → inference` 新設 (3-tier、 Tier2 は writing-code 参照で重複回避) + writing-code/report-by-evidence/debug-guardrail に cross-ref。 intent-preserving (既存 body は frame のみ・body rewrite 無し)
+- [x] CLAUDE.md 重複 (org:21 報告/根拠 = Tier1、 :23 前半) は skill 側集約済。 CLAUDE.md からの削除は下記 pruning task で扱う (verify-before-claim/report-by-evidence/debug-guardrail が cover)
+
+Work file: survey agent a4fa9fd9 — landscape + primary home + per-skill edit plan
+
+### 3 CLAUDE.md の hook 化で不要な部分を削除 (2026-05-31 H.S. 依頼)
+
+Goal: org (`files/claude_managed-CLAUDE.md`) / user (`files/claude_user-CLAUDE.md`) / project (`.claude/CLAUDE.md`) を読み直し、 新 hook/skill 駆動で不要化した文面を削除。 **判断基準** (H.S. nuance): hook 強制があっても予防的に動けて hook 発動を回避できる文面は価値あり保持。 system prompt 上書きを CLAUDE.md に書く類は不要ゆえ削除候補。
+
+Exit Criteria:
+- [ ] 3 CLAUDE.md 各文面を分類 (hook-redundant / preventive-keep / system-override-delete / semantic-keep)
+- [ ] 削除確定 (borderline は H.S. 確認・clear-cut は適用) → source 編集 → deploy (org/user は sudo cp / project は直 commit) → commit
+- [ ] CLAUDE.md は user 永続指示ゆえ保守的に。 git 履歴で revert 可
+
+Work file: 本 session inline 分析 + survey agent a4fa9fd9 の CLAUDE.md overlap note
+
 ### advisory hook for evaluative term post-hoc check
 
 Goal: LLM output 内の評価語 (`大改造` / `影響大` / `アーキテクチャ再設計系` / `改造が少ない`) を Stop hook で捕捉し、 同 turn に証拠 tool (EVIDENCE_TOOLS) が無ければ block して report-by-evidence へ誘導する。 Stop の model 到達 channel は exit2 / decision:block の 2 つだけで両方 block と一次資料で確定 → soft 不可 → block route + `stop_hook_active` advise-once gate で自己 block loop を断つ設計に pivot 済 (H.S. 承認)。
@@ -80,6 +102,6 @@ Exit Criteria:
 - [ ] **除外を厳守** (H.S. 指摘・種類が違う): deploy の決まり (`copy_dir`・exec-bit 0755・settings `copy`) は contract でなく **deploy ルール** ゆえ混ぜない
 - [x] (H.S. 追加依頼) 文書先頭に jargon-free な L1〜L4 概観 (動機/仕組み/狙う効果 の3軸表 + 補足 + 具体例) を記載 (commit 91cf0e0)。 固有名は「相手」に汎用化。 実装 contract 本体は placeholder
 
-Note: doc 作成済 (L1〜L4 概観 = head)。 残るは実装 contract 本体 (line 79 の patterns)。 L1〜L4 全確定ゆえ着手可 (各 hook が grant/declare/throttle/fail-open の最新例)。
+Note: doc 本体 (L1〜L4 概観 head + 実装 contract 0〜5 + 除外) 記載・commit 27b498c・SendUserFile 送付済。 目次 = 二つの family → capability-grant → 判定/検出/状態/安全 → 除外、 各項に実フック名の具体例。 **H.S. レビュー待ち** (外出先・後日)。 承認後に Exit flip + block 削除 (body 構成/粒度の直しがあれば反映してから)。
 
 Work file: plan `~/.claude/plans/breezy-bubbling-quiche.md` の「並行 deliverable」節
