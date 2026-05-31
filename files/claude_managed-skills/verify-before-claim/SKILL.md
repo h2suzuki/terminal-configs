@@ -8,6 +8,14 @@ when_to_use: TRIGGER when about to make a positive claim ("網羅した" / "reas
 
 claim を発する前に根拠 (primary source / 実体 code / 参照ポインタ先) を verify する。 positive form (「網羅した」「確認済」 等の自己 verify claim) と negative form (「できない」「ない」「非対応」 等の否定断定) は polarity が違うだけで、 LLM の calibration error (cut-off で古い記憶・入口だけ読んで網羅と framing) という共通 root cause を持つ。 根拠なき claim は durable artifact に書くと自己強化されて未来の自分を誤誘導する。
 
+## Operating principle: facts → code → inference
+
+ゴールが与えられたら、 推論の運用を 3 段の順で行う。 これが推論の最も効果的で価値ある運用である。 本 skill の verify は 1 段目の中核。
+
+1. **まず事実を積む** — 事実に立脚しない推論は妄想であり、 開発では無価値、 むしろ有害。 本 skill の Process / Rules がこの段の機構 (claim 前に primary source / 実体 code / 参照先を verify)。
+2. **次にコード化できないか考える** — コード化できる対象を推論で代用するのは token の浪費であり、 精度・再現性で劣る劣化版の解。 deterministic ならコードを書いて毎回呼ぶ (code から LLM を呼ぶ側の具体は `writing-code` 「Restrict LLM API call use cases」)。
+3. **最後に、 事実とコードで埋まらない gap を論理推論で橋渡しする** — 推論はここで最も価値を持つ。
+
 ## Process
 
 1. claim を発しかけた瞬間に **停止**

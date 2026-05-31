@@ -96,4 +96,5 @@ bug の起因による sub-classification:
 
 ## Related
 
+- `verify-before-claim` — operating principle 「facts → code → inference」 の primary home。 本 skill は 1 段目 (判定・報告前に根拠を読む) の具体機構
 - **Legacy:** org CLAUDE.md §報告・応答 (§1.3.2.2 sub-bullets 3 行) より

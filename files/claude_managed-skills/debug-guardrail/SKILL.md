@@ -36,6 +36,6 @@ LLM は 「fix した」 感覚が先行し、 新旧の量が同値であるこ
 
 ## Related
 
-- `verify-before-claim` — positive self-verification claim の exhaustiveness。 fix correctness verify は specific instance
+- `verify-before-claim` — operating principle 「facts → code → inference」 の primary home (本 skill は 1 段目を debug 文脈で具体化: 実体を読んでから論じる)。 positive self-verification claim の exhaustiveness、 fix correctness verify は specific instance
 - `report-by-evidence` — 判定 / 推奨 を発話する前に根拠を示す
 - **Legacy:** org CLAUDE.md 開発 § c. デバッグ より
