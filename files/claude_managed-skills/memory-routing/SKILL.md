@@ -117,10 +117,18 @@ keywords: <その状況が再発した時の prompt に出る選択的な match 
 
 **reminder (surface 時に表示・inject される文)**:
 
+**誰向けか**: model 自身。 prompt が keywords に match した時、 UserPromptSubmit hook が `reminder` + `詳細: <path>` を additionalContext に inject する (`<memory-surface>` で囲う)。 **body (Why/事例) は inject されない** — model は path を開かない限り body を読まない。 ゆえ reminder は**それ単体で行動を正せる self-sufficient な是正指示**にする。
+
 - **要約でなく「是正指示」** — incident の叙述や description 再述でなく、 「X する前に Y せよ」 「Z するな (理由)」 等、 読んだ瞬間に再発を止める rule を先頭に置く
 - **keyword を盛らない** — match は keywords 行が担うので reminder は自然文で読みやすく
 - **事案名・jargon を入れない** — behavioral nudge は具体事案名や jargon を入れても効きにくい。 一般的な是正指示にする (個別事案・事例は entry 本文に書く)
 - **1 文・150 字以内** — hook output は 1 行、 長文は verbose で無視される。 `memory_routing_gate` が 150 字超を deny する (hard 化)
+
+良い例 / 悪い例:
+
+- 良い: 「memory entry を書く前に、 引用 source が claim を直接支えるか 1 文で self-check せよ」 (単体で行動を正せる是正指示)
+- 悪い: 「2026-05-28 に feedback_X で起きた件」 (事案の叙述で何をすべきか不明。 事案は body へ)
+- 悪い: 「verify が大事」 (一般論で actionable でない)
 
 **keywords (match 専用。 reminder とは別行)**:
 

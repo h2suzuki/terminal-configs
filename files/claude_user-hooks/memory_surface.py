@@ -376,10 +376,10 @@ def _memory_surface(payload: dict) -> str | None:
         if _throttle_check(con, file_path, session_id, now):
             return None
         _record_inject(con, file_path, project_id, session_id, now, score, prompt)
-        display = (reminder or "(reminder 未設定)").rstrip("。．.!?！？ \t")
+        display = reminder or "(reminder 未設定)"
         return (
             "<memory-surface>\n"
-            f"過去にこんな事例あり: {display}。 詳細: {file_path}\n"
+            f"{display} 詳細: {file_path}\n"
             "</memory-surface>"
         )
     finally:
