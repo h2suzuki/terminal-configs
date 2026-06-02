@@ -25,8 +25,8 @@ Combined Stop hook for org-managed Claude Code:
     規模・影響評価語を、 同 turn 内に Read/Grep/Glob/WebSearch/WebFetch が無ければ
     block。 report-by-evidence skill が射程外にした structured-doc (比較表 cell 等)
     への ungrounded 評価語混入を補う。 bare-term match (table cell に述語は付かない
-    ため述語 anchor は張らない)。 v1 は compound/phrasal な高確度語のみ — 軽微/複雑/
-    大変/抜本的/リスクが高い は流文 false-positive が広く除外、 観測ベースで追加。
+    ため述語 anchor は張らない)。 compound/phrasal な高確度語のみ — 軽微/複雑/
+    大変/抜本的/リスクが高い は流文 false-positive が広く除外。
 
   deferral (warning-only, exit 0):
     「後で対処」「別タスクに切り出」「TODO として」 系 phrase は、 同 turn 内に
@@ -53,7 +53,7 @@ Combined Stop hook for org-managed Claude Code:
     確認済み は meta-text 多数 + Bash-backed 多数で意図的に除外 (ungrounded 確認済み の
     FN は承知)。
 
-  turn-marker (bonus, exit 0 only — 旧 turn_counter.py を融合):
+  turn-marker (bonus, exit 0 only):
     enforcement が pass した turn 終了時のみ、 per-turn marker (時刻 / Turn #N /
     context size / 当 turn の User Prompt からの経過) を JSON `systemMessage` で
     USER に表示する (Claude には非可視)。 経過は transcript の境界 user entry の
@@ -65,11 +65,6 @@ Combined Stop hook for org-managed Claude Code:
     1 bump)。 この once-per-turn 不変条件は memory_surface.py も同 .turns を読むので
     cross-hook で load-bearing。 完全 fail-open で enforcement の
     exit code に影響しない (= おまけ)。
-
-Origin: meta-announce-silence / no-hollow-claims / recognize-own-work /
-report-by-evidence の skill 群 + org CLAUDE.md §報告・応答 / §計画と遂行 を集約した
-enforcer。 skill SKILL.md 本体は別途残置するが、 Stop event での mechanical detection
-は本 hook が担う (評価語 family は report-by-evidence の structured-doc gap を補完)。
 
 Stop hook input: JSON via stdin with session_id, transcript_path,
 hook_event_name = "Stop".
@@ -145,7 +140,7 @@ META_ANNOUNCE_RE = re.compile("|".join(META_ANNOUNCE_PATTERNS), re.IGNORECASE)
 # conjugation を anchor (反省し → 反省しない を excludable)。 false-positive 抑制:
 # 「記憶」 は記述的「X を記憶します」 を を-lookbehind で除外、 次回 は自己矯正動詞
 # (気をつけ/注意/改め) に限定し task 動詞 (実装/着手 等) を除外、 「として」 で
-# 名詞単体 (反省点の指摘) を除外。 broad phrase は引き続き除外 (観測ベースで追加可)。
+# 名詞単体 (反省点の指摘) を除外。 broad phrase は除外。
 HOLLOW_CLAIM_PATTERNS: list[str] = [
     # Learning / memorization
     r"学習し(た|ました)",
@@ -196,8 +191,8 @@ GIT_VERIFY_RE = re.compile(r"\bgit\s+(log|show|diff)\b", re.IGNORECASE)
 # 規模・影響の評価語。 report-by-evidence skill の structured-doc gap (比較表 cell 等
 # への ungrounded 評価語混入 — 述語が付かないので skill の文末 judgment trigger が
 # 射程外) を補う。 bare-term match (table cell に述語 anchor を張れない)。 同 turn に
-# EVIDENCE_TOOLS が無ければ block。 v1 は compound/phrasal な高確度語のみ — 軽微/複雑/
-# 大変/抜本的/リスクが高い は流文 false-positive が広いため除外、 観測ベースで追加。
+# EVIDENCE_TOOLS が無ければ block。 compound/phrasal な高確度語のみ — 軽微/複雑/
+# 大変/抜本的/リスクが高い は流文 false-positive が広いため除外。
 EVALUATIVE_PATTERNS: list[str] = [
     r"大改造",
     r"影響大(?!き)",  # label 影響大 を拾い、 形容詞 影響大きい/大きく は除外
@@ -224,8 +219,8 @@ CLAIM_RE = re.compile(
 # strip_fences で fence と inline span を除いた prose に host cmd が残れば未 fence の
 # 違反。 host_cmd は deploy repo の高頻度 verb 限定 (curl/wget は URL を要求し prose
 # 言及を除外)。 tool pairing 無しの純 text-shape 判定。 ホスト側 は exec 動詞を必須化
-# (裸 match だと当 repo 頻出の中立語「ホスト側」が全 turn で発火するため — bug review
-# 収束指摘)。 残留: pairing は turn-global ゆえ instruction phrase と無関係な
+# (裸 match だと当 repo 頻出の中立語「ホスト側」が全 turn で発火するため)。
+# 残留: pairing は turn-global ゆえ instruction phrase と無関係な
 # 過去形 host cmd が遠隔で同 turn に共存すると稀に発火しうる (観測極小・warn のみ)。
 HOST_CMD_PATTERNS: list[str] = [
     r"sudo\s+(cp|install|tee|mv|rm|ln)\b",
@@ -288,7 +283,7 @@ TODOS_PATH_RE = re.compile(r"todos\.md$")
 # Evidence tools (claim-without-evidence pairing)
 EVIDENCE_TOOLS = {"Read", "Grep", "Glob", "WebSearch", "WebFetch"}
 
-# Task tools (deferral pairing; TodoWrite kept for legacy transcripts)
+# Task tools (deferral pairing)
 TASK_TOOLS = {"TaskCreate", "TaskUpdate", "TodoWrite"}
 
 # Tools whose file_path / notebook_path inputs are recorded for path matching.
@@ -535,7 +530,7 @@ def _run(payload: dict) -> tuple[int, float | None]:
     return exit_code, prompt_epoch
 
 
-# --- Turn marker (bonus; merged from the former turn_counter.py) ---
+# --- Turn marker (bonus, exit 0 only) ---
 # Shown to the USER via systemMessage at turn end, never entering model
 # context. Emitted only on exit 0 (see main): a turn has exactly one exit-0
 # Stop — the clean end, or the stop_hook_active retry that _run demotes from a
@@ -618,7 +613,7 @@ def _emit_turn_marker(payload: dict, prompt_epoch: float | None) -> None:
     ctx = _context_size(sl)
     if isinstance(ctx, (int, float)) and ctx >= 0:
         parts.append("Context %dK" % round(ctx / 1000.0))
-    # Compare on float time; an int now would drop a same-second turn.
+    # now_f keeps sub-second precision for the prompt_epoch comparison.
     if prompt_epoch is not None and 0 < prompt_epoch <= now_f:
         parts.append("(%s passed since the prompt)" % _gap(int(now_f - prompt_epoch)))
     else:
@@ -713,7 +708,6 @@ class TurnMarkerTest(unittest.TestCase):
         self.assertIn("Turn #1", msg)
 
     def test_marker_subsecond_turn_not_dropped(self):
-        # int(now) would floor 1000.95 to 1000 and reject 1000.789 <= 1000.
         self.assertIn("0 sec passed since the prompt", self._emit(1000.789, 1000.95))
 
     def test_marker_fallbacks(self):

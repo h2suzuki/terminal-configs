@@ -132,7 +132,7 @@ def _parse_entry(file_path: str) -> tuple[str, str, str] | None:
     surface — write it to prevent repeating the mistake, not as a summary) plus
     a `keywords:` line (match terms kept separate so the reminder need not be
     keyword-stuffed). `keywords` is what the FTS5 index matches; `reminder` is
-    display-only. The retired `oneline_summary:` is no longer read.
+    display-only.
     """
     try:
         size = os.path.getsize(file_path)
