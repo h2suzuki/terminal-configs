@@ -15,6 +15,9 @@ when_to_use: TRIGGER when editing or creating a .sh file, or when writing a shel
 - **プロセス生成はなるべく避ける。**
   - jq 式の中で現在時刻が必要なら `date +%s` を spawn せず jq 組み込みの `now` を使う
   - `cp src dst && chmod 0755 dst` → `install -m 0755 src dst`（1 プロセスで完結）
+  - stdin を変数へ丸ごと取り込む `var="$(cat)"` は cat を spawn する → `IFS= read -r -d '' var || true`（builtin・fork なし。`-d ''` で NUL まで＝全 stdin、EOF で非 0 ゆえ `|| true`）
+  - ファイル全体を変数へ読むなら `var="$(cat file)"` でなく `var="$(< file)"`（bash 組み込み・fork なし）
+  - 同じ入力から複数値を取るとき jq を複数回呼ばない。1 回の `jq -r '[.a,.b]|@tsv'` ＋ `IFS=$'\t' read -r a b` で 1 プロセスに畳む
 
 - **実行されるスクリプトには exec bit を必ず立てる。** shebang 付きで bare command（`./x` / hook の `command` field / `$PATH` 経由）として起動されるファイルは mode 644 だと `Permission denied` で exec 不能。
   - 作成したら `chmod +x`。 git 管理下なら `git ls-files -s <path>` が `100755` か確認（`100644` は実行不可）
