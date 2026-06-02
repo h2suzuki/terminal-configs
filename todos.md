@@ -41,6 +41,20 @@ Exit Criteria:
 
 Work file: `last-session-handoff.md` + commit f1dab94。 残 = deploy (別 session) + 実機確認
 
+### claude-md-lint bg session 残留 (reaper 取りこぼし)
+
+Goal: SessionStart hook `claude-md-lint.sh` が dispatch する bg lint session が idle/working のまま残留する問題を、 reaper が確実に撤去するよう修正する。
+
+Exit Criteria:
+- [ ] B1: `reap_inflight` を LOCK_FILE guard (現 line 180 の early `exit 0`) より前へ移し、 dispatch 後 BG_STALE_S(30分) 窓でも毎 SessionStart で finished job を撤去する (reap は name-guard・idempotent ゆえ lock 前実行は安全)
+- [ ] B2: marker 消失後の orphan を拾う name-guard fallback sweep (`claude agents --json` で name==claude-md-lint かつ staging 完了/BG_STALE_S 超の session を **full sessionId** 照合で stop+rm。 短 id 再利用 footgun 回避)
+- [ ] A1: child の user_prompt に「Write 後即終了・git/編集を実行も queue もしない strictly read-only」を明示し self-extend (`state:working` 居座り) を抑制
+- [ ] source `files/claude_managed-hooks/claude-md-lint.sh` + deploy `/etc/claude-code/hooks/claude-md-lint.sh` 両更新 + smoke
+
+経緯: 2026-06-02 H.S. 指摘で調査。 orphan `b94dcffb` (state:working/idle, ~21分生存) を実機確認し stop+rm 撤去済。 state.json detail=「queued git mv + commit」 = lint child (Read,Write のみ) が読んだ CLAUDE.md の命令を自分宛と誤認し mandate 超過、 終了せず居座り。 reaper が拾えない構造: reap_inflight は **marker 駆動** で trigger は (a) dispatch+180s の単発 detached pass と (b) 各 SessionStart のみ。 (b) は LOCK_FILE guard が reap より前に early-exit するため dispatch 後30分は走らず、 かつ marker 消失後は jobs/* を列挙しない設計 (line 24-25) ゆえ live orphan に到達不能。 孤立 staging 2件 (今日 `b7b91fc8` + 5/30 `9154cc28`、cache 化されず) = 再発の証拠。 撤去後 inflight/staging=0。
+
+Work file: 現 session の調査 (job state.json / hook line 158-202)。 settings.local.json line11 の `rm -f .inflight/* .staging/*` 手動 cleanup 許可は marker だけ消し live session を orphan 化する footgun (B2 が本質対策)
+
 ## Medium
 
 ### memory entry: evaluative term in table cell の違反事例
