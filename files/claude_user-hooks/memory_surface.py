@@ -33,6 +33,7 @@ import re
 import sqlite3
 import sys
 import time
+import unittest
 
 
 HOME = os.path.expanduser("~")
@@ -323,7 +324,7 @@ def _turn_marker(payload: dict) -> str | None:
     # Read-only view of the Stop-owned turn counter. At this UserPromptSubmit
     # the file still holds the previous turn's (count, last-stop epoch): the
     # turn now starting is count+1 and the idle gap is now - last-stop. We do
-    # not write, so Stop's own "since the previous turn ended" stays correct.
+    # not write, so the Stop-owned count + last-stop epoch stays correct.
     path = _counter_path(payload)
     if not path:
         return None
@@ -541,6 +542,53 @@ def main() -> int:
         return _main_rebuild(argv[1:])
     sys.stderr.write(f"unknown command: {cmd}\n")
     return 1
+
+
+class TurnMarkerTest(unittest.TestCase):
+    """UserPromptSubmit turn-marker tests. Run: python3 -m unittest memory_surface"""
+
+    @staticmethod
+    def _with_turns(count, last):
+        # Seed .turns as the Stop hook writes it ("count last_stop").
+        import tempfile
+        p = os.path.join(tempfile.mkdtemp(), "s.jsonl")
+        open(p, "w").close()
+        payload = {"transcript_path": p, "prompt": "next q"}
+        with open(_counter_path(payload), "w", encoding="utf-8") as f:
+            f.write("%d %d\n" % (count, last))
+        return payload
+
+    def test_idle_gap_since_last_stop(self):
+        from unittest import mock
+        payload = self._with_turns(1, 2_000_000)
+        with mock.patch.object(time, "time", lambda: 2_000_300):
+            msg = _turn_marker(payload)
+        self.assertIn("Turn #2 starting", msg)
+        self.assertIn("5 min passed since the last stop", msg)
+
+    def test_session_start_when_no_counter(self):
+        import tempfile
+        from unittest import mock
+        p = os.path.join(tempfile.mkdtemp(), "fresh.jsonl")
+        open(p, "w").close()
+        with mock.patch.object(time, "time", lambda: 1000):
+            msg = _turn_marker({"transcript_path": p, "prompt": "q"})
+        self.assertIn("Turn #1 starting", msg)
+        self.assertIn("session start", msg)
+
+    def test_read_only_never_writes(self):
+        # Invariant: UPS reads the Stop-owned counter, never writes it.
+        from unittest import mock
+        payload = self._with_turns(3, 5_000_000)
+        with open(_counter_path(payload)) as f:
+            before = f.read()
+        with mock.patch.object(time, "time", lambda: 5_000_100):
+            _turn_marker(payload)
+        with open(_counter_path(payload)) as f:
+            self.assertEqual(f.read(), before)
+
+    def test_synthetic_prompt_skipped(self):
+        self.assertIsNone(_turn_marker({"prompt": "<task-notification> x", "transcript_path": "/x"}))
 
 
 if __name__ == "__main__":
