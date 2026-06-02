@@ -563,7 +563,7 @@ def _emit_turn_marker(payload: dict, prompt_epoch: float | None) -> None:
         parts.append("Context %dK" % round(ctx / 1000.0))
     # now_f keeps sub-second precision for the prompt_epoch comparison.
     if prompt_epoch is not None and 0 < prompt_epoch <= now_f:
-        parts.append("(%s passed since the prompt)" % _gap(int(now_f - prompt_epoch)))
+        parts.append("(%s passed for this turn)" % _gap(int(now_f - prompt_epoch)))
     else:
         started = sl.get("session_started_epoch")
         if isinstance(started, (int, float)) and 0 < started <= now_f:
@@ -670,13 +670,13 @@ class TurnMarkerTest(unittest.TestCase):
             with open(p) as f:
                 self.assertEqual(f.read().split(), want)
 
-    def test_marker_shows_since_the_prompt(self):
+    def test_marker_shows_turn_elapsed(self):
         msg = self._emit(1_000_000 - 150, 1_000_000)
-        self.assertIn("2 min passed since the prompt", msg)
+        self.assertIn("2 min passed for this turn", msg)
         self.assertIn("Turn #1", msg)
 
     def test_marker_subsecond_turn_not_dropped(self):
-        self.assertIn("0 sec passed since the prompt", self._emit(1000.789, 1000.95))
+        self.assertIn("0 sec passed for this turn", self._emit(1000.789, 1000.95))
 
     def test_marker_fallbacks(self):
         started = self._emit(
@@ -686,7 +686,7 @@ class TurnMarkerTest(unittest.TestCase):
         degraded = self._emit(None, 3_000_000, {})
         self.assertNotIn("passed since", degraded)
         self.assertIn("Turn #", degraded)
-        self.assertNotIn("since the prompt", self._emit(3_000_999, 3_000_000, {}))
+        self.assertNotIn("for this turn", self._emit(3_000_999, 3_000_000, {}))
 
     def test_enforcement_returns_code_and_epoch(self):
         import io
