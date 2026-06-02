@@ -188,6 +188,16 @@ if [[ -n "${CLAUDE_MD_LINT_PARENT:-}" ]]; then
   exit 0
 fi
 
+# --- stdin payload → cwd + agent-session guard ------------------------------
+payload="$(</dev/stdin)"
+[[ -z "$payload" ]] && payload='{}'
+# One jq pass: cwd + agent-session detection. Agent sessions (claude agents TUI, --agent,
+# subagents) carry agent_type/agent_id and fire source=startup, so a source matcher can't filter them.
+{ read -r cwd; read -r agent_field; } \
+  < <(jq -r '(.cwd // ""), (.agent_type // .agent_id // "")' <<<"$payload" 2>/dev/null)
+[[ -z "$cwd" ]] && cwd="$PWD"
+[[ -n "$agent_field" ]] && exit 0
+
 # Reap ahead of the dispatch lock guard on purpose — the lock gates only
 # re-dispatch, not teardown — so finished jobs clear without waiting out the
 # lock's BG_STALE_S window. Neither call consumes stdin.
@@ -207,13 +217,6 @@ fi
 
 # No skill body → nothing to inject; bail rather than fire a degraded lint (-s nonzero, -r readable).
 [[ -s "$SKILL_MD" && -r "$SKILL_MD" ]] || exit 0
-
-# --- stdin payload → cwd ----------------------------------------------------
-
-payload="$(cat 2>/dev/null || true)"
-[[ -z "$payload" ]] && payload='{}'
-cwd="$(jq -r '.cwd // empty' <<<"$payload" 2>/dev/null || true)"
-[[ -z "$cwd" ]] && cwd="$PWD"
 
 # --- collect input files ----------------------------------------------------
 
