@@ -2,13 +2,6 @@
 r"""
 Skill-active gate hook for Claude Code.
 
-Origin: 「skill 発火率 system 対策」 task の最優先機構 = skill-active gate
-(2026-05-28/29 H.S. 提起 — 信用向上のため作った skill 群が self-invoke 依存で
-発火率低い問題への機構対策)。
-本 hook は CLAUDE.md section の抽出ではなく、 writing-* skill の invoke を編集の
-前提として機械 enforce する新規機構である (writing-* skill 自体は org CLAUDE.md
-由来だが、 本 hook はその enforcement 層)。
-
 Purpose
 =======
 writing-* skill (writing-code / writing-python / writing-bash / writing-tests /
@@ -56,12 +49,10 @@ kind 語彙 → skill (additive。else 必須):
 
 skill-active 窓 (現 turn ∪ 直近 SKILL_WINDOW_SECONDS=5 分) の根拠
 ================================================================
-skill を invoke したら、 同 turn 内 + 直近 5 分は guidance が active とみなす。当初は
-current-turn のみ (time-TTL なし) だったが、 長い turn を跨ぐ作業で毎 turn 再 invoke
-する friction が大きく、 H.S. 指定で 5 分窓を併用。5 分は 「同一タスクの作業中」 に収まる
-短さで、 旧 1hr 案で懸念した 「無関係な後続 turn が通る」 リスクをほぼ避けつつ再 invoke
-頻度を下げる。現 turn を union するのは >5 分の長い turn 内編集を誤 deny しないため
-(turn 内は entry 時刻に関係なく常に active)。
+skill を invoke したら、 同 turn 内 + 直近 5 分は guidance が active とみなす。 5 分窓は、
+長い turn を跨ぐ作業で毎 turn 再 invoke する friction を抑えつつ、 「同一タスクの作業中」 に
+収まる短さで 「無関係な後続 turn が通る」 リスクをほぼ避ける。 現 turn を union するのは
+>5 分の長い turn 内編集を誤 deny しないため (turn 内は entry 時刻に関係なく常に active)。
 
 turn boundary 判定 (load-bearing — 変更時は false-allow/deny を再発させる)
 =========================================================================
@@ -266,7 +257,7 @@ def _prune_old_sessions() -> None:
             pass
 
 
-# --- current-turn skill scan (stop_checks.py の current-turn 解析を流用・拡張) ---
+# --- current-turn skill scan ---
 
 def _load_transcript(path: str) -> list[dict]:
     out: list[dict] = []

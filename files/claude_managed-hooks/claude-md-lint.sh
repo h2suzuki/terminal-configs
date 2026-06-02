@@ -30,8 +30,8 @@
 # `--setting-sources ""` are best-effort and do NOT reach the `--bg`
 # child — the worker inherits the daemon env (not this client's inline
 # assignment), and `--setting-sources` cannot drop the *managed* settings
-# file that registers this hook. Both were present when the 2026-05-28
-# cascade fired; primary-source confirmation in the env-guard memory entry.
+# file that registers this hook. Primary-source confirmation is in the
+# env-guard memory entry.
 #
 # The skill body (/etc/claude-code/skills/claude-md-lint/SKILL.md) is injected via
 # --append-system-prompt so the child gets the evaluation criteria; the
@@ -206,7 +206,7 @@ payload="$(cat)"
 reap_inflight
 fallback_sweep
 
-# File-based recursion guard (authoritative; rationale + 2026-05-28 cascade in the header). A lock
+# File-based recursion guard (authoritative; rationale in the header). A lock
 # younger than BG_STALE_S blocks re-dispatch (incl. from the child); stale locks are ignored.
 LOCK_FILE="${CACHE_DIR}/.dispatch.lock"
 if [[ -f "$LOCK_FILE" ]]; then

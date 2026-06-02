@@ -2,8 +2,6 @@
 """
 detect_cwd_pollution hook for Claude Code.
 
-Legacy: user CLAUDE.md「Bash 運用」 § cwd 汚染を疑うエラーパターン より
-
 PostToolUseFailure hook on Bash (official tool-failure-only
 event; PostToolUse does not fire on failures by design). When a
 failed Bash command's output contains cwd-pollution error

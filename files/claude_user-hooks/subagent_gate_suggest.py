@@ -12,8 +12,7 @@ mode. Skill 4 条件 (a-d) の判定は最終的に LLM が行う。
 
 Patterns: specific な compound 形のみ (false positive 抑制目的 — 「全部」
 単独より「全 file」 / 「全件」 / 「すべての <ext>」 等の compound form)。
-Origin: subagent-gate skill (4 条件 a-d) を mechanical proxy で補助。
-memory_surface.py の context-inject 出力形式 (hookSpecificOutput) を流用。
+subagent-gate skill (4 条件 a-d) を mechanical proxy で補助。
 
 Exit:
   0: 常に exit 0 (fail-open)。 detect 時は stdout に
@@ -78,7 +77,7 @@ def _detect(prompt: str) -> str | None:
 
 
 def _emit_advisory(matched: str) -> None:
-    """Emit hookSpecificOutput.additionalContext (memory_surface.py 流用形式)。"""
+    """Emit hookSpecificOutput.additionalContext。"""
     # writing-skills template-hook.md の 「judge framing / corrective action
     # 直接書き」 規律遵守 — hook を変更主体に誤読させず、 corrective を直接
     # 書き下す。 trim 抑止の冗長性は意図的に残す。

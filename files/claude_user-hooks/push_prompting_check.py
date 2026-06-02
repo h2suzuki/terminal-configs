@@ -5,8 +5,6 @@ assistant's last turn. Block (exit 2) when detected — git push is
 exclusively user-driven per user CLAUDE.md "Commit 自律則" and the
 commit-discipline skill (push silence clause).
 
-Legacy: user CLAUDE.md § Commit 自律則 (push silence) より
-
 Stdin: Stop payload JSON with `transcript_path`.
 
 Transcript walking is identical to the org-scope stop_checks.py:
@@ -32,8 +30,7 @@ import sys
 # interrogative (`push しますか?`, `push しましょうか`), plan/timing/condition
 # (`push する予定/つもり/タイミング/時/なら/べき`), permission
 # (`push してもいいですか`), and soliciting the user to signal a push
-# (`push する…お知らせ/教えて/指示/連絡ください`). The notification form is the
-# one that slipped through earlier (`push するタイミングでお知らせください`).
+# (`push する…お知らせ/教えて/指示/連絡ください`, `push するタイミングでお知らせください`).
 # Factual reports (`push しました`, `未 push です`) are deliberately NOT matched —
 # the same-clause `[^。、\n]` bound keeps the solicitation alternation tight.
 PUSH_PROMPT_RE = re.compile(

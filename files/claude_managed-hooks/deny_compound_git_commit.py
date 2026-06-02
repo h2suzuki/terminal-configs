@@ -10,9 +10,6 @@ heredoc / multi-quoting / cross-command env-var precedence and
 expose bypass surfaces that the per-command regexes cannot reason
 about.
 
-Legacy: derived from genai-development-process/.claude/hooks/
-deny-compound-git-commit.py (same logic, project-tailored rationale).
-
 Exit:
   0: not a compound git-commit invocation (allow)
   2: compound `git commit` detected (deny)

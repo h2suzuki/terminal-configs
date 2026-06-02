@@ -7,9 +7,6 @@ Sibling to deny_compound_git_commit.py. Forces `git add` to run as
 a standalone Bash call so the staged state is settled before the
 subsequent `git commit` PreToolUse hooks fire.
 
-Legacy: derived from genai-development-process/.claude/hooks/
-deny-compound-git-add.py.
-
 Exit:
   0: not a compound git-add invocation (allow)
   2: compound `git add` detected (deny)

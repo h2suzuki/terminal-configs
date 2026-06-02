@@ -2,8 +2,6 @@
 """
 check_commit_author hook for Claude Code.
 
-Legacy: user CLAUDE.md「コミット・PUSH運用」 § Author は ... で統一 より
-
 PreToolUse hook on Bash. When the command contains `git commit`,
 verifies that the target repo's effective `user.email` equals
 the expected email passed as argv[1]. On mismatch OR unset,

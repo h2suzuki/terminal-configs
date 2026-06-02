@@ -7,8 +7,7 @@ confirmation ("この draft で良い?" / "進めて良い?"), the gate requires
 declare-and-proceed skill was invoked in the current turn (∪ recent 5 min). If
 not, it DENIES via JSON permissionDecision and routes the model to invoke the
 skill first — so the 3-check (material 取得可? / default 可? / parallel 両立可?)
-runs BEFORE the question is posed, not after (an advisory additionalContext was
-dead-on-arrival: it landed only after the user had already been asked).
+runs BEFORE the question is posed, not after.
 
 After invoking declare-and-proceed the model either decides itself (skipping the
 ask) or, for a genuine exception (user-taste / design-level / unrecoverable
@@ -99,7 +98,7 @@ def _detect(text: str) -> str | None:
     return None
 
 
-# --- current-turn skill scan (skill_reminder_gate.py の turn 解析を流用) ---
+# --- current-turn skill scan ---
 
 def _load_transcript(path: str) -> list[dict]:
     out: list[dict] = []

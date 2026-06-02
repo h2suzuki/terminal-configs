@@ -2,20 +2,16 @@
 r"""
 Deterministic feature-research findings builder + SessionStart hook.
 
-Legacy: org CLAUDE.md §開発 (deterministic transform は LLM でなく code に)。
-
 This single file both BUILDS the findings and IS the SessionStart hook —
 there is no LLM and no `claude` subprocess in the build, so it cannot
-re-trigger SessionStart, which is why the old `.sh` dispatcher's recursion
-guard / reaper / staging / in-flight machinery is all gone (that complexity
-existed only to tame the `claude --bg` LLM spawn).
+re-trigger SessionStart and needs no recursion guard / reaper / staging /
+in-flight machinery.
 
 The official changelog (code.claude.com/docs/en/changelog.md) is structured
 MDX — `<Update label="X.Y.Z" description="<Mon DD, YYYY>">` blocks of `  * `
 bullets — so the build is a plain parse → keep post-cutoff (by the in-source
 DATE, no model judgement) → keyword-bucket → emit verbatim. No summarization
-means features can never be silently dropped (the bug that made the old
-findings untrustworthy).
+means features can never be silently dropped.
 
 (The RSS feed code.claude.com/docs/en/changelog/rss.xml is cleaner XML but only
 carries ~15 recent items, too few for the post-cutoff range; the MDX page,

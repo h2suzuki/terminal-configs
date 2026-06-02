@@ -2,8 +2,6 @@
 """
 check_commit_format hook for Claude Code.
 
-Legacy: user CLAUDE.md「コミット・PUSH運用」 § 50/72 rule + <area>: <Imperative> より
-
 PreToolUse hook on Bash. When `git commit` is invoked with a
 message (via heredoc or `-m` / `--message`), validates:
 

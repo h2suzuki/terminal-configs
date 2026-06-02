@@ -6,9 +6,6 @@ uncommitted changes in cwd. If any, inject additionalContext to
 remind Claude of the commit-discipline rule ("don't leave dirty
 state at session end").
 
-Legacy: org CLAUDE.md → commit-discipline skill (session wind-down
-clause) より
-
 Why UserPromptSubmit (not Stop): the user's intent to end the
 session is best detected from their own message; Stop hook fires
 after every assistant turn regardless of session state, and

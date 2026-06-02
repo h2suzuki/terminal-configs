@@ -17,7 +17,7 @@ Heuristic for "overuse candidate":
 
 3 条件すべて true で warn 発火 (false positive 抑制目的の AND)。
 
-Origin: subagent-gate skill (4 条件 a-d) を mechanical proxy で補助。 spawn
+subagent-gate skill (4 条件 a-d) を mechanical proxy で補助。 spawn
 そのものは止めない — judgment は LLM 側に残す。
 
 Exit:

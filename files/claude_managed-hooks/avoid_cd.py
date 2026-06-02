@@ -2,8 +2,6 @@
 """
 Avoid-cd hook for Claude Code.
 
-Legacy: user CLAUDE.md「Bash 運用」より
-
 PreToolUse hook on Bash. Detects commands starting with `cd ` (or
 bare `cd`) and emits hookSpecificOutput.additionalContext suggesting
 alternatives (pushd/popd, absolute paths, `git -C <repo>`).
