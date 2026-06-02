@@ -19,6 +19,7 @@ one skill invoke + re-ask, a slip lets a decidable question reach the user ungat
 deploy: /etc/claude-code/hooks/ (copy_dir で自動)。canonical source は
 files/claude_managed-hooks/。両者を同 session で同内容に保つ。
 """
+
 from __future__ import annotations
 
 import datetime
@@ -94,6 +95,7 @@ def _detect(text: str) -> str | None:
 
 # --- current-turn skill scan ---
 
+
 def _load_transcript(path: str) -> list[dict]:
     out: list[dict] = []
     try:
@@ -135,7 +137,9 @@ def _parse_ts(ts) -> float | None:
         return None
 
 
-def _skill_active(entries: list[dict], skill: str, now: float, window_s: int) -> bool | None:
+def _skill_active(
+    entries: list[dict], skill: str, now: float, window_s: int
+) -> bool | None:
     """target skill が 現 turn ∪ 直近 window_s 秒 に invoke 済か。boundary 不在は None (fail-open ALLOW)。
 
     Skill 呼出形: assistant tool_use, name=="Skill", input=={"skill":"<name>"}.
@@ -170,6 +174,7 @@ def _skill_active(entries: list[dict], skill: str, now: float, window_s: int) ->
 
 
 # --- deny emission (writing-skills の deny-wording 規律。文面は意図的に冗長・trim 禁止) ---
+
 
 def _emit_deny(reason: str) -> None:
     payload = {

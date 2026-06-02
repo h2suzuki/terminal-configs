@@ -384,6 +384,7 @@ else
     # Detached self-reap: one delayed setsid pass tears down a finished bg session even if no new session starts.
     self="$(realpath -e "$0" 2>/dev/null || printf '%s' "$0")"
     if command -v setsid >/dev/null 2>&1; then
+      # shellcheck disable=SC2016  # $1/$2 expand in the inner bash, not here (intentional)
       setsid bash -c 'sleep "$1"; exec "$2" --reap-pass' _ "$BG_SELF_REAP_S" "$self" \
         </dev/null >/dev/null 2>&1 &
     else

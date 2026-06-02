@@ -64,7 +64,7 @@ def _run(payload: dict) -> int:
             "single-command form; compound forms tangle multi-heredoc and "
             "multi-quoting cases and create bypass surfaces.\n\n"
             "Retry: split into separate Bash invocations — first `git add ...`, "
-            "then `git commit -m \"...\"` (or heredoc form) as another call.\n"
+            'then `git commit -m "..."` (or heredoc form) as another call.\n'
         )
         return 2
     return 0

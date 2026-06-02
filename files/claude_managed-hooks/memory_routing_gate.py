@@ -78,8 +78,8 @@ GRANTS_DIR = os.path.join(STATE_DIR, "memory-routing", "grants")
 SURFACE_HOOK = os.path.join(HOME, ".claude", "hooks", "memory_surface.py")
 USER_MEM_DIR = os.path.join(HOME, ".claude", "memory")
 
-MAX_ENTRY_SIZE = 50_000           # memory_surface._parse_entry と一致
-GRANT_STALE_SECONDS = 3600        # 放置 grant を無効化 + 掃除する閾値
+MAX_ENTRY_SIZE = 50_000  # memory_surface._parse_entry と一致
+GRANT_STALE_SECONDS = 3600  # 放置 grant を無効化 + 掃除する閾値
 SYNC_TIMEOUT_SECONDS = 10
 INDEX_NAMES = {"MEMORY.md", "OLD-MEMORY.md"}
 OPT_OUT = "memory-guard: allow"
@@ -95,13 +95,46 @@ _ASCII_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{3,}")
 # 「これらだけ」弾く: 1 つでも固有語があれば通す。tunable。
 STOPWORDS = {
     # JA (katakana / 3+ char generics)
-    "ファイル", "エラー", "コード", "テスト", "データ", "メモリ",
-    "ください", "できる", "される", "について", "における",
+    "ファイル",
+    "エラー",
+    "コード",
+    "テスト",
+    "データ",
+    "メモリ",
+    "ください",
+    "できる",
+    "される",
+    "について",
+    "における",
     # EN (4+ char generics)
-    "file", "files", "error", "errors", "code", "test", "tests",
-    "data", "this", "that", "when", "with", "from", "your", "have",
-    "will", "into", "thing", "things", "stuff", "issue", "change",
-    "update", "value", "true", "false", "none", "null",
+    "file",
+    "files",
+    "error",
+    "errors",
+    "code",
+    "test",
+    "tests",
+    "data",
+    "this",
+    "that",
+    "when",
+    "with",
+    "from",
+    "your",
+    "have",
+    "will",
+    "into",
+    "thing",
+    "things",
+    "stuff",
+    "issue",
+    "change",
+    "update",
+    "value",
+    "true",
+    "false",
+    "none",
+    "null",
 }
 
 
@@ -166,39 +199,51 @@ def _strip_frontmatter(text: str) -> str:
         end = text.find("\n---", 3)
         if end != -1:
             nl = text.find("\n", end + 4)
-            return text[nl + 1:] if nl != -1 else ""
+            return text[nl + 1 :] if nl != -1 else ""
     return text
 
 
 def _content_problem(content: str) -> str | None:
     """受理できない内容なら是正指示文字列、OK なら None。"""
     if len(content.encode("utf-8")) > MAX_ENTRY_SIZE:
-        return (f"entry が {MAX_ENTRY_SIZE} byte 超で memory_surface が index "
-                "しません。 短くしてから Write してください。")
+        return (
+            f"entry が {MAX_ENTRY_SIZE} byte 超で memory_surface が index "
+            "しません。 短くしてから Write してください。"
+        )
     body = _strip_frontmatter(content)
     if re.search(r"^oneline_summary:", body, flags=re.MULTILINE):
-        return ("oneline_summary: は廃止形式 (read されません)。 reminder: と "
-                "keywords: の 2 行に置き換えてください。")
+        return (
+            "oneline_summary: は廃止形式 (read されません)。 reminder: と "
+            "keywords: の 2 行に置き換えてください。"
+        )
     m = re.search(r"^reminder:\s*(.+)$", body, flags=re.MULTILINE)
     if not (m and m.group(1).strip()):
-        return ("本文先頭に reminder: 行 (1 文の是正指示) が必要です。 "
-                "/memory-routing の書式に従ってください。")
+        return (
+            "本文先頭に reminder: 行 (1 文の是正指示) が必要です。 "
+            "/memory-routing の書式に従ってください。"
+        )
     if len(m.group(1).strip()) > 150:
-        return ("reminder が 150 字を超えています (1 文・150 字以内)。 surface 時の "
-                "injection が verbose になり無視されます。 具体事案名や jargon は "
-                "behavioral nudge に効かないので避け、 一般的な是正指示 1 文に縮めて "
-                "ください (個別事案・事例は entry 本文に書く)。")
+        return (
+            "reminder が 150 字を超えています (1 文・150 字以内)。 surface 時の "
+            "injection が verbose になり無視されます。 具体事案名や jargon は "
+            "behavioral nudge に効かないので避け、 一般的な是正指示 1 文に縮めて "
+            "ください (個別事案・事例は entry 本文に書く)。"
+        )
     mk = re.search(r"^keywords:\s*(.+)$", body, flags=re.MULTILINE)
     if not (mk and mk.group(1).strip()):
-        return ("本文に keywords: 行 (選択的な match 語) が必要です。 "
-                "/memory-routing の書式に従ってください。")
+        return (
+            "本文に keywords: 行 (選択的な match 語) が必要です。 "
+            "/memory-routing の書式に従ってください。"
+        )
     keywords = mk.group(1)
     tokens = _CJK_RE.findall(keywords) + _ASCII_RE.findall(keywords)
     meaningful = [t for t in tokens if t.lower() not in STOPWORDS]
     if not meaningful:
-        return ("keywords が FTS で match しません (3+ 字 CJK / 4+ 字 ASCII の "
-                "固有語が無い、 または一般語のみ)。 tool 名・path・error code・"
-                "固有名詞など選択的な語を入れてください。")
+        return (
+            "keywords が FTS で match しません (3+ 字 CJK / 4+ 字 ASCII の "
+            "固有語が無い、 または一般語のみ)。 tool 名・path・error code・"
+            "固有名詞など選択的な語を入れてください。"
+        )
     return None
 
 
@@ -210,8 +255,9 @@ def _edit_content(tool: str, inp: dict) -> str:
         return inp.get("new_string") or ""
     if tool == "MultiEdit":
         edits = inp.get("edits") or []
-        return "\n".join(e.get("new_string", "") or "" for e in edits
-                         if isinstance(e, dict))
+        return "\n".join(
+            e.get("new_string", "") or "" for e in edits if isinstance(e, dict)
+        )
     return ""
 
 
@@ -275,9 +321,13 @@ def cmd_sync(payload: dict) -> None:
     if pid:
         args.append(pid)
     try:
-        subprocess.run(args, timeout=SYNC_TIMEOUT_SECONDS,
-                       stdin=subprocess.DEVNULL,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(
+            args,
+            timeout=SYNC_TIMEOUT_SECONDS,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
     except Exception:
         pass
 

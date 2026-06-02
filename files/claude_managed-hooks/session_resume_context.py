@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """SessionStart hook: inject the prior session's last assistant text as resume context (startup / clear only; fail-open)."""
+
 from __future__ import annotations
 
 import glob
@@ -10,8 +11,8 @@ import sys
 
 HOME = os.path.expanduser("~")
 PROJECTS_DIR = os.path.join(HOME, ".claude", "projects")
-MAX_INJECT_LEN = 2000   # truncate prior tail at this length
-MIN_TEXT_LEN = 30       # skip if last assistant text is shorter than this
+MAX_INJECT_LEN = 2000  # truncate prior tail at this length
+MIN_TEXT_LEN = 30  # skip if last assistant text is shorter than this
 
 
 def _encoded_project_id(cwd: str) -> str:

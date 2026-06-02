@@ -23,6 +23,7 @@ Modes:
 The query mode does NOT scan the filesystem — the DB is the source of truth,
 maintained by /memory-routing via --upsert / --delete.
 """
+
 from __future__ import annotations
 
 import json
@@ -38,8 +39,10 @@ HOME = os.path.expanduser("~")
 USER_MEMORY_DIR = os.path.join(HOME, ".claude", "memory")
 DB_PATH = os.path.join(HOME, ".claude", "hooks", "state", "memory_index.sqlite3")
 THROTTLE_SECONDS = 900  # 15 min per (file_path, session_id)
-BM25_SURFACE_FLOOR = -1.0  # top-1 を surface する floor (負が深いほど良 match、 ~0 は弱 noise)
-BM25_STRONG_FLOOR = -3.0   # 2 件目は強候補 (bm25 <= これ) の時だけ追加。 大抵は top-1 のみ
+# top-1 を surface する floor (負が深いほど良 match、 ~0 は弱 noise)
+BM25_SURFACE_FLOOR = -1.0
+# 2 件目は強候補 (bm25 <= これ) の時だけ追加。 大抵は top-1 のみ
+BM25_STRONG_FLOOR = -3.0
 MIN_ASCII_LEN = 4
 MIN_CJK_RUN = 3
 QUERY_EXCERPT_LEN = 200
@@ -59,21 +62,27 @@ _CORRECTION_REMINDER = (
     "<correction-detected>訂正/feedback が出た可能性。 memory-routing: 同じ指摘の "
     "再発なら memory entry 化を検討 (user vs project-local を判断)。</correction-detected>"
 )
-_CONCERN_RES = [re.compile(p, re.IGNORECASE) for p in (
-    r"心配",
-    r"気がかり",
-    r"懸念(?!\s*もう少し)",
-    r"大丈夫(?:[?？]|なの|ですか|だろうか|でしょうか|かな)",
-    r"(?:壊れ|崩れ|破綻|消え|漏れ|デグレ|退行|regress).{0,8}(?:ない|しない)(?:か|の)?[?？]",
-    r"(?:恐れ|危険)が(?:ある|あり|高)",
-    r"(?:本当に|ほんとに|ちゃんと).{0,12}(?:動く|大丈夫|問題ない|いける)(?:の)?[?？]",
-)]
-_CORRECTION_RES = [re.compile(p, re.IGNORECASE) for p in (
-    r"じゃなくて",
-    r"(?:そう|それ)じゃ(?:なく|ない)",
-    r"勝手に",
-    r"(?:前|さっき|何度|毎回|以前)(?:に)?も(?:言|いっ|指摘|伝え)",
-)]
+_CONCERN_RES = [
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"心配",
+        r"気がかり",
+        r"懸念(?!\s*もう少し)",
+        r"大丈夫(?:[?？]|なの|ですか|だろうか|でしょうか|かな)",
+        r"(?:壊れ|崩れ|破綻|消え|漏れ|デグレ|退行|regress).{0,8}(?:ない|しない)(?:か|の)?[?？]",
+        r"(?:恐れ|危険)が(?:ある|あり|高)",
+        r"(?:本当に|ほんとに|ちゃんと).{0,12}(?:動く|大丈夫|問題ない|いける)(?:の)?[?？]",
+    )
+]
+_CORRECTION_RES = [
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"じゃなくて",
+        r"(?:そう|それ)じゃ(?:なく|ない)",
+        r"勝手に",
+        r"(?:前|さっき|何度|毎回|以前)(?:に)?も(?:言|いっ|指摘|伝え)",
+    )
+]
 
 
 def _connect() -> sqlite3.Connection | None:
@@ -139,7 +148,7 @@ def _parse_entry(file_path: str) -> tuple[str, str, str] | None:
         end = text.find("\n---", 3)
         if end != -1:
             nl = text.find("\n", end + 4)
-            body = text[nl + 1:] if nl != -1 else ""
+            body = text[nl + 1 :] if nl != -1 else ""
     m = re.search(r"^reminder:\s*(.+)$", body, flags=re.MULTILINE)
     reminder = m.group(1).strip() if m else ""
     mk = re.search(r"^keywords:\s*(.+)$", body, flags=re.MULTILINE)
@@ -230,7 +239,8 @@ def _build_query(prompt: str) -> str | None:
     """Extract 3+ char CJK runs and 4+ char ASCII tokens; OR-join for FTS5."""
     cjk = re.findall(r"[぀-ゟ゠-ヿ一-鿿]{3,}", prompt)
     ascii_tokens = re.findall(
-        rf"[A-Za-z][A-Za-z0-9_-]{{{MIN_ASCII_LEN - 1},}}", prompt,
+        rf"[A-Za-z][A-Za-z0-9_-]{{{MIN_ASCII_LEN - 1},}}",
+        prompt,
     )
     terms: list[str] = []
     seen: set[str] = set()
@@ -324,8 +334,10 @@ def _turn_marker(payload: dict) -> str | None:
     except (OSError, ValueError):
         count = last = 0
     now = int(time.time())
-    out = [time.strftime("%H:%M:%S", time.localtime(now)),
-           "Turn #%d starting" % (count + 1)]
+    out = [
+        time.strftime("%H:%M:%S", time.localtime(now)),
+        "Turn #%d starting" % (count + 1),
+    ]
     if last > 0:
         out.append("(%s passed since the last stop)" % _gap(now - last))
     else:
@@ -373,7 +385,9 @@ def _memory_surface(payload: dict) -> str | None:
                 continue
             _record_inject(con, file_path, project_id, session_id, now, score, prompt)
             display = reminder or "(reminder 未設定)"
-            blocks.append(f"<memory-surface>\n{display} 詳細: {file_path}\n</memory-surface>")
+            blocks.append(
+                f"<memory-surface>\n{display} 詳細: {file_path}\n</memory-surface>"
+            )
         return "\n".join(blocks) if blocks else None
     finally:
         con.close()
@@ -385,7 +399,9 @@ def _concern_inject(payload: dict) -> str | None:
     if not isinstance(prompt, str) or not prompt.strip():
         return None
     # Skip synthetic re-entry prompts (task-notification / compaction continuation).
-    if prompt.lstrip().startswith(("<task-notification>", "This session is being continued")):
+    if prompt.lstrip().startswith(
+        ("<task-notification>", "This session is being continued")
+    ):
         return None
     hits = []
     if any(r.search(prompt) for r in _CONCERN_RES):
@@ -399,7 +415,9 @@ def _concern_inject(payload: dict) -> str | None:
     except Exception:
         con = None
     if con is None:
-        return None  # DB unavailable → drop (match _memory_surface; no unthrottled spam)
+        return (
+            None  # DB unavailable → drop (match _memory_surface; no unthrottled spam)
+        )
     try:
         session_id = payload.get("session_id") or ""
         now = time.time()
@@ -529,6 +547,7 @@ class TurnMarkerTest(unittest.TestCase):
     def _with_turns(count, last):
         # Seed .turns as the Stop hook writes it ("count last_stop").
         import tempfile
+
         p = os.path.join(tempfile.mkdtemp(), "s.jsonl")
         open(p, "w").close()
         payload = {"transcript_path": p, "prompt": "next q"}
@@ -538,6 +557,7 @@ class TurnMarkerTest(unittest.TestCase):
 
     def test_idle_gap_since_last_stop(self):
         from unittest import mock
+
         payload = self._with_turns(1, 2_000_000)
         with mock.patch.object(time, "time", lambda: 2_000_300):
             msg = _turn_marker(payload)
@@ -547,6 +567,7 @@ class TurnMarkerTest(unittest.TestCase):
     def test_session_start_when_no_counter(self):
         import tempfile
         from unittest import mock
+
         p = os.path.join(tempfile.mkdtemp(), "fresh.jsonl")
         open(p, "w").close()
         with mock.patch.object(time, "time", lambda: 1000):
@@ -557,6 +578,7 @@ class TurnMarkerTest(unittest.TestCase):
     def test_read_only_never_writes(self):
         # Invariant: UPS reads the Stop-owned counter, never writes it.
         from unittest import mock
+
         payload = self._with_turns(3, 5_000_000)
         with open(_counter_path(payload)) as f:
             before = f.read()
@@ -566,7 +588,9 @@ class TurnMarkerTest(unittest.TestCase):
             self.assertEqual(f.read(), before)
 
     def test_synthetic_prompt_skipped(self):
-        self.assertIsNone(_turn_marker({"prompt": "<task-notification> x", "transcript_path": "/x"}))
+        self.assertIsNone(
+            _turn_marker({"prompt": "<task-notification> x", "transcript_path": "/x"})
+        )
 
 
 if __name__ == "__main__":

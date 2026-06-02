@@ -12,6 +12,7 @@ Exit:
   0: 常に exit 0 (fail-open)。 detect 時のみ stdout に JSON 出力、 他は silent。
      parse / IO error も fail-open (exit 0、 出力なし)。
 """
+
 from __future__ import annotations
 
 import json

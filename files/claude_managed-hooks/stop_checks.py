@@ -182,9 +182,7 @@ DEFERRAL_RE = re.compile(
 )
 
 # --- Pattern: claim-without-evidence (warning, no block) ---
-CLAIM_RE = re.compile(
-    r"不明|該当なし|存在しません|未確認|わかりません|分かりません"
-)
+CLAIM_RE = re.compile(r"不明|該当なし|存在しません|未確認|わかりません|分かりません")
 
 # --- Pattern: provide-user-instructions (warning, no block) ---
 # MANUAL_EXEC 文脈ありつつ HOST_CMD が strip_fences 後の bare prose に残る時だけ warn (host_cmd は頻出 verb 限定、 ホスト側 は exec 動詞必須 — 裸だと中立語が全 turn 発火)。
@@ -363,9 +361,7 @@ def _check(
     # hollow-claims (block unless persistence-path Write/Edit in turn)
     m = HOLLOW_CLAIM_RE.search(text)
     if m:
-        persistence_recorded = any(
-            PERSISTENCE_PATH_RE.search(p) for p in tool_paths
-        )
+        persistence_recorded = any(PERSISTENCE_PATH_RE.search(p) for p in tool_paths)
         if not persistence_recorded:
             blocking.append(
                 f"hollow-claims: 「{m.group(0)}」 と発話したが当ターンで "
@@ -485,6 +481,7 @@ def _run(payload: dict) -> tuple[int, float | None]:
 # block to a pass (advise-once) — so it counts once per turn. .turns (flock RMW)
 # holds count + last-stop; the marker's gap = now - the turn's prompt epoch.
 
+
 def _counter_path(payload: dict) -> str | None:
     transcript = payload.get("transcript_path") or ""
     if transcript:
@@ -535,8 +532,11 @@ def _context_size(sl: dict):
     n = cw.get("total_input_tokens")
     if n is None:
         cu = cw.get("current_usage") or {}
-        n = (cu.get("input_tokens", 0) + cu.get("cache_read_input_tokens", 0)
-             + cu.get("cache_creation_input_tokens", 0)) or None
+        n = (
+            cu.get("input_tokens", 0)
+            + cu.get("cache_read_input_tokens", 0)
+            + cu.get("cache_creation_input_tokens", 0)
+        ) or None
     return n
 
 
@@ -567,7 +567,9 @@ def _emit_turn_marker(payload: dict, prompt_epoch: float | None) -> None:
     else:
         started = sl.get("session_started_epoch")
         if isinstance(started, (int, float)) and 0 < started <= now_f:
-            parts.append("(%s passed since the session start)" % _gap(int(now_f - started)))
+            parts.append(
+                "(%s passed since the session start)" % _gap(int(now_f - started))
+            )
     print(json.dumps({"systemMessage": " ".join(parts)}))
 
 
@@ -579,7 +581,10 @@ def main() -> int:
     try:
         exit_code, prompt_epoch = _run(payload)
     except Exception:
-        exit_code, prompt_epoch = 0, None  # fail-open: an enforcement glitch never blocks the turn
+        exit_code, prompt_epoch = (
+            0,
+            None,
+        )  # fail-open: an enforcement glitch never blocks the turn
     # Bonus: at a genuine turn end (enforcement passed, exit 0) show the
     # per-turn marker. Never on a block (exit 2) — the turn is continuing.
     # Fully isolated: a marker error must not change the enforcement result.
@@ -602,11 +607,15 @@ class TurnMarkerTest(unittest.TestCase):
 
     @staticmethod
     def _asst(text):
-        return {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
+        return {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": text}]},
+        }
 
     @staticmethod
     def _transcript(entries):
         import tempfile
+
         p = os.path.join(tempfile.mkdtemp(), "t.jsonl")
         with open(p, "w", encoding="utf-8") as f:
             for e in entries:
@@ -617,9 +626,14 @@ class TurnMarkerTest(unittest.TestCase):
         import io
         from contextlib import redirect_stdout
         from unittest import mock
+
         payload = {"transcript_path": self._transcript([])}
-        with mock.patch.object(time, "time", lambda: now), \
-             mock.patch.object(sys.modules[__name__], "_statusline", lambda sid: statusline or {}):
+        with (
+            mock.patch.object(time, "time", lambda: now),
+            mock.patch.object(
+                sys.modules[__name__], "_statusline", lambda sid: statusline or {}
+            ),
+        ):
             buf = io.StringIO()
             with redirect_stdout(buf):
                 _emit_turn_marker(payload, prompt_epoch)
@@ -627,7 +641,9 @@ class TurnMarkerTest(unittest.TestCase):
         return json.loads(out)["systemMessage"] if out else ""
 
     def test_parse_ts(self):
-        want = datetime.datetime.fromisoformat("2026-06-02T04:45:24.945+00:00").timestamp()
+        want = datetime.datetime.fromisoformat(
+            "2026-06-02T04:45:24.945+00:00"
+        ).timestamp()
         self.assertEqual(_parse_ts(self.TS), want)
         for bad in (None, "", "not-a-date", 123):
             self.assertIsNone(_parse_ts(bad))
@@ -638,12 +654,16 @@ class TurnMarkerTest(unittest.TestCase):
         self.assertEqual(pe, _parse_ts(self.TS))
         no_ts = [{"type": "user", "message": {"content": "x"}}, self._asst("y")]
         self.assertIsNone(_current_turn(no_ts)[4])
-        tool_only = [{"type": "user", "message": {"content": [{"type": "tool_result"}]}}, self._asst("y")]
+        tool_only = [
+            {"type": "user", "message": {"content": [{"type": "tool_result"}]}},
+            self._asst("y"),
+        ]
         self.assertEqual(_current_turn(tool_only), ("", set(), [], False, None))
 
     def test_bump_persists_count_and_last_stop(self):
         # .turns = "count last_stop"; last_stop feeds the next UPS idle gap.
         import tempfile
+
         p = os.path.join(tempfile.mkdtemp(), "x.turns")
         for n, want in ((1000, ["1", "1000"]), (2000, ["2", "2000"])):
             self.assertEqual(_bump(p, n), int(want[0]))
@@ -659,7 +679,9 @@ class TurnMarkerTest(unittest.TestCase):
         self.assertIn("0 sec passed since the prompt", self._emit(1000.789, 1000.95))
 
     def test_marker_fallbacks(self):
-        started = self._emit(None, 3_000_000, {"session_started_epoch": 3_000_000 - 600})
+        started = self._emit(
+            None, 3_000_000, {"session_started_epoch": 3_000_000 - 600}
+        )
         self.assertIn("passed since the session start", started)
         degraded = self._emit(None, 3_000_000, {})
         self.assertNotIn("passed since", degraded)
@@ -669,12 +691,22 @@ class TurnMarkerTest(unittest.TestCase):
     def test_enforcement_returns_code_and_epoch(self):
         import io
         from contextlib import redirect_stderr
+
         with redirect_stderr(io.StringIO()):
             blk = self._transcript([self._user(), self._asst("省略しません")])
-            self.assertEqual(_run({"transcript_path": blk, "stop_hook_active": False}), (2, _parse_ts(self.TS)))
-            self.assertEqual(_run({"transcript_path": blk, "stop_hook_active": True})[0], 0)
-            clean = self._transcript([self._user(), self._asst("all good, here is the result.")])
-            self.assertEqual(_run({"transcript_path": clean, "stop_hook_active": False})[0], 0)
+            self.assertEqual(
+                _run({"transcript_path": blk, "stop_hook_active": False}),
+                (2, _parse_ts(self.TS)),
+            )
+            self.assertEqual(
+                _run({"transcript_path": blk, "stop_hook_active": True})[0], 0
+            )
+            clean = self._transcript(
+                [self._user(), self._asst("all good, here is the result.")]
+            )
+            self.assertEqual(
+                _run({"transcript_path": clean, "stop_hook_active": False})[0], 0
+            )
         self.assertEqual(_run("nope"), (0, None))
         self.assertEqual(_run({}), (0, None))
 

@@ -189,8 +189,7 @@ def cmd_record(payload: dict) -> None:
         conn.execute("BEGIN IMMEDIATE")
         try:
             row = conn.execute(
-                "SELECT accesses_json FROM read_mtime "
-                "WHERE session_id=? AND path=?",
+                "SELECT accesses_json FROM read_mtime WHERE session_id=? AND path=?",
                 (sid, path),
             ).fetchone()
             accesses = _load_accesses(row[0]) if row else []
@@ -227,8 +226,7 @@ def cmd_check(payload: dict) -> None:
     conn = _open_db()
     try:
         row = conn.execute(
-            "SELECT accesses_json FROM read_mtime "
-            "WHERE session_id=? AND path=?",
+            "SELECT accesses_json FROM read_mtime WHERE session_id=? AND path=?",
             (sid, path),
         ).fetchone()
     finally:
@@ -265,7 +263,9 @@ def cmd_check(payload: dict) -> None:
     if not accesses:
         reason = "未 Read。 編集前に、 Read で内容の確認が必要。"
     else:
-        reason = "前回の Read から内容が変化。 編集前に、 再 Read で現内容の確認が必要。"
+        reason = (
+            "前回の Read から内容が変化。 編集前に、 再 Read で現内容の確認が必要。"
+        )
     _emit_deny(reason)
 
 

@@ -98,8 +98,8 @@ import time
 
 HOME = os.path.expanduser("~")
 STATE_DIR = os.path.join(HOME, ".claude", "hooks", "state", "skill_reminder")
-DECL_STALE_SECONDS = 7 * 24 * 3600   # 放置宣言 session dir の自己掃除閾値
-SKILL_WINDOW_SECONDS = 300           # skill-active 窓 (現 turn ∪ 直近 5 分。H.S. 指定)
+DECL_STALE_SECONDS = 7 * 24 * 3600  # 放置宣言 session dir の自己掃除閾値
+SKILL_WINDOW_SECONDS = 300  # skill-active 窓 (現 turn ∪ 直近 5 分。H.S. 指定)
 GATE_TOOLS = ("Edit", "Write", "MultiEdit")
 
 # kind → 当該 kind が要求する skill 集合 (additive。else は ∅)。
@@ -117,19 +117,88 @@ KIND_SKILLS: dict[str, set[str]] = {
 # source code 拡張子 (any language) → writing-code (universal) を要求。広めに列挙し
 # 未収載は skill-less (residual)。LANGUAGES の managed add-on を上に積む。
 CODE_EXTENSIONS: set[str] = {
-    ".py", ".pyi", ".pyw",
-    ".sh", ".bash", ".zsh", ".ksh", ".fish",
-    ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".cts", ".mts",
-    ".go", ".rs", ".rb", ".rake", ".php", ".pl", ".pm", ".lua", ".tcl",
-    ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx", ".m", ".mm",
-    ".java", ".kt", ".kts", ".scala", ".groovy", ".gradle",
-    ".clj", ".cljs", ".cljc", ".cs", ".fs", ".fsx", ".vb",
-    ".swift", ".dart", ".r", ".jl", ".ex", ".exs", ".erl", ".hrl",
-    ".hs", ".ml", ".mli", ".nim", ".zig",
-    ".sql", ".vim", ".el", ".lisp", ".scm",
-    ".html", ".htm", ".css", ".scss", ".sass", ".less",
-    ".vue", ".svelte", ".astro",
-    ".proto", ".thrift", ".tf", ".tfvars", ".hcl", ".bicep", ".sol",
+    ".py",
+    ".pyi",
+    ".pyw",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".ksh",
+    ".fish",
+    ".js",
+    ".mjs",
+    ".cjs",
+    ".jsx",
+    ".ts",
+    ".tsx",
+    ".cts",
+    ".mts",
+    ".go",
+    ".rs",
+    ".rb",
+    ".rake",
+    ".php",
+    ".pl",
+    ".pm",
+    ".lua",
+    ".tcl",
+    ".c",
+    ".h",
+    ".cc",
+    ".cpp",
+    ".cxx",
+    ".hpp",
+    ".hh",
+    ".hxx",
+    ".m",
+    ".mm",
+    ".java",
+    ".kt",
+    ".kts",
+    ".scala",
+    ".groovy",
+    ".gradle",
+    ".clj",
+    ".cljs",
+    ".cljc",
+    ".cs",
+    ".fs",
+    ".fsx",
+    ".vb",
+    ".swift",
+    ".dart",
+    ".r",
+    ".jl",
+    ".ex",
+    ".exs",
+    ".erl",
+    ".hrl",
+    ".hs",
+    ".ml",
+    ".mli",
+    ".nim",
+    ".zig",
+    ".sql",
+    ".vim",
+    ".el",
+    ".lisp",
+    ".scm",
+    ".html",
+    ".htm",
+    ".css",
+    ".scss",
+    ".sass",
+    ".less",
+    ".vue",
+    ".svelte",
+    ".astro",
+    ".proto",
+    ".thrift",
+    ".tf",
+    ".tfvars",
+    ".hcl",
+    ".bicep",
+    ".sol",
 }
 
 # managed language add-on skill (writing-code の上に積む)。bash add-on は bash 系
@@ -156,11 +225,11 @@ HOOK_DIR_RE = re.compile(
 
 # test file 判定 (code file にのみ writing-tests を足す)。anchored で誤検出抑制。
 TEST_NAME_RE = re.compile(
-    r"^test_.+\.[a-z0-9]+$"      # test_foo.py
-    r"|.+_test\.[a-z0-9]+$"      # foo_test.go / foo_test.py
-    r"|.+_spec\.[a-z0-9]+$"      # foo_spec.rb
-    r"|.+\.test\.[a-z0-9]+$"     # foo.test.ts
-    r"|.+\.spec\.[a-z0-9]+$",    # foo.spec.js
+    r"^test_.+\.[a-z0-9]+$"  # test_foo.py
+    r"|.+_test\.[a-z0-9]+$"  # foo_test.go / foo_test.py
+    r"|.+_spec\.[a-z0-9]+$"  # foo_spec.rb
+    r"|.+\.test\.[a-z0-9]+$"  # foo.test.ts
+    r"|.+\.spec\.[a-z0-9]+$",  # foo.spec.js
     re.IGNORECASE,
 )
 TEST_DIR_RE = re.compile(r"/(tests?|__tests__|spec)/")
@@ -215,6 +284,7 @@ def relevant_skills(path: str) -> set[str]:
 
 # --- declare state (拡張子なし file 用・session persistent) ---
 
+
 def _session_dir(sid: str) -> str:
     return os.path.join(STATE_DIR, sid)
 
@@ -257,6 +327,7 @@ def _prune_old_sessions() -> None:
 
 
 # --- current-turn skill scan ---
+
 
 def _load_transcript(path: str) -> list[dict]:
     out: list[dict] = []
@@ -336,6 +407,7 @@ def _active_skills(entries: list[dict], now: float, window_s: int) -> set[str] |
 
 # --- deny emission (writing-skills の deny-wording 規律。文面は意図的に冗長・trim 禁止) ---
 
+
 def _emit_deny(reason: str) -> None:
     payload = {
         "hookSpecificOutput": {
@@ -374,6 +446,7 @@ def _deny_missing(missing: set[str]) -> None:
 
 
 # --- modes ---
+
 
 def cmd_gate(payload: dict) -> None:
     if not isinstance(payload, dict):
@@ -433,8 +506,7 @@ def cmd_declare(argv: list[str]) -> int:
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
     if not sid:
         sys.stderr.write(
-            "declare: $CLAUDE_CODE_SESSION_ID が未設定で session を特定でき"
-            "ません。\n"
+            "declare: $CLAUDE_CODE_SESSION_ID が未設定で session を特定できません。\n"
         )
         return 2
     expanded = os.path.expanduser(argv[0])
@@ -451,9 +523,7 @@ def cmd_declare(argv: list[str]) -> int:
     unknown = [k for k in kinds if k not in KIND_SKILLS]
     if not kinds or unknown:
         bad = ", ".join(unknown) if unknown else "(空)"
-        sys.stderr.write(
-            f"declare: 未知の kind {bad}。 使える kind = {_VOCAB}。\n"
-        )
+        sys.stderr.write(f"declare: 未知の kind {bad}。 使える kind = {_VOCAB}。\n")
         return 2
     try:
         os.makedirs(_session_dir(sid), exist_ok=True)

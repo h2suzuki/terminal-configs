@@ -161,7 +161,7 @@ def _run(payload: dict) -> int:
         sys.stderr.write(
             "git commit -F / --file is not allowed — use inline -m or heredoc "
             "form so the commit message can be validated by check_commit_format.\n"
-            "Retry: git commit -m \"...\" (or heredoc form).\n"
+            'Retry: git commit -m "..." (or heredoc form).\n'
         )
         return 2
 
@@ -211,8 +211,7 @@ def _run(payload: dict) -> int:
             + "\n".join(f"  - {e}" for e in hard)
             + f"\n\nsubject was: {subject[:120]}\n"
             + (
-                "\nsoft warnings:\n"
-                + "\n".join(f"  - {w}" for w in soft)
+                "\nsoft warnings:\n" + "\n".join(f"  - {w}" for w in soft)
                 if soft
                 else ""
             )

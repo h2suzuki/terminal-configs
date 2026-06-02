@@ -46,21 +46,15 @@ GIT_COMMIT_RE = re.compile(r"\bgit\b(?:\s+-{1,2}\S+(?:[ =]\S+)?)*\s+commit\b(?![
 
 # Detect inline `-c user.email=...` override that would supersede repo / global
 # config for the single command.
-INLINE_EMAIL_OVERRIDE_RE = re.compile(
-    r"""-c\s+["']?user\.email=["']?([^"'\s]+)"""
-)
+INLINE_EMAIL_OVERRIDE_RE = re.compile(r"""-c\s+["']?user\.email=["']?([^"'\s]+)""")
 
 # Detect env-var bypass `GIT_AUTHOR_EMAIL=value git commit` (and
 # GIT_COMMITTER_EMAIL). Git honours these env vars over both -c and config,
 # so they must be checked first.
-ENV_EMAIL_RE = re.compile(
-    r"\b(?:GIT_AUTHOR_EMAIL|GIT_COMMITTER_EMAIL)=([^\s;&|]+)"
-)
+ENV_EMAIL_RE = re.compile(r"\b(?:GIT_AUTHOR_EMAIL|GIT_COMMITTER_EMAIL)=([^\s;&|]+)")
 
 # Detect `git -C <path>` to retarget the repo lookup.
-C_PATH_RE = re.compile(
-    r"\bgit\b(?:\s+-\S+(?:[ =]\S+)?)*\s+-C\s+(\S+)"
-)
+C_PATH_RE = re.compile(r"\bgit\b(?:\s+-\S+(?:[ =]\S+)?)*\s+-C\s+(\S+)")
 
 
 def _git_user_email(target: str, payload_cwd: str | None) -> str | None:
@@ -150,7 +144,9 @@ def _run(payload: dict, expected_email: str) -> int:
     if env_match:
         actual = _resolve_placeholder(env_match.group(1), quoted_contents).strip("'\"")
     elif override_match:
-        actual = _resolve_placeholder(override_match.group(1), quoted_contents).strip("'\"")
+        actual = _resolve_placeholder(override_match.group(1), quoted_contents).strip(
+            "'\""
+        )
     else:
         raw_target = (
             _resolve_placeholder(c_path_match.group(1), quoted_contents)

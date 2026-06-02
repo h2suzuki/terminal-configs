@@ -21,6 +21,7 @@ Exit:
 
 parse / IO error は fail-open (exit 0) — 誤 block で user 作業を止めない。
 """
+
 from __future__ import annotations
 
 import json

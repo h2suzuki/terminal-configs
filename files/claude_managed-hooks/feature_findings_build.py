@@ -41,25 +41,43 @@ import time
 import urllib.request
 
 SOURCE_URL = "https://code.claude.com/docs/en/changelog.md"
-CUTOFF_YM = (2026, 1)   # assistant knowledge cutoff (year, month); keep dates >= this
+CUTOFF_YM = (2026, 1)  # assistant knowledge cutoff (year, month); keep dates >= this
 FETCH_TIMEOUT_S = 30
 CACHE_DIR = os.path.join(
     os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
-    "claude-code-feature-research")
+    "claude-code-feature-research",
+)
 FINDINGS_PATH = os.path.join(CACHE_DIR, "findings.md")
 ERR_LOG = os.path.join(CACHE_DIR, "build-errors.log")
 
 _UPDATE_RE = re.compile(r'<Update\s+label="([^"]+)"\s+description="([^"]+)"')
 _BULLET_RE = re.compile(r"^\s*\*\s+(.*\S)\s*$")
 _END_RE = re.compile(r"</Update>")
-_ID_RE = re.compile(r"`[^`]+`")   # backtick token in a bullet
+_ID_RE = re.compile(r"`[^`]+`")  # backtick token in a bullet
 # Clean CLI/config identifier (flag/slash-command/env/dotted-setting/word).
 # Rejects spaces, mid-path slashes, and bare version tokens (leading digit).
 _IDENT_SHAPE_RE = re.compile(r"(--?|/)?[A-Za-z][A-Za-z0-9_.\-]*")
 _TOP_VER_RE = re.compile(r"^## v(\d+\.\d+\.\d+)")
-_MONTHS = {m: i for i, m in enumerate(
-    ["", "January", "February", "March", "April", "May", "June",
-     "July", "August", "September", "October", "November", "December"])}
+_MONTHS = {
+    m: i
+    for i, m in enumerate(
+        [
+            "",
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ]
+    )
+}
 
 
 def _vkey(version: str) -> tuple[int, ...]:
@@ -82,7 +100,9 @@ def _bucket(text: str) -> str:
         return "fix"
     if re.search(r"\b(deprecat\w*|removed?|no longer|dropped|retired)\b", low):
         return "deprecated"
-    if re.search(r"\b(skills?|hooks?|subagents?|plugins?|marketplace)\b|skill\.md", low):
+    if re.search(
+        r"\b(skills?|hooks?|subagents?|plugins?|marketplace)\b|skill\.md", low
+    ):
         return "skill_hook_agent"
     return "feature"
 
@@ -103,8 +123,9 @@ def parse(text: str) -> list[dict]:
             continue
         mb = _BULLET_RE.match(line)
         if mb and cur_v:
-            out.append({"version": cur_v, "date": cur_d, "ym": cur_ym,
-                        "bullet": mb.group(1)})
+            out.append(
+                {"version": cur_v, "date": cur_d, "ym": cur_ym, "bullet": mb.group(1)}
+            )
     return out
 
 
@@ -124,7 +145,9 @@ def _fix_identifiers(fixes: list[dict]) -> list[tuple[str, str]]:
                 continue
             if ident not in best or _vkey(r["version"]) > _vkey(best[ident]):
                 best[ident] = r["version"]
-    return sorted(best.items(), key=lambda kv: (_vkey(kv[1]), kv[0].lower()), reverse=True)
+    return sorted(
+        best.items(), key=lambda kv: (_vkey(kv[1]), kv[0].lower()), reverse=True
+    )
 
 
 _SECTIONS = [
@@ -156,14 +179,17 @@ def build(text: str, today: str) -> str:
         "> keyword-bucketed, no LLM so nothing is summarized away. Rebuild: run",
         "> feature_findings_build.py --force. The SessionStart hook regenerates",
         f"> this on a version change. {len(versions)} versions ({lo}..{hi}); "
-        + "buckets: " + ", ".join(f"{counts[k]} {k}" for k, _ in _SECTIONS)
+        + "buckets: "
+        + ", ".join(f"{counts[k]} {k}" for k, _ in _SECTIONS)
         + f". Fixes consolidated to the {len(fix_ids)} CLI/config identifiers "
         + f"they name (from {len(fixes_all)} fix bullets); keyword-less fixes dropped.",
     ]
     for key, title in _SECTIONS:
         lines += ["", f"### {title}", ""]
         rs = [r for r in recs if r["_b"] == key]
-        lines += [f"- {r['bullet']} (v{r['version']}, {r['date']})" for r in rs] or ["- なし"]
+        lines += [f"- {r['bullet']} (v{r['version']}, {r['date']})" for r in rs] or [
+            "- なし"
+        ]
     lines += ["", "### Fixes — identifiers touched (consolidated, for reference)", ""]
     lines += [f"- `{ident}` (v{ver})" for ident, ver in fix_ids] or ["- なし"]
     return "\n".join(lines) + "\n"
@@ -195,7 +221,9 @@ def cmd_force(output: str) -> int:
         try:
             os.makedirs(CACHE_DIR, exist_ok=True)
             with open(ERR_LOG, "a", encoding="utf-8") as f:
-                f.write(f"[{time.strftime('%FT%TZ', time.gmtime())}] build failed: {e!r}\n")
+                f.write(
+                    f"[{time.strftime('%FT%TZ', time.gmtime())}] build failed: {e!r}\n"
+                )
         except OSError:
             pass
         sys.stderr.write(f"feature_findings_build: {e}\n")
@@ -204,8 +232,9 @@ def cmd_force(output: str) -> int:
 
 def _cli_version() -> str | None:
     try:
-        r = subprocess.run(["claude", "--version"], capture_output=True,
-                           text=True, timeout=5)
+        r = subprocess.run(
+            ["claude", "--version"], capture_output=True, text=True, timeout=5
+        )
     except Exception:
         return None
     m = re.search(r"\d+\.\d+\.\d+", r.stdout or "")
@@ -224,17 +253,20 @@ def _findings_version(path: str) -> str | None:
 def cmd_hook(output: str) -> int:
     """SessionStart: version-check, detach a --force rebuild on a miss; child runs plain python (cannot re-trigger SessionStart, no recursion guard) and always exits 0 so it never blocks startup."""
     try:
-        sys.stdin.read()   # drain the SessionStart payload (unused)
+        sys.stdin.read()  # drain the SessionStart payload (unused)
     except Exception:
         pass
     cur = _cli_version()
     if cur and os.path.exists(output) and _findings_version(output) == cur:
-        return 0   # already current — no fetch
+        return 0  # already current — no fetch
     try:
         subprocess.Popen(
             [sys.executable, os.path.realpath(__file__), "--force", "--output", output],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=True)
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
     except Exception:
         pass
     return 0
@@ -258,7 +290,7 @@ def main() -> int:
         return 0
     if a.force:
         return cmd_force(a.output)
-    return cmd_hook(a.output)   # default = SessionStart hook mode
+    return cmd_hook(a.output)  # default = SessionStart hook mode
 
 
 if __name__ == "__main__":
