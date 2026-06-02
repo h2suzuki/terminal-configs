@@ -1,47 +1,39 @@
 #!/bin/bash
 # /etc/claude-code/hooks/claude-md-lint.sh
 #
-# SessionStart hook — cross-project lint of the auto-loaded CLAUDE.md
-# chain (org / user / project CLAUDE.md and @-imported CLAUDE.md files).
-# Auto-memory index files (MEMORY.md / global-memory) are excluded: they
-# change almost every session and would make the result cache miss
-# perpetually. Read-only judgement; flags duplications with the system
-# prompt, internal contradictions, stale references, unclear directives.
+# SessionStart hook — read-only lint of the auto-loaded CLAUDE.md chain (org /
+# user / project CLAUDE.md and @-imports). Flags system-prompt duplications,
+# internal contradictions, stale references, unclear directives. Auto-memory
+# index files (MEMORY.md / global-memory) are EXCLUDED — they change nearly
+# every session and would make the cache miss perpetually.
 #
 # Execution model (asynchronous, subscription-billed):
-#   - Cache HIT  → read the cached findings synchronously and emit them
-#                  (no model call; unchanged fast path).
-#   - Cache MISS → dispatch a detached `claude --bg` session that writes
-#                  its findings to a per-key staging file, then return at
-#                  once. This session surfaces nothing; the findings show
+#   - Cache HIT  → emit cached findings synchronously, no model call.
+#   - Cache MISS → dispatch a detached `claude --bg` (subscription-billed,
+#                  unlike `claude -p`) that writes findings to a per-key
+#                  staging file, then return surfacing nothing; findings show
 #                  up on the first session start after the bg job ends.
-#                  `claude --bg` bills to the subscription plan (unlike
-#                  `claude -p`, which moves to separate metering).
-#   - Every start runs a reaper that turns a completed staging file into
-#     a cache file (deterministic bash layout — the model only produces
-#     the findings text, never the cache format) and tears down the
-#     finished bg session by its recorded id, guarded by a
-#     jobs/<id>/state.json name match. The reaper never enumerates
-#     ~/.claude/jobs/*; it acts solely on ids this hook recorded.
+#   - Every start runs a reaper: completed staging → cache file (bash builds
+#                  the layout; model only produces findings text), then tears
+#                  down the bg session by recorded id, guarded by a
+#                  jobs/<id>/state.json name match. NEVER enumerates
+#                  ~/.claude/jobs/*; acts solely on ids this hook recorded.
 #   - A per-key in-flight marker dedups concurrent dispatches.
 #
-# Recursion guard: the file-based LOCK_FILE check below is the
-# authoritative defence. The env var (CLAUDE_MD_LINT_PARENT) and
-# `--setting-sources ""` are best-effort and do NOT reach the `--bg`
-# child — the worker inherits the daemon env (not this client's inline
-# assignment), and `--setting-sources` cannot drop the *managed* settings
-# file that registers this hook. Primary-source confirmation is in the
-# env-guard memory entry.
+# Recursion guard: the file-based LOCK_FILE check below is authoritative. The
+# env var (CLAUDE_MD_LINT_PARENT) and `--setting-sources ""` are best-effort
+# and do NOT reach the `--bg` child — the worker inherits the daemon env, and
+# `--setting-sources` cannot drop the *managed* settings file registering this
+# hook. Primary-source confirmation in the env-guard memory entry.
 #
-# The skill body (/etc/claude-code/skills/claude-md-lint/SKILL.md) is injected via
-# --append-system-prompt so the child gets the evaluation criteria; the
-# child reads each target file itself with the Read tool.
+# The skill body (/etc/claude-code/skills/claude-md-lint/SKILL.md) is injected
+# via --append-system-prompt so the child gets the criteria; the child Reads
+# each target file itself.
 #
 # Stdin : SessionStart payload JSON (uses .cwd, .session_id, .agent_type/.agent_id).
-# Stdout: SessionStart hook JSON only when a completed lint is surfaced
-#   (a HIT). systemMessage marks completion; additionalContext carries
-#   the findings. Every no-op terminal state (re-entry guard, missing
-#   skill body, no candidate files, async dispatch, in-flight dedup,
+# Stdout: SessionStart hook JSON only on a HIT (systemMessage = completion,
+#   additionalContext = findings). Every no-op terminal state (re-entry guard,
+#   missing skill body, no candidate files, async dispatch, in-flight dedup,
 #   stale cleanup) produces empty stdout.
 
 set -u
@@ -137,9 +129,8 @@ reap_inflight() {
   done
 }
 
-# Backstop for orphans the marker-driven reaper can't reach (marker cleared
-# while the bg session lingers). Name-matched via full sessionId, not short
-# id; a fresh in-progress lint (no staging, age < BG_STALE_S) is never killed.
+# Backstop for orphans the marker reaper can't reach (marker cleared, session lingers);
+# name-matched via full sessionId. A fresh lint (no staging, age < BG_STALE_S) is never killed.
 fallback_sweep() {
   command -v claude >/dev/null 2>&1 || return 0
   command -v jq >/dev/null 2>&1 || return 0
@@ -200,9 +191,8 @@ payload="$(cat)"
 # Daemon bg sessions (agent view / --bg) register jobs/<short>/state.json before SessionStart but carry no agent_*; interactive sessions have neither.
 [[ -n "$sid" && -f "${HOME}/.claude/jobs/${sid:0:8}/state.json" ]] && exit 0
 
-# Reap ahead of the dispatch lock guard on purpose — the lock gates only
-# re-dispatch, not teardown — so finished jobs clear without waiting out the
-# lock's BG_STALE_S window. Neither call consumes stdin.
+# Reap before the dispatch lock on purpose: the lock gates re-dispatch, not teardown,
+# so finished jobs clear without waiting out BG_STALE_S. Neither call consumes stdin.
 reap_inflight
 fallback_sweep
 

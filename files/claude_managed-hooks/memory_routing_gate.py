@@ -5,26 +5,23 @@ Memory-entry write enforcement hook for Claude Code.
 Purpose
 =======
 memory entry (~/.claude/memory/*.md, ~/.claude/projects/<enc>/memory/*.md)
-への書込を、/memory-routing skill 経由に強制する決定論的 gate。skill が
-非発火でも format / keyword 品質 / DB 同期が担保されるよう、retrieval 層
-(memory_surface.py の reminder/keywords surface) の上に乗る hard 層。
+への書込を /memory-routing skill 経由に強制する決定論的 gate。retrieval 層
+(memory_surface.py の reminder/keywords surface) の上に乗る hard 層で、skill
+非発火でも format / keyword 品質 / DB 同期を担保する。
 
-なぜ skill 強制か: /memory-routing は entry の routing 判断・正書式
-(reminder:/keywords:)・FTS DB 同期 (--upsert) を 1 単位で行う。skill を
-通らない直接 Write はこれらを欠く。本 hook は「skill を通ったか」を gate に
-する — 通れば skill が品質を担保し、通らなければ deny する。
+なぜ skill 強制か: /memory-routing は routing 判断・正書式 (reminder:/keywords:)・
+FTS DB 同期 (--upsert) を 1 単位で行う。直接 Write はこれらを欠く。本 hook は
+「skill を通ったか」を gate にし、通らなければ deny する。
 
 検出機構: capability grant (skill が mint・hook が consume)
 ==========================================================
-turn 概念 / 時刻 window / stop hook の turn_counter には依存しない。
-代わりに /memory-routing skill が「entry P を Write する直前に grant ファイル
-~/.claude/hooks/state/memory-routing/grants/<basename(P)> を Write する」。本 hook
-はその grant の存在 (+ 鮮度) を skill 経由の証跡として扱う。
+turn 概念 / 時刻 window / turn_counter には依存しない。/memory-routing が entry P
+の Write 直前に grant ~/.claude/hooks/state/memory-routing/grants/<basename(P)>
+を mint し、本 hook はその存在 (+ 鮮度) を skill 経由の証跡とする。
 
   - 1 turn 複数 entry: entry ごとに固有 grant → 各 Write が独立に通る。
   - 乱数不要: grant 名を対象 path の basename に束ねる (LLM が Bash 無しで組める)。
-  - skill を無視して grant を作らないほど従わない LLM は本文も不備 → 内容 check
-    で捕捉される (二重の網)。
+  - grant を作らないほど従わない LLM は本文も不備 → 内容 check で捕捉 (二重の網)。
 
 grant content には P の絶対パスを書く (audit 用)。判定は basename 一致 + 鮮度。
 
@@ -34,8 +31,8 @@ PreToolUse `^(Edit|Write|MultiEdit)$` → guard:
   対象外 (memory entry でない / index file MEMORY.md・OLD-MEMORY.md) → 素通り。
   opt-out: 対象 content に `memory-guard: allow` を含む → 素通り。
   Edit / MultiEdit on entry:
-    → 無条件 deny。差分編集は最終 format を gate できず、また skill 経由に
-      一本化するため。「/memory-routing 経由で full content を Write」へ誘導。
+    → 無条件 deny。差分編集は最終 format を gate できず、skill 経由に一本化する
+      ため。「/memory-routing 経由で full content を Write」へ誘導。
   Write on entry:
     1. grant 不在 (or 鮮度切れ) → deny「/memory-routing を使え」。
     2. 内容不備 (下記) → deny (具体的是正指示)。grant は残す (直して再 Write が
@@ -48,20 +45,19 @@ PreToolUse `^(Edit|Write|MultiEdit)$` → guard:
     - body に `oneline_summary:` (廃止形式) を含む。
     - body に非空の `reminder:` 行が無い (^reminder:\s*(.+)$ MULTILINE)。
     - body に非空の `keywords:` 行が無い。
-    - keywords が FTS token を 1 つも産まない / 一般語 (STOPWORDS) のみ
-      = 無効/広すぎ (memory_surface のトークナイザで照合)。
+    - keywords が FTS token を 1 つも産まない / 一般語 (STOPWORDS) のみ = 無効/広すぎ。
 
 PostToolUse `^Write$` → sync:
   entry の Write 成功後に memory_surface.py --upsert <abspath> [project_id] を
-  呼び DB を self-heal (skill の手動 upsert 漏れに対する保険)。project_id は
-  path から導出 (projects/<enc>/memory → <enc>、user memory → なし)。
+  呼び DB を self-heal (skill の upsert 漏れ保険)。project_id は path から導出
+  (projects/<enc>/memory → <enc>、user memory → なし)。
 
 deny 方式・fail-open
 ====================
-deny は JSON `permissionDecision: "deny"` (exit 0) — read_before_edit.py と同様、
-hook bug が誤って tool を block しないため (deny は exit code でなく JSON で伝える)。
-guard/sync とも全例外を握り潰し exit 0 (fail-open): hook 不具合が prompt/turn を
-壊さない。sync は PostToolUse ゆえそもそも block 不能。
+deny は JSON `permissionDecision: "deny"` (exit 0) — read_before_edit.py と同じく
+hook bug が誤って tool を block しないため (deny は exit code でなく JSON で伝える)。guard/sync とも全例外を
+握り潰し exit 0 (fail-open): hook 不具合が prompt/turn を壊さない。sync は
+PostToolUse ゆえそもそも block 不能。
 
 canonical source: files/claude_managed-hooks/memory_routing_gate.py
 deploy: /etc/claude-code/hooks/ (copy_dir で自動)。両者を同 session で同内容に保つ。
@@ -95,9 +91,8 @@ _PROJ_MEM_RE = re.compile(r".*/\.claude/projects/([^/]+)/memory/[^/]+\.md$")
 _CJK_RE = re.compile(r"[぀-ゟ゠-ヿ一-鿿]{3,}")
 _ASCII_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{3,}")
 
-# 一般語 = match に効かず context を flood する語。トークナイザを通る長さ
-# (CJK 3+ / ASCII 4+) のみ列挙。広すぎ keyword を deny する閾値判定に使う。
-# 保守的に「これらだけ」を弾く: 1 つでも固有語があれば通す。tunable。
+# 一般語 (=match に効かず context を flood する語; CJK 3+/ASCII 4+ のみ列挙) を deny する閾値判定用。保守的に
+# 「これらだけ」弾く: 1 つでも固有語があれば通す。tunable。
 STOPWORDS = {
     # JA (katakana / 3+ char generics)
     "ファイル", "エラー", "コード", "テスト", "データ", "メモリ",

@@ -3,79 +3,61 @@
 Combined Stop hook for org-managed Claude Code:
 
   meta-announce-silence (enforcement, exit 2):
-    「省略しません」「触りません」「mock しません」「催促しません」 系の
-    compliance-non-execution 宣言を block。 silent compliance の rule 趣旨に反する
-    (rule 遵守を発話で能動的に話題化する自体が rule 違反)。 phrase hit のみで block、
-    persistence pairing 不要。
+    不実施宣言 (「省略しません」「mock しません」等) を block。 rule 遵守を発話で
+    話題化する自体が silent compliance 趣旨に反する。 phrase hit のみ、 pairing 不要。
 
   hollow-claims (enforcement, exit 2):
-    「学習しました」「記憶します」「肝に銘じ/留意します」「教訓/反省点として」「反省」
-    「申し訳」「次回(は)…気をつけ/注意し」 系の introspective phrase
-    は、 同 turn 内に memory subtree / skill dir / hook dir / CLAUDE.md への Write/Edit
-    記録が無ければ block。 session reset で虚偽化するため persistence 行動とのペアを
-    要求する。
+    introspective phrase (「学習しました」「肝に銘じ」「反省」「申し訳」等) は、 同
+    turn 内に memory / skill / hook / CLAUDE.md への Write/Edit が無ければ block。
+    session reset で虚偽化するため persistence とのペアを要求する。
 
   recognize-own-work (enforcement, exit 2):
-    「想定外」「知らなかった」「あれ?」 系の surprise phrase を、 同 turn 内に
-    git log / git show / git diff の Bash 呼出が無ければ block。 LLM session 揮発で
-    前 session の自作業が unfamiliar に見える錯覚 対策。
+    surprise phrase (「想定外」「知らなかった」等) を、 同 turn 内に git log/show/diff の
+    Bash 呼出が無ければ block。 LLM session 揮発で自作業が unfamiliar に見える錯覚対策。
 
   evaluative-terms (enforcement, exit 2):
-    「大改造」「影響大」「アーキテクチャ(の)見直し/再設計/刷新」「改造が少ない」 系の
-    規模・影響評価語を、 同 turn 内に Read/Grep/Glob/WebSearch/WebFetch が無ければ
-    block。 report-by-evidence skill が射程外にした structured-doc (比較表 cell 等)
-    への ungrounded 評価語混入を補う。 bare-term match (table cell に述語は付かない
-    ため述語 anchor は張らない)。 compound/phrasal な高確度語のみ — 軽微/複雑/
-    大変/抜本的/リスクが高い は流文 false-positive が広く除外。
+    規模・影響評価語 (「大改造」「影響大」等) を、 同 turn 内に Read/Grep/Glob/
+    WebSearch/WebFetch が無ければ block。 report-by-evidence skill が射程外にした
+    structured-doc (比較表 cell 等) への ungrounded 混入を補う。 bare-term match
+    (table cell に述語 anchor を張れない)。 compound/phrasal な高確度語のみ — 軽微/
+    複雑/大変/抜本的/リスクが高い は流文 false-positive が広く除外。
 
   deferral (warning-only, exit 0):
-    「後で対処」「別タスクに切り出」「TODO として」 系 phrase は、 同 turn 内に
-    TaskCreate / TaskUpdate / TodoWrite または todos.md への Write/Edit が無ければ
-    warn (block しない)。
+    「後で対処」「別タスクに切り出」等 は、 同 turn 内に TaskCreate/TaskUpdate/
+    TodoWrite または todos.md への Write/Edit が無ければ warn。
 
   claim-without-evidence (warning-only, exit 0):
-    「不明」「該当なし」「未確認」 系 phrase は、 同 turn 内に Read / Grep / Glob /
-    WebSearch / WebFetch のいずれも使われていなければ warn (verify-before-claim の
-    negative side)。
+    「不明」「該当なし」「未確認」 系は、 同 turn 内に EVIDENCE_TOOLS が無ければ warn
+    (verify-before-claim の negative side)。
 
   provide-user-instructions (warning-only, exit 0):
-    「お手元で」「手動実行」「以下を実行」 系の manual-execution 文脈がありつつ、 host
-    コマンド (sudo cp/install, git push/checkout 等, gh pr, curl/wget+URL, claude
-    --bg, deploy-root への cp) が fenced code block の外 (= bare prose) に残れば warn。
-    strip_fences で fenced block と inline backtick span を除いた prose に host cmd が
-    残る = 未 fence の違反。 skill: 手動実行コマンドは独立 fence に置く・inline backtick
-    は実行用でない。 tool pairing 無しの純 text-shape 判定。
+    manual-execution 文脈がありつつ host コマンド (sudo cp, git push, gh pr, curl+URL,
+    claude --bg, deploy-root への cp) が strip_fences 後の prose (= fence/inline span の外)
+    に残れば warn。 手動実行コマンドは独立 fence に置く・inline backtick は実行用でない。
+    tool pairing 無しの純 text-shape 判定。
 
   verify-before-claim positive (warning-only, exit 0):
-    「網羅した」「全部読んだ」「reasonable default」 系の completeness self-claim を、
-    同 turn 内に EVIDENCE_TOOLS (Read/Grep/Glob/WebSearch/WebFetch) が無ければ warn。
-    claim-without-evidence (negative side) と pairing 同一・polarity と message のみ別。
-    確認済み は meta-text 多数 + Bash-backed 多数で意図的に除外 (ungrounded 確認済み の
-    FN は承知)。
+    completeness self-claim (「網羅した」「reasonable default」等) を、 同 turn 内に
+    EVIDENCE_TOOLS が無ければ warn。 claim-without-evidence と pairing 同一、 polarity と
+    message のみ別。 確認済み は meta-text/Bash-backed 多数で意図的に除外 (FN 承知)。
 
   turn-marker (bonus, exit 0 only):
-    enforcement が pass した turn 終了時のみ、 per-turn marker (時刻 / Turn #N /
-    context size / 当 turn の User Prompt からの経過) を JSON `systemMessage` で
-    USER に表示する (Claude には非可視)。 経過は transcript の境界 user entry の
-    timestamp 起点 (UserPromptSubmit marker は逆に前回 stop 起点の idle gap を出す)。
-    block (exit 2) 時は turn が継続するので非表示。 1 turn の
-    exit-0 Stop はちょうど 1 回 — block 無しの turn は clean な Stop が、 block した
-    turn は advise-once gate が retry (stop_hook_active=true) を exit 0 に降格させた
-    Stop が、 その 1 回。 どちらも marker を 1 回だけ載せる (= counter は turn 毎に
-    1 bump)。 この once-per-turn 不変条件は memory_surface.py も同 .turns を読むので
-    cross-hook で load-bearing。 完全 fail-open で enforcement の
-    exit code に影響しない (= おまけ)。
+    enforcement が pass した turn 終了時のみ、 per-turn marker (時刻 / Turn #N / context
+    size / User Prompt からの経過) を JSON `systemMessage` で USER に表示 (Claude には非可視)。
+    経過は境界 user entry の timestamp 起点。 block (exit 2) 時は turn 継続のため非表示。
+    1 turn の exit-0 Stop はちょうど 1 回 — clean な Stop か、 advise-once gate が retry
+    (stop_hook_active=true) を exit 0 に降格させた Stop。 どちらも marker を 1 回だけ載せる
+    (counter は turn 毎 1 bump)。 この once-per-turn 不変条件は memory_surface.py も同
+    .turns を読むので cross-hook で load-bearing。 完全 fail-open。
 
 Stop hook input: JSON via stdin with session_id, transcript_path,
 hook_event_name = "Stop".
 
-Transcript format: JSONL。 user / assistant / system / ... の type 列。 user entry は
-human prompt なら content が str、 tool_result なら list。 assistant entry は text /
-thinking / tool_use blocks の list。
+Transcript format: JSONL。 user entry は human prompt なら content が str、 tool_result なら
+list。 assistant entry は text / thinking / tool_use blocks の list。
 
-Current-turn boundary: 直近の human-input user entry (content が str の entry) を
-boundary とし、 そこ以降の assistant entry を current turn とみなす。 corrupted /
-partial transcript の場合は空値を返して fall-broad scan しない。
+Current-turn boundary: 直近の human-input user entry (content が str) 以降の assistant
+entry を current turn とみなす。 corrupted/partial は空値を返し fall-broad scan しない。
 
 Exit:
   0: no enforcement triggered, OR a would-be re-block on a stop_hook_active
@@ -90,8 +72,7 @@ otherwise self-block-loop until the harness's 8-block override, freezing the
 turn counter. Do NOT narrow the gate to evaluative-only: that reintroduces the
 loop for meta-announce / hollow-claims / recognize-own-work.
 
-parse / IO error は fail-open (exit 0) — Stop hook で誤 block して user 作業を
-止めないことを優先する。
+parse / IO error は fail-open (exit 0) — 誤 block で user 作業を止めないことを優先。
 """
 
 from __future__ import annotations
@@ -135,12 +116,8 @@ META_ANNOUNCE_PATTERNS: list[str] = [
 META_ANNOUNCE_RE = re.compile("|".join(META_ANNOUNCE_PATTERNS), re.IGNORECASE)
 
 # --- Pattern: hollow-claims (block on hit unless persistence in same turn) ---
-# introspective phrase — 「学習・記銘」「改善宣言」「留意・省察」「教訓framing」
-# 「formal apology」 系統。 否定形 / 中立形 / 記述用法を match させないよう
-# conjugation を anchor (反省し → 反省しない を excludable)。 false-positive 抑制:
-# 「記憶」 は記述的「X を記憶します」 を を-lookbehind で除外、 次回 は自己矯正動詞
-# (気をつけ/注意/改め) に限定し task 動詞 (実装/着手 等) を除外、 「として」 で
-# 名詞単体 (反省点の指摘) を除外。 broad phrase は除外。
+# introspective phrase (学習/改善宣言/省察/apology)。 conjugation を anchor し否定/中立/記述用法を除外
+# (反省しない, を-lookbehind で「X を記憶」, 次回は自己矯正動詞限定, としてで名詞単体, broad phrase)。
 HOLLOW_CLAIM_PATTERNS: list[str] = [
     # Learning / memorization
     r"学習し(た|ました)",
@@ -188,11 +165,8 @@ SURPRISE_RE = re.compile("|".join(SURPRISE_PATTERNS), re.IGNORECASE)
 GIT_VERIFY_RE = re.compile(r"\bgit\s+(log|show|diff)\b", re.IGNORECASE)
 
 # --- Pattern: evaluative-terms (block on hit unless evidence tool in same turn) ---
-# 規模・影響の評価語。 report-by-evidence skill の structured-doc gap (比較表 cell 等
-# への ungrounded 評価語混入 — 述語が付かないので skill の文末 judgment trigger が
-# 射程外) を補う。 bare-term match (table cell に述語 anchor を張れない)。 同 turn に
-# EVIDENCE_TOOLS が無ければ block。 compound/phrasal な高確度語のみ — 軽微/複雑/
-# 大変/抜本的/リスクが高い は流文 false-positive が広いため除外。
+# 規模・影響評価語。 report-by-evidence の structured-doc gap (述語なし = skill の文末 trigger 外) を補う
+# bare-term match、 同 turn に EVIDENCE_TOOLS 無ければ block。 compound/phrasal 高確度語のみ (軽微/複雑/大変/抜本的/リスクが高い は流文 FP で除外)。
 EVALUATIVE_PATTERNS: list[str] = [
     r"大改造",
     r"影響大(?!き)",  # label 影響大 を拾い、 形容詞 影響大きい/大きく は除外
@@ -213,15 +187,8 @@ CLAIM_RE = re.compile(
 )
 
 # --- Pattern: provide-user-instructions (warning, no block) ---
-# manual-execution 文脈 (MANUAL_EXEC) がありつつ host コマンド (HOST_CMD) が fenced /
-# inline-backtick code span の外 (= bare prose) に残る時だけ warn。 skill: 手動実行
-# コマンドは独立 fence に置く・inline backtick は readability 用で実行用でない。 ゆえ
-# strip_fences で fence と inline span を除いた prose に host cmd が残れば未 fence の
-# 違反。 host_cmd は deploy repo の高頻度 verb 限定 (curl/wget は URL を要求し prose
-# 言及を除外)。 tool pairing 無しの純 text-shape 判定。 ホスト側 は exec 動詞を必須化
-# (裸 match だと当 repo 頻出の中立語「ホスト側」が全 turn で発火するため)。
-# 残留: pairing は turn-global ゆえ instruction phrase と無関係な
-# 過去形 host cmd が遠隔で同 turn に共存すると稀に発火しうる (観測極小・warn のみ)。
+# MANUAL_EXEC 文脈ありつつ HOST_CMD が strip_fences 後の bare prose に残る時だけ warn (host_cmd は頻出 verb 限定、 ホスト側 は exec 動詞必須 — 裸だと中立語が全 turn 発火)。
+# 残留: turn-global pairing ゆえ無関係の過去形 host cmd と同 turn 共存で稀に発火 (warn のみ)。
 HOST_CMD_PATTERNS: list[str] = [
     r"sudo\s+(cp|install|tee|mv|rm|ln)\b",
     r"\bgit\s+(push|pull|checkout|clone|fetch|reset|rebase|cherry-pick)\b",
@@ -249,16 +216,8 @@ MANUAL_EXEC_PATTERNS: list[str] = [
 MANUAL_EXEC_RE = re.compile("|".join(MANUAL_EXEC_PATTERNS), re.IGNORECASE)
 
 # --- Pattern: verify-before-claim positive side (warning, no block) ---
-# completeness self-claim。 negative side (CLAIM_RE: 不明/該当なし) と pairing 同一
-# (EVIDENCE_TOOLS)・polarity と message のみ別。 確認済み は meta-text 多数 +
-# Bash-backed 多数 (EVIDENCE_TOOLS 外) ゆえ意図的に除外 (ungrounded 確認済み の FN
-# は承知)。 漏れはない/見落としはない の negative 形は CLAIM_RE 側に残し double-warn
-# を回避し、 ここは positive completeness のみ。 _check では strip_fences 後の text に
-# 当てる (Family A と一貫、 fence/inline 内に quote された claim 語を除外)。 reasonable
-# default は assertion anchor (として/を採用/で良い 等) を要求 (裸だと code default の
-# 議論「reasonable default を設定するか」で誤発火)。 lexeme は corpus 駆動で意図的に
-# tight — 完了/隅々まで/一通り/カバー/チェック済み 等の口語 completeness は broad 化
-# すると over-fire するため非対象 (FN 承知)。
+# positive completeness self-claim。 CLAIM_RE (negative) と pairing/EVIDENCE_TOOLS 同一、 polarity/message のみ別。 negative 形は CLAIM_RE 側に残し double-warn 回避。
+# strip_fences 後の text に当てる (quote された claim 語除外)。 reasonable default は assertion anchor 要求 (裸だと code default 議論で誤発火)。 lexeme は corpus 駆動で tight (口語 completeness は over-fire で非対象, FN 承知, 確認済みも意図除外)。
 POS_CLAIM_PATTERNS: list[str] = [
     r"(全部|全て|すべて)(の(ファイル|file|entry|箇所))?を?(読(んだ|みました|了|み終え)|確認しました)",
     r"網羅(し(た|ました)|的に(確認|読了|チェック|調査)し(た|ました))",
@@ -329,18 +288,7 @@ def _parse_ts(ts) -> float | None:
 def _current_turn(
     entries: list[dict],
 ) -> tuple[str, set[str], list[str], bool, float | None]:
-    """Return (assistant_text, tool_names, tool_paths, has_git_verify, prompt_epoch).
-
-    Current turn starts after the most recent user entry whose
-    `message.content` is a string (= human prompt; tool_result entries
-    use a list of content blocks). If no such entry is found, return
-    empty values (avoids fail-broad scanning of the whole transcript).
-
-    has_git_verify: True if any Bash tool_use in this turn invokes
-    git log / git show / git diff (for recognize-own-work pairing).
-
-    prompt_epoch: the boundary user entry's timestamp (turn-start wall clock).
-    """
+    """Return (assistant_text, tool_names, tool_paths, has_git_verify, prompt_epoch) for the turn after the most recent string-content user entry; empty values if none (avoids fail-broad whole-transcript scan)."""
     start_idx = -1
     prompt_epoch: float | None = None
     for i in range(len(entries) - 1, -1, -1):

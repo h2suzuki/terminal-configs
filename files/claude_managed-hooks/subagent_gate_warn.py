@@ -1,31 +1,25 @@
 #!/usr/bin/env python3
 """PreToolUse:^(Task|Agent)$ hook — subagent-gate overuse warning (advisory).
 
-Fires before a Task / Agent tool call. Inspects tool_input (prompt /
-subagent_type / description) and emits a stderr advisory when the spawn
-looks like it will not amortize context-switch + result-integration +
-token overhead. Always exits 0 (warn-only) — the spawn proceeds either
-way; this hook is judgment-aid, not a gate.
+Inspects tool_input (prompt / subagent_type / description) and emits a stderr
+advisory when a spawn looks unlikely to amortize its context-switch +
+result-integration + token overhead. Always exits 0
+(warn-only) — the spawn proceeds; this hook is judgment-aid, not a gate.
 
-Heuristic for "overuse candidate":
-  - prompt 文字数 < OVERUSE_PROMPT_THRESHOLD (200 chars) AND
-  - subagent_type が "general-purpose" / 未指定 / empty (specialized 系で
-    ない — Explore / code-reviewer / security-review 等の domain agent は
-    skill 条件 (d) を自動的に満たすので除外する) AND
-  - description が短い動詞句 (≤ DESC_WORD_THRESHOLD = 3 words) または
-    DESC_PATTERN_RE (Read X / Check Y 等の単純 lookup 動詞で始まる形)
+Heuristic for "overuse candidate" (3 条件 AND, false-positive 抑制目的):
+  - prompt < OVERUSE_PROMPT_THRESHOLD (200 chars) AND
+  - subagent_type が general-purpose / 未指定 / empty (specialized domain
+    agent は skill 条件 (d) を自動的に満たすので除外) AND
+  - description が短い動詞句 (≤ DESC_WORD_THRESHOLD words) または
+    DESC_PATTERN_RE (Read X / Check Y 等の lookup 動詞開始)
 
-3 条件すべて true で warn 発火 (false positive 抑制目的の AND)。
-
-subagent-gate skill (4 条件 a-d) を mechanical proxy で補助。 spawn
-そのものは止めない — judgment は LLM 側に残す。
+subagent-gate skill (4 条件 a-d) を mechanical proxy で補助。 judgment は
+LLM 側に残す。
 
 Exit:
-  0: silent pass (overuse not detected) or stderr advisory printed
-     (advisory は warn であって block ではない)。
+  0: silent pass (not detected) or stderr advisory (warn, never block)。
 
-parse / IO error は fail-open (exit 0)。 誤 block で user 作業を止めない
-ことを優先する。
+parse / IO error は fail-open (exit 0) — 誤 block で user 作業を止めない。
 """
 from __future__ import annotations
 
@@ -115,9 +109,8 @@ def _run(payload: dict) -> int:
     if not _is_overuse_candidate(prompt, subagent_type, description):
         return 0
 
-    # advisory 出力 (writing-skills template-hook.md の 「judge framing /
-    # corrective action 直接書き」 規律遵守 — hook を変更主体に誤読させない、
-    # corrective を直接書き下す)。 trim 抑止の冗長性は意図的に残してある。
+    # advisory: writing-skills template-hook.md の「judge framing / corrective 直接書き」規律
+    # 遵守 — hook を変更主体に誤読させず corrective を直接書き下す。 trim 抑止の冗長性は意図的。
     prompt_len = len(prompt)
     st_display = subagent_type if subagent_type else "(未指定)"
     sys.stderr.write(

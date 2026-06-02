@@ -2,16 +2,10 @@
 """
 check_commit_author hook for Claude Code.
 
-PreToolUse hook on Bash. When the command contains `git commit`,
-verifies that the target repo's effective `user.email` equals
-the expected email passed as argv[1]. On mismatch OR unset,
-blocks the commit (exit 2).
-
-The expected email is supplied at invocation time (from
-settings.json `command` field) rather than hardcoded, so the
-hook script itself is generic and contains no user-specific
-data. The user-specific value lives in settings.json (which is
-already user-deployed) as the argument.
+PreToolUse hook on Bash. On `git commit`, verifies the target repo's
+effective `user.email` equals the expected email (argv[1]); blocks on
+mismatch OR unset. Expected email is passed in (not hardcoded) so the
+script stays generic; the user-specific value lives in settings.json.
 
 Effective-email precedence (matches git's own rules):
   1. GIT_AUTHOR_EMAIL / GIT_COMMITTER_EMAIL env var
@@ -19,8 +13,7 @@ Effective-email precedence (matches git's own rules):
   3. Repo config — target is `-C <path>` if present, else payload.cwd
 
 Override / env detection runs against the QUOTE-STRIPPED command so
-that `-c user.email=evil` appearing inside a quoted `-m` message
-does not trigger a false-positive block.
+`-c user.email=evil` inside a quoted `-m` message does not false-block.
 
 Exit:
   0: command not git commit, OR email matches expected
@@ -37,12 +30,9 @@ import re
 import subprocess
 import sys
 
-# Strip heredoc bodies and quoted strings to expose executable structure before
-# detection. Substitutes a single `_` placeholder so `-c "..."` still reads as
-# `-c _` (preserving the flag-arg pairing), and so `echo "git commit"` doesn't
-# false-trigger.
-# Heredoc body strip: closing delimiter may be tab-indented under `<<-`, and the
-# opener line may carry trailing shell code that must be preserved.
+# Strip heredoc bodies + quoted strings to expose executable structure, so
+# `echo "git commit"` and quoted `-m` args don't false-trigger. Heredoc close
+# delimiter may be tab-indented (`<<-`); opener trailing code must survive.
 HEREDOC_BODY = re.compile(
     r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n[\s\S]*?^[ \t]*\1\b",
     re.MULTILINE,
@@ -99,14 +89,7 @@ def _resolve(path: str, payload_cwd: str | None) -> str:
 
 
 def _strip_with_placeholders(text: str) -> tuple[str, list[str]]:
-    """Replace quoted strings with `__Q<i>__` placeholders, returning the
-    stripped text and a list mapping placeholder index to the original
-    string (with outer quotes removed and double-quote escapes processed).
-
-    A bare `_` substitution would lose the actual value, causing the email
-    extractor to capture `_` from `-c user.email="real@x"` and false-block.
-    Preserving content via indexed placeholders avoids that.
-    """
+    """Replace quoted strings with `__Q<i>__` placeholders, returning stripped text + index->original map (so `-c user.email="real@x"` resolves back, not a value-losing `_`)."""
     contents: list[str] = []
 
     def _sub(m: re.Match) -> str:
@@ -146,10 +129,8 @@ def _run(payload: dict, expected_email: str) -> int:
     if not isinstance(cmd, str):
         return 0
 
-    # Strip heredoc bodies first (single `_`; body content is not consulted
-    # downstream). Then strip quoted strings with indexed placeholders so
-    # captured values like `-c user.email="real@x"` resolve back to the
-    # actual quoted content instead of a flat `_`.
+    # Strip heredoc bodies (content unused downstream), then quote strings via
+    # indexed placeholders so `-c user.email="real@x"` resolves back, not `_`.
     after_heredoc = HEREDOC_BODY.sub("_", cmd)
     stripped, quoted_contents = _strip_with_placeholders(after_heredoc)
     if not GIT_COMMIT_RE.search(stripped):
@@ -157,15 +138,11 @@ def _run(payload: dict, expected_email: str) -> int:
 
     payload_cwd = payload.get("cwd")
     if not payload_cwd or not isinstance(payload_cwd, str):
-        # Without a known cwd we cannot reliably target the right repo;
-        # fail-open rather than validate against the hook's own cwd.
+        # No known cwd: fail-open rather than validate against the hook's own cwd.
         return 0
 
-    # Compute the effective author email in git's actual precedence.
-    # All inspection runs on `stripped` so that the same patterns
-    # appearing inside a quoted `-m` message don't false-trigger; and
-    # captured group values run through `_resolve_placeholder` to recover
-    # the actual content for quoted values.
+    # Effective author email in git's precedence; inspect `stripped` so quoted
+    # `-m` patterns don't false-trigger; resolve placeholders to real content.
     env_match = ENV_EMAIL_RE.search(stripped)
     override_match = INLINE_EMAIL_OVERRIDE_RE.search(stripped)
     c_path_match = C_PATH_RE.search(stripped)

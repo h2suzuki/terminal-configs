@@ -1,27 +1,20 @@
 #!/usr/bin/env python3
 """
-UserPromptSubmit hook: when user signals session wind-down
-(handoff / お疲れさま / 終わります / sign off 等), check for
-uncommitted changes in cwd. If any, inject additionalContext to
-remind Claude of the commit-discipline rule ("don't leave dirty
-state at session end").
+UserPromptSubmit hook: on session wind-down phrase (handoff / お疲れさま /
+終わります / sign off 等), inject additionalContext reminding Claude of the
+commit-discipline rule "don't leave dirty state at session end".
 
-Why UserPromptSubmit (not Stop): the user's intent to end the
-session is best detected from their own message; Stop hook fires
-after every assistant turn regardless of session state, and
-checking for uncommitted state on every Stop is noisy.
+Why UserPromptSubmit (not Stop): end-intent is detected from the user's own
+message; Stop fires after every turn, so checking uncommitted state there is
+noisy.
 
-Stdin: UserPromptSubmit payload JSON with `prompt`, `cwd`,
-`session_id`, `transcript_path`.
-
-Stdout: hookSpecificOutput JSON with additionalContext when a
-handoff phrase is detected AND uncommitted changes exist.
-Otherwise empty.
+Stdin: UserPromptSubmit payload JSON (`prompt`, `cwd`, `session_id`, `transcript_path`).
+Stdout: hookSpecificOutput additionalContext only when a handoff phrase AND
+uncommitted changes both hold; else empty.
 
 Exit:
-  0: always (this hook only injects context, never blocks).
-
-Always exits 0 on any parse / IO error (fail-open).
+  0: always. This hook only injects context, never blocks; exits 0 on any
+     parse / IO error (fail-open).
 """
 
 from __future__ import annotations
@@ -32,10 +25,8 @@ import re
 import subprocess
 import sys
 
-# Case-insensitive: catches `Handoff`, `HANDOFF`, `Sign Off` etc.
-# (common when copy-pasting from chat/email subject lines).
-# `本日はこれで` requires これで explicitly to avoid matching bare
-# `本日は…` neutral prompts (e.g., `本日は晴天なり`).
+# Case-insensitive for `Handoff` / `Sign Off` etc.
+# `本日はこれで` requires これで to avoid matching neutral `本日は…` (e.g. 本日は晴天なり).
 HANDOFF_RE = re.compile(
     r"handoff|セッション(終了|リセット)|お疲れさま(でし)?(た)?|終わります|またね|sign\s?off|本日はこれで",
     re.IGNORECASE,
@@ -45,12 +36,7 @@ MAX_FILES_LISTED = 20
 
 
 def _git_uncommitted(cwd: str) -> list[str]:
-    """Return list of uncommitted entries via `git status --porcelain`.
-
-    Returns empty list on any error (not in a repo, git missing,
-    timeout, non-zero exit). Each entry is the path portion of a
-    porcelain v1 line, with the leading 3-char status code stripped.
-    """
+    """Return uncommitted paths via `git status --porcelain`; empty list on any error (fail-open)."""
     if not cwd or not os.path.isdir(cwd):
         return []
     try:
@@ -67,9 +53,8 @@ def _git_uncommitted(cwd: str) -> list[str]:
         return []
     files: list[str] = []
     for line in result.stdout.splitlines():
-        # porcelain v1 line is `XY<space>path[<space>-><space>renamed]`,
-        # so column 3 onwards is the path. Strip to drop the rename
-        # arrow notation cleanly enough for a user-facing listing.
+        # porcelain v1 is `XY<space>path...`, so col 3+ is the path;
+        # strip is good-enough for the user-facing rename-arrow case.
         if len(line) < 4:
             continue
         path_part = line[3:].strip()

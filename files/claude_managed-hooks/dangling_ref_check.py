@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """PreToolUse:Edit/Write/MultiEdit hook: block edits whose content contains
-dangling-prone references (terminal-specific paths, project CLAUDE.md
-citation, ephemeral tags). Enforces writing-code Rules「No dangling-prone
-references in persistent files」.
+dangling-prone references (terminal paths, project CLAUDE.md citation,
+ephemeral tags). Enforces writing-code「No dangling-prone refs in persistent files」.
 
-Opt-out: include `dangling-ref-check: allow` anywhere in the same content
-(typically as a comment) when the pattern is intentional (e.g. the rule
-file itself, hook source listing the pattern).
+Opt-out: include `dangling-ref-check: allow` anywhere in the content when the
+pattern is intentional (rule file itself, hook source listing the pattern).
 """
 import json
 import re

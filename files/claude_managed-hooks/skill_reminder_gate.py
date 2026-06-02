@@ -4,11 +4,10 @@ Skill-active gate hook for Claude Code.
 
 Purpose
 =======
-writing-* skill (writing-code / writing-python / writing-bash / writing-tests /
-writing-skills / writing-todos) は LLM の self-invoke 発火依存で発火率が低い。
-本 hook は Edit/Write/MultiEdit を 「関連 skill が **当 turn で invoke 済か**」 で
-gate する。正規ルート (skill 発動 → 同 turn で編集) は通し、 skip = detour は
-deny → 正しい kind を declare → skill invoke → 編集、 へ誘導する。
+writing-* skill は LLM の self-invoke 依存で発火率が低い。本 hook は Edit/Write/
+MultiEdit を 「関連 skill が **当 turn で invoke 済か**」 で gate する。正規ルート
+(skill 発動 → 同 turn で編集) は通し、 skip = detour は deny → kind declare →
+skill invoke → 編集、 へ誘導する。
 
 mechanism
 =========
@@ -17,24 +16,24 @@ mechanism
   gate    PreToolUse(^(Edit|Write|MultiEdit)$) hook。下記 flow で allow/deny。
   declare model が Bash で実行する CLI:
             skill_reminder_gate.py declare <ABS-path> <kind>[,<kind>...]
-          拡張子なし file の kind 真実源を session state に記録する。sid は env
-          $CLAUDE_CODE_SESSION_ID (== payload session_id、 実証済) から取る。
-          path は **絶対 path 必須** — gate は payload.cwd で、 declare は shell
-          cwd で解決するため、 相対 path だと cwd drift 時に hash 不一致で永久に
-          match せず deny loop になる。同じ絶対 path を後続 Edit でも使う。
+          拡張子なし file の kind 真実源を session state に記録。sid は env
+          $CLAUDE_CODE_SESSION_ID (== payload session_id) から取る。path は
+          **絶対 path 必須** — gate は payload.cwd、 declare は shell cwd で
+          解決するため、 相対だと cwd drift 時に hash 不一致で永久 deny loop。
+          同じ絶対 path を後続 Edit でも使う。
 
 gate flow:
   declared(sid, path) あり:
       拡張子あり → required = relevant_skills(path) ∪ ∪(宣言 kind の skill)
-                   (declare は **追加のみ**。 else 等で auto-detect を下回れない —
-                    .py を else 宣言して恒久的に gating を無効化する穴を塞ぐ)
+                   (declare は **追加のみ**。 auto-detect を下回れない —
+                    .py を else 宣言で gating 無効化する穴を塞ぐ)
       拡張子なし → required = ∪(宣言 kind の skill)  (declare が唯一の真実源)
   elif 拡張子あり → required = relevant_skills(path)
   else (拡張子なし・未宣言) → DENY「絶対 path で kind を declare せよ」; return
-  required が空            → ALLOW (skill-less file。transcript は読まない)
+  required が空            → ALLOW (skill-less file。transcript 非読込)
   active = 当 turn の Skill invoke 集合 (transcript current-turn scan)
   active 判定不能 (corrupted) → ALLOW (fail-open)
-  required ⊆ active        → ALLOW (skill 当 turn invoke 済)
+  required ⊆ active        → ALLOW
   else                    → DENY「<missing> を invoke してから編集」
 
 kind 語彙 → skill (additive。else 必須):
@@ -44,44 +43,44 @@ kind 語彙 → skill (additive。else 必須):
   test   → writing-code + writing-tests   (lang は別 kind で additive 宣言)
   skills → writing-skills
   todos  → writing-todos
-  memory → memory-routing  (実 gate は既存 memory_routing_gate、本 hook は通す)
+  memory → memory-routing  (実 gate は memory_routing_gate、本 hook は通す)
   else   → ∅  (skill の無い file。これが無いと拡張子なし file が Write 不能)
 
 skill-active 窓 (現 turn ∪ 直近 SKILL_WINDOW_SECONDS=5 分) の根拠
 ================================================================
-skill を invoke したら、 同 turn 内 + 直近 5 分は guidance が active とみなす。 5 分窓は、
-長い turn を跨ぐ作業で毎 turn 再 invoke する friction を抑えつつ、 「同一タスクの作業中」 に
-収まる短さで 「無関係な後続 turn が通る」 リスクをほぼ避ける。 現 turn を union するのは
->5 分の長い turn 内編集を誤 deny しないため (turn 内は entry 時刻に関係なく常に active)。
+skill invoke で同 turn 内 + 直近 5 分を active とみなす。5 分窓は長い turn を跨ぐ
+作業の再 invoke friction を抑えつつ無関係な後続 turn が通るリスクをほぼ避ける。
+現 turn を union するのは >5 分の長い turn 内編集を誤 deny しないため (turn 内は
+entry 時刻に関係なく常に active)。
 
 turn boundary 判定 (load-bearing — 変更時は false-allow/deny を再発させる)
 =========================================================================
 直近の human-input user entry を boundary とする。boundary 判定:
-  - isMeta==True の user entry は除外 (Skill invoke 後に付く skill 展開 injection。
-    boundary 扱いすると Skill invoke を turn から弾いて誤 deny する)
+  - isMeta==True の user entry は除外 (Skill invoke 後の skill 展開 injection。
+    boundary 扱いすると Skill invoke を turn から弾いて誤 deny)
   - content が str → boundary (典型 human prompt)
   - content が list で **非 tool_result block を 1 つ以上含む** → boundary
-    (画像+テキスト / steering 等の list 形 human prompt。 これを取りこぼすと前
-     turn の skill が active に leak して誤 allow する)
+    (画像+テキスト / steering 等の list 形 human prompt。取りこぼすと前 turn の
+     skill が active に leak して誤 allow)
   - content が list で全 tool_result → 継続 (boundary でない)
-boundary が見つからない corrupted transcript では None → fail-open ALLOW。
+boundary 不在の corrupted transcript では None → fail-open ALLOW。
 
 deny 方式・fail-open
 ====================
-deny は JSON permissionDecision: "deny" (exit 0) — memory_routing_gate /
-read_before_edit と同様、 hook bug が誤って tool を block しない。全例外を握り潰し
-exit 0 (fail-open)。transcript が読めない / boundary 不在のときも ALLOW に倒す。
+deny は JSON permissionDecision: "deny" (exit 0) — hook bug が誤って tool を
+block しない。全例外を握り潰し exit 0 (fail-open)。transcript が読めない /
+boundary 不在のときも ALLOW に倒す。
 
 residual (閉じない・既知)
 =========================
-- 拡張子なし file の kind 語彙選択は model 判断 (bash script を else 誤宣言すれば
-  すり抜け)。detour deny で declare を強制できるが語彙は model が選ぶ。
-- 未収載の exotic 言語拡張子 (CODE_EXTENSIONS 外) は skill-less 扱い (要なら 1 行追加)。
-- .j2/.in/.tmpl 等 templating 拡張子は多くが config ゆえ skill-less 許容 (.bak/.orig/
-  .swp/~ の backup/swap は元拡張子を復元して gate する)。
-- symlink: _canonical の realpath が skill/hook-dir segment を解決し分類が変わり得る
-  (現 deploy の symlink は skills→/etc/.../skills で分類保存、 SKILL.md は basename
-   判定ゆえ realpath 不変 = 現状未発火。latent)。
+- 拡張子なし file の kind 語彙選択は model 判断 (bash を else 誤宣言ですり抜け)。
+  detour deny で declare は強制できるが語彙は model が選ぶ。
+- 未収載の exotic 言語拡張子 (CODE_EXTENSIONS 外) は skill-less 扱い。
+- .j2/.in/.tmpl 等 templating 拡張子は config 多数ゆえ skill-less 許容 (.bak/
+  .orig/.swp/~ の backup/swap は元拡張子を復元して gate)。
+- symlink: _canonical の realpath が skill/hook-dir segment を解決し分類が変わり
+  得る (現 deploy の symlink は分類保存、 SKILL.md は basename 判定で不変 = 現状
+  未発火。latent)。
 
 canonical source: files/claude_managed-hooks/skill_reminder_gate.py
 deploy: /etc/claude-code/hooks/ (copy_dir で自動)。両者を同 session で同内容に保つ。
@@ -302,12 +301,7 @@ def _parse_ts(ts) -> float | None:
 
 
 def _active_skills(entries: list[dict], now: float, window_s: int) -> set[str] | None:
-    """invoke 済 skill 集合 = 現 turn ∪ 直近 window_s 秒 (entry timestamp)。
-
-    純 window だと >window_s の長い turn 内編集が誤 deny されるため現 turn を union。
-    boundary 不在の corrupted transcript は None (fail-open ALLOW)。Skill 呼出形:
-    assistant tool_use, name=="Skill", input=={"skill":"<name>"} (実証済)。
-    """
+    """invoke 済 skill 集合 = 現 turn ∪ 直近 window_s 秒。boundary 不在は None (fail-open)。"""
     start_idx = -1
     for i in range(len(entries) - 1, -1, -1):
         if _is_turn_boundary(entries[i]):

@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """
-Stop hook (user scope): detect push-prompting language in the
-assistant's last turn. Block (exit 2) when detected — git push is
-exclusively user-driven per user CLAUDE.md "Commit 自律則" and the
-commit-discipline skill (push silence clause).
+Stop hook (user scope): detect push-prompting in the assistant's
+last turn and block. git push is exclusively user-driven per user
+CLAUDE.md "Commit 自律則" / commit-discipline skill (push silence).
 
 Stdin: Stop payload JSON with `transcript_path`.
 
-Transcript walking is identical to the org-scope stop_checks.py:
-walk backwards to the most recent human-input user entry (content
-is a str), then collect text from all assistant entries after it.
-If no such entry is found (corrupted / partial transcript), return
-empty text rather than fall-broad scan.
+Transcript walk (identical to org-scope stop_checks.py): backwards
+to the most recent human-input user entry (content is str), then
+collect text from assistant entries after it. No such entry
+(corrupted / partial) → return empty rather than fall-broad scan.
 
 Exit:
   0: no push-prompting detected
@@ -26,13 +24,8 @@ import json
 import re
 import sys
 
-# Case-insensitive. Catches proactive push-prompting in its common forms:
-# interrogative (`push しますか?`, `push しましょうか`), plan/timing/condition
-# (`push する予定/つもり/タイミング/時/なら/べき`), permission
-# (`push してもいいですか`), and soliciting the user to signal a push
-# (`push する…お知らせ/教えて/指示/連絡ください`, `push するタイミングでお知らせください`).
-# Factual reports (`push しました`, `未 push です`) are deliberately NOT matched —
-# the same-clause `[^。、\n]` bound keeps the solicitation alternation tight.
+# Case-insensitive. Factual reports (`push しました`, `未 push です`) are
+# deliberately NOT matched — the same-clause `[^。、\n]` bound keeps the solicitation alternation tight.
 PUSH_PROMPT_RE = re.compile(
     r"(次に)?push\s?(し|を)?ますか[?？]"
     r"|push\s?しま(しょう|す)か"
@@ -61,9 +54,7 @@ def _load_transcript(path: str) -> list[dict]:
 
 
 def _last_assistant_text(entries: list[dict]) -> str:
-    """Concatenated text from assistant entries since the most recent
-    human-input user entry (content is str). Returns empty string if
-    no such boundary is found (avoids fall-broad transcript scan)."""
+    """Assistant text since the last human-input user entry; empty if no boundary (avoids fall-broad scan)."""
     start_idx = -1
     for i in range(len(entries) - 1, -1, -1):
         obj = entries[i]

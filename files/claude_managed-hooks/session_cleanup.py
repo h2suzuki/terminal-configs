@@ -2,16 +2,15 @@
 # /etc/claude-code/hooks/session_cleanup.py
 #
 # SessionEnd hook: removes this session's per-session temp files — the
-# statusline cache (<cache>/claude-tui-statusline/<session_id>.json, written
-# by statusline.sh) and the turn counter (<transcript>.turns, plus the
-# session-keyed fallback <cache>/claude-turn-counter/<session_id>.turns,
-# written by stop_checks.py's turn marker).
+# statusline cache (<cache>/claude-tui-statusline/<session_id>.json, written by
+# statusline.sh) and the turn counter (<transcript>.turns plus session-keyed fallback
+# <cache>/claude-turn-counter/<session_id>.turns, written by stop_checks.py's turn marker).
 #
-# SessionEnd does not fire on crash/kill, so abnormally-ended sessions would
-# otherwise leak their files forever. To bound both cache dirs we ALSO sweep
-# entries older than CRUFT_TTL each time a session ends cleanly (active
-# sessions keep their mtime fresh, so only true orphans are reaped). Every
-# error is swallowed (exit 0) — teardown must never fail.
+# SessionEnd does NOT fire on crash/kill, so abnormally-ended sessions would
+# leak their files forever. To bound both cache dirs we ALSO sweep entries
+# older than CRUFT_TTL on clean exit (active sessions keep mtime fresh, so
+# only true orphans are reaped). Every error is swallowed (exit 0) — teardown
+# must never fail.
 
 import glob
 import json

@@ -4,26 +4,24 @@
 
 Modes:
 
-- (no argv) — UserPromptSubmit handler. Reads stdin JSON envelope, runs
-  FTS5 BM25 against the user prompt, picks top-1 (plus a 2nd only if it also
-  clears a strong bar), applies a confidence floor + per-session throttle
-  (15 min same-entry suppression), and prints each entry's reminder as
-  additional context. Fail-open: any error exits 0
-  with no output so a hook bug never blocks the prompt.
+- (no argv) — UserPromptSubmit handler. FTS5 BM25 against the prompt, top-1
+  (plus a 2nd only if it clears a strong bar), confidence floor + per-session
+  throttle (15 min same-entry suppression). Fail-open: any error exits 0 with
+  no output so a hook bug never blocks the prompt.
 
-- `--upsert <abs_path> [project_id]` — replace one entry in entries_fts.
-  Called by /memory-routing after writing a memory feedback file. Exit 1
-  on error so the skill can surface the failure.
+- `--upsert <abs_path> [project_id]` — replace one entry. Called by
+  /memory-routing after writing a feedback file. Exit 1 on error so the
+  skill can surface the failure.
 
-- `--delete <abs_path> [project_id]` — remove one entry from entries_fts.
-  Called when /memory-routing retires an entry to OLD-MEMORY.md.
+- `--delete <abs_path> [project_id]` — remove one entry. Called when
+  /memory-routing retires an entry to OLD-MEMORY.md.
 
-- `--rebuild [memory_dir [project_id]]` — bulk re-index every active
-  feedback file referenced by `<memory_dir>/MEMORY.md`. Useful for
-  initial population and disaster recovery. Defaults to user memory.
+- `--rebuild [memory_dir [project_id]]` — bulk re-index files referenced by
+  `<memory_dir>/MEMORY.md` (initial population / disaster recovery). Defaults
+  to user memory.
 
-The query mode does NOT scan the filesystem — the DB is the source of
-truth, maintained by /memory-routing via --upsert / --delete.
+The query mode does NOT scan the filesystem — the DB is the source of truth,
+maintained by /memory-routing via --upsert / --delete.
 """
 from __future__ import annotations
 
@@ -48,11 +46,8 @@ QUERY_EXCERPT_LEN = 200
 MAX_ENTRY_SIZE = 50_000  # skip absurdly large feedback files
 
 # --- L4: concern / correction injector (UserPromptSubmit) ---
-# Raises (not enforces) illuminate-not-reassure / memory-routing by scanning the
-# user prompt for tight, corpus-calibrated phrases (precision over recall — a
-# noisy L4 is net-negative); throttled per channel via inject_log sentinels.
-# 間違 is intentionally excluded — it fires on generic "X is wrong" (code bugs /
-# rule-authoring prose), not assistant-correction, and is this repo's dominant FP.
+# Raises (not enforces) illuminate-not-reassure / memory-routing via tight prompt phrases (precision>recall — noisy L4 is net-negative; per-channel throttle).
+# 間違 INTENTIONALLY excluded: fires on generic "X is wrong" (code bugs / rule-authoring prose), not assistant-correction — dominant FP.
 _L4_CONCERN_KEY = "<L4-concern>"
 _L4_CORRECTION_KEY = "<L4-correction>"
 _CONCERN_REMINDER = (
@@ -126,14 +121,8 @@ def _encoded_project_id(cwd: str) -> str:
 
 
 def _parse_entry(file_path: str) -> tuple[str, str, str] | None:
-    """Return (reminder, keywords, body_for_search). Strips YAML frontmatter.
-
-    Format: a `reminder:` line (the actionable past-mistake reminder shown on
-    surface — write it to prevent repeating the mistake, not as a summary) plus
-    a `keywords:` line (match terms kept separate so the reminder need not be
-    keyword-stuffed). `keywords` is what the FTS5 index matches; `reminder` is
-    display-only.
-    """
+    """Return (reminder, keywords, body_for_search); strips YAML frontmatter. FTS5 matches
+    `keywords`; `reminder` is the actionable past-mistake reminder (written to prevent repeat, not a summary) — kept separate so it need not be keyword-stuffed."""
     try:
         size = os.path.getsize(file_path)
     except OSError:
@@ -321,10 +310,8 @@ def _turn_marker(payload: dict) -> str | None:
     prompt = payload.get("prompt")
     if isinstance(prompt, str) and prompt.lstrip().startswith("<task-notification>"):
         return None
-    # Read-only view of the Stop-owned turn counter. At this UserPromptSubmit
-    # the file still holds the previous turn's (count, last-stop epoch): the
-    # turn now starting is count+1 and the idle gap is now - last-stop. We do
-    # not write, so the Stop-owned count + last-stop epoch stays correct.
+    # Read-only view of Stop-owned counter: file holds prev turn's (count, last-stop), so starting=count+1, idle gap=now-last-stop.
+    # We never write — Stop owns count + last-stop epoch.
     path = _counter_path(payload)
     if not path:
         return None
@@ -428,16 +415,7 @@ def _concern_inject(payload: dict) -> str | None:
 
 
 def _main_query() -> int:
-    """UserPromptSubmit handler — always exit 0 (fail-open).
-
-    The turn marker rides BOTH channels: systemMessage (user-visible) and
-    additionalContext (model-visible). The fullscreen TUI may not paint the UPS
-    systemMessage (an undocumented CC rendering gap), so additionalContext is
-    the reliable copy; emitting both lets either audience see it. A matched
-    memory entry rides both channels too (so the user can see what surfaced,
-    subject to the same TUI gap). The L4 concern/correction reminder rides
-    additionalContext only — a private model nudge, not user-facing.
-    """
+    """UserPromptSubmit handler — always exit 0 (fail-open). Turn marker + memory entry ride BOTH channels (TUI may drop UPS systemMessage, an undocumented CC gap, so additionalContext is the reliable copy); L4 concern/correction rides additionalContext only — a private model nudge."""
     try:
         payload = json.loads(sys.stdin.read() or "{}")
     except Exception:
@@ -595,8 +573,6 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception:
-        # Fail-open for hook (query) path; non-zero exit for admin paths
-        # would be hidden under this catch, so admin callers should rely
-        # on the explicit return codes above (this catch is the last line
-        # of defense against unexpected exceptions in the hook context).
+        # Fail-open last-line-of-defense for the hook path. Admin paths' non-zero
+        # exits would be hidden here, so admin callers rely on explicit returns above.
         sys.exit(0)

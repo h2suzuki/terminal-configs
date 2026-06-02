@@ -2,34 +2,27 @@
 """
 detect_cwd_pollution hook for Claude Code.
 
-PostToolUseFailure hook on Bash (official tool-failure-only
-event; PostToolUse does not fire on failures by design). When a
-failed Bash command's output contains cwd-pollution error
-patterns, emits a brief advisory via
-hookSpecificOutput.additionalContext naming payload.cwd. The
-advisory is a reminder for Claude to compare cwd against its
-mental expectation, not an independent verification.
+PostToolUseFailure hook on Bash (PostToolUse does not fire on failures by
+design). On a failed Bash command whose output matches cwd-pollution patterns,
+emits a brief advisory via hookSpecificOutput.additionalContext naming
+payload.cwd. The advisory is a reminder for Claude to compare cwd against its
+mental model — NOT an independent verification.
 
 Pattern scope:
-  - "pathspec ... did not match" — git complaint about a path arg
-    that didn't resolve in the current repo / cwd
-  - relative-path "no such file or directory" — leading char is NOT
-    "/", "~", or "." followed by "/", suggesting the path was
-    resolved against cwd
-  - relative-path "cannot open directory" — same as above
+  - "pathspec ... did not match" — git path arg unresolved in current repo / cwd
+  - relative-path "no such file or directory" — leading char NOT "/", "~", or
+    "./", so the path was resolved against cwd
+  - relative-path "cannot open directory" — same
 
-Absolute-path errors (e.g. `ls: cannot access '/nonexistent'`) are
-NOT flagged: those are unrelated to cwd. The originating CLAUDE.md
-rule explicitly targets "routine commands that suddenly fail" due
-to cwd drift, not generic missing-file errors.
+Absolute-path errors are NOT flagged: unrelated to cwd. The originating
+CLAUDE.md rule targets "routine commands that suddenly fail" from cwd drift,
+not generic missing-file errors.
 
-The hook deliberately does not call `pwd` in a subprocess: with
-cwd= set on subprocess.run, `pwd` just echoes back the same path,
-giving no independent diagnostic. The advisory references
-payload.cwd so Claude can compare against its own mental model.
+Deliberately does NOT call `pwd` in a subprocess: with cwd= set on
+subprocess.run, `pwd` echoes back the same path — no independent diagnostic.
+The advisory references payload.cwd instead.
 
-Always exits 0 (advisory; the tool has already failed by the time
-PostToolUseFailure fires).
+Always exits 0 (advisory; the tool has already failed when PostToolUseFailure fires).
 """
 
 from __future__ import annotations
@@ -84,10 +77,8 @@ def _is_pollution(output: str) -> bool:
     # pathspec is always cwd-relative inside its repo, so flag unconditionally
     if PATHSPEC_RE.search(output):
         return True
-    # no-such-file / cannot-open-directory: scan line-by-line. In each line
-    # that contains the error text, examine quoted path tokens — if any one
-    # is cwd-relative, flag. If only absolute paths are quoted, don't flag.
-    # If no path is quoted at all, conservative: don't flag.
+    # no-such-file / cannot-open: flag a line's error only if a quoted path token
+    # is cwd-relative; absolute-only or no quoted path → conservative, don't flag.
     for line in output.splitlines():
         if not NOSUCHFILE_TEXT_RE.search(line):
             continue

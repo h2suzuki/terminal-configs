@@ -2,23 +2,21 @@
 """
 Avoid-cd hook for Claude Code.
 
-PreToolUse hook on Bash. Detects commands starting with `cd ` (or
-bare `cd`) and emits hookSpecificOutput.additionalContext suggesting
-alternatives (pushd/popd, absolute paths, `git -C <repo>`).
+PreToolUse hook on Bash. Detects leading-`cd` (or bare `cd`) and emits
+hookSpecificOutput.additionalContext suggesting alternatives (pushd/popd,
+absolute paths, `git -C <repo>`).
 
-Scope is intentionally narrow: only leading-`cd` is flagged. Embedded
-forms (`; cd`, `bash -c 'cd ...'`, `(cd /tmp; ls)`) are NOT flagged
-here; the runtime-symptom detector `detect_cwd_pollution.py`
-(PostToolUseFailure) catches their consequences when they actually
-pollute cwd. Broadening this prefix check would over-flag legitimate
-subshell idioms.
+Scope is INTENTIONALLY narrow: only leading-`cd` is flagged. Embedded forms
+(`; cd`, `bash -c 'cd ...'`, `(cd /tmp; ls)`) are NOT flagged here; the
+runtime-symptom detector `detect_cwd_pollution.py` (PostToolUseFailure)
+catches their cwd pollution. Broadening would over-flag legitimate subshell
+idioms.
 
-The git-push allowlist exception (`git push origin main` must be
-run as the bare string for the permission allowlist to match) does
-not match `^cd\\s`, so no carve-out is required.
+The git-push allowlist exception (`git push origin main` run as the bare
+string) does not match `^cd\\s`, so no carve-out is required.
 
-Exit code is always 0 (fail-open). Any unexpected exception during
-parsing is swallowed silently so a hook bug never blocks Claude.
+Exit code is always 0 (fail-open): any parsing exception is swallowed so a
+hook bug never blocks Claude.
 """
 
 from __future__ import annotations

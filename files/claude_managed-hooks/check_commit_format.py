@@ -2,31 +2,28 @@
 """
 check_commit_format hook for Claude Code.
 
-PreToolUse hook on Bash. When `git commit` is invoked with a
-message (via heredoc or `-m` / `--message`), validates:
+PreToolUse hook on Bash. When `git commit` carries a message (heredoc or
+`-m` / `--message`), validates:
 
   - subject: must match `<area>: <Capital-imperative> [<tag>...]`
     (regex `^\\S+: [A-Z]`), <= 72 chars (hard), <= 50 chars (soft)
   - body lines: <= 72 chars (soft)
 
-The subject length / format check is computed on `lines[0].rstrip()`
-(trailing whitespace trimmed but leading whitespace preserved), so
-an indented heredoc subject is judged against what git actually
-stores.
+Subject checks run on `lines[0].rstrip()` (trailing ws trimmed, leading ws
+preserved) so an indented heredoc subject is judged as git stores it.
 
 Hard violations (block, exit 2):
   - subject > 72 chars
   - subject does not match `<area>: <Capital>` format
-  - `git commit -F`/`--file` (cannot read file content from hook)
+  - `git commit -F`/`--file` (file content unreachable from hook)
 
 Soft violations (warn via additionalContext, exit 0):
   - subject 51-72 chars
   - body line > 72 chars
 
-Multi-`-m`: git concatenates `-m a -m b` as `a\\n\\nb`. The hook
-extracts all `-m` / `--message` args in order and joins them with
-blank-line separators so the body-length check sees the same body
-git will commit.
+Multi-`-m`: git joins `-m a -m b` as `a\\n\\nb`; the hook extracts all
+`-m` / `--message` args in order and joins with blank lines so the
+body-length check sees the same body git commits.
 
 Exit:
   0: not git commit / no message / format passes / soft warnings only
@@ -41,12 +38,8 @@ import json
 import re
 import sys
 
-# Strip heredoc bodies and quoted strings to expose executable structure before
-# detection. Substitutes a single `_` placeholder so `-c "..."` still reads as
-# `-c _` (preserving the flag-arg pairing), and so `echo "git commit"` doesn't
-# false-trigger.
-# Heredoc body strip: closing delimiter may be tab-indented under `<<-`, and the
-# opener line may carry trailing shell code that must be preserved.
+# Strip heredoc bodies + quoted strings to `_` so flag-arg pairing survives (`-c _`) and
+# `echo "git commit"` can't false-trigger; `<<-` closing delim tab-indent + opener code kept.
 HEREDOC_BODY = re.compile(
     r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n[\s\S]*?^[ \t]*\1\b",
     re.MULTILINE,
@@ -57,23 +50,18 @@ QUOTED = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
 # flags with optional space- or `=`-separated args.
 GIT_COMMIT_RE = re.compile(r"\bgit\b(?:\s+-{1,2}\S+(?:[ =]\S+)?)*\s+commit\b(?![\w.])")
 
-# Block `-F` / `--file` / `--file=` forms — file content is unreachable from
-# the hook. Match the flag at a token boundary so `-Fmsg` / `-F-` / `-F<file>`
-# / `--file file` / `--file=file` are all caught.
+# Block `-F` / `--file` — file content is unreachable from the hook. Match at a
+# token boundary so `-Fmsg` / `-F-` / `--file file` / `--file=file` are caught.
 F_FLAG_RE = re.compile(r"(?:^|\s)(?:-F\S*|--file(?:=|\s|$))")
 
-# Extract message from the ORIGINAL command after detection passes.
-# Closing delimiter may be tab-indented (`<<-EOF`); require the delimiter
-# to be alone on its line (optional leading whitespace, then word boundary
-# and end of line) so body lines that happen to start with the delim word
-# don't truncate the message.
+# Extract from ORIGINAL command after detection. Closing delim may be `<<-` tab-indented;
+# require it alone on its line so body lines starting with the delim word don't truncate.
 HEREDOC_RE = re.compile(
     r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n(.*?)\n[ \t]*\2\s*(?:\n|$)",
     re.DOTALL,
 )
-# After quoted strings are replaced with `__Q<i>__` placeholders, `-m` /
-# `--message` always takes one whitespace-delimited token (either a
-# placeholder or a bare word) — no need for triple-alternative regex.
+# After quoting -> `__Q<i>__` placeholders, `-m`/`--message` takes one ws-delimited token
+# (placeholder or bare word) — no triple-alternative regex needed.
 M_FLAG_RE = re.compile(r"(?:^|\s)(?:-m|--message)(?:\s+|=)(\S+)")
 SUBJECT_FORMAT_RE = re.compile(r"^\S+: [A-Z]")
 
@@ -83,16 +71,7 @@ BODY_LINE_LIMIT = 72
 
 
 def _strip_with_placeholders(text: str) -> tuple[str, list[str]]:
-    """Replace quoted strings with `__Q<i>__` placeholders, returning the
-    stripped text and a list mapping placeholder index to the original
-    string (with outer quotes removed and double-quote escapes processed).
-
-    Unlike a bare `_` substitution, this preserves the inner content so
-    later extraction (e.g. `M_FLAG_RE`) can recover the actual value.
-    Crucially, since the regex now scans the stripped text, a literal
-    `-m fake` that appeared INSIDE a quoted string is hidden behind the
-    placeholder and cannot false-match.
-    """
+    """Replace quoted strings with `__Q<i>__` placeholders; return stripped text + index->original list (so later extraction recovers the value and an inner `-m fake` can't false-match)."""
     contents: list[str] = []
 
     def _sub(m: re.Match) -> str:
@@ -124,15 +103,11 @@ def _extract_message(cmd: str) -> str | None:
     m = HEREDOC_RE.search(cmd)
     if m:
         return m.group(3)
-    # Use placeholder substitution so `-m "fake"` appearing inside an outer
-    # quoted string (e.g. `echo "text -m fake" | git commit -m "real"`) is
-    # hidden behind the placeholder and does NOT false-match.
+    # Placeholder substitution hides `-m "fake"` inside an outer quoted string
+    # (e.g. `echo "text -m fake" | git commit -m "real"`) so it does NOT false-match.
     stripped, quoted_contents = _strip_with_placeholders(cmd)
-    # Restrict the M_FLAG scan to the SAME statement as `git commit`. A
-    # multi-line / multi-statement Bash payload may legitimately contain
-    # `-m` belonging to other commands (e.g. `install -m 0755 ...` in a
-    # different line). Stop at the first newline / compound op after the
-    # commit token.
+    # Restrict M_FLAG scan to the SAME statement as `git commit` (a payload may carry `-m`
+    # from other commands, e.g. `install -m 0755`): stop at first newline / compound op.
     git_commit_match = GIT_COMMIT_RE.search(stripped)
     if not git_commit_match:
         return None
@@ -153,9 +128,8 @@ def _extract_message(cmd: str) -> str | None:
 
 
 def _emit_context(msg: str) -> None:
-    # Emit additionalContext only — no permissionDecision — so this hook's
-    # warning does not aggregate-vote against any future PreToolUse hook
-    # that might want to ask/deny.
+    # additionalContext only, no permissionDecision, so this warning doesn't
+    # aggregate-vote against a future PreToolUse hook that may ask/deny.
     payload = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",

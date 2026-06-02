@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """
-PreToolUse(Bash) hook: deny `git add` invocations combined with
-shell operators (`&&`, `||`, `;`, `|`).
-
-Sibling to deny_compound_git_commit.py. Forces `git add` to run as
-a standalone Bash call so the staged state is settled before the
-subsequent `git commit` PreToolUse hooks fire.
+PreToolUse(Bash) hook: deny `git add` combined with shell operators
+(`&&`, `||`, `;`, `|`). Forces `git add` standalone so the staged state
+is settled before the subsequent `git commit` PreToolUse hooks fire.
+Sibling to deny_compound_git_commit.py.
 
 Exit:
   0: not a compound git-add invocation (allow)
@@ -20,23 +18,16 @@ import sys
 
 COMPOUND_OPS = ("&&", "||", ";", "|")
 
-# Match `git ... add` allowing intervening flags with optional space- or
-# `=`-separated args, so `git -C /repo add`, `git -c key=val add`, and
-# `git --git-dir /x add` are detected. Matches GIT_ADD against the
-# stripped command so `echo "git add foo"` doesn't false-trigger.
+# Detect `add` after `git` past intervening flags (`git -C /repo add` etc).
+# Run against the stripped command so `echo "git add foo"` won't false-trigger.
 GIT_ADD = re.compile(r"\bgit\b(?:\s+-{1,2}\S+(?:[ =]\S+)?)*\s+add\b(?![\w.])")
 
-# Strip quoted strings first (single and double; backslash escapes inside
-# double quotes). Substitutes a single `_` placeholder rather than empty
-# string, so `-c "user.email=x"` becomes `-c _` and downstream regex still
-# sees `-c` taking an arg.
+# Strip quoted strings, substituting `_` (not empty) so `-c "x=y"` becomes
+# `-c _` and the flag-arg regex still sees `-c` taking an arg.
 QUOTED = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
 
-# Heredoc body strip: closing delimiter may be tab-indented under `<<-`,
-# and the line containing the `<<DELIM` opener may carry trailing shell
-# code that must be preserved (e.g. `... <<EOF && git add foo`).
-# Pattern: opener up to end-of-its-line, then body until a line whose
-# only whitespace-leading content is the delimiter word.
+# Strip heredoc body but keep trailing shell code on the opener line
+# (e.g. `... <<EOF && git add foo`); `<<-` allows a tab-indented delimiter.
 HEREDOC = re.compile(
     r"<<-?\s*['\"]?(\w+)['\"]?([^\n]*)\n[\s\S]*?^[ \t]*\1\b",
     re.MULTILINE,
@@ -44,12 +35,7 @@ HEREDOC = re.compile(
 
 
 def _strip_heredoc(m: re.Match) -> str:
-    """Keep `_` placeholder + any trailing shell code on the opener line.
-
-    `cat <<EOF && git add foo\\ncontent\\nEOF` reduces to
-    `cat _ && git add foo\\n` — the body is stripped but the real
-    compound operator and the real `git add` survive.
-    """
+    """Replace a heredoc with `_` plus the opener line's trailing shell code."""
     return "_" + m.group(2)
 
 

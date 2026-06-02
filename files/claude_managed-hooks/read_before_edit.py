@@ -7,71 +7,44 @@ Use-case scenarios
 
 PostToolUse — fix knowledge state
 ---------------------------------
-On Read or Write:
-  Knowledge is now in Claude's context.
-    Read  -> INSERT record (tool=Read, range = offset+limit, mtime_ns).
-    Write -> INSERT record (tool=Write, range = whole file, mtime_ns).
-
-On Edit, MultiEdit, or NotebookEdit:
-  Exact post-edit content is uncertain — context cache is invalidated.
-  No action required: the file's mtime change automatically excludes
-  prior records from the current-mtime filter on the next check.
+On Read / Write: INSERT record (mtime_ns; Read range = offset+limit, Write = whole file).
+On Edit / MultiEdit / NotebookEdit: no action — the mtime change auto-excludes
+prior records from the next check's current-mtime filter.
 
 PreToolUse — gate or prompt the tool call
 -----------------------------------------
 On Read:
-  Look up records at the file's current mtime.
-    No Read/Write record  -> cache invalidated -> allow
-                             (Read is justified, silent advisory).
-    Read/Write record(s)  -> advise that the duplicate range is
-                             already in context; allow.
-
-On Write or NotebookEdit:
-  Unconditional allow. Do nothing else.
-
-On Edit or MultiEdit:
-  Look up records at the file's current mtime.
-    No Read/Write record  -> cache invalidated -> DENY with a
-                             Read-before-Edit instruction.
-    Read/Write record(s)  -> if any Write covers the whole file,
-                             stay silent (full coverage).
-                             Otherwise (Read records only), advise
-                             that the Edit region may fall outside
-                             the prior Read scope; allow.
+  No record at current mtime -> cache invalidated -> allow (silent advisory).
+  Record(s) -> advise duplicate range already in context; allow.
+On Write / NotebookEdit: unconditional allow.
+On Edit / MultiEdit:
+  No record at current mtime -> DENY with a Read-before-Edit instruction.
+  Any Write covers whole file -> stay silent.
+  Read records only -> advise Edit region may fall outside Read scope; allow.
 
 Subcommands
 ===========
 
-  record  PostToolUse hook for Read / Write. Appends an entry
-          {tool, mtime_ns, [offset, limit | -]} to accesses_json.
+  record  PostToolUse for Read / Write. Appends {tool, mtime_ns, [offset, limit | -]}.
+  check   PreToolUse for Read / Edit / MultiEdit. Emits hookSpecificOutput per above.
 
-  check   PreToolUse hook for Read / Edit / MultiEdit. Emits
-          hookSpecificOutput per the scenarios above.
+  Write / NotebookEdit PreToolUse and Edit / MultiEdit / NotebookEdit PostToolUse must
+  not route here (excluded at the settings.json matcher — anchored `^(Read|Edit|MultiEdit)$`
+  and `^(Read|Write)$`). The hook is defensive and early-returns on unexpected tools.
 
-  Write and NotebookEdit PreToolUse, and Edit / MultiEdit /
-  NotebookEdit PostToolUse, should not route through this hook
-  (excluded at the settings.json matcher level — anchored
-  `^(Read|Edit|MultiEdit)$` and `^(Read|Write)$`). The hook is
-  defensive and early-returns on unexpected tools.
+State lives in ~/.claude/hooks/state/read_mtime.sqlite3 (WAL). Rows older than
+TTL_SECONDS (default 7 days) are pruned opportunistically on each write;
+accesses_json is capped to the last ACCESS_HISTORY_CAP entries per row.
 
+Paths are canonicalised via `~`-expansion -> realpath against the payload's `cwd`,
+so symlink and relative/absolute variants converge to one state row. Non-string
+`file_path` is rejected early.
 
-State lives in ~/.claude/hooks/state/read_mtime.sqlite3 (WAL mode).
-Rows older than TTL_SECONDS (default 7 days) are pruned
-opportunistically on each write. accesses_json is capped to the last
-ACCESS_HISTORY_CAP entries per row.
+cmd_record wraps SELECT-then-UPSERT in one `BEGIN IMMEDIATE` transaction so two
+concurrent PostToolUse hooks for the same (session_id, path) cannot lose an append.
 
-Paths are canonicalised via `~`-expansion -> realpath against the
-payload's `cwd`, so symlink and relative/absolute path variants
-converge to a single state row. Tool inputs whose `file_path` is
-non-string are rejected early.
-
-cmd_record wraps the SELECT-then-UPSERT in a single
-`BEGIN IMMEDIATE` transaction so two concurrent PostToolUse hooks
-for the same (session_id, path) cannot lose an append.
-
-`record` always exits 0. `check` exits 0 even when denying — the
-deny is communicated via JSON `permissionDecision: "deny"`, not via
-exit code, so hook bugs cannot accidentally block Claude.
+`record` always exits 0. `check` exits 0 even when denying — the deny rides JSON
+`permissionDecision: "deny"`, not the exit code, so hook bugs cannot block Claude.
 """
 
 from __future__ import annotations
@@ -211,9 +184,8 @@ def cmd_record(payload: dict) -> None:
 
     conn = _open_db()
     try:
-        # BEGIN IMMEDIATE acquires a RESERVED lock right away so concurrent
-        # PostToolUse hooks for the same (session_id, path) cannot interleave
-        # SELECT-then-UPSERT and clobber each other's append.
+        # RESERVED lock up front so concurrent same-(session_id, path) hooks
+        # cannot interleave SELECT-then-UPSERT and clobber each other's append.
         conn.execute("BEGIN IMMEDIATE")
         try:
             row = conn.execute(

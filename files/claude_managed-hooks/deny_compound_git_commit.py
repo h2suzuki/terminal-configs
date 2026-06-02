@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """
-PreToolUse(Bash) hook: deny `git commit` invocations combined with
-shell operators (`&&`, `||`, `;`, `|`).
+PreToolUse(Bash) hook: deny `git commit` combined with shell operators
+(`&&`, `||`, `;`, `|`).
 
-Forces `git commit` to run as a standalone Bash call so the sibling
-check_commit_format / check_commit_author hooks can parse the
-single-command form unambiguously. Compound forms tangle multi-
-heredoc / multi-quoting / cross-command env-var precedence and
-expose bypass surfaces that the per-command regexes cannot reason
-about.
+Forces `git commit` standalone so the sibling check_commit_format /
+check_commit_author hooks can parse the single-command form
+unambiguously; compound forms expose bypass surfaces the per-command
+regexes cannot reason about.
 
 Exit:
   0: not a compound git-commit invocation (allow)
@@ -23,25 +21,16 @@ import sys
 
 COMPOUND_OPS = ("&&", "||", ";", "|")
 
-# Match `git ... commit` allowing intervening flags with optional space- or
-# `=`-separated args, so `git -C /repo commit`, `git -c key=val commit`,
-# and `git --git-dir /x commit` are detected. The `(?:[ =]\\S+)?` after
-# the flag swallows the flag's argument (e.g. `commit.template=/x` after
-# `-c`), preventing the bare substring `commit` inside `-c commit.X=Y`
-# from being misread as a commit subcommand.
+# Match `git ... commit` past intervening flags; the flag-arg swallow keeps
+# the substring `commit` inside `-c commit.X=Y` from reading as the subcommand.
 GIT_COMMIT = re.compile(r"\bgit\b(?:\s+-{1,2}\S+(?:[ =]\S+)?)*\s+commit\b(?![\w.])")
 
-# Strip quoted strings first (single and double; backslash escapes inside
-# double quotes). Substitutes a single `_` placeholder rather than empty
-# string, so `-c "user.email=x"` becomes `-c _` and downstream regex still
-# sees `-c` taking an arg.
+# Strip quoted strings to a single `_` placeholder (not empty) so downstream
+# regex still sees the flag taking an arg, e.g. `-c "x"` becomes `-c _`.
 QUOTED = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
 
-# Heredoc body strip: closing delimiter may be tab-indented under `<<-`,
-# and the line containing the `<<DELIM` opener may carry trailing shell
-# code that must be preserved (e.g. `... <<EOF && git commit -m foo`).
-# Pattern: opener up to end-of-its-line, then body until a line whose
-# only whitespace-leading content is the delimiter word.
+# Heredoc body strip: closing delimiter may be tab-indented under `<<-`, and
+# trailing shell code on the opener line must survive (`<<EOF && git commit`).
 HEREDOC = re.compile(
     r"<<-?\s*['\"]?(\w+)['\"]?([^\n]*)\n[\s\S]*?^[ \t]*\1\b",
     re.MULTILINE,
@@ -49,12 +38,7 @@ HEREDOC = re.compile(
 
 
 def _strip_heredoc(m: re.Match) -> str:
-    """Keep `_` placeholder + any trailing shell code on the opener line.
-
-    `cat <<EOF && git commit -m foo\\ncontent\\nEOF` reduces to
-    `cat _ && git commit -m foo\\n` — the body is stripped but the real
-    compound operator and the real `git commit` survive.
-    """
+    """Replace heredoc body with `_`, keeping trailing shell code on the opener line."""
     return "_" + m.group(2)
 
 

@@ -1,24 +1,16 @@
 #!/usr/bin/env python3
 """UserPromptSubmit hook — subagent-gate spawn suggest (advisory).
 
-Inspects the user prompt and, when subagent-friendly patterns appear
-(sweeps / multi-file scans / parallel exploration 系), surfaces an
-advisory via hookSpecificOutput.additionalContext so main can verbalize
-whether to delegate to an Agent tool.
+subagent-friendly pattern 検出時に hookSpecificOutput.additionalContext で
+advisory を出す。 does NOT decide for the LLM — option-space を surface する
+だけで、 4 条件 (a-d) の判定は LLM が行う。
 
-This hook does NOT decide for the LLM — it only surfaces option-space
-that LLM tends to skip when it has already locked into "main で直接やる"
-mode. Skill 4 条件 (a-d) の判定は最終的に LLM が行う。
-
-Patterns: specific な compound 形のみ (false positive 抑制目的 — 「全部」
-単独より「全 file」 / 「全件」 / 「すべての <ext>」 等の compound form)。
-subagent-gate skill (4 条件 a-d) を mechanical proxy で補助。
+Patterns: compound 形のみ requiring (false positive 抑制目的)。
+subagent-gate skill (4 条件 a-d) の mechanical proxy。
 
 Exit:
-  0: 常に exit 0 (fail-open)。 detect 時は stdout に
-     hookSpecificOutput.additionalContext JSON を出力、 非 detect 時は silent。
-
-parse / IO error は fail-open (exit 0、 stdout 出力なし)。
+  0: 常に exit 0 (fail-open)。 detect 時のみ stdout に JSON 出力、 他は silent。
+     parse / IO error も fail-open (exit 0、 出力なし)。
 """
 from __future__ import annotations
 
@@ -27,15 +19,8 @@ import re
 import sys
 
 
-# subagent-friendly patterns — compound 形を要求して false positive を抑制。
-# 各 pattern は対応する skill 条件 (a/b/c) を comment で明記し、 advisory
-# 出力時に該当条件を user に提示できるよう group 化している。
-#
-# Pattern naming convention:
-#   - 「全 file」 / 「全件」 / 「すべての .py」 系 = sweep (条件 b: large output)
-#   - 「並列に / parallel に」 系 = (条件 a: parallelizable)
-#   - 「複数 endpoint / N 個の file 比較」 系 = (条件 c: 3+ query 探索)
-#   - 「codebase 全体で / 全 repo で」 系 = sweep (条件 b)
+# compound 形を要求して false positive を抑制。 skill 条件 (a/b/c) ごとに
+# group 化し、 advisory で該当条件を提示できるよう inline comment で明記。
 SUBAGENT_FRIENDLY_PATTERNS: list[str] = [
     # Sweep / 全件系 (条件 b)
     r"全\s?file\s?(を|で)?\s?(scan|読|read|確認|チェック|inspect)",
@@ -78,9 +63,8 @@ def _detect(prompt: str) -> str | None:
 
 def _emit_advisory(matched: str) -> None:
     """Emit hookSpecificOutput.additionalContext。"""
-    # writing-skills template-hook.md の 「judge framing / corrective action
-    # 直接書き」 規律遵守 — hook を変更主体に誤読させず、 corrective を直接
-    # 書き下す。 trim 抑止の冗長性は意図的に残す。
+    # writing-skills 規律: hook を変更主体に誤読させず corrective を直接書き下す。
+    # context の冗長性は trim 抑止のため意図的に残す。
     context = (
         f"subagent-gate (suggest): user 要求に 「{matched}」 を検出しました。 "
         f"subagent-gate skill 4 条件のうち (b) large output / "

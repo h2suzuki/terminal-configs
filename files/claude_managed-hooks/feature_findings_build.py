@@ -2,26 +2,20 @@
 r"""
 Deterministic feature-research findings builder + SessionStart hook.
 
-This single file both BUILDS the findings and IS the SessionStart hook —
-there is no LLM and no `claude` subprocess in the build, so it cannot
-re-trigger SessionStart and needs no recursion guard / reaper / staging /
-in-flight machinery.
+This file both BUILDS the findings and IS the SessionStart hook. No LLM and no
+`claude` subprocess in the build, so it cannot re-trigger SessionStart — needs
+no recursion guard / reaper / staging / in-flight machinery.
 
-The official changelog (code.claude.com/docs/en/changelog.md) is structured
-MDX — `<Update label="X.Y.Z" description="<Mon DD, YYYY>">` blocks of `  * `
-bullets — so the build is a plain parse → keep post-cutoff (by the in-source
-DATE, no model judgement) → keyword-bucket → emit verbatim. No summarization
-means features can never be silently dropped.
+Source is the structured-MDX changelog (code.claude.com/docs/en/changelog.md):
+`<Update label="X.Y.Z" description="<Mon DD, YYYY>">` blocks of `  * ` bullets.
+Build = parse → keep post-cutoff → keyword-bucket → emit verbatim. No
+summarization, so features can never be silently dropped. (RSS is cleaner XML
+but carries only ~15 items; the MDX page is the one source with full history.)
 
-(The RSS feed code.claude.com/docs/en/changelog/rss.xml is cleaner XML but only
-carries ~15 recent items, too few for the post-cutoff range; the MDX page,
-generated from the GitHub CHANGELOG, is the one source with full history.)
-
-Cutoff: a bullet is kept when its version's date is >= CUTOFF_YM. The date is
-in the source, so the boundary needs no subagent. Bump CUTOFF_YM when the
-model's cutoff moves. Features/skills/deprecations are verbatim; fixes are
-consolidated to the clean CLI/config identifiers they name (keyword-less fixes
-dropped).
+Cutoff: keep a bullet when its version date is >= CUTOFF_YM — the date is in
+the source, so the boundary needs no model judgement / subagent. Bump CUTOFF_YM
+when the model's cutoff moves. Features/skills/deprecations verbatim; fixes
+consolidated to the clean CLI/config identifiers they name (keyword-less dropped).
 
 Modes:
   (no args)        SessionStart hook: fast local version-check; if findings.md
@@ -59,9 +53,8 @@ _UPDATE_RE = re.compile(r'<Update\s+label="([^"]+)"\s+description="([^"]+)"')
 _BULLET_RE = re.compile(r"^\s*\*\s+(.*\S)\s*$")
 _END_RE = re.compile(r"</Update>")
 _ID_RE = re.compile(r"`[^`]+`")   # backtick token in a bullet
-# A clean CLI/config identifier: flag (--x / -x), slash command (/x), env var,
-# dotted setting, or a tool/command word. Rejects snippets with spaces, mid-path
-# slashes, and bare version tokens (those start with a digit).
+# Clean CLI/config identifier (flag/slash-command/env/dotted-setting/word).
+# Rejects spaces, mid-path slashes, and bare version tokens (leading digit).
 _IDENT_SHAPE_RE = re.compile(r"(--?|/)?[A-Za-z][A-Za-z0-9_.\-]*")
 _TOP_VER_RE = re.compile(r"^## v(\d+\.\d+\.\d+)")
 _MONTHS = {m: i for i, m in enumerate(
@@ -122,8 +115,7 @@ def _post_cutoff(rec: dict) -> bool:
 
 
 def _fix_identifiers(fixes: list[dict]) -> list[tuple[str, str]]:
-    """Consolidate fixes to the clean identifiers they name: identifier ->
-    newest version. Drops keyword-less fixes and noisy tokens. Newest-first."""
+    """Consolidate fixes to identifier -> newest version, newest-first; drops keyword-less/noisy tokens."""
     best: dict[str, str] = {}
     for r in fixes:
         for tok in _ID_RE.findall(r["bullet"]):
@@ -230,12 +222,7 @@ def _findings_version(path: str) -> str | None:
 
 
 def cmd_hook(output: str) -> int:
-    """SessionStart: local version-check, detach a --force rebuild on a miss.
-
-    The rebuild child runs plain python (no `claude` spawn) so it cannot
-    re-trigger SessionStart — no recursion guard needed. Always exits 0:
-    a feature-cache refresh must never block or break session startup.
-    """
+    """SessionStart: version-check, detach a --force rebuild on a miss; child runs plain python (cannot re-trigger SessionStart, no recursion guard) and always exits 0 so it never blocks startup."""
     try:
         sys.stdin.read()   # drain the SessionStart payload (unused)
     except Exception:

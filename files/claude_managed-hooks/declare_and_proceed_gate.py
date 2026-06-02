@@ -1,24 +1,20 @@
 #!/usr/bin/env python3
 r"""PreToolUse:^AskUserQuestion$ deny-gate — declare-and-proceed enforcement.
 
-Fires before an AskUserQuestion. When the question looks like a DECIDABLE
-routing question ("A経由かB経由か" / "どちらから調査") or a per-unit/per-batch
-confirmation ("この draft で良い?" / "進めて良い?"), the gate requires that the
-declare-and-proceed skill was invoked in the current turn (∪ recent 5 min). If
-not, it DENIES via JSON permissionDecision and routes the model to invoke the
-skill first — so the 3-check (material 取得可? / default 可? / parallel 両立可?)
-runs BEFORE the question is posed, not after.
+When the question is a DECIDABLE routing ("A経由かB経由か" / "どちらから調査") or
+per-unit/per-batch confirmation ("この draft で良い?"), the gate requires the
+declare-and-proceed skill be invoked in the current turn (∪ recent 5 min);
+otherwise it DENIES via JSON permissionDecision so the 3-check (material 取得可? /
+default 可? / parallel 両立可?) runs BEFORE the question, not after.
 
-After invoking declare-and-proceed the model either decides itself (skipping the
-ask) or, for a genuine exception (user-taste / design-level / unrecoverable
-destructive-op pre-approval), re-issues the question — now allowed because the
-skill is active. Those exceptions are phrased openly ("which X?") and do not
-match these narrow patterns, so they pass without ever needing the skill.
+After invoking the skill the model either decides itself or, for a genuine
+exception (user-taste / design-level / unrecoverable destructive-op pre-approval),
+re-issues the question (now allowed). Such exceptions are phrased openly
+("which X?") and do not match these narrow patterns, so they never need the skill.
 
 Twin of skill_reminder_gate.py (turn-scan, 5-min window, JSON deny, fail-open),
-scoped to one tool and one skill. Narrow-recall/high-precision patterns: a
-false-positive only costs one skill invoke + re-ask, a slip lets a decidable
-question reach the user ungated.
+scoped to one tool/skill. Narrow-recall/high-precision: a false-positive costs
+one skill invoke + re-ask, a slip lets a decidable question reach the user ungated.
 
 deploy: /etc/claude-code/hooks/ (copy_dir で自動)。canonical source は
 files/claude_managed-hooks/。両者を同 session で同内容に保つ。
@@ -34,9 +30,8 @@ import time
 TARGET_SKILL = "declare-and-proceed"
 SKILL_WINDOW_SECONDS = 300  # 現 turn ∪ 直近 5 分 (skill_reminder_gate と同じ窓)
 
-# Per-unit / per-batch confirmation — "これで良い?" 系。 design 質問は通常
-# open form ("which X?") なので、 yes/no 承認を求める closed form のみ拾う。
-# 高確度語に限定 (false positive 抑制)。
+# Per-unit/per-batch 確認 ("これで良い?" 系) の closed form のみ拾う。 design は
+# 通常 open form ("which X?") なので除外。 高確度語限定で false positive 抑制。
 CONFIRM_PATTERNS: list[str] = [
     r"これで(良|よ)い",
     r"で(良|よ)いです(か|ね)",
@@ -48,9 +43,8 @@ CONFIRM_PATTERNS: list[str] = [
     r"してもよいですか",
 ]
 
-# Routing — investigation/execution route の binary/ternary。 "どちらから" /
-# "A 経由 か B 経由 か" 系。 design-level の "which architecture" は除外したいので
-# route 語 (経由/から調査/から着手/どちら(から)/A するか B するか) に anchor する。
+# 調査/実行 route の binary/ternary ("どちらから" / "A 経由 か B 経由 か")。 design-level
+# の "which architecture" を除外するため route 語に anchor する。
 ROUTING_PATTERNS: list[str] = [
     r"どちら(から|を先に|で進め|を調査)",
     r"どっち(から|を先に)",
@@ -142,10 +136,9 @@ def _parse_ts(ts) -> float | None:
 
 
 def _skill_active(entries: list[dict], skill: str, now: float, window_s: int) -> bool | None:
-    """target skill が 現 turn ∪ 直近 window_s 秒 に invoke 済か。
+    """target skill が 現 turn ∪ 直近 window_s 秒 に invoke 済か。boundary 不在は None (fail-open ALLOW)。
 
-    boundary 不在の corrupted transcript は None (fail-open ALLOW)。Skill 呼出形:
-    assistant tool_use, name=="Skill", input=={"skill":"<name>"}.
+    Skill 呼出形: assistant tool_use, name=="Skill", input=={"skill":"<name>"}.
     """
     start_idx = -1
     for i in range(len(entries) - 1, -1, -1):
