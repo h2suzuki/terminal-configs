@@ -15,7 +15,8 @@ when_to_use: TRIGGER when editing or creating a .sh file, or when writing a shel
 - **プロセス生成はなるべく避ける。**
   - jq 式の中で現在時刻が必要なら `date +%s` を spawn せず jq 組み込みの `now` を使う
   - `cp src dst && chmod 0755 dst` → `install -m 0755 src dst`（1 プロセスで完結）
-  - `var="$(cat)"` / `var="$(cat file)"` は禁止（cat を spawn）。ファイルは `var="$(< file)"`、stdin は `var="$(</dev/stdin)"`（いずれも bash 組み込み・fork なし）
+  - `var="$(cat)"` / `var="$(cat file)"` は原則禁止（cat を spawn）。ファイルは `var="$(< file)"`、通常の stdin は `var="$(</dev/stdin)"`（bash 組み込み・fork なし）
+    - **例外: hook の stdin は socket**。`$(</dev/stdin)` は `/proc/self/fd/0` を**開き直す**ため socket では 0 byte になる（Claude Code は hook payload を socket 渡し）。既に開いている fd 0 を直読する `var="$(cat)"`（または `IFS= read -r -d '' var`）を使う
   - slurp した変数を jq 等へ渡すときは、再び cat せず here-string `cmd <<<"$var"`（またはリダイレクト）で渡す
   - 同じ入力から複数値を取るとき jq を複数回呼ばない。1 回の `jq -r '.a, .b'`（改行区切り出力）を `{ read -r a; read -r b; }` で受ける
 
