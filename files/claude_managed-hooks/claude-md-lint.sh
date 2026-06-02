@@ -37,7 +37,7 @@
 # --append-system-prompt so the child gets the evaluation criteria; the
 # child reads each target file itself with the Read tool.
 #
-# Stdin : SessionStart payload JSON (uses .cwd).
+# Stdin : SessionStart payload JSON (uses .cwd, .session_id, .agent_type/.agent_id).
 # Stdout: SessionStart hook JSON only when a completed lint is surfaced
 #   (a HIT). systemMessage marks completion; additionalContext carries
 #   the findings. Every no-op terminal state (re-entry guard, missing
@@ -188,15 +188,17 @@ if [[ -n "${CLAUDE_MD_LINT_PARENT:-}" ]]; then
   exit 0
 fi
 
-# --- stdin payload → cwd + agent-session guard ------------------------------
-payload="$(</dev/stdin)"
+# --- stdin payload → cwd + non-interactive session guard --------------------
+# Hook stdin is a socket; $(</dev/stdin) reopens fd0 and reads 0 bytes on a socket — slurp the already-open fd 0.
+payload="$(cat)"
 [[ -z "$payload" ]] && payload='{}'
-# One jq pass: cwd + agent-session detection. Agent sessions (claude agents TUI, --agent,
-# subagents) carry agent_type/agent_id and fire source=startup, so a source matcher can't filter them.
-{ read -r cwd; read -r agent_field; } \
-  < <(jq -r '(.cwd // ""), (.agent_type // .agent_id // "")' <<<"$payload" 2>/dev/null)
+{ read -r cwd; read -r agent_field; read -r sid; } \
+  < <(jq -r '(.cwd // ""), (.agent_type // .agent_id // ""), (.session_id // "")' <<<"$payload" 2>/dev/null)
 [[ -z "$cwd" ]] && cwd="$PWD"
+# Subagent / --agent sessions carry agent_type|agent_id; skip them.
 [[ -n "$agent_field" ]] && exit 0
+# Daemon bg sessions (agent view / --bg) register jobs/<short>/state.json before SessionStart but carry no agent_*; interactive sessions have neither.
+[[ -n "$sid" && -f "${HOME}/.claude/jobs/${sid:0:8}/state.json" ]] && exit 0
 
 # Reap ahead of the dispatch lock guard on purpose — the lock gates only
 # re-dispatch, not teardown — so finished jobs clear without waiting out the
