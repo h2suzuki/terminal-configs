@@ -510,7 +510,7 @@ def _bump(path: str, now: int) -> int:
             try:
                 count = int(parts[0])
             except ValueError:
-                count = 0
+                pass
         count += 1
         f.seek(0)
         f.truncate()
