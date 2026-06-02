@@ -213,6 +213,9 @@ export UV_NO_PROGRESS=true
 run bash /tmp/uv_install.sh
 run uv self update
 
+# Install Python linter / formatter: ruff (system-wide, not per-user)
+run uv pip install --system --break-system-packages ruff
+
 
 # git-delta   ref. https://github.com/dandavison/delta/releases
 [ -s /tmp/git-delta.deb ] ||
