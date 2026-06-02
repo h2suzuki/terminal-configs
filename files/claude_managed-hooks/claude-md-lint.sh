@@ -80,10 +80,7 @@ readonly SYSTEM_MSG='セッション開始時の CLAUDE.md チェックが完了
 
 # --- session reap helpers ---------------------------------------------------
 
-# Stop+remove one bg session by id, but only when jobs/<id>/state.json
-# records "name" == $2. A missing state.json means the session is
-# already gone; a name mismatch means the short id was reused by an
-# unrelated session and must not be touched.
+# Stop+remove a bg session by id, only when jobs/<id>/state.json name == $2 (guards short-id reuse).
 _reap_session() {
   local id="$1" want="$2" sj content got
   [[ -z "$id" ]] && return 0
@@ -97,10 +94,7 @@ _reap_session() {
   timeout 30 claude rm "$id" </dev/null >/dev/null 2>&1 || true
 }
 
-# Render one completed staging file into the deterministic cache layout.
-# Key is the staging basename (== cache key); no-op when staging is absent.
-# The model only ever writes the findings text; this fixed layout stays in
-# bash so the reader's parse contract never depends on model output.
+# Render a completed staging file into the cache layout (key == staging basename).
 _stage_to_cache() {
   local key="$1" staging cf ts
   staging="${STAGING_DIR}/${key}.txt"
@@ -124,9 +118,7 @@ _stage_to_cache() {
   fi
 }
 
-# Turn completed staging files into cache files and tear down their bg
-# sessions. Iterates only this hook's own in-flight markers, never the
-# global jobs directory.
+# Marker-driven: turn completed staging files into cache + tear down their bg sessions (own markers only).
 reap_inflight() {
   [[ -d "$INFLIGHT_DIR" ]] || return 0
   command -v claude >/dev/null 2>&1 || return 0
@@ -138,8 +130,7 @@ reap_inflight() {
     iid=""; iname=""; its=""
     IFS=$'\t' read -r iid iname its <"$f" 2>/dev/null || true
     if [[ -z "$iid" ]]; then
-      # Claimed but no id recorded (crash between claim and write).
-      # Drop the marker once clearly stale so dispatch can retry.
+      # Claimed but id-less (crash mid-write): drop once stale so dispatch can retry.
       fmt="$(stat -c %Y "$f" 2>/dev/null || echo 0)"
       (( now - ${fmt:-0} > BG_STALE_S )) && rm -f "$f" 2>/dev/null
       continue
@@ -159,14 +150,9 @@ reap_inflight() {
   done
 }
 
-# Backstop for orphaned bg sessions the marker-driven reaper cannot reach:
-# a child that lingers (e.g. drifts into state:working and never exits)
-# after its in-flight marker was already cleared. Enumerates live bg
-# sessions by name (matched via the full sessionId's state.json, never a
-# short id, to avoid id-reuse collisions). For each claude-md-lint session
-# it either salvages+reaps (staging already written → real work done) or
-# reaps once older than BG_STALE_S (stuck). A fresh in-progress lint has no
-# staging yet and age < BG_STALE_S, so it is never killed mid-run.
+# Backstop for orphans the marker-driven reaper can't reach (marker cleared
+# while the bg session lingers). Name-matched via full sessionId, not short
+# id; a fresh in-progress lint (no staging, age < BG_STALE_S) is never killed.
 fallback_sweep() {
   command -v claude >/dev/null 2>&1 || return 0
   command -v jq >/dev/null 2>&1 || return 0
@@ -221,12 +207,9 @@ if [[ -n "${CLAUDE_MD_LINT_PARENT:-}" ]]; then
   exit 0
 fi
 
-# Reap finished/stale bg jobs on every non-reentrant SessionStart, ahead of
-# the dispatch lock guard below. Teardown is name-guarded and idempotent;
-# the lock only gates re-dispatch, never reaping. Running the reaper before
-# it is what lets a finished job be torn down within the lock's BG_STALE_S
-# window instead of lingering until the lock expires. Neither call reads
-# stdin (the payload `cat` further down still receives it).
+# Reap ahead of the dispatch lock guard on purpose — the lock gates only
+# re-dispatch, not teardown — so finished jobs clear without waiting out the
+# lock's BG_STALE_S window. Neither call consumes stdin.
 reap_inflight
 fallback_sweep
 
