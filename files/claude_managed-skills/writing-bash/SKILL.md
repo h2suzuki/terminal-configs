@@ -34,3 +34,17 @@ when_to_use: TRIGGER when editing or creating a .sh file, or when writing a shel
 
 - **shellcheck が使えるなら使う。** スクリプトを書いたら `shellcheck --enable=deprecate-which script.sh` で検証する（`deprecate-which`＝SC2230 を上乗せ: `which` は Debian trixie で削除・非推奨ゆえ存在確認は `command -v` を使う）。 設定ファイルは置かず CLI 引数で運用。
 - **shellcheck の抑制**（適用判定は `writing-code`「指摘は修正が基本、 抑制は例外」）: 対象行の直前に `# shellcheck disable=SC2086`（code 指定）を置く。 shebang 直後に置くと file 全体に効く。 誤検知が確実 / 逆に読みにくくなる / 正当な理由がある時のみ、 理由を添えて使う
+
+- **obsolete commands を使わない（代替を使う）。** 未保守ツールは bug fix が来ず、 新しめ distro / 最小 image では存在しないことがある。 スクリプトでは保守された標準の代替を使う:
+
+  | 避ける | 代替 | 理由 |
+  |---|---|---|
+  | `which` | `command -v` | 非 POSIX・Debian trixie で削除（shellcheck SC2230 が検出）|
+  | `egrep` | `grep -E` | deprecated |
+  | `fgrep` | `grep -F` | deprecated |
+  | `ifconfig` | `ip addr` | net-tools 未保守 → iproute2 |
+  | `route` | `ip route` | net-tools 未保守 → iproute2 |
+  | `netstat` | `ss` | net-tools 未保守 → iproute2 |
+  | `nslookup` | `dig` | dig 推奨（OS resolver 準拠）。 nslookup は厳密には deprecated でない |
+
+  deprecation は環境で異なるので、 断定前に現行 doc で確認する（出典: Red Hat "Deprecated Linux command replacements"）。
