@@ -510,6 +510,12 @@ def _run(payload: dict) -> tuple[int, float | None]:
     if not entries:
         return 0, None
     text, tool_names, tool_paths, has_git_verify, prompt_epoch = _current_turn(entries)
+    # Claude Code が Stop hook を invoke する時点で最新 assistant text はまだ transcript に
+    # flush されていない (v2.1.47+ で payload に last_assistant_message が提供されたのはこの
+    # gap を埋めるため)。 transcript 由来 text に concat して全 family の取りこぼしを防ぐ。
+    last_msg = payload.get("last_assistant_message")
+    if isinstance(last_msg, str) and last_msg:
+        text = (text + "\n" + last_msg) if text else last_msg
     if not text:
         return 0, prompt_epoch
     exit_code, warnings, blocking = _check(text, tool_names, tool_paths, has_git_verify)
