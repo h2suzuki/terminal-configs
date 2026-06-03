@@ -1,22 +1,22 @@
 #!/bin/bash
 
-# Installs Claude Code extensions as an opt-in step after the base setup. Per-user items
-# (npm globals, MCP servers, plugins, skills) are installed for both root and the login
-# user. Re-running upgrades each item in place.
+# Installs Claude Code extensions as an opt-in step after the base setup.
 #
-#   agent-browser  Vercel Labs CLI + Claude Code skill (not an MCP server)
-#   playwright     Microsoft @playwright/mcp (stdio; reuses the system Chrome, headless)
-#   figma          Anthropic-marketplace plugin (bundles a remote MCP + skills)
-#   serena         oraios/serena semantic code MCP (LSP-backed, stdio; telemetry off)
-#   codegraph      @colbymchenry/codegraph local code-graph MCP (tree-sitter+SQLite, stdio)
-#   cloud-run      Google Cloud Run MCP (stdio; deploy/logs)
-#   toolbox        Google MCP Toolbox for Databases (stdio; BigQuery prebuilt -- data/cost)
-#   vercel         Vercel CLI + Vercel MCP (remote http) + Vercel plugin (skills/commands)
+#   agent-browser CLI   Vercel Labs CLI + Claude Code skill
+#   playwright MCP      Microsoft playwright/mcp (stdio; reuses the system Chrome, headless)
+#   figma plugin        Claude-to-figma plugin (a remote MCP + skills)
+#   serena MCP          LSP (stdio; telemetry off)
+#   codegraph MCP       Tree-sitter + SQLite MCP (stdio)
+#   cloud-run MCP       Google Cloud Run MCP (stdio; deploy/logs)
+#   Google MCP Toolbox  For Databases (stdio; BigQuery prebuilt)
+#   Vercel CLI          Vercel CLI + Vercel MCP (remote http) + Vercel plugin (skills/commands)
 
 [ "$EUID" = 0 ] || {
     echo "Please run as root"
     exit 1
 }
+
+
 
 command -v sudo >/dev/null || { echo "Cannot find sudo"; exit 1; }
 
@@ -50,37 +50,38 @@ run()
 }
 
 
-run bash -i -c '"node --version && npm --version && npx --version && uvx --version && claude --version"'
+. $HOME/.nvm/nvm.sh
+export PATH="$HOME/.local/bin:$PATH"
 
 # agent-browser
-run bash -i -c '"CI=1 npm install -g agent-browser"'
-run bash -i -c '"agent-browser install"'
-run bash -i -c '"npx -y skills add vercel-labs/agent-browser --skill agent-browser --agent claude-code --global --yes"'
+run CI=1 npm install -g agent-browser
+run agent-browser install
+run npx -y skills add vercel-labs/agent-browser --skill agent-browser --agent claude-code --global --yes
 
 # Playwright MCP
-run bash -i -c '"claude mcp remove playwright --scope user >/dev/null 2>&1; claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"'
+run "claude mcp remove playwright --scope user >/dev/null 2>&1; claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"
 
 # Figma plugin
-run bash -i -c '"claude plugin install figma@claude-plugins-official || claude plugin update figma@claude-plugins-official"'
+run "claude plugin install figma@claude-plugins-official || claude plugin update figma@claude-plugins-official"
 
 # Serena MCP -- uvx --python: short -p clashes with claude -p past `--`
-run bash -i -c '"claude mcp remove serena -s user >/dev/null 2>&1; claude mcp add serena -s user -e SERENA_USAGE_REPORTING=false -- uvx --python 3.13 --from git+https://github.com/oraios/serena serena start-mcp-server --context claude-code --project-from-cwd --enable-web-dashboard false"'
+run "claude mcp remove serena -s user >/dev/null 2>&1; claude mcp add serena -s user -e SERENA_USAGE_REPORTING=false -- uvx --python 3.13 --from git+https://github.com/oraios/serena serena start-mcp-server --context claude-code --project-from-cwd --enable-web-dashboard false"
 
 # CodeGraph MCP
-run bash -i -c '"npm install -g @colbymchenry/codegraph"'
-run bash -i -c '"claude mcp remove codegraph -s user >/dev/null 2>&1; claude mcp add codegraph -s user -- codegraph serve --mcp"'
+run npm install -g @colbymchenry/codegraph
+run "claude mcp remove codegraph -s user >/dev/null 2>&1; claude mcp add codegraph -s user -- codegraph serve --mcp"
 
 # Cloud Run + Toolbox MCPs
-run bash -i -c '"claude mcp remove cloud-run -s user >/dev/null 2>&1; claude mcp add cloud-run -s user -- npx -y @google-cloud/cloud-run-mcp"'
-run bash -i -c '"claude mcp remove toolbox -s user >/dev/null 2>&1; claude mcp add toolbox -s user -- npx -y @toolbox-sdk/server@latest --prebuilt=bigquery --stdio"'
+run "claude mcp remove cloud-run -s user >/dev/null 2>&1; claude mcp add cloud-run -s user -- npx -y @google-cloud/cloud-run-mcp"
+run "claude mcp remove toolbox -s user >/dev/null 2>&1; claude mcp add toolbox -s user -- npx -y @toolbox-sdk/server@latest --prebuilt=bigquery --stdio"
 
 # Vercel CLI + MCP + plugin
-run bash -i -c '"npm install -g vercel"'
-run bash -i -c '"claude mcp remove vercel -s user >/dev/null 2>&1; claude mcp add -s user --transport http vercel https://mcp.vercel.com"'
-run bash -i -c '"CI=1 npx -y plugins add vercel/vercel-plugin"'
+run npm install -g vercel
+run "claude mcp remove vercel -s user >/dev/null 2>&1; claude mcp add -s user --transport http vercel https://mcp.vercel.com"
+run CI=1 npx -y plugins add vercel/vercel-plugin
 
-run bash -i -c '"claude mcp list"'
-run bash -i -c '"claude plugin list"'
+run claude mcp list
+run claude plugin list
 
 
 LOGIN_USER="$(logname)"
