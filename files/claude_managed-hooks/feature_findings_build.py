@@ -233,7 +233,11 @@ def cmd_force(output: str) -> int:
 def _cli_version() -> str | None:
     try:
         r = subprocess.run(
-            ["claude", "--version"], capture_output=True, text=True, timeout=5
+            ["claude", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
         )
     except Exception:
         return None

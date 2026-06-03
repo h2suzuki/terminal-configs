@@ -46,6 +46,7 @@ def _git_uncommitted(cwd: str) -> list[str]:
             capture_output=True,
             text=True,
             timeout=5,
+            check=False,
         )
     except (subprocess.SubprocessError, OSError):
         return []

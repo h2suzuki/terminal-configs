@@ -139,7 +139,7 @@ def _parse_entry(file_path: str) -> tuple[str, str, str] | None:
     if size > MAX_ENTRY_SIZE:
         return None
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             text = f.read()
     except OSError:
         return None
@@ -218,7 +218,7 @@ def _list_active_entries(memory_dir: str) -> list[str]:
     if not os.path.exists(index_path):
         return []
     try:
-        with open(index_path, "r", encoding="utf-8") as f:
+        with open(index_path, encoding="utf-8") as f:
             text = f.read()
     except OSError:
         return []

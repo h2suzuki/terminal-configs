@@ -37,7 +37,7 @@ def _find_prior_session(cwd: str, current_session_id: str) -> str | None:
 
 def _extract_last_assistant_text(jsonl_path: str) -> str:
     try:
-        with open(jsonl_path, "r", encoding="utf-8") as f:
+        with open(jsonl_path, encoding="utf-8") as f:
             lines = f.readlines()
     except OSError:
         return ""

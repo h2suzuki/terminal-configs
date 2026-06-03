@@ -327,6 +327,7 @@ def cmd_sync(payload: dict) -> None:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            check=False,
         )
     except Exception:
         pass

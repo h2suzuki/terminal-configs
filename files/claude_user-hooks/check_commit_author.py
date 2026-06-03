@@ -65,6 +65,7 @@ def _git_user_email(target: str, payload_cwd: str | None) -> str | None:
             text=True,
             timeout=5,
             cwd=payload_cwd or None,
+            check=False,
         )
         if result.returncode == 0:
             v = result.stdout.strip()

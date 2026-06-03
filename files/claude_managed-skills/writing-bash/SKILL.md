@@ -32,5 +32,5 @@ when_to_use: TRIGGER when editing or creating a .sh file, or when writing a shel
   `command -v foo >/dev/null 2>&1 || { echo "foo not found"; exit 1; }`
   あるいは任意実行なら `if command -v foo >/dev/null 2>&1; then foo ...; fi`
 
-- **shellcheck が使えるなら使う。** スクリプトを書いたら `shellcheck script.sh` で検証する
+- **shellcheck が使えるなら使う。** スクリプトを書いたら `shellcheck --enable=deprecate-which script.sh` で検証する（`deprecate-which`＝SC2230 を上乗せ: `which` は Debian trixie で削除・非推奨ゆえ存在確認は `command -v` を使う）。 設定ファイルは置かず CLI 引数で運用。
 - **shellcheck の抑制**（適用判定は `writing-code`「指摘は修正が基本、 抑制は例外」）: 対象行の直前に `# shellcheck disable=SC2086`（code 指定）を置く。 shebang 直後に置くと file 全体に効く。 誤検知が確実 / 逆に読みにくくなる / 正当な理由がある時のみ、 理由を添えて使う
