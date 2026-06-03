@@ -4,6 +4,18 @@
 
 ## High
 
+### memory_surface 誤発火修正 (BM25_SURFACE_FLOOR 厳格化)
+
+Goal: 緊急 entry (`feedback_no_other_work_or_worsening_commands_during_emergency.md`) 等が非緊急 prompt ("stop hook" 等) で誤 surface する over-fire を、 誤検出を最小化しつつ recall を保って解消する。
+
+Exit Criteria:
+- [x] root-cause 特定 + 承認方針の再検証 (2026-06-04): 前 session 承認の approach (1) `bm25(…,10,1)` keyword 重み付けは FP に対し**実機 no-op** と判明 — 緊急 entry の "stop"/"hook" は **body のみ**マッチ (keywords に無い) ため keywords 重みを上げても score 不変 (-2.396→-2.396)。 bm25 列重みは「その列にマッチした行」にのみ効く正しい仕様 (バグでない。 keywords match を持つ bg_session は -2.137→-2.377 と変化し機構の生存を確認)。 ∴ body-only FP は keyword 上げでなく **floor 厳格化 (approach 3) でしか消せない**。 H.S. 再承認: 重み付け (1) は破棄、 floor 厳格化のみ採用
+- [ ] corpus calibration で `BM25_SURFACE_FLOOR` の値を決定 (現 -1.0 → 約 -3.0 見込み。 正規マッチ -4〜-12 と FP -2.4 が明確分離)。 realistic prompt corpus (recall+ / FP / adversarial-FP) で FP 抑止 vs recall を実測。 sweep harness = read-only で source の `_build_query` を import し live DB に当てる scratch script (本 session の `/tmp/cal_memory_floor.py`、 消えたら再生成可)
+- [ ] source 編集: `files/claude_user-hooks/memory_surface.py` の `BM25_SURFACE_FLOOR` (line 43) を更新 + コメント。 `BM25_STRONG_FLOOR` (line 45, rank1 gate) も要否判断。 **重み付けは入れない** (no-op ゆえ)
+- [ ] smoke (calibration sweep が回帰になる) → deploy 両 user: `~/.claude/hooks/memory_surface.py` (debian12.sh + ubuntu2404-wsl.sh の copy 行、 root + login_user 両方)。 `~/.claude` 配下ゆえ sudo 不要。 source==deploy 確認
+
+経緯: 前 session (b1b20622、 count-glitch で中断) が「keyword 重み + floor」=「1+3」で H.S. 承認を得たが、 本 session で (1) の実機 no-op を発見し floor-only に修正 (H.S. 再承認)。 同 session の他の回収 idea (Stop hook haiku watcher / malformed tool-call 自動復旧) は未起票 — 着手時に起票する。
+
 ### skill 発火率 system 対策
 
 Goal: 既存 skill (verify-before-claim / report-by-evidence / scope-mismatch-detector / illuminate-not-reassure / 他) と 本 session で追加した user memory entry 4 個が、 LLM の「trigger 該当時の self-invoke」 に依存して発火率低い問題への system 対策を設計 + 実装。
