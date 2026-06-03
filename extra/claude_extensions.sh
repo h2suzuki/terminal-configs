@@ -1,19 +1,21 @@
 #!/bin/bash
 
 # Installs Claude Code extensions as an opt-in step after the base setup. Every item is
-# per-user runtime config written by the claude / npm / skills CLIs (user scope:
+# per-user runtime config written by the claude / npm / skills / uvx CLIs (user scope:
 # ~/.claude.json and ~/.claude/skills), NOT a files/ -> /etc deploy, so there is no
 # canonical source file to keep in sync -- this script itself is the source of truth.
 #
 #   agent-browser     Vercel Labs CLI + Claude Code skill (NOT an MCP server)
 #   @playwright/mcp   Microsoft official Playwright MCP server (reuses the system Chrome)
 #   figma             Anthropic official-marketplace plugin (bundles a remote MCP + skills)
+#   serena            oraios/serena semantic code MCP (LSP-backed, stdio; telemetry off)
+#   codegraph         @colbymchenry/codegraph local code-graph MCP (tree-sitter+SQLite, stdio)
 #
 # GitHub MCP is intentionally NOT installed: redundant with the already-installed gh CLI,
 # and the remote server's OAuth is broken on Linux. See the end-of-run notes to add it.
 #
-# Idempotent: re-running upgrades in place (agent-browser via npm @latest, figma via
-# `claude plugin update`, Playwright MCP by re-pinning the current latest release).
+# Idempotent: re-running upgrades in place (npm @latest for agent-browser / codegraph,
+# `claude plugin update` for figma, version re-pin for Playwright; serena uvx tracks main).
 
 [ "$EUID" = 0 ] || {
     echo "Please run as root"
@@ -61,8 +63,8 @@ as_user() {
 }
 
 
-# Confirm the login user's toolchain (node/npm/npx via nvm, claude on PATH).
-as_user 'node --version && npm --version && npx --version && claude --version'
+# Confirm the login user's toolchain (node/npm/npx via nvm, uvx, claude on PATH).
+as_user 'node --version && npm --version && npx --version && uvx --version && claude --version'
 
 
 # Resolve the current @playwright/mcp release so a re-run re-pins (upgrades) it; fall back
@@ -107,6 +109,20 @@ else
 fi
 
 
+# --- Serena (oraios/serena): LSP-backed semantic code retrieval/editing, stdio MCP ---
+# SERENA_USAGE_REPORTING=false opts out of anonymous startup telemetry; --enable-web-dashboard
+# false disables the localhost dashboard (no browser auto-open). --project-from-cwd binds it to
+# the dir `claude` is launched in. uvx -p 3.13 pins the runtime; the git ref tracks main.
+as_user "claude mcp remove serena -s user >/dev/null 2>&1; claude mcp add serena -s user -e SERENA_USAGE_REPORTING=false -- uvx -p 3.13 --from git+https://github.com/oraios/serena serena start-mcp-server --context claude-code --project-from-cwd --enable-web-dashboard false"
+
+
+# --- CodeGraph (@colbymchenry/codegraph): local tree-sitter -> SQLite code graph, stdio MCP ---
+# @latest upgrades on re-run; serve --mcp is the stdio entry. Per repo, `codegraph init` must
+# build the index once (tools are empty until indexed) -- see end-of-run notes for /mnt + init.
+as_user 'npm install -g @colbymchenry/codegraph@latest'
+as_user "claude mcp remove codegraph -s user >/dev/null 2>&1; claude mcp add codegraph -s user -- codegraph serve --mcp"
+
+
 # --- Verify ---
 as_user 'claude mcp list'
 as_user 'claude plugin list'
@@ -132,6 +148,19 @@ cat <<'EOF'
              skill: run `claude`, then `/skills` (look for `agent-browser`). For logged-in
              sites, run it once and sign in -- the session is then reused:
                agent-browser open <url> --session-name <name>
+
+[Serena]     MCP server `serena` added (user scope, stdio; anonymous telemetry OFF via
+             SERENA_USAGE_REPORTING=false). No sign-in. It binds to the dir `claude` runs in;
+             first use of a repo onboards + indexes and starts a per-language Language Server,
+             so the first call on a big repo is heavy. Pre-index a repo to avoid that lag:
+               uvx -p 3.13 --from git+https://github.com/oraios/serena serena project index
+
+[CodeGraph]  MCP server `codegraph` added (user scope, stdio). No sign-in. Build the per-repo
+             index once before use (tools stay empty until then), from the repo root:
+               codegraph init
+             On WSL2 /mnt (drvfs) repos the file watcher is unreliable -- re-add with --no-watch:
+               claude mcp remove codegraph --scope user
+               claude mcp add --scope user codegraph -- codegraph serve --mcp --no-watch
 
 [GitHub MCP] NOT installed (gh already covers GitHub; the remote server's OAuth is broken
              on Linux). To add it anyway, reusing gh's token:
