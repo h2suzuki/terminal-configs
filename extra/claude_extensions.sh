@@ -11,9 +11,6 @@
 #   serena            oraios/serena semantic code MCP (LSP-backed, stdio; telemetry off)
 #   codegraph         @colbymchenry/codegraph local code-graph MCP (tree-sitter+SQLite, stdio)
 #
-# GitHub MCP is intentionally NOT installed: redundant with the already-installed gh CLI,
-# and the remote server's OAuth is broken on Linux. See the end-of-run notes to add it.
-#
 # Idempotent: re-running upgrades in place (npm @latest for agent-browser / codegraph,
 # `claude plugin update` for figma, version re-pin for Playwright; serena uvx tracks main).
 
@@ -161,11 +158,6 @@ cat <<'EOF'
              On WSL2 /mnt (drvfs) repos the file watcher is unreliable -- re-add with --no-watch:
                claude mcp remove codegraph --scope user
                claude mcp add --scope user codegraph -- codegraph serve --mcp --no-watch
-
-[GitHub MCP] NOT installed (gh already covers GitHub; the remote server's OAuth is broken
-             on Linux). To add it anyway, reusing gh's token:
-               claude mcp add --scope user --transport http github \
-                 https://api.githubcopilot.com/mcp/ --header "Authorization: Bearer $(gh auth token)"
 
 =====================================================================================
 EOF
