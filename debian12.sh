@@ -213,8 +213,25 @@ export UV_NO_PROGRESS=true
 run bash /tmp/uv_install.sh
 run uv self update
 
-# Install Python linter / formatter: ruff (system-wide, not per-user)
-run uv pip install --system --break-system-packages ruff
+# Install Python linter / formatter: ruff (system-wide, standalone installer)
+[ -s /tmp/ruff_install.sh ] ||
+run curl -o /tmp/ruff_install.sh \
+  -fsSL https://astral.sh/ruff/install.sh
+chmod u-s,o+r /tmp/ruff_install.sh
+
+export RUFF_INSTALL_DIR=/usr/local/bin
+export RUFF_NO_MODIFY_PATH=1
+run bash /tmp/ruff_install.sh
+
+# Install Python type checker: ty (system-wide, standalone installer)
+[ -s /tmp/ty_install.sh ] ||
+run curl -o /tmp/ty_install.sh \
+  -fsSL https://astral.sh/ty/install.sh
+chmod u-s,o+r /tmp/ty_install.sh
+
+export TY_INSTALL_DIR=/usr/local/bin
+export TY_NO_MODIFY_PATH=1
+run bash /tmp/ty_install.sh
 
 
 # git-delta   ref. https://github.com/dandavison/delta/releases
