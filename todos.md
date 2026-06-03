@@ -53,6 +53,20 @@ Exit Criteria:
 
 Work file: `last-session-handoff.md` + commit f1dab94。 残 = deploy (別 session) + 実機確認
 
+### stop_checks: known-possible-denial family
+
+Goal: 既知で可能と判明済みの操作 (KNOWN_POSSIBLE 表 = 部分 stage / rebase autosquash 等) を「できない/不可/無理」と同一行で断定したら Stop hook で block し、 verify させ直さず既知 method を実行させる (verify-before-claim の不可断定側、 2026-06-04 H.S. 依頼)。
+
+Exit Criteria:
+- [x] 実装: `stop_checks.py` に `KNOWN_POSSIBLE` 表 + `IMPOSSIBLE_RE` (lookahead で 不可能/不可避/不可逆/不可分/不可欠/不可侵 除外) + `_known_possible_denial()` helper + `_check()` 内 block 呼出 + docstring family。 strip_fences 適用・pairing 無し (op が既知可能ゆえ証拠の有無に関わらず否定が誤り)。 advise-once gate は既存 `_run` が demote するので再 block loop 無し
+- [x] smoke 15/15 (`/tmp/smoke_known_denial.py`): 5 block ケース (partial+不可 / git add -p+できない / autosquash+できない / 部分コミット+無理 / 部分ステージ+no-op) + 8 non-block ケース (op only / impossible only / fenced / inline-backtick / できないか exploratory / 不可避 lookahead / 不可能 lookahead / cross-line) + 2 regression (eval 大改造 / clean text)。 ruff lint+format + ty + 既存 unittest 7/7 全 clean
+- [x] deploy 済: `sudo install -m 0755` で `/etc/claude-code/hooks/stop_checks.py`、 source==deployed、 mode 755 確認
+- [ ] live self-test: 部分 stage で本 entry を commit + trigger 文言を発話 → 自分の Stop hook に block される実証 (本 turn 進行中)
+
+経緯: 2026-06-04 session、 私が「partial staging は不可」「foreign hunk 検出は無理」と未検証で 2 度断定し H.S. に「メモリに保存すべき案件・git add で surface されるべきだった」「verify させるのでなく、 できると分かっているのだから、 させろ」と指摘された (= 本機構の core motivation)。 同根 sibling entries: `feedback_partial_stage_foreign_changes` (2026-06-04) / `feedback_rebase_autosquash_needs_interactive` (2026-06-03) / `feedback_rebut_user_concern_with_inference` (2026-06-04)。
+
+Work file: `files/claude_managed-hooks/stop_checks.py` + smoke `/tmp/smoke_known_denial.py`
+
 ## Medium
 
 ### feature-research に Claude Developer Platform source 追加

@@ -22,6 +22,13 @@ Combined Stop hook for org-managed Claude Code:
     (table cell に述語 anchor を張れない)。 compound/phrasal な高確度語のみ — 軽微/
     複雑/大変/抜本的/リスクが高い は流文 false-positive が広く除外。
 
+  known-possible-denial (enforcement, exit 2):
+    既知で実行可能と判明済みの操作 (KNOWN_POSSIBLE: 部分 stage / rebase autosquash 等) を
+    「できない/不可/無理」 と同一行で断定したら block。 verify させ直すのでなく、 可能と
+    分かっている既知 method を実行させる (verify-before-claim の不可断定側)。 pairing 無し
+    (op が既知可能ゆえ証拠の有無に関わらず否定が誤り)。 strip_fences 適用・不可能/不可避
+    等は lookahead 除外。 新たな「実は可能」が判明する度 KNOWN_POSSIBLE に 1 行追加。
+
   deferral (warning-only, exit 0):
     「後で対処」「別タスクに切り出」等 は、 同 turn 内に TaskCreate/TaskUpdate/
     TodoWrite または todos.md への Write/Edit が無ければ warn。
@@ -225,6 +232,28 @@ POS_CLAIM_PATTERNS: list[str] = [
 ]
 POS_CLAIM_RE = re.compile("|".join(POS_CLAIM_PATTERNS), re.IGNORECASE)
 
+# --- Pattern: known-possible-denial (block, no pairing) ---
+# 既知で可能と判明済みの操作を「できない/不可」と断定したら却下を促す。 op-keyword と
+# 不可語が同一行で共起した時のみ block (verify し直させず既知 method を実行させる)。
+KNOWN_POSSIBLE: list[tuple[re.Pattern[str], str]] = [
+    (
+        re.compile(
+            r"部分(コミット|ステージ|stage)|partial[ _-]*stag|git add -p", re.IGNORECASE
+        ),
+        "`git apply --cached` で hunk 単位の部分 stage が可能 (feedback_partial_stage_foreign_changes)",
+    ),
+    (
+        re.compile(
+            r"autosquash|rebase\s+-i|fixup.*squash|squash.*fixup", re.IGNORECASE
+        ),
+        "`GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash` で非対話に可能 (feedback_rebase_autosquash_needs_interactive)",
+    ),
+]
+IMPOSSIBLE_RE = re.compile(
+    r"でき(ない|ません|ず)(?!か|わけ|こと)|不可(?!能|逆|避|分|欠|侵)|無理|no-?op",
+    re.IGNORECASE,
+)
+
 # --- Persistence path (broader than memory only) ---
 # memory subtree / skill dir / hook dir / CLAUDE.md への Write/Edit が hollow-claims の
 # pairing を満たす。 「claude_managed-skills/」「claude_managed-hooks/」 等の
@@ -338,6 +367,23 @@ def _current_turn(
     return "\n".join(text_parts), tool_names, tool_paths, has_git_verify, prompt_epoch
 
 
+def _known_possible_denial(text: str) -> str | None:
+    """Block message when an op known to be doable is asserted impossible on one line; else None."""
+    for line in strip_fences(text).splitlines():
+        if not IMPOSSIBLE_RE.search(line):
+            continue
+        for op_re, hint in KNOWN_POSSIBLE:
+            mop = op_re.search(line)
+            if mop:
+                return (
+                    f"known-possible-denial: 「{mop.group(0)}」 を「できない/不可」と "
+                    f"断定していますが、 この操作は既知で実行可能です。 その否定を却下し、 "
+                    f"verify し直さずそのまま実行してください — {hint}。 "
+                    f"(verify-before-claim の不可断定側: 可能と判明済みの method を実行する)"
+                )
+    return None
+
+
 def _check(
     text: str,
     tool_names: set[str],
@@ -395,6 +441,11 @@ def _check(
             f"該当語を delete するか、 根拠を読んでから 「N file / M 箇所」 等の "
             f"定量表現に書き換えてから再出力してください。"
         )
+
+    # known-possible-denial (block, no pairing): 既知で可能な操作への 不可 断定
+    denial = _known_possible_denial(text)
+    if denial:
+        blocking.append(denial)
 
     # deferral (warning-only)
     m = DEFERRAL_RE.search(text)
