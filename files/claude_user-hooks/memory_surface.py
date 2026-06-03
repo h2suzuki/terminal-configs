@@ -40,9 +40,11 @@ USER_MEMORY_DIR = os.path.join(HOME, ".claude", "memory")
 DB_PATH = os.path.join(HOME, ".claude", "hooks", "state", "memory_index.sqlite3")
 THROTTLE_SECONDS = 900  # 15 min per (file_path, session_id)
 # top-1 を surface する floor (負が深いほど良 match、 ~0 は弱 noise)
-BM25_SURFACE_FLOOR = -1.0
+BM25_SURFACE_FLOOR = -2.0
 # 2 件目は強候補 (bm25 <= これ) の時だけ追加。 大抵は top-1 のみ
 BM25_STRONG_FLOOR = -3.0
+# body 列を keywords より下げ、 lesson 本文の汎用語が無関係 prompt に誤マッチするのを抑える
+BM25_BODY_WEIGHT = 0.3
 MIN_ASCII_LEN = 4
 MIN_CJK_RUN = 3
 QUERY_EXCERPT_LEN = 200
@@ -350,6 +352,11 @@ def _memory_surface(payload: dict) -> str | None:
     prompt = payload.get("prompt") or ""
     if not isinstance(prompt, str) or not prompt.strip():
         return None
+    # Skip synthetic re-entry prompts (task-notification / compaction continuation).
+    if prompt.lstrip().startswith(
+        ("<task-notification>", "This session is being continued")
+    ):
+        return None
     session_id = payload.get("session_id") or ""
     cwd = payload.get("cwd") or os.getcwd()
     if not isinstance(cwd, str):
@@ -364,10 +371,10 @@ def _memory_surface(payload: dict) -> str | None:
             return None
         try:
             rows = con.execute(
-                "SELECT file_path, reminder, bm25(entries_fts) "
+                f"SELECT file_path, reminder, bm25(entries_fts, 0, 0, 0, 1.0, {BM25_BODY_WEIGHT}, 0) "
                 "FROM entries_fts WHERE entries_fts MATCH ? "
                 "AND (project_id IS NULL OR project_id = ?) "
-                "ORDER BY bm25(entries_fts) LIMIT 2",
+                f"ORDER BY bm25(entries_fts, 0, 0, 0, 1.0, {BM25_BODY_WEIGHT}, 0) LIMIT 2",
                 (query, project_id),
             ).fetchall()
         except sqlite3.Error:
