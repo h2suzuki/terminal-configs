@@ -39,10 +39,9 @@ convention が harmful と判断するなら silently fork せず surface する
 
 編集した code には、 利用可能なら必ずその言語の **linter / formatter / type-checker を通す**。 指摘は commit / 完了報告の前に解消する（auto-fix できるものは fix、 残りは直すか surface）。 後から post-edit hook / review で指摘される手戻り (token 浪費) を防ぐ。
 
-- 具体ツールは language add-on skill が定義する: Python は `ruff`（lint+format）+ `ty`（type check）、 bash は `shellcheck`。 add-on の無い言語でも、 その ecosystem の標準ツールが PATH にあれば使う（`command -v` で存在確認）
-- **規模で手段を変える**:
-  - 1〜数 file: inline で実行（例 `ruff check --fix && ruff format && ty check <files>`）
-  - repo 全体の sweep / 多 file・多言語の大量編集: **workflow で fan out** が有効 — file または言語ごとに 1 agent で lint+format+typecheck を回し、 findings を集約する pipeline。 user の明示 opt-in が前提で、 小規模では spawn しない（`subagent-gate` 参照）
+- 具体ツール・コマンドは language add-on skill が定義する（`writing-python` / `writing-bash` 等）。 add-on の無い言語でも、 その ecosystem の標準ツールが PATH にあれば使う（`command -v` で存在確認）
+- **tool の実行自体は inline で回す（deterministic ゆえ workflow 不要）**: linter / formatter / type-checker は決定的 oracle で、 複数 agent に投票させても同一結果＝重複計算。 adversarial review には載せない（`Restrict LLM API call use cases` / `Self-check for wasteful code patterns` と衝突）
+- **adversarial review が効くのは一段上の judgment 層**: tool が捕れないバグや suppression の妥当性は判定ゆえ、 独立 reviewer に refute させる pass が活きる。 これは linter を回すことではなく編集差分の review（`/code-review` の領域）であり、 大量差分なら workflow で fan out する候補（opt-in 前提・小規模で spawn しない、 `subagent-gate`）
 
 ### Handle conflicting patterns explicitly
 
