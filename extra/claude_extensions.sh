@@ -86,7 +86,7 @@ run claude plugin list
 
 LOGIN_USER="$(logname)"
 [ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
-if [ -n "$LOGIN_USER" ] && [ "$LOGIN_USER" != root ]; then
+if [ -n "$LOGIN_USER" ]; then
     run sudo -i -u $LOGIN_USER bash -i -c '"node --version && npm --version && npx --version && uvx --version && claude --version"'
 
     # agent-browser
@@ -118,6 +118,9 @@ if [ -n "$LOGIN_USER" ] && [ "$LOGIN_USER" != root ]; then
 
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp list"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin list"'
+else
+    echo -e "${COLOR_RED}No login user found... omitting to install extensions for the login user${COLOR_CLEAR}"
+    echo ""
 fi
 
 
