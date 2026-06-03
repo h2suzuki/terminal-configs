@@ -308,6 +308,24 @@ run apt update
 run apt install -y gh
 
 
+# Google Cloud CLI
+[ -s /tmp/cloud.google.apt-key.gpg ] ||
+run curl -o /tmp/cloud.google.apt-key.gpg \
+  -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg
+run gpg --yes --dearmor -o /tmp/cloud.google.gpg /tmp/cloud.google.apt-key.gpg
+[ -d /etc/apt/keyrings ] ||
+run install --mode 0755 --directory /etc/apt/keyrings/
+run install --mode 0644 /tmp/cloud.google.gpg /etc/apt/keyrings/
+
+cat > /etc/apt/sources.list.d/google-cloud-sdk.list <<EOF
+deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/cloud.google.gpg] \
+https://packages.cloud.google.com/apt cloud-sdk main
+EOF
+
+run apt update
+run apt install -y google-cloud-cli
+
+
 # Node.js
 [ -s /tmp/nvm_install.sh ] ||
 run curl -o /tmp/nvm_install.sh \

@@ -1,11 +1,10 @@
 #!/bin/bash
 
-# Installs Claude Code extensions + cloud CLIs as an opt-in step after the base setup.
-# Per-user items (npm globals, MCP servers, plugins, skills) are installed for BOTH root
-# and the login user -- mirroring ubuntu2404-wsl.sh, which sets up Claude Code for both.
-# The Google Cloud CLI is a system-wide apt package. Re-running upgrades each item in place.
+# Installs Claude Code extensions as an opt-in step after the base setup. Per-user items
+# (npm globals, MCP servers, plugins, skills) are installed for BOTH root and the login
+# user -- mirroring ubuntu2404-wsl.sh, which sets up Claude Code for both. Re-running
+# upgrades each item in place. (gcloud, used by the GCP MCPs, is installed by the base.)
 #
-#   gcloud         Google Cloud CLI (apt; gcloud + gsutil + bq), system-wide
 #   agent-browser  Vercel Labs CLI + Claude Code skill (not an MCP server)
 #   playwright     Microsoft @playwright/mcp (stdio; reuses the system Chrome, headless)
 #   figma          Anthropic-marketplace plugin (bundles a remote MCP + skills)
@@ -21,8 +20,6 @@
 }
 
 command -v sudo >/dev/null || { echo "Cannot find sudo"; exit 1; }
-command -v curl >/dev/null || { echo "Cannot find curl"; exit 1; }
-command -v gpg  >/dev/null || { echo "Cannot find gpg";  exit 1; }
 
 
 if tty -s >/dev/null; then
@@ -52,25 +49,6 @@ run()
         exit $RETVAL
     fi
 }
-
-
-# Google Cloud CLI (apt; provides gcloud, gsutil, bq) -- system-wide, all users.
-# curl/gpg are guarded above; ca-certificates is assumed present (same as the base's gh repo).
-[ -s /tmp/cloud.google.apt-key.gpg ] ||
-run curl -o /tmp/cloud.google.apt-key.gpg \
-  -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg
-run gpg --yes --dearmor -o /tmp/cloud.google.gpg /tmp/cloud.google.apt-key.gpg
-[ -d /etc/apt/keyrings ] ||
-run install --mode 0755 --directory /etc/apt/keyrings/
-run install --mode 0644 /tmp/cloud.google.gpg /etc/apt/keyrings/
-
-cat > /etc/apt/sources.list.d/google-cloud-sdk.list <<EOF
-deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/cloud.google.gpg] \
-https://packages.cloud.google.com/apt cloud-sdk main
-EOF
-
-run apt update
-run apt install -y google-cloud-cli
 
 
 # Per-user toolchain: install for root (this script's user) and the login user.
@@ -123,7 +101,8 @@ cat <<'EOF'
 
 Installed for BOTH root and the login user (run `claude` as whichever you use).
 
-[Google Cloud]  gcloud/gsutil/bq are system-wide. Sign in (interactive):
+[Google Cloud]  gcloud/gsutil/bq are installed by the base setup. The cloud-run / toolbox
+                MCP servers need an authenticated gcloud -- sign in (interactive):
                   gcloud auth login
                   gcloud auth application-default login   # used by the MCP servers
                   gcloud config set project <PROJECT_ID>
