@@ -42,6 +42,7 @@ convention が harmful と判断するなら silently fork せず surface する
 - 具体ツール・コマンドは language add-on skill が定義する（`writing-python` / `writing-bash` 等）。 add-on の無い言語でも、 その ecosystem の標準ツールが PATH にあれば使う（`command -v` で存在確認）
 - **tool の実行自体は inline で回す（deterministic ゆえ workflow 不要）**: linter / formatter / type-checker は決定的 oracle で、 複数 agent に投票させても同一結果＝重複計算。 adversarial review には載せない（`Restrict LLM API call use cases` / `Self-check for wasteful code patterns` と衝突）
 - **adversarial review が効くのは一段上の judgment 層**: tool が捕れないバグや suppression の妥当性は判定ゆえ、 独立 reviewer に refute させる pass が活きる。 これは linter を回すことではなく編集差分の review（`/code-review` の領域）であり、 大量差分なら workflow で fan out する候補（opt-in 前提・小規模で spawn しない、 `subagent-gate`）
+- **指摘は修正が基本、 抑制（suppress）は例外**: lint / format / type-check の指摘は直すのが default。 抑制してよいのは ① 誤検知が確実、 ② formatter の reflow が手書き整形を崩して逆に読みにくくする、 ③ 意図的な negative-test 等の正当な理由がある、 のいずれかの時のみ。 **エラーを握りつぶす目的では使わない**。 抑制行には理由を 1 行添える。 具体の抑制構文は language add-on（`writing-python` / `writing-bash`）が定義する
 
 ### Handle conflicting patterns explicitly
 
