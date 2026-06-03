@@ -35,6 +35,15 @@ codebase / 既知 style / spec (CLAUDE.md / SKILL.md / hook 等) に最初から
 post-edit hook / commit deny で後から指摘されてやり直す手戻りは token 浪費。
 convention が harmful と判断するなら silently fork せず surface する。
 
+### Run linters / formatters / type-checkers
+
+編集した code には、 利用可能なら必ずその言語の **linter / formatter / type-checker を通す**。 指摘は commit / 完了報告の前に解消する（auto-fix できるものは fix、 残りは直すか surface）。 後から post-edit hook / review で指摘される手戻り (token 浪費) を防ぐ。
+
+- 具体ツールは language add-on skill が定義する: Python は `ruff`（lint+format）+ `ty`（type check）、 bash は `shellcheck`。 add-on の無い言語でも、 その ecosystem の標準ツールが PATH にあれば使う（`command -v` で存在確認）
+- **規模で手段を変える**:
+  - 1〜数 file: inline で実行（例 `ruff check --fix && ruff format && ty check <files>`）
+  - repo 全体の sweep / 多 file・多言語の大量編集: **workflow で fan out** が有効 — file または言語ごとに 1 agent で lint+format+typecheck を回し、 findings を集約する pipeline。 user の明示 opt-in が前提で、 小規模では spawn しない（`subagent-gate` 参照）
+
 ### Handle conflicting patterns explicitly
 
 codebase 内に矛盾する 2 つの pattern を見つけたら、片方を選択して選択理由を述べ、もう片方を cleanup flag として surface する (blend しない)。
