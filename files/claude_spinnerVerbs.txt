@@ -2,7 +2,7 @@
 # このリストは claude から、以下のコマンドで抽出した Spinner verbs を
 # claude に頼んでゆるい感じに翻訳してもらったものです。
 #
-#   strings $(which claude) | awk '/Infusing/ {match($0, /d[0-9]+=\[("[^]]+")\]/,a); split(a[1],b,","); for(v in b) print b[v]; exit}'
+#   strings $(command -v claude) | awk '/Infusing/ {match($0, /d[0-9]+=\[("[^]]+")\]/,a); split(a[1],b,","); for(v in b) print b[v]; exit}'
 #
 # settings.json の "spinnerVerbs" に登録して利用しています。
 #

@@ -2,7 +2,7 @@
 
 # This script sets up a Ubuntu 24.04 on WSL2 environment
 
-which fgrep >/dev/null || {
+command -v fgrep >/dev/null || {
     echo "Cannot find grep"
     exit 1
 }
@@ -21,9 +21,9 @@ fgrep -qs "Ubuntu 24.04" /etc/lsb-release || {
 
 
 
-which tty       >/dev/null || { echo "Cannot find tty";         exit 1; }
-which readlink  >/dev/null || { echo "Cannot find readlink";    exit 1; }
-which cmp       >/dev/null || { echo "Cannot find cmp";         exit 1; }
+command -v tty       >/dev/null || { echo "Cannot find tty";         exit 1; }
+command -v readlink  >/dev/null || { echo "Cannot find readlink";    exit 1; }
+command -v cmp       >/dev/null || { echo "Cannot find cmp";         exit 1; }
 
 
 TOP_DIR=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
