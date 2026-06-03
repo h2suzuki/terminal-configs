@@ -61,7 +61,7 @@ Exit Criteria:
 - [x] 実装: `stop_checks.py` に `KNOWN_POSSIBLE` 表 + `IMPOSSIBLE_RE` (lookahead で 不可能/不可避/不可逆/不可分/不可欠/不可侵 除外) + `_known_possible_denial()` helper + `_check()` 内 block 呼出 + docstring family。 strip_fences 適用・pairing 無し (op が既知可能ゆえ証拠の有無に関わらず否定が誤り)。 advise-once gate は既存 `_run` が demote するので再 block loop 無し
 - [x] smoke 15/15 (`/tmp/smoke_known_denial.py`): 5 block ケース (partial+不可 / git add -p+できない / autosquash+できない / 部分コミット+無理 / 部分ステージ+no-op) + 8 non-block ケース (op only / impossible only / fenced / inline-backtick / できないか exploratory / 不可避 lookahead / 不可能 lookahead / cross-line) + 2 regression (eval 大改造 / clean text)。 ruff lint+format + ty + 既存 unittest 7/7 全 clean
 - [x] deploy 済: `sudo install -m 0755` で `/etc/claude-code/hooks/stop_checks.py`、 source==deployed、 mode 755 確認
-- [ ] live self-test: 部分 stage で本 entry を commit + trigger 文言を発話 → 自分の Stop hook に block される実証 (本 turn 進行中)
+- [x] live self-test: (turn 12) trigger 文言を発話したが block しなかった → (turn 13) H.S.「セッションログも見た方がよいのでは」の助言で attachment 935 を読み、 hook が exit 0 を返していたと判明 → 真因 = Claude Code は Stop hook invoke 時点で最新 assistant text を transcript に flush しておらず `_current_turn` が trigger を含まない stale text を返していた → v2.1.47+ の payload `last_assistant_message` field を `_run` で concat する fix (commit 0bfb645) → (turn 14) 再 trigger で **block 文面を H.S. が live で受信確認**「known-possible-denial: 「partial stag」 を…」。 当初想定の (turn 13) 正しい partial-stage 行動による復帰デモは hook bug 調査に化けたため未実施 (機構の正しさは独立に証明済み)
 
 経緯: 2026-06-04 session、 私が「partial staging は不可」「foreign hunk 検出は無理」と未検証で 2 度断定し H.S. に「メモリに保存すべき案件・git add で surface されるべきだった」「verify させるのでなく、 できると分かっているのだから、 させろ」と指摘された (= 本機構の core motivation)。 同根 sibling entries: `feedback_partial_stage_foreign_changes` (2026-06-04) / `feedback_rebase_autosquash_needs_interactive` (2026-06-03) / `feedback_rebut_user_concern_with_inference` (2026-06-04)。
 
@@ -121,3 +121,13 @@ Exit Criteria:
 Note: doc 本体 (L1〜L4 概観 head + 実装 contract 0〜5 + 除外) 記載・commit 27b498c・SendUserFile 送付済。 目次 = 二つの family → capability-grant → 判定/検出/状態/安全 → 除外、 各項に実フック名の具体例。 **H.S. レビュー待ち** (外出先・後日)。 承認後に Exit flip + block 削除 (body 構成/粒度の直しがあれば反映してから)。 2026-05-31: コード照合 audit (workflow wvsbvz52x、 34 claim 中 30 accurate、 adversarial 確認・誤 flag 1 件棄却) 実施し確定 3 finding を commit eedd808 で反映 — (A) 中核 dichotomy 訂正 (L3 stop_checks の 4 family は exit2 で block、 overview L3 行+段階補足+§0 表)、 (B) §3 synthetic-skip を path 別に (BM25 surfacer `_memory_surface` は非 skip・本 turn live 確認)、 (C) §1/§2 に advisory-allow + content-embedded opt-out token 追記。 **事実精度は audit 済**、 残は H.S. の構成/粒度レビュー。 任意候補: 補足「L3とL4どう違うか」の「指摘する」(現 line 24) も同根で、 H.S. が望めば「介入する」系へ。 follow-up (doc外・コード): `_memory_surface` が synthetic prompt を surface する挙動の許容可否。 2026-06-01〜02: H.S. live レビューで overview を全面改稿 (歴史先行 CLAUDE.md→skill→hook / L1-L4 jargon 撤去 / 一人称除去 / です・ます / 表 A-D 化+俳句 / capability-grant をフロー番号リスト化 / 事実確認) + ファイル名 `_`→`-` リネーム (commit 025a3c6・14cf6d0)。 **レビュー継続中** — 次 session も H.S. の追加指摘を反映。 確立した編集ルールは handoff doc 参照。
 
 Work file: handoff = `last-session-handoff.md` の「SKILL-HOOK-CONTRACT.md パターン集」 section ＋ plan `~/.claude/plans/breezy-bubbling-quiche.md` の「並行 deliverable」節
+
+### KNOWN_POSSIBLE 表の自動拡張
+
+Goal: `stop_checks.py` の `KNOWN_POSSIBLE` (既知で可能な op × 既知 method hint 表) は手で 1 行ずつ追加する設計だが、 「実は可能」 が判明する度に user memory entry も書かれるので、 memory entry の reminder/keywords から KNOWN_POSSIBLE への hook source 上の追記を semi-automated にする余地を検討する (新 memory feedback_*_can_*.md の存在を memory_routing_gate sync 後に hint として surface 等)。
+
+Exit Criteria:
+- [ ] 設計: memory entry の命名規約や frontmatter で「KNOWN_POSSIBLE 候補」 を mark する仕組みを置くか、 hook が memory dir を scan して候補を列挙し人 review するか、 設計 trade-off を verbalize
+- [ ] 実装方針が決まれば実装 + smoke + deploy
+
+Work file: `files/claude_managed-hooks/stop_checks.py` の `KNOWN_POSSIBLE` 表 + `~/.claude/memory/feedback_partial_stage_foreign_changes.md` 等の既存 sibling entries
