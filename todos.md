@@ -43,6 +43,18 @@ Work file: `last-session-handoff.md` + commit f1dab94。 残 = deploy (別 sessi
 
 ## Medium
 
+### Claude Code 拡張 installer (extra/claude_extensions.sh)
+
+Goal: agent-browser (Vercel skill+CLI) / Playwright MCP (Microsoft @playwright/mcp) / Figma plugin (Anthropic marketplace) を per-user (scope=user) で入れる opt-in script を提供し、 再実行で in-place upgrade できる。
+
+Exit Criteria:
+- [x] 実装 + 静的検証 (shellcheck clean / `bash -n` / 全 claude サブコマンド syntax を live 2.1.161 binary で裏とり)、 再実行 upgrade 対応 — commit 38d511f
+- [ ] 実機 fresh provisioning で end-to-end 実行確認: (a) skills CLI が `--agent claude-code` を受理し `~/.claude/skills` へ global install / (b) `agent-browser install` の apt-sudo 挙動 (system lib 不足時) / (c) figma plugin の install/update が非対話で通る / (d) playwright が system Chrome を headless 起動 / (e) PW_MCP_VER の runtime 解決が機能
+
+決定事項 (rejected — 再検討時の参照): GitHub MCP 不採用 (gh と重複・優位性 incremental・Linux remote OAuth 不可 #3433、 案内のみ) / managed-mcp.json 不採用 (排他制御で plugin + claude.ai connector を suppress・単一ユーザー機に過剰) / Vercel Plugin 未採用 (依頼外・Next.js 開発向けの束、 欲しければ `npx plugins add vercel/vercel-plugin`) / per-user `claude mcp add -s user` 採用 (files/ deploy でなく runtime config ゆえ canonical-source 非該当)。
+
+Work file: extra/claude_extensions.sh
+
 ### memory entry: evaluative term in table cell の違反事例
 
 Goal: 2026-05-28 session で発生した「比較表 cell に評価形容詞 (`大改造`) を ungrounded で混入」 事例を memory entry に save、 advisory hook 完成までの reminder とする。
