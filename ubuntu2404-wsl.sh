@@ -2,15 +2,15 @@
 
 # This script sets up a Ubuntu 24.04 on WSL2 environment
 
-command -v fgrep >/dev/null || {
+command -v grep >/dev/null || {
     echo "Cannot find grep"
     exit 1
 }
-fgrep -qs WSL /proc/version || {
+grep -Fqs WSL /proc/version || {
     echo "This environment does not look like WSL"
     exit 1
 }
-fgrep -qs "Ubuntu 24.04" /etc/lsb-release || {
+grep -Fqs "Ubuntu 24.04" /etc/lsb-release || {
     echo "This environment does not look like Ubuntu 24.04"
     exit 1
 }

@@ -2,11 +2,11 @@
 
 # This script sets up a Debian 12 environment
 
-command -v fgrep >/dev/null || {
+command -v grep >/dev/null || {
     echo "Cannot find grep"
     exit 1
 }
-fgrep -qs "Debian GNU/Linux 12 " /etc/issue || {
+grep -Fqs "Debian GNU/Linux 12 " /etc/issue || {
     echo "This environment does not look like Debian 12"
     exit 1
 }
