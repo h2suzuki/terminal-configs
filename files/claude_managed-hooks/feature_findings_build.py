@@ -6,24 +6,32 @@ This file both BUILDS the findings and IS the SessionStart hook. No LLM and no
 `claude` subprocess in the build, so it cannot re-trigger SessionStart — needs
 no recursion guard / reaper / staging / in-flight machinery.
 
-Source is the structured-MDX changelog (code.claude.com/docs/en/changelog.md):
-`<Update label="X.Y.Z" description="<Mon DD, YYYY>">` blocks of `  * ` bullets.
-Build = parse → keep post-cutoff → keyword-bucket → emit verbatim. No
-summarization, so features can never be silently dropped. (RSS is cleaner XML
-but carries only ~15 items; the MDX page is the one source with full history.)
+Two sources, each emitted verbatim (no LLM, nothing summarized away):
+  1. Claude Code: the structured-MDX changelog (code.claude.com/docs/en/changelog.md),
+     `<Update label="X.Y.Z" description="<Mon DD, YYYY>">` blocks of `  * ` bullets.
+     parse → keep post-cutoff → keyword-bucket → emit. Stays the FIRST section so
+     its top `## v<X.Y.Z>` heading drives the version-check (consumers reconcile it
+     against `claude --version`).
+  2. Claude Developer Platform: the release-notes page (platform.claude.com/docs/en/
+     release-notes/overview.md), `### <Mon DD, YYYY>` date blocks. Appended verbatim
+     by date — covers the API / client SDKs / Console / Managed Agents / `ant` CLI
+     (official tooling usable from Claude Code). fail-soft: a fetch error logs and
+     drops this section rather than breaking the Claude Code build.
 
-Cutoff: keep a bullet when its version date is >= CUTOFF_YM — the date is in
-the source, so the boundary needs no model judgement / subagent. Bump CUTOFF_YM
-when the model's cutoff moves. Features/skills/deprecations verbatim; fixes
-consolidated to the clean CLI/config identifiers they name (keyword-less dropped).
+Cutoff: keep an entry when its date is >= CUTOFF_YM — the date is in each source,
+so the boundary needs no model judgement / subagent. Bump CUTOFF_YM when the
+model's cutoff moves. The rebuild trigger keys off `claude --version` only; the
+platform section refreshes on the next CLI version bump (frequent enough).
 
 Modes:
   (no args)        SessionStart hook: fast local version-check; if findings.md
                    is missing or its top version != `claude --version`, detach
                    a `--force` child to rebuild. Never blocks/breaks startup.
-  --force          fetch + rebuild + write FINDINGS_PATH atomically.
-  --input F        build from a local changelog file instead of fetching.
-  --stdout         print instead of writing (with --input, for tests).
+  --force          fetch both sources + rebuild + write FINDINGS_PATH atomically.
+  --input F        build the Claude Code section from a local file (skips its fetch).
+  --platform-input F  build the platform section from a local file (skips its fetch).
+  --stdout         print instead of writing. With no --input/--platform-input it
+                   fetches both live; with either, only that source (offline tests).
 
 canonical source: files/claude_managed-hooks/feature_findings_build.py
 deploy: /etc/claude-code/hooks/ (copy_dir で自動)。両者を同 session で同内容に保つ。
@@ -41,6 +49,7 @@ import time
 import urllib.request
 
 SOURCE_URL = "https://code.claude.com/docs/en/changelog.md"
+PLATFORM_URL = "https://platform.claude.com/docs/en/release-notes/overview.md"
 CUTOFF_YM = (2026, 1)  # assistant knowledge cutoff (year, month); keep dates >= this
 FETCH_TIMEOUT_S = 30
 CACHE_DIR = os.path.join(
@@ -86,8 +95,8 @@ def _vkey(version: str) -> tuple[int, ...]:
 
 
 def _parse_date(desc: str) -> tuple[int, int] | None:
-    """`May 30, 2026` -> (2026, 5). None when unparseable (caller keeps it)."""
-    m = re.search(r"([A-Za-z]+)\s+\d{1,2},\s*(\d{4})", desc)
+    """`May 30, 2026` / `July 15th, 2024` -> (year, month). None when unparseable (caller keeps it)."""
+    m = re.search(r"([A-Za-z]+)\s+\d{1,2}(?:st|nd|rd|th)?,\s*(\d{4})", desc)
     if not m:
         return None
     mon = _MONTHS.get(m.group(1).capitalize())
@@ -195,6 +204,58 @@ def build(text: str, today: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+_PLATFORM_HEADING_RE = re.compile(r"^###\s+(.+\S)\s*$")
+
+
+def parse_platform(text: str) -> list[tuple[str, tuple[int, int] | None, list[str]]]:
+    """Split platform release-notes into (date-heading, ym, body-lines) blocks; body verbatim."""
+    out: list[tuple[str, tuple[int, int] | None, list[str]]] = []
+    cur_h: str | None = None
+    cur_ym: tuple[int, int] | None = None
+    body: list[str] = []
+    for line in text.splitlines():
+        mh = _PLATFORM_HEADING_RE.match(line)
+        if mh:
+            if cur_h is not None:
+                out.append((cur_h, cur_ym, body))
+            cur_h, cur_ym, body = mh.group(1), _parse_date(mh.group(1)), []
+        elif cur_h is not None:
+            body.append(line)
+    if cur_h is not None:
+        out.append((cur_h, cur_ym, body))
+    return out
+
+
+def build_platform_section(text: str) -> str:
+    """Appended section of post-cutoff platform release notes, verbatim by date. Empty when none."""
+    recs = [
+        (h, body)
+        for h, ym, body in parse_platform(text)
+        if ym is None or ym >= CUTOFF_YM
+    ]
+    if not recs:
+        return ""
+    lines = [
+        "",
+        "# Claude Developer Platform — release notes (post-cutoff "
+        f">= {CUTOFF_YM[0]}-{CUTOFF_YM[1]:02d}, verbatim by date)",
+        "",
+        f"> Source: {PLATFORM_URL} — Claude API / client SDKs / Console /",
+        "> Managed Agents / `ant` CLI. Claude Code itself ships a separate changelog.",
+        "",
+    ]
+    for h, body in recs:
+        b = list(body)
+        while b and not b[0].strip():
+            del b[0]
+        while b and not b[-1].strip():
+            del b[-1]
+        lines.append(f"### {h}")
+        lines += b
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
 def _fetch(url: str) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": "claude-code-hook"})
     with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
@@ -211,21 +272,35 @@ def _write_atomic(path: str, content: str) -> None:
     os.replace(tmp, path)
 
 
-def cmd_force(output: str) -> int:
-    """Fetch + rebuild + write. On failure, log (never silently swallow)."""
+def _log_err(msg: str) -> None:
     try:
-        text = _fetch(SOURCE_URL)
-        _write_atomic(output, build(text, datetime.date.today().isoformat()))
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        with open(ERR_LOG, "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%FT%TZ', time.gmtime())}] {msg}\n")
+    except OSError:
+        pass
+
+
+def _platform_section_or_log() -> str:
+    """Fetch + build the platform section; fail-soft (log and return '' so the CC build never breaks)."""
+    try:
+        return build_platform_section(_fetch(PLATFORM_URL))
+    except Exception as e:
+        _log_err(f"platform fetch/build failed: {e!r}")
+        return ""
+
+
+def cmd_force(output: str) -> int:
+    """Fetch + rebuild + write. CC source required; platform source fail-soft. On failure, log."""
+    try:
+        cc = _fetch(SOURCE_URL)
+        findings = (
+            build(cc, datetime.date.today().isoformat()) + _platform_section_or_log()
+        )
+        _write_atomic(output, findings)
         return 0
     except Exception as e:
-        try:
-            os.makedirs(CACHE_DIR, exist_ok=True)
-            with open(ERR_LOG, "a", encoding="utf-8") as f:
-                f.write(
-                    f"[{time.strftime('%FT%TZ', time.gmtime())}] build failed: {e!r}\n"
-                )
-        except OSError:
-            pass
+        _log_err(f"build failed: {e!r}")
         sys.stderr.write(f"feature_findings_build: {e}\n")
         return 1
 
@@ -278,15 +353,36 @@ def cmd_hook(output: str) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input", help="read changelog from FILE instead of fetching")
+    ap.add_argument(
+        "--input", help="read Claude Code changelog from FILE instead of fetching"
+    )
+    ap.add_argument(
+        "--platform-input",
+        help="read platform release-notes from FILE instead of fetching",
+    )
     ap.add_argument("--output", default=FINDINGS_PATH)
     ap.add_argument("--stdout", action="store_true", help="print instead of writing")
     ap.add_argument("--force", action="store_true", help="fetch + rebuild now")
     a = ap.parse_args()
 
-    if a.input or a.stdout:
-        text = open(a.input, encoding="utf-8").read() if a.input else _fetch(SOURCE_URL)
-        findings = build(text, datetime.date.today().isoformat())
+    if a.input or a.platform_input or a.stdout:
+        live = not (a.input or a.platform_input)  # no input files → fetch both live
+        today = datetime.date.today().isoformat()
+        findings = ""
+        if a.input or live:
+            cc = (
+                open(a.input, encoding="utf-8").read()
+                if a.input
+                else _fetch(SOURCE_URL)
+            )
+            findings += build(cc, today)
+        if a.platform_input or live:
+            pf = (
+                open(a.platform_input, encoding="utf-8").read()
+                if a.platform_input
+                else _fetch(PLATFORM_URL)
+            )
+            findings += build_platform_section(pf)
         if a.stdout:
             sys.stdout.write(findings)
         else:
