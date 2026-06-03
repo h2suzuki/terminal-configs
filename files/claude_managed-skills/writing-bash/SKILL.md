@@ -45,6 +45,5 @@ when_to_use: TRIGGER when editing or creating a .sh file, or when writing a shel
   | `ifconfig` | `ip addr` | net-tools 未保守 → iproute2 |
   | `route` | `ip route` | net-tools 未保守 → iproute2 |
   | `netstat` | `ss` | net-tools 未保守 → iproute2 |
-  | `nslookup` | `dig` | dig 推奨（OS resolver 準拠）。 nslookup は厳密には deprecated でない |
 
-  deprecation は環境で異なるので、 断定前に現行 doc で確認する（出典: Red Hat "Deprecated Linux command replacements"）。
+  deprecation は環境で異なるので、 断定前に現行 doc で確認する（出典: Red Hat "Deprecated Linux command replacements"）。 なお `nslookup` は **obsolete ではない**: 現行 man page (bind9-dnsutils) に非推奨記述はなく、 dig と同一 package。 script では出力が扱いやすい dig が好まれるが、 これは好みで deprecation ではない。
