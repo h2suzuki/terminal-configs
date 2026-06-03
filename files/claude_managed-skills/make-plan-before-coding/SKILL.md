@@ -28,7 +28,7 @@ coding に着手する前に plan を立てる discipline。 設計の option sp
 2. productized 先行実装 / 他者の公開解法 (blog / issue / repo) は?
 3. 一次情報で mechanism 確認したか?
 4. 「今知っている範囲」 で収束していないか self-rebut?
-5. **Claude Code 機能** (hook event / skill frontmatter / `claude --bg` 等 hidden flag / settings.json schema / MCP / plugin) を含む planning なら、 `${XDG_CACHE_HOME:-~/.cache}/claude-code-feature-research/findings.md` を Read して cutoff 以降の delta を check。 最上位 `## v<X.Y.Z>` heading と `claude --version` を突き合わせ、 match していれば既知範囲は cache が cover、 不一致 / 不在なら `feature_findings_build.py` hook が version 変化時に決定的 rebuild する (高速) ので既知範囲で進めつつ negation / positive 断定は後追い verify
+5. **Claude Code / Claude Developer Platform 機能** (hook event / skill frontmatter / `claude --bg` 等 hidden flag / settings.json schema / MCP / plugin / `ant` CLI 等の公式ツール) を含む planning なら、 `${XDG_CACHE_HOME:-~/.cache}/claude-code-feature-research/findings.md` を Read して cutoff 以降の delta を check。 最上位 `## v<X.Y.Z>` heading と `claude --version` を突き合わせ、 match していれば既知範囲は cache が cover、 不一致 / 不在なら `feature_findings_build.py` hook が version 変化時に決定的 rebuild する (高速) ので既知範囲で進めつつ negation / positive 断定は後追い verify
 
 新事実が判明したら過去の設計判断を再評価して verbalize する (新事実発見後の古設計維持は calibration error)。
 
