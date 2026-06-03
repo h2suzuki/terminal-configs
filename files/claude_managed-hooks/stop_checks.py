@@ -515,7 +515,7 @@ def _bump(path: str, now: int) -> int:
     return count
 
 
-def _statusline(session_id: str) -> dict:
+def _statusline(session_id: str | None) -> dict:
     if not session_id:
         return {}
     cache = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
@@ -707,7 +707,8 @@ class TurnMarkerTest(unittest.TestCase):
             self.assertEqual(
                 _run({"transcript_path": clean, "stop_hook_active": False})[0], 0
             )
-        self.assertEqual(_run("nope"), (0, None))
+        # _run tolerates non-dict input via its isinstance guard; verify it.
+        self.assertEqual(_run("nope"), (0, None))  # ty: ignore[invalid-argument-type]
         self.assertEqual(_run({}), (0, None))
 
 

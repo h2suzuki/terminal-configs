@@ -551,7 +551,9 @@ class TurnMarkerTest(unittest.TestCase):
         p = os.path.join(tempfile.mkdtemp(), "s.jsonl")
         open(p, "w").close()
         payload = {"transcript_path": p, "prompt": "next q"}
-        with open(_counter_path(payload), "w", encoding="utf-8") as f:
+        cp = _counter_path(payload)
+        assert cp is not None
+        with open(cp, "w", encoding="utf-8") as f:
             f.write("%d %d\n" % (count, last))
         return payload
 
@@ -561,6 +563,7 @@ class TurnMarkerTest(unittest.TestCase):
         payload = self._with_turns(1, 2_000_000)
         with mock.patch.object(time, "time", lambda: 2_000_300):
             msg = _turn_marker(payload)
+        assert msg is not None
         self.assertIn("Turn #2 starting", msg)
         self.assertIn("5 min passed since the last stop", msg)
 
@@ -572,6 +575,7 @@ class TurnMarkerTest(unittest.TestCase):
         open(p, "w").close()
         with mock.patch.object(time, "time", lambda: 1000):
             msg = _turn_marker({"transcript_path": p, "prompt": "q"})
+        assert msg is not None
         self.assertIn("Turn #1 starting", msg)
         self.assertIn("session start", msg)
 
@@ -580,11 +584,13 @@ class TurnMarkerTest(unittest.TestCase):
         from unittest import mock
 
         payload = self._with_turns(3, 5_000_000)
-        with open(_counter_path(payload)) as f:
+        cp = _counter_path(payload)
+        assert cp is not None
+        with open(cp) as f:
             before = f.read()
         with mock.patch.object(time, "time", lambda: 5_000_100):
             _turn_marker(payload)
-        with open(_counter_path(payload)) as f:
+        with open(cp) as f:
             self.assertEqual(f.read(), before)
 
     def test_synthetic_prompt_skipped(self):
