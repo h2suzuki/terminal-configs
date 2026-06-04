@@ -88,7 +88,7 @@ claude mcp remove toolbox --scope user
 run "claude mcp add toolbox --scope user -- npx -y @toolbox-sdk/server@latest --prebuilt=bigquery --stdio"
 
 # Vercel CLI + plugin (MCP comes from the plugin)
-run npm install -g vercel
+run npm install -g @vercel/vc-native --force
 run CI=1 npx -y plugins add vercel/vercel-plugin --yes
 run claude plugin update vercel@claude-plugins-official
 
@@ -131,7 +131,7 @@ if [ -n "$LOGIN_USER" ]; then
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add toolbox --scope user -- npx -y @toolbox-sdk/server@latest --prebuilt=bigquery --stdio"'
 
     # Vercel CLI + plugin (MCP comes from the plugin)
-    run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g vercel"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g @vercel/vc-native --force"'
     run sudo -i -u $LOGIN_USER bash -i -c '"CI=1 npx -y plugins add vercel/vercel-plugin --yes"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin update vercel@claude-plugins-official"'
 
