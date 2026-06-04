@@ -77,9 +77,11 @@ run npm install -g @colbymchenry/codegraph
 run "claude mcp remove codegraph -s user >/dev/null 2>&1 || true"
 run "claude mcp add codegraph -s user -- codegraph serve --mcp"
 
-# Cloud Run + Toolbox MCPs
+# Cloud Run MCP
 run "claude mcp remove cloud-run -s user >/dev/null 2>&1 || true"
 run "claude mcp add cloud-run -s user -- npx -y @google-cloud/cloud-run-mcp"
+
+# Toolbox MCP
 run "claude mcp remove toolbox -s user >/dev/null 2>&1 || true"
 run "claude mcp add toolbox -s user -- npx -y @toolbox-sdk/server@latest --prebuilt=bigquery --stdio"
 
@@ -118,9 +120,11 @@ if [ -n "$LOGIN_USER" ]; then
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp remove codegraph -s user >/dev/null 2>&1 || true"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add codegraph -s user -- codegraph serve --mcp"'
 
-    # Cloud Run + Toolbox MCPs
+    # Cloud Run MCP
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp remove cloud-run -s user >/dev/null 2>&1 || true"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add cloud-run -s user -- npx -y @google-cloud/cloud-run-mcp"'
+
+    # Toolbox MCP
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp remove toolbox -s user >/dev/null 2>&1 || true"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add toolbox -s user -- npx -y @toolbox-sdk/server@latest --prebuilt=bigquery --stdio"'
 

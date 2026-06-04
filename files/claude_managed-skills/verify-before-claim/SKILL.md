@@ -1,7 +1,7 @@
 ---
 name: verify-before-claim
 description: Verify supporting evidence (primary source / actual code / exhaustively traversed pointers) before uttering a positive or negative claim.
-when_to_use: TRIGGER when about to make a positive claim ("網羅した" / "reasonable default" etc) or negative claim ("できない" / "非対応" etc). SKIP when basing on a primary source you directly verified with citation.
+when_to_use: TRIGGER when about to make a positive claim ("網羅した" / "reasonable default" etc), negative claim ("できない" / "非対応" etc), or implicit done-claim by reporting an executable artifact (script / hook / CLI / config) edit as complete without having executed it. SKIP when basing on a primary source you directly verified with citation.
 ---
 
 # Verify Before Claim
@@ -64,6 +64,17 @@ memory / doc / commit message / todos / handoff 等の **durable artifact** に 
 - 「具体 = 親切」 の圧で confabulate しない (plausible specifics を検証の代わりに生成しない)
 - 照合できなければ confident-specific に書かず、 曖昧化するか省く
 - 誤 memory は無いより有害 (durable かつ自己強化、 未来の自分を誤誘導)
+
+### Run executable artifacts before claiming done
+
+実行可能 artifact (script / hook / CLI / config) を edit したら、 done を report する前に実機で実行する。 done report は implicit positive claim (=「これは動く」) であり、 explicit な verify phrase 不在でも本 skill が trigger する。 type-check / lint / syntax 確認は code 正しさで feature 正しさを保証しない (system prompt の UI rule の同型適用)。
+
+- script edit → 該当節を実行 (最小 slice 可)
+- hook edit → trigger event を発火させて動作観測
+- CLI flag 追加・変更 → `<tool> --help` で flag 名確認 + 実機実行
+- 実行不能なら 「未実行」 明示。 「edit 自体は正しい」 「lint 通った」 で代用しない
+
+**flag 方言の落とし穴**: `CI=1` / `-y` / `--yes` / `--non-interactive` は CLI ごとに方言が違う (npm の `CI=1` は他 CLI に効かず、 `npx -y` は npx 用で内部 CLI に別途 flag 要)。 推定 flag で実行スキップすると prompt stall / 確認ダイアログが deploy 環境で発覚する。
 
 ## Sources
 
