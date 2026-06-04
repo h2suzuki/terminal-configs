@@ -91,6 +91,7 @@ run "claude mcp add toolbox --scope user -- npx -y @toolbox-sdk/server@latest --
 claude mcp remove vercel --scope user
 run npm install -g vercel
 run CI=1 npx -y plugins add vercel/vercel-plugin --yes
+run claude plugin update vercel@claude-plugins-official
 
 run claude mcp list
 run claude plugin list
@@ -134,6 +135,7 @@ if [ -n "$LOGIN_USER" ]; then
     sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove vercel --scope user"
     run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g vercel"'
     run sudo -i -u $LOGIN_USER bash -i -c '"CI=1 npx -y plugins add vercel/vercel-plugin --yes"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin update vercel@claude-plugins-official"'
 
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp list"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin list"'
