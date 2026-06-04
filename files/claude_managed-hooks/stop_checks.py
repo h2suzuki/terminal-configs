@@ -182,6 +182,16 @@ EVALUATIVE_PATTERNS: list[str] = [
 ]
 EVALUATIVE_RE = re.compile("|".join(EVALUATIVE_PATTERNS), re.IGNORECASE)
 
+# --- Pattern: order-question-to-user (block on hit, no pairing) ---
+# prose で 「どちらを先に」 「どちらから」 等の順序質問を user に投げるのは judgment 回避。
+# 順序は 3 分解で常に自決可能 (declare-and-proceed application detail)。 hook scope は prose のみ
+# — AskUserQuestion 内の同種は declare_and_proceed_gate.py が PreToolUse で deny する。
+ORDER_QUESTION_PATTERNS: list[str] = [
+    r"どちら\s*(を)?\s*(先に|から)\s*[^。\n]{0,20}(ますか|しょうか|でしょう)",
+    r"どっち\s*(を)?\s*(先に|から)\s*[^。\n]{0,20}(ますか|しょうか|でしょう)",
+]
+ORDER_QUESTION_RE = re.compile("|".join(ORDER_QUESTION_PATTERNS), re.IGNORECASE)
+
 # --- Pattern: deferral (warning, no block) ---
 DEFERRAL_RE = re.compile(
     r"後で(対処|やる|考える)|別タスクに(切り出|分け)|今は(処置|対処)しません|"
@@ -446,6 +456,18 @@ def _check(
     denial = _known_possible_denial(text)
     if denial:
         blocking.append(denial)
+
+    # order-question-to-user (block, no pairing): 順序質問の user 投げは judgment 回避
+    m = ORDER_QUESTION_RE.search(strip_fences(text))
+    if m:
+        blocking.append(
+            f"order-question-to-user: 「{m.group(0)}」 と順序質問を user に投げています。 "
+            f"「どちらを先に」 系は (1) 両方やる → 順序不問で自決 / "
+            f"(2) 順序に正解あり → 自分で決まる / (3) どちらでも OK → 最初の方から、 "
+            f"の 3 分解で常に自決可能で user に valuable answer を求めることはできません "
+            f"(declare-and-proceed skill, feedback_order_questions_are_avoidable)。 "
+            f"該当文を delete し、 3 分解 self-check して自分で proceed してから再出力してください。"
+        )
 
     # deferral (warning-only)
     m = DEFERRAL_RE.search(text)
