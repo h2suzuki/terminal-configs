@@ -168,6 +168,9 @@ copy gitconfig  /etc/gitconfig
 copy inputrc    ~/.inputrc
 copy share_ssh_x11forwarding  ~/.share_ssh_x11forwarding
 
+copy ssh_keepalive.conf   /etc/ssh/ssh_config.d/10-keepalive.conf   -m 0644
+copy sshd_keepalive.conf  /etc/ssh/sshd_config.d/10-keepalive.conf  -m 0644
+systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
 
 # Neovim, Git / Git-LFS, tree, ripgrep, shellcheck
 run apt update
@@ -386,6 +389,8 @@ for skill_dir in /etc/claude-code/skills/*; do
     run ln -sfn "$skill_dir" ~/.claude/skills/
 done
 
+run "claude --model haiku --effort low --no-session-persistence --tools \"\" --setting-sources \"\" --disable-slash-commands -p hello || true"
+
 
 # Tools used by Claude Code (bubblewrap/socat: Sandbox, poppler-utils: PDF reading)
 run apt install -y --no-install-recommends \
@@ -518,6 +523,8 @@ EOF
         run ln -sfn "$skill_dir" $LOGIN_HOME/.claude/skills/
         run chown -h $LOGIN_USER:$LOGIN_GROUP $LOGIN_HOME/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
     done
+
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude --model haiku --effort low --no-session-persistence --tools \"\" --setting-sources \"\" --disable-slash-commands -p hello || true"'
 
 else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"

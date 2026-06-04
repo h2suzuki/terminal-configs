@@ -349,6 +349,8 @@ for skill_dir in /etc/claude-code/skills/*; do
     run ln -sfn "$skill_dir" ~/.claude/skills/
 done
 
+run "claude --model haiku --effort low --no-session-persistence --tools \"\" --setting-sources \"\" --disable-slash-commands -p hello || true"
+
 
 # Tools used by Claude Code (bubblewrap/socat: Sandbox, poppler-utils: PDF reading)
 run apt install -y --no-install-recommends \
@@ -474,6 +476,8 @@ EOF
         run ln -sfn "$skill_dir" $LOGIN_HOME/.claude/skills/
         run chown -h $LOGIN_USER:$LOGIN_GROUP $LOGIN_HOME/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
     done
+
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude --model haiku --effort low --no-session-persistence --tools \"\" --setting-sources \"\" --disable-slash-commands -p hello || true"'
 
 else
     echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
