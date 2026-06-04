@@ -162,10 +162,11 @@ copy sudoers    /etc/sudoers.d/nopasswd -m 0440
 copy gitconfig  /etc/gitconfig
 copy inputrc    ~/.inputrc
 copy share_ssh_x11forwarding  ~/.share_ssh_x11forwarding
+
 copy ssh_keepalive.conf   /etc/ssh/ssh_config.d/10-keepalive.conf   -m 0644
 copy sshd_keepalive.conf  /etc/ssh/sshd_config.d/10-keepalive.conf  -m 0644
-# sshd needs a reload to pick up the drop-in (best-effort; client config is read per ssh run)
 systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+
 copy pulseaudio-forwarding.sh  /etc/profile.d/pulseaudio-forwarding.sh
 run chmod 0644 /etc/profile.d/pulseaudio-forwarding.sh
 
