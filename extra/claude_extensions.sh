@@ -75,10 +75,10 @@ run "claude mcp remove codegraph -s user >/dev/null 2>&1; claude mcp add codegra
 run "claude mcp remove cloud-run -s user >/dev/null 2>&1; claude mcp add cloud-run -s user -- npx -y @google-cloud/cloud-run-mcp"
 run "claude mcp remove toolbox -s user >/dev/null 2>&1; claude mcp add toolbox -s user -- npx -y @toolbox-sdk/server@latest --prebuilt=bigquery --stdio"
 
-# Vercel CLI + MCP + plugin
+# Vercel CLI + plugin (the plugin bundles the vercel MCP -- do not add it manually)
 run npm install -g vercel
-run "claude mcp remove vercel -s user >/dev/null 2>&1; claude mcp add -s user --transport http vercel https://mcp.vercel.com"
-run CI=1 npx -y plugins add vercel/vercel-plugin
+run "claude mcp remove vercel -s user >/dev/null 2>&1 || true"   # cleanup stale user-scope vercel MCP from prior script versions
+run CI=1 npx -y plugins add vercel/vercel-plugin --yes
 
 run claude mcp list
 run claude plugin list
@@ -111,10 +111,10 @@ if [ -n "$LOGIN_USER" ]; then
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp remove cloud-run -s user >/dev/null 2>&1; claude mcp add cloud-run -s user -- npx -y @google-cloud/cloud-run-mcp"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp remove toolbox -s user >/dev/null 2>&1; claude mcp add toolbox -s user -- npx -y @toolbox-sdk/server@latest --prebuilt=bigquery --stdio"'
 
-    # Vercel CLI + MCP + plugin
+    # Vercel CLI + plugin (the plugin bundles the vercel MCP -- do not add it manually)
     run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g vercel"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp remove vercel -s user >/dev/null 2>&1; claude mcp add -s user --transport http vercel https://mcp.vercel.com"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"CI=1 npx -y plugins add vercel/vercel-plugin"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp remove vercel -s user >/dev/null 2>&1 || true"'   # cleanup stale user-scope vercel MCP from prior script versions
+    run sudo -i -u $LOGIN_USER bash -i -c '"CI=1 npx -y plugins add vercel/vercel-plugin --yes"'
 
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp list"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin list"'
