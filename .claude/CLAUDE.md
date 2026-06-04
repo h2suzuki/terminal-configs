@@ -15,3 +15,7 @@
 ## 作業の終了
 
 セッション終了 trigger (「handoff して」「セッションリセット」「終わります」等) 時、 `/handoff` skill が利用可能なら invoke する。
+
+## ルール違反 = 即 countermeasure
+
+ルール違反は rule 不発火 signal。 同 turn 内で原因特定 + trigger 拡張 / keyword 追加 / 新 entry 等の対策を即実装する。
