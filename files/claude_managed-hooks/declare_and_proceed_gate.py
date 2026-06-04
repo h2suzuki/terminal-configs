@@ -55,6 +55,7 @@ ROUTING_PATTERNS: list[str] = [
     r"どこから\s*(調査|着手|始め|見)",
     r"先に\s*(調査|確認|読み?)\s*ますか",
     r"[ぁ-んァ-ヶ一-鿿\w]+するか\s*[ぁ-んァ-ヶ一-鿿\w]+するか",  # SKILL の正典 trigger
+    r"(どう|どの|どれ)を?\s*[ぁ-んァ-ヶ一-鿿\w]+\s*しますか",  # 「<X> を どう <verb> しますか?」 form (options 列挙されると routing)
 ]
 
 CONFIRM_RE = re.compile("|".join(CONFIRM_PATTERNS), re.IGNORECASE)
