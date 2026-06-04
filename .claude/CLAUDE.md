@@ -18,4 +18,4 @@
 
 ## ルール違反 = 即 countermeasure
 
-ルール違反は rule 不発火 signal。 同 turn 内で原因特定 + trigger 拡張 / keyword 追加 / 新 entry 等の対策を即実装する。
+ルール違反は rule 不発火 signal。 同 turn 内で原因特定 + trigger 拡張 / keyword 追加 / 新 entry 等の対策を即実装する。 ただし CLAUDE.md への追加にはユーザーの許可が必要。 このファイルの編集は最後の手段と心得る。
