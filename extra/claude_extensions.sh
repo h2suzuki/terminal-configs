@@ -57,6 +57,8 @@ run()
 . $HOME/.nvm/nvm.sh
 export PATH="$HOME/.local/bin:$PATH"
 
+run claude plugin marketplace update claude-plugins-official
+
 # agent-browser
 run CI=1 npm install -g agent-browser
 run agent-browser install
@@ -99,6 +101,8 @@ run claude plugin list
 LOGIN_USER="$(logname)"
 [ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
 if [ -n "$LOGIN_USER" ]; then
+
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin marketplace update claude-plugins-official"'
 
     # agent-browser
     run sudo -i -u $LOGIN_USER bash -i -c '"CI=1 npm install -g agent-browser"'
