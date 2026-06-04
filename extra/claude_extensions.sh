@@ -61,7 +61,7 @@ run claude plugin marketplace update claude-plugins-official
 
 # agent-browser
 run CI=1 npm install -g agent-browser
-run agent-browser install
+run agent-browser install --with-deps
 run npx -y skills add vercel-labs/agent-browser --skill agent-browser --agent claude-code --global --yes
 
 # Playwright MCP
@@ -106,7 +106,7 @@ if [ -n "$LOGIN_USER" ]; then
 
     # agent-browser
     run sudo -i -u $LOGIN_USER bash -i -c '"CI=1 npm install -g agent-browser"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"agent-browser install"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"agent-browser install --with-deps"'
     run sudo -i -u $LOGIN_USER bash -i -c '"npx -y skills add vercel-labs/agent-browser --skill agent-browser --agent claude-code --global --yes"'
 
     # Playwright MCP
