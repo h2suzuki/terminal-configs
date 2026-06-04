@@ -67,7 +67,8 @@ claude mcp remove playwright --scope user
 run "claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"
 
 # Figma plugin
-run "claude plugin install figma@claude-plugins-official || claude plugin update figma@claude-plugins-official"
+run claude plugin install figma@claude-plugins-official
+run claude plugin update figma@claude-plugins-official
 
 # Serena MCP -- uvx --python: short -p clashes with claude -p past `--`
 claude mcp remove serena --scope user
@@ -109,7 +110,8 @@ if [ -n "$LOGIN_USER" ]; then
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"'
 
     # Figma plugin
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install figma@claude-plugins-official || claude plugin update figma@claude-plugins-official"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install figma@claude-plugins-official"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin update figma@claude-plugins-official"'
 
     # Serena MCP -- uvx --python: short -p clashes with claude -p past `--`
     sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove serena --scope user"
