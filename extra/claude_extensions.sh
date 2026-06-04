@@ -63,7 +63,7 @@ run agent-browser install
 run npx -y skills add vercel-labs/agent-browser --skill agent-browser --agent claude-code --global --yes
 
 # Playwright MCP
-claude mcp remove playwright --scope user
+claude mcp get playwright >/dev/null 2>&1 && claude mcp remove playwright --scope user
 run "claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"
 
 # Figma plugin
@@ -71,24 +71,23 @@ run claude plugin install figma@claude-plugins-official
 run claude plugin update figma@claude-plugins-official
 
 # Serena MCP -- uvx --python: short -p clashes with claude -p past `--`
-claude mcp remove serena --scope user
+claude mcp get serena >/dev/null 2>&1 && claude mcp remove serena --scope user
 run "claude mcp add serena --scope user -e SERENA_USAGE_REPORTING=false -- uvx --python 3.13 --from git+https://github.com/oraios/serena serena start-mcp-server --context claude-code --project-from-cwd --enable-web-dashboard false"
 
 # CodeGraph MCP
-claude mcp remove codegraph --scope user
+claude mcp get codegraph >/dev/null 2>&1 && claude mcp remove codegraph --scope user
 run npm install -g @colbymchenry/codegraph
 run "claude mcp add codegraph --scope user -- codegraph serve --mcp"
 
 # Cloud Run MCP
-claude mcp remove cloud-run --scope user
+claude mcp get cloud-run >/dev/null 2>&1 && claude mcp remove cloud-run --scope user
 run "claude mcp add cloud-run --scope user -- npx -y @google-cloud/cloud-run-mcp"
 
 # Toolbox MCP
-claude mcp remove toolbox --scope user
+claude mcp get toolbox >/dev/null 2>&1 && claude mcp remove toolbox --scope user
 run "claude mcp add toolbox --scope user -- npx -y @toolbox-sdk/server@latest --prebuilt=bigquery --stdio"
 
 # Vercel CLI + plugin (MCP comes from the plugin)
-claude mcp remove vercel --scope user
 run npm install -g vercel
 run CI=1 npx -y plugins add vercel/vercel-plugin --yes
 run claude plugin update vercel@claude-plugins-official
@@ -107,7 +106,7 @@ if [ -n "$LOGIN_USER" ]; then
     run sudo -i -u $LOGIN_USER bash -i -c '"npx -y skills add vercel-labs/agent-browser --skill agent-browser --agent claude-code --global --yes"'
 
     # Playwright MCP
-    sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove playwright --scope user"
+    sudo -i -u $LOGIN_USER bash -i -c "claude mcp get playwright >/dev/null 2>&1 && claude mcp remove playwright --scope user"
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"'
 
     # Figma plugin
@@ -115,24 +114,23 @@ if [ -n "$LOGIN_USER" ]; then
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin update figma@claude-plugins-official"'
 
     # Serena MCP -- uvx --python: short -p clashes with claude -p past `--`
-    sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove serena --scope user"
+    sudo -i -u $LOGIN_USER bash -i -c "claude mcp get serena >/dev/null 2>&1 && claude mcp remove serena --scope user"
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add serena --scope user -e SERENA_USAGE_REPORTING=false -- uvx --python 3.13 --from git+https://github.com/oraios/serena serena start-mcp-server --context claude-code --project-from-cwd --enable-web-dashboard false"'
 
     # CodeGraph MCP
-    sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove codegraph --scope user"
+    sudo -i -u $LOGIN_USER bash -i -c "claude mcp get codegraph >/dev/null 2>&1 && claude mcp remove codegraph --scope user"
     run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g @colbymchenry/codegraph"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add codegraph --scope user -- codegraph serve --mcp"'
 
     # Cloud Run MCP
-    sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove cloud-run --scope user"
+    sudo -i -u $LOGIN_USER bash -i -c "claude mcp get cloud-run >/dev/null 2>&1 && claude mcp remove cloud-run --scope user"
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add cloud-run --scope user -- npx -y @google-cloud/cloud-run-mcp"'
 
     # Toolbox MCP
-    sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove toolbox --scope user"
+    sudo -i -u $LOGIN_USER bash -i -c "claude mcp get toolbox >/dev/null 2>&1 && claude mcp remove toolbox --scope user"
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add toolbox --scope user -- npx -y @toolbox-sdk/server@latest --prebuilt=bigquery --stdio"'
 
     # Vercel CLI + plugin (MCP comes from the plugin)
-    sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove vercel --scope user"
     run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g vercel"'
     run sudo -i -u $LOGIN_USER bash -i -c '"CI=1 npx -y plugins add vercel/vercel-plugin --yes"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin update vercel@claude-plugins-official"'
