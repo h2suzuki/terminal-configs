@@ -4,6 +4,8 @@
 #
 #   Managed skills/hooks  Guardrail skills + hooks into /etc/claude-code/ and ~/.claude/
 #
+#   Security plugin     Anthropic official plugin for a security gate
+#
 #   Figma plugin        Claude-to-figma plugin (a remote MCP + skills)
 #
 #   Agent-browser CLI   Vercel Labs CLI + Claude Code skill
@@ -163,6 +165,14 @@ done
 
 run claude plugin marketplace update claude-plugins-official
 
+# Security-guidance plugin (disabled by default)
+run claude plugin install security-guidance@claude-plugins-official
+run claude plugin disable security-guidance@claude-plugins-official
+
+# Figma plugin
+run claude plugin install figma@claude-plugins-official
+run claude plugin update figma@claude-plugins-official
+
 # agent-browser
 run CI=1 npm install -g agent-browser
 run agent-browser install --with-deps
@@ -171,10 +181,6 @@ run npx -y skills add vercel-labs/agent-browser --skill agent-browser --agent cl
 # Playwright MCP
 claude mcp remove playwright --scope user
 run "claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"
-
-# Figma plugin
-run claude plugin install figma@claude-plugins-official
-run claude plugin update figma@claude-plugins-official
 
 # Serena MCP -- uvx --python: short -p clashes with claude -p past `--`
 claude mcp remove serena --scope user
@@ -242,6 +248,14 @@ if [ -n "$LOGIN_USER" ]; then
 
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin marketplace update claude-plugins-official"'
 
+    # Security-guidance plugin (disabled by default)
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install security-guidance@claude-plugins-official"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin disable security-guidance@claude-plugins-official"'
+
+    # Figma plugin
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install figma@claude-plugins-official"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin update figma@claude-plugins-official"'
+
     # agent-browser
     run sudo -i -u $LOGIN_USER bash -i -c '"CI=1 npm install -g agent-browser"'
     run sudo -i -u $LOGIN_USER bash -i -c '"agent-browser install --with-deps"'
@@ -250,10 +264,6 @@ if [ -n "$LOGIN_USER" ]; then
     # Playwright MCP
     sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove playwright --scope user"
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"'
-
-    # Figma plugin
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install figma@claude-plugins-official"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin update figma@claude-plugins-official"'
 
     # Serena MCP -- uvx --python: short -p clashes with claude -p past `--`
     sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove serena --scope user"
