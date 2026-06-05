@@ -2,7 +2,7 @@
 
 # Installs Claude Code extensions as an opt-in step after the base setup.
 #
-#   Managed skills/hooks  Guardrail skills + hooks into /etc/claude-code/ and ~/.claude/
+#   Skills/hooks        Guardrail skills + hooks into /etc/claude-code/ and ~/.claude/
 #
 #   Security plugin     Anthropic official plugin for a security gate
 #
@@ -15,8 +15,9 @@
 #   Codegraph MCP       Tree-sitter + SQLite MCP (stdio)
 #
 #   Cloud-run MCP       Google Cloud Run MCP (stdio; deploy/logs)
-#   Google MCP Toolbox  For Databases (stdio; BigQuery prebuilt)
+#   Toolbox MCP         Google database access MCP (stdio; BigQuery prebuilt)
 #   Vercel CLI          Vercel CLI + Vercel MCP (remote http) + Vercel plugin (skills/commands)
+
 
 [ "$EUID" = 0 ] || {
     echo "Please run as root"
@@ -25,14 +26,12 @@
 
 
 
-command -v sudo >/dev/null      || { echo "Cannot find sudo"; exit 1; }
-command -v claude >/dev/null    || { echo "Cannot find claude"; exit 1; }
-command -v tty       >/dev/null || { echo "Cannot find tty";         exit 1; }
-command -v readlink  >/dev/null || { echo "Cannot find readlink";    exit 1; }
-command -v cmp       >/dev/null || { echo "Cannot find cmp";         exit 1; }
+command -v tty      >/dev/null || { echo "Cannot find tty";         exit 1; }
+command -v readlink >/dev/null || { echo "Cannot find readlink";    exit 1; }
+command -v cmp      >/dev/null || { echo "Cannot find cmp";         exit 1; }
+command -v claude   >/dev/null || { echo "Cannot find claude";      exit 1; }
 
 
-# Repository root (one level up from extra/)
 TOP_DIR=$(dirname "$(dirname "$(realpath "${BASH_SOURCE[0]}")")")
 
 
@@ -102,8 +101,6 @@ copy()
 }
 
 
-# Mirror files/$1's children into $2 (DST contents are wiped first).
-# Top-level __pycache__ in source is skipped to avoid deploying Python bytecode.
 copy_dir()
 {
     DNAME=files/${1%/}
@@ -134,11 +131,11 @@ copy_dir()
 export PATH="$HOME/.local/bin:$PATH"
 
 
-# Deploy the managed hooks / skills into /etc/claude-code/
+# Deploy the managed hooks and skills
 copy_dir        claude_managed-hooks/                       /etc/claude-code/hooks/
 copy_dir        claude_managed-skills/                      /etc/claude-code/skills/
 
-# Populate ~/.claude/ hooks
+# Deploy the user hooks
 copy --nobackup claude_user-hooks/check_commit_author.py    ~/.claude/hooks/check_commit_author.py
 copy --nobackup claude_user-hooks/push_prompting_check.py   ~/.claude/hooks/push_prompting_check.py
 copy --nobackup claude_user-hooks/memory_surface.py         ~/.claude/hooks/memory_surface.py
@@ -151,6 +148,7 @@ for skill_dir in */; do
     copy_dir "claude_user-skills/$skill_dir" ~/.claude/skills/$skill_dir
 done
 popd >/dev/null
+
 
 # Symlink the managed skills
 run install --directory ~/.claude/skills/
@@ -173,7 +171,7 @@ run claude plugin disable security-guidance@claude-plugins-official
 run claude plugin install figma@claude-plugins-official
 run claude plugin update figma@claude-plugins-official
 
-# agent-browser
+# Agent-browser
 run CI=1 npm install -g agent-browser
 run agent-browser install --with-deps
 run npx -y skills add vercel-labs/agent-browser --skill agent-browser --agent claude-code --global --yes
@@ -182,7 +180,7 @@ run npx -y skills add vercel-labs/agent-browser --skill agent-browser --agent cl
 claude mcp remove playwright --scope user
 run "claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"
 
-# Serena MCP -- uvx --python: short -p clashes with claude -p past `--`
+# Serena MCP
 claude mcp remove serena --scope user
 run "claude mcp add serena --scope user -e SERENA_USAGE_REPORTING=false -- uvx --python 3.13 --from git+https://github.com/oraios/serena serena start-mcp-server --context claude-code --project-from-cwd --enable-web-dashboard false"
 
@@ -204,6 +202,7 @@ run npm install -g @vercel/vc-native
 run CI=1 npx -y plugins add vercel/vercel-plugin --yes
 run claude plugin update vercel@claude-plugins-official
 
+
 run claude mcp list
 run claude plugin list
 
@@ -221,7 +220,7 @@ if [ -n "$LOGIN_USER" ]; then
     run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory $LOGIN_HOME/.claude/hooks
     run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory $LOGIN_HOME/.claude/skills
 
-    # Populate $LOGIN_HOME/.claude/ hooks
+    # Deploy $LOGIN_HOME/.claude/ hooks
     copy --nobackup claude_user-hooks/check_commit_author.py    $LOGIN_HOME/.claude/hooks/check_commit_author.py  --owner $LOGIN_USER --group $LOGIN_GROUP
     copy --nobackup claude_user-hooks/push_prompting_check.py   $LOGIN_HOME/.claude/hooks/push_prompting_check.py --owner $LOGIN_USER --group $LOGIN_GROUP
     copy --nobackup claude_user-hooks/memory_surface.py         $LOGIN_HOME/.claude/hooks/memory_surface.py       --owner $LOGIN_USER --group $LOGIN_GROUP
@@ -256,7 +255,7 @@ if [ -n "$LOGIN_USER" ]; then
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install figma@claude-plugins-official"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin update figma@claude-plugins-official"'
 
-    # agent-browser
+    # Agent-browser
     run sudo -i -u $LOGIN_USER bash -i -c '"CI=1 npm install -g agent-browser"'
     run sudo -i -u $LOGIN_USER bash -i -c '"agent-browser install --with-deps"'
     run sudo -i -u $LOGIN_USER bash -i -c '"npx -y skills add vercel-labs/agent-browser --skill agent-browser --agent claude-code --global --yes"'
@@ -265,7 +264,7 @@ if [ -n "$LOGIN_USER" ]; then
     sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove playwright --scope user"
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"'
 
-    # Serena MCP -- uvx --python: short -p clashes with claude -p past `--`
+    # Serena MCP
     sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove serena --scope user"
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add serena --scope user -e SERENA_USAGE_REPORTING=false -- uvx --python 3.13 --from git+https://github.com/oraios/serena serena start-mcp-server --context claude-code --project-from-cwd --enable-web-dashboard false"'
 
@@ -282,13 +281,14 @@ if [ -n "$LOGIN_USER" ]; then
     sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove toolbox --scope user"
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add toolbox --scope user -- npx -y @toolbox-sdk/server@latest --prebuilt=bigquery --stdio"'
 
-    # Vercel CLI + plugin (MCP comes from the plugin)
+    # Vercel CLI
     run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g @vercel/vc-native"'
     run sudo -i -u $LOGIN_USER bash -i -c '"CI=1 npx -y plugins add vercel/vercel-plugin --yes"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin update vercel@claude-plugins-official"'
 
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp list"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin list"'
+
 else
     echo -e "${COLOR_RED}No login user found... omitting to install extensions for the login user${COLOR_CLEAR}"
     echo ""
