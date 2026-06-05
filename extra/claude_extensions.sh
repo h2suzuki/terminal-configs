@@ -152,13 +152,15 @@ for skill_dir in */; do
 done
 popd >/dev/null
 
-# Symlink the org skills
+# Symlink the managed skills
 run install --directory ~/.claude/skills/
 for skill_dir in /etc/claude-code/skills/*; do
     [ -d "$skill_dir" ] || continue
     rm -rf ~/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
     run ln -sfn "$skill_dir" ~/.claude/skills/
 done
+# Prune dangling symlinks (skills renamed/removed since a prior run)
+run find ~/.claude/skills/ -maxdepth 1 -xtype l -delete
 
 
 run claude plugin marketplace update claude-plugins-official
@@ -233,7 +235,7 @@ if [ -n "$LOGIN_USER" ]; then
     done
     popd >/dev/null
 
-    # Symlink the org skills
+    # Symlink the managed skills
     run install --directory $LOGIN_HOME/.claude/skills/ --owner $LOGIN_USER --group $LOGIN_GROUP
     for skill_dir in /etc/claude-code/skills/*; do
         [ -d "$skill_dir" ] || continue
@@ -241,6 +243,8 @@ if [ -n "$LOGIN_USER" ]; then
         run ln -sfn "$skill_dir" $LOGIN_HOME/.claude/skills/
         run chown -h $LOGIN_USER:$LOGIN_GROUP $LOGIN_HOME/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
     done
+    # Prune dangling symlinks (skills renamed/removed since a prior run)
+    run find $LOGIN_HOME/.claude/skills/ -maxdepth 1 -xtype l -delete
 
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin marketplace update claude-plugins-official"'
 
