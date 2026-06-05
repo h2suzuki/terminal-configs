@@ -1,0 +1,73 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(Read|Edit|MultiEdit)$",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/read_before_edit.py check" } ]
+      },
+      {
+        "matcher": "^(Edit|Write|MultiEdit)$",
+        "hooks": [
+          { "type": "command", "command": "/etc/claude-code/hooks/dangling_ref_check.py" },
+          { "type": "command", "command": "/etc/claude-code/hooks/memory_routing_gate.py guard" },
+          { "type": "command", "command": "/etc/claude-code/hooks/skill_reminder_gate.py gate" },
+          { "type": "command", "command": "/etc/claude-code/hooks/comment_rationale_gate.py" }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "/etc/claude-code/hooks/avoid_cd.py" },
+          { "type": "command", "command": "/etc/claude-code/hooks/deny_compound_git_add.py" },
+          { "type": "command", "command": "/etc/claude-code/hooks/deny_compound_git_commit.py" },
+          { "type": "command", "command": "/etc/claude-code/hooks/check_commit_format.py" }
+        ]
+      },
+      {
+        "matcher": "^(Task|Agent)$",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/subagent_gate_warn.py" } ]
+      },
+      {
+        "matcher": "^AskUserQuestion$",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/declare_and_proceed_gate.py" } ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [ { "type": "command", "command": "~/.claude/hooks/check_commit_author.py h2suzuki@gmail.com" } ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(Read|Write)$",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/read_before_edit.py record" } ]
+      },
+      {
+        "matcher": "^Write$",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/memory_routing_gate.py sync" } ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/detect_cwd_pollution.py" } ]
+      }
+    ],
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/claude-md-lint.sh", "timeout": 120 } ] },
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/feature_findings_build.py", "timeout": 30 } ] },
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/session_resume_context.py" } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/handoff_uncommitted_check.py" } ] },
+      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/memory_surface.py" } ] },
+      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/subagent_gate_suggest.py" } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/stop_checks.py" } ] },
+      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/push_prompting_check.py" } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/session_cleanup.py" } ] }
+    ]
+  }
+}

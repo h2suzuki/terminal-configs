@@ -135,6 +135,9 @@ export PATH="$HOME/.local/bin:$PATH"
 copy_dir        claude_managed-hooks/                       /etc/claude-code/hooks/
 copy_dir        claude_managed-skills/                      /etc/claude-code/skills/
 
+# Register the hooks via a managed-settings drop-in (base settings stay hook-free)
+copy --nobackup claude_managed-extensions.json             /etc/claude-code/managed-settings.d/extensions.json
+
 # Deploy the user hooks
 copy --nobackup claude_user-hooks/check_commit_author.py    ~/.claude/hooks/check_commit_author.py
 copy --nobackup claude_user-hooks/push_prompting_check.py   ~/.claude/hooks/push_prompting_check.py
