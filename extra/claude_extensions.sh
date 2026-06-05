@@ -2,6 +2,8 @@
 
 # Installs Claude Code extensions as an opt-in step after the base setup.
 #
+#   Managed skills/hooks  Guardrail skills + hooks into /etc/claude-code/ and ~/.claude/
+#
 #   Figma plugin        Claude-to-figma plugin (a remote MCP + skills)
 #
 #   Agent-browser CLI   Vercel Labs CLI + Claude Code skill
@@ -23,6 +25,13 @@
 
 command -v sudo >/dev/null      || { echo "Cannot find sudo"; exit 1; }
 command -v claude >/dev/null    || { echo "Cannot find claude"; exit 1; }
+command -v tty       >/dev/null || { echo "Cannot find tty";         exit 1; }
+command -v readlink  >/dev/null || { echo "Cannot find readlink";    exit 1; }
+command -v cmp       >/dev/null || { echo "Cannot find cmp";         exit 1; }
+
+
+# Repository root (one level up from extra/)
+TOP_DIR=$(dirname "$(dirname "$(realpath "${BASH_SOURCE[0]}")")")
 
 
 if tty -s >/dev/null; then
@@ -54,8 +63,103 @@ run()
 }
 
 
+copy()
+{
+    BACKUP=1
+    [ "$1" = "--nobackup" ] && { BACKUP=0; shift; }
+
+    FNAME="files/$1"
+    DST="$2"
+    shift 2
+
+    # When the caller did not pass -m, default the mode by extension:
+    #   *.md / *.json / *.jsonl  -> 0644 (read-only data)
+    #   else                     -> 0755 (matches install's own default;
+    #                                     scripts / configs)
+    # Security-sensitive targets (sudoers, secrets) must pass -m explicitly.
+    case " $* " in
+        *" -m "*) ;;
+        *)
+            case "$FNAME" in
+                *.md|*.json|*.jsonl) set -- -m 0644 "$@" ;;
+                *)                   set -- -m 0755 "$@" ;;
+            esac
+            ;;
+    esac
+
+    if [ -e "$DST" ]; then
+        if cmp -s "$TOP_DIR/$FNAME" "$DST"; then
+            echo -e "=> ${COLOR_YELLOW}$FNAME is already copied${COLOR_CLEAR}\n"
+        else
+            [ $BACKUP -eq 0 -o -e "$DST.org" ] || run install $@ "$DST" "$DST.org"
+            run install "$@" "$TOP_DIR/$FNAME" "$DST"
+        fi
+    else
+        run install -D "$@" "$TOP_DIR/$FNAME" "$DST"
+    fi
+}
+
+
+# Mirror files/$1's children into $2 (DST contents are wiped first).
+# Top-level __pycache__ in source is skipped to avoid deploying Python bytecode.
+copy_dir()
+{
+    DNAME=files/${1%/}
+    DST=${2%/}
+    shift 2
+
+    # Pick up --owner from "$@" so we can chown -R after cp (cp -r ignores --owner).
+    OWNER=
+    prev=
+    for a in "$@"; do
+        [ "$prev" = "--owner" ] && { OWNER=$a; break; }
+        case "$a" in --owner=*) OWNER=${a#--owner=}; break;; esac
+        prev=$a
+    done
+
+    [ -d "$DST" ] || { rm -rf "$DST"; run install --directory "$@" "$DST"; }
+    rm -rf "$DST"/*
+    for child in "$TOP_DIR/$DNAME"/*; do
+        [ -e "$child" ] || continue   # empty source dir: glob stays literal
+        [ "${child##*/}" = __pycache__ ] && continue
+        run cp -r "$child" "$DST/"
+    done
+    [ -n "$OWNER" ] && run chown -R "$OWNER:" "$DST"
+}
+
+
 . $HOME/.nvm/nvm.sh
 export PATH="$HOME/.local/bin:$PATH"
+
+
+# Deploy the managed hooks / skills into /etc/claude-code/
+copy_dir        claude_managed-hooks/                       /etc/claude-code/hooks/
+copy_dir        claude_managed-skills/                      /etc/claude-code/skills/
+
+# Populate ~/.claude/ hooks
+copy --nobackup claude_user-hooks/check_commit_author.py    ~/.claude/hooks/check_commit_author.py
+copy --nobackup claude_user-hooks/push_prompting_check.py   ~/.claude/hooks/push_prompting_check.py
+copy --nobackup claude_user-hooks/memory_surface.py         ~/.claude/hooks/memory_surface.py
+copy --nobackup claude_user-hooks/subagent_gate_suggest.py  ~/.claude/hooks/subagent_gate_suggest.py
+
+# Install the user skills (dir absent when no user skills exist)
+if [ -d "$TOP_DIR"/files/claude_user-skills ]; then
+    pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
+    for skill_dir in */; do
+        [ -d "$skill_dir" ] || continue
+        copy_dir "claude_user-skills/$skill_dir" ~/.claude/skills/$skill_dir
+    done
+    popd >/dev/null
+fi
+
+# Symlink the org skills
+run install --directory ~/.claude/skills/
+for skill_dir in /etc/claude-code/skills/*; do
+    [ -d "$skill_dir" ] || continue
+    rm -rf ~/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
+    run ln -sfn "$skill_dir" ~/.claude/skills/
+done
+
 
 run claude plugin marketplace update claude-plugins-official
 
@@ -101,6 +205,40 @@ run claude plugin list
 LOGIN_USER="$(logname)"
 [ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
 if [ -n "$LOGIN_USER" ]; then
+
+    LOGIN_GROUP="$(id -gn "$LOGIN_USER")"
+    LOGIN_HOME="$(getent passwd "$LOGIN_USER" | cut -d: -f6)"
+    [ -n "$LOGIN_HOME" ] || LOGIN_HOME="/home/$LOGIN_USER"
+
+    # Pre-create user-owned parents — `install -D/-d --owner` only owners the final component.
+    run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory $LOGIN_HOME/.claude
+    run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory $LOGIN_HOME/.claude/hooks
+    run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory $LOGIN_HOME/.claude/skills
+
+    # Populate $LOGIN_HOME/.claude/ hooks
+    copy --nobackup claude_user-hooks/check_commit_author.py    $LOGIN_HOME/.claude/hooks/check_commit_author.py  --owner $LOGIN_USER --group $LOGIN_GROUP
+    copy --nobackup claude_user-hooks/push_prompting_check.py   $LOGIN_HOME/.claude/hooks/push_prompting_check.py --owner $LOGIN_USER --group $LOGIN_GROUP
+    copy --nobackup claude_user-hooks/memory_surface.py         $LOGIN_HOME/.claude/hooks/memory_surface.py       --owner $LOGIN_USER --group $LOGIN_GROUP
+    copy --nobackup claude_user-hooks/subagent_gate_suggest.py  $LOGIN_HOME/.claude/hooks/subagent_gate_suggest.py --owner $LOGIN_USER --group $LOGIN_GROUP
+
+    # Install the user skills (dir absent when no user skills exist)
+    if [ -d "$TOP_DIR"/files/claude_user-skills ]; then
+        pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
+        for skill_dir in */; do
+            [ -d "$skill_dir" ] || continue
+            copy_dir "claude_user-skills/$skill_dir" $LOGIN_HOME/.claude/skills/$skill_dir --owner $LOGIN_USER --group $LOGIN_GROUP
+        done
+        popd >/dev/null
+    fi
+
+    # Symlink the org skills
+    run install --directory $LOGIN_HOME/.claude/skills/ --owner $LOGIN_USER --group $LOGIN_GROUP
+    for skill_dir in /etc/claude-code/skills/*; do
+        [ -d "$skill_dir" ] || continue
+        rm -rf $LOGIN_HOME/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
+        run ln -sfn "$skill_dir" $LOGIN_HOME/.claude/skills/
+        run chown -h $LOGIN_USER:$LOGIN_GROUP $LOGIN_HOME/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
+    done
 
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin marketplace update claude-plugins-official"'
 

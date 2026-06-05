@@ -95,35 +95,6 @@ copy()
 }
 
 
-# Mirror files/$1's children into $2 (DST contents are wiped first).
-# Top-level __pycache__ in source is skipped to avoid deploying Python bytecode.
-copy_dir()
-{
-    DNAME=files/${1%/}
-    DST=${2%/}
-    shift 2
-
-    # Pick up --owner from "$@" so we can chown -R after cp (cp -r ignores --owner).
-    OWNER=
-    prev=
-    for a in "$@"; do
-        [ "$prev" = "--owner" ] && { OWNER=$a; break; }
-        case "$a" in --owner=*) OWNER=${a#--owner=}; break;; esac
-        prev=$a
-    done
-
-    [ -d "$DST" ] || { rm -rf "$DST"; run install --directory "$@" "$DST"; }
-    rm -rf "$DST"/*
-    for child in "$TOP_DIR/$DNAME"/*; do
-        [ -e "$child" ] || continue   # empty source dir: glob stays literal
-        [ "${child##*/}" = __pycache__ ] && continue
-        run cp -r "$child" "$DST/"
-    done
-    [ -n "$OWNER" ] && run chown -R "$OWNER:" "$DST"
-}
-
-
-
 [ -e ~/.bashrc ] &&
 run sed -i ~/.bashrc \
     -e '/export\ LS_OPTIONS/s/^\ *#*\ *//' \
@@ -359,35 +330,11 @@ rm -rf /etc/claude-code/
 copy --nobackup claude_statusline.sh                        /etc/claude-code/statusline.sh
 copy --nobackup claude_managed-CLAUDE.md                    /etc/claude-code/CLAUDE.md
 copy --nobackup claude_managed-settings.json                /etc/claude-code/managed-settings.json
-copy_dir        claude_managed-hooks/                       /etc/claude-code/hooks/
-copy_dir        claude_managed-skills/                      /etc/claude-code/skills/
 
 # Populate ~/.claude/ (try to preserve the existing contents)
 [ -e ~/.claude/CLAUDE.md ] ||
 copy --nobackup claude_user-CLAUDE.md                       ~/.claude/CLAUDE.md
 copy --nobackup claude_user-settings.json                   ~/.claude/settings.json
-copy --nobackup claude_user-hooks/check_commit_author.py    ~/.claude/hooks/check_commit_author.py
-copy --nobackup claude_user-hooks/push_prompting_check.py   ~/.claude/hooks/push_prompting_check.py
-copy --nobackup claude_user-hooks/memory_surface.py         ~/.claude/hooks/memory_surface.py
-copy --nobackup claude_user-hooks/subagent_gate_suggest.py  ~/.claude/hooks/subagent_gate_suggest.py
-
-# Install the user skills (dir absent when no user skills exist)
-if [ -d "$TOP_DIR"/files/claude_user-skills ]; then
-    pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
-    for skill_dir in */; do
-        [ -d "$skill_dir" ] || continue
-        copy_dir "claude_user-skills/$skill_dir" ~/.claude/skills/$skill_dir
-    done
-    popd >/dev/null
-fi
-
-# Symlink the org skills
-run install --directory ~/.claude/skills/
-for skill_dir in /etc/claude-code/skills/*; do
-    [ -d "$skill_dir" ] || continue
-    rm -rf ~/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
-    run ln -sfn "$skill_dir" ~/.claude/skills/
-done
 
 run "claude --model haiku --effort low --no-session-persistence --tools \"\" --setting-sources \"\" --disable-slash-commands -p hello || true"
 
@@ -493,36 +440,11 @@ EOF
 
     # Pre-create user-owned parents — `install -D/-d --owner` only owners the final component.
     run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory $LOGIN_HOME/.claude
-    run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory $LOGIN_HOME/.claude/hooks
-    run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory $LOGIN_HOME/.claude/skills
 
     # Populate $LOGIN_HOME/.claude/ (try to preserve the existing contents)
     [ -e $LOGIN_HOME/.claude/CLAUDE.md ] ||
     copy --nobackup claude_user-CLAUDE.md                       $LOGIN_HOME/.claude/CLAUDE.md --owner $LOGIN_USER --group $LOGIN_GROUP
     copy --nobackup claude_user-settings.json                   $LOGIN_HOME/.claude/settings.json --owner $LOGIN_USER --group $LOGIN_GROUP
-    copy --nobackup claude_user-hooks/check_commit_author.py    $LOGIN_HOME/.claude/hooks/check_commit_author.py  --owner $LOGIN_USER --group $LOGIN_GROUP
-    copy --nobackup claude_user-hooks/push_prompting_check.py   $LOGIN_HOME/.claude/hooks/push_prompting_check.py --owner $LOGIN_USER --group $LOGIN_GROUP
-    copy --nobackup claude_user-hooks/memory_surface.py         $LOGIN_HOME/.claude/hooks/memory_surface.py       --owner $LOGIN_USER --group $LOGIN_GROUP
-    copy --nobackup claude_user-hooks/subagent_gate_suggest.py  $LOGIN_HOME/.claude/hooks/subagent_gate_suggest.py --owner $LOGIN_USER --group $LOGIN_GROUP
-
-    # Install the user skills (dir absent when no user skills exist)
-    if [ -d "$TOP_DIR"/files/claude_user-skills ]; then
-        pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
-        for skill_dir in */; do
-            [ -d "$skill_dir" ] || continue
-            copy_dir "claude_user-skills/$skill_dir" $LOGIN_HOME/.claude/skills/$skill_dir --owner $LOGIN_USER --group $LOGIN_GROUP
-        done
-        popd >/dev/null
-    fi
-
-    # Symlink the org skills
-    run install --directory $LOGIN_HOME/.claude/skills/ --owner $LOGIN_USER --group $LOGIN_GROUP
-    for skill_dir in /etc/claude-code/skills/*; do
-        [ -d "$skill_dir" ] || continue
-        rm -rf $LOGIN_HOME/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
-        run ln -sfn "$skill_dir" $LOGIN_HOME/.claude/skills/
-        run chown -h $LOGIN_USER:$LOGIN_GROUP $LOGIN_HOME/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
-    done
 
     run sudo -i -u $LOGIN_USER bash -i -c '"claude --model haiku --effort low --no-session-persistence --tools \"\" --setting-sources \"\" --disable-slash-commands -p hello || true"'
 
