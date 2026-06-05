@@ -296,8 +296,8 @@ copy --nobackup claude_managed-settings.json                /etc/claude-code/man
 copy --nobackup claude_user-CLAUDE.md                       ~/.claude/CLAUDE.md
 copy --nobackup claude_user-settings.json                   ~/.claude/settings.json
 
+# Warm up Claude Code
 run "claude --model haiku --effort low --no-session-persistence --tools \"\" --setting-sources \"\" --disable-slash-commands -p hello || true"
-
 
 # Tools used by Claude Code (bubblewrap/socat: Sandbox, poppler-utils: PDF reading)
 run apt install -y --no-install-recommends \
