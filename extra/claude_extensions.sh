@@ -144,15 +144,13 @@ copy --nobackup claude_user-hooks/push_prompting_check.py   ~/.claude/hooks/push
 copy --nobackup claude_user-hooks/memory_surface.py         ~/.claude/hooks/memory_surface.py
 copy --nobackup claude_user-hooks/subagent_gate_suggest.py  ~/.claude/hooks/subagent_gate_suggest.py
 
-# Install the user skills (dir absent when no user skills exist)
-if [ -d "$TOP_DIR"/files/claude_user-skills ]; then
-    pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
-    for skill_dir in */; do
-        [ -d "$skill_dir" ] || continue
-        copy_dir "claude_user-skills/$skill_dir" ~/.claude/skills/$skill_dir
-    done
-    popd >/dev/null
-fi
+# Deploy the user skills
+pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
+for skill_dir in */; do
+    [ -d "$skill_dir" ] || continue
+    copy_dir "claude_user-skills/$skill_dir" ~/.claude/skills/$skill_dir
+done
+popd >/dev/null
 
 # Symlink the org skills
 run install --directory ~/.claude/skills/
@@ -227,15 +225,13 @@ if [ -n "$LOGIN_USER" ]; then
     copy --nobackup claude_user-hooks/memory_surface.py         $LOGIN_HOME/.claude/hooks/memory_surface.py       --owner $LOGIN_USER --group $LOGIN_GROUP
     copy --nobackup claude_user-hooks/subagent_gate_suggest.py  $LOGIN_HOME/.claude/hooks/subagent_gate_suggest.py --owner $LOGIN_USER --group $LOGIN_GROUP
 
-    # Install the user skills (dir absent when no user skills exist)
-    if [ -d "$TOP_DIR"/files/claude_user-skills ]; then
-        pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
-        for skill_dir in */; do
-            [ -d "$skill_dir" ] || continue
-            copy_dir "claude_user-skills/$skill_dir" $LOGIN_HOME/.claude/skills/$skill_dir --owner $LOGIN_USER --group $LOGIN_GROUP
-        done
-        popd >/dev/null
-    fi
+    # Deploy the user skills (dir absent when no user skills exist)
+    pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
+    for skill_dir in */; do
+        [ -d "$skill_dir" ] || continue
+        copy_dir "claude_user-skills/$skill_dir" $LOGIN_HOME/.claude/skills/$skill_dir --owner $LOGIN_USER --group $LOGIN_GROUP
+    done
+    popd >/dev/null
 
     # Symlink the org skills
     run install --directory $LOGIN_HOME/.claude/skills/ --owner $LOGIN_USER --group $LOGIN_GROUP
