@@ -135,14 +135,18 @@ export PATH="$HOME/.local/bin:$PATH"
 copy_dir        claude_managed-hooks/                       /etc/claude-code/hooks/
 copy_dir        claude_managed-skills/                      /etc/claude-code/skills/
 
-# Register the hooks via a managed-settings drop-in (base settings stay hook-free)
+# Register the managed hooks
 copy --nobackup claude_managed-extensions.json             /etc/claude-code/managed-settings.d/extensions.json
+
+# Install the user-hook injector
+copy --nobackup claude_user_settings                       /usr/local/bin/claude_user_settings -m 0755
 
 # Deploy the user hooks
 copy --nobackup claude_user-hooks/check_commit_author.py    ~/.claude/hooks/check_commit_author.py
 copy --nobackup claude_user-hooks/push_prompting_check.py   ~/.claude/hooks/push_prompting_check.py
 copy --nobackup claude_user-hooks/memory_surface.py         ~/.claude/hooks/memory_surface.py
 copy --nobackup claude_user-hooks/subagent_gate_suggest.py  ~/.claude/hooks/subagent_gate_suggest.py
+run claude_user_settings inject "$TOP_DIR/files/claude_user-extensions.json"
 
 # Deploy the user skills
 pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
@@ -228,6 +232,7 @@ if [ -n "$LOGIN_USER" ]; then
     copy --nobackup claude_user-hooks/push_prompting_check.py   $LOGIN_HOME/.claude/hooks/push_prompting_check.py --owner $LOGIN_USER --group $LOGIN_GROUP
     copy --nobackup claude_user-hooks/memory_surface.py         $LOGIN_HOME/.claude/hooks/memory_surface.py       --owner $LOGIN_USER --group $LOGIN_GROUP
     copy --nobackup claude_user-hooks/subagent_gate_suggest.py  $LOGIN_HOME/.claude/hooks/subagent_gate_suggest.py --owner $LOGIN_USER --group $LOGIN_GROUP
+    run sudo -i -u $LOGIN_USER claude_user_settings inject "$TOP_DIR/files/claude_user-extensions.json"
 
     # Deploy the user skills (dir absent when no user skills exist)
     pushd "$TOP_DIR"/files/claude_user-skills >/dev/null

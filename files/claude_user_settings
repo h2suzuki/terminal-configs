@@ -1,0 +1,42 @@
+#!/bin/bash
+
+# Pseudo drop-in for ~/.claude/settings.json (Claude Code has no user settings.d).
+#
+#   Usage: claude_user_settings {inject|remove} <fragment.json>
+
+command -v jq >/dev/null || { echo "Cannot find jq"; exit 1; }
+
+CMD="$1"
+FRAGMENT="$2"
+if [ -z "$CMD" ] || [ -z "$FRAGMENT" ]; then
+    echo "Usage: $(basename "$0") {inject|remove} <fragment.json>"; exit 1
+fi
+[ -s "$FRAGMENT" ] || { echo "Fragment not found: $FRAGMENT"; exit 1; }
+
+TARGET="$HOME/.claude/settings.json"
+[ -s "$TARGET" ] || { echo "Target not found: $TARGET"; exit 1; }
+
+# inject appends missing hooks (idempotent); remove deletes them and prunes empties
+case "$CMD" in
+    inject)
+        FILTER='($frag[0].hooks // {}) as $fh
+            | reduce ($fh | keys_unsorted[]) as $ev (.;
+                .hooks[$ev] = ((.hooks[$ev] // []) + ($fh[$ev] - (.hooks[$ev] // []))))'
+        ;;
+    remove)
+        FILTER='($frag[0].hooks // {}) as $fh
+            | reduce ($fh | keys_unsorted[]) as $ev (.;
+                .hooks[$ev] = ((.hooks[$ev] // []) - $fh[$ev])
+                | if (.hooks[$ev] | length) == 0 then del(.hooks[$ev]) else . end)
+            | if (.hooks // {} | length) == 0 then del(.hooks) else . end'
+        ;;
+    *)
+        echo "Unknown command: $CMD (expected inject|remove)"; exit 1 ;;
+esac
+
+TMP=$(mktemp "$TARGET.XXXXXX") || { echo "mktemp failed"; exit 1; }
+trap 'rm -f "$TMP"' EXIT
+
+jq --slurpfile frag "$FRAGMENT" "$FILTER" "$TARGET" > "$TMP" || { echo "jq transform failed"; exit 1; }
+chmod --reference="$TARGET" "$TMP"
+mv "$TMP" "$TARGET"

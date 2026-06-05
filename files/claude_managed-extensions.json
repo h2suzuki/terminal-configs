@@ -30,10 +30,6 @@
       {
         "matcher": "^AskUserQuestion$",
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/declare_and_proceed_gate.py" } ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [ { "type": "command", "command": "~/.claude/hooks/check_commit_author.py h2suzuki@gmail.com" } ]
       }
     ],
     "PostToolUse": [
@@ -58,13 +54,10 @@
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/session_resume_context.py" } ] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/handoff_uncommitted_check.py" } ] },
-      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/memory_surface.py" } ] },
-      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/subagent_gate_suggest.py" } ] }
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/handoff_uncommitted_check.py" } ] }
     ],
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/stop_checks.py" } ] },
-      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/push_prompting_check.py" } ] }
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/stop_checks.py" } ] }
     ],
     "SessionEnd": [
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/session_cleanup.py" } ] }
