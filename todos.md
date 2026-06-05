@@ -85,6 +85,7 @@ Goal: agent-browser (Vercel skill+CLI) / Playwright MCP (Microsoft @playwright/m
 Exit Criteria:
 - [x] 実装 + 静的検証 (shellcheck clean / `bash -n` / 全 claude サブコマンド syntax を live 2.1.161 binary で裏とり)、 再実行 upgrade 対応 — commit 38d511f
 - [ ] 実機 fresh provisioning で end-to-end 実行確認: (a) skills CLI が `--agent claude-code` を受理し `~/.claude/skills` へ global install / (b) `agent-browser install` の apt-sudo 挙動 (system lib 不足時) / (c) figma plugin の install/update が非対話で通る / (d) playwright が system Chrome を headless 起動 / (e) PW_MCP_VER の runtime 解決が機能
+- [ ] 実機確認 (2026-06-05 hook settings 分離): managed hooks drop-in (`/etc/claude-code/managed-settings.d/extensions.json`) と user hooks の `claude_user_settings inject` が root / LOGIN_USER 双方の `~/.claude/settings.json` に反映され、 base-only 機は hook 登録ゼロ (dangling なし) であること
 
 決定事項 (rejected — 再検討時の参照): GitHub MCP 不採用 (gh と重複・優位性 incremental・Linux remote OAuth 不可 #3433、 案内のみ) / managed-mcp.json 不採用 (排他制御で plugin + claude.ai connector を suppress・単一ユーザー機に過剰) / Vercel Plugin 未採用 (依頼外・Next.js 開発向けの束、 欲しければ `npx plugins add vercel/vercel-plugin`) / per-user `claude mcp add -s user` 採用 (files/ deploy でなく runtime config ゆえ canonical-source 非該当)。
 
