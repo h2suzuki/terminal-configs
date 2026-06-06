@@ -4,23 +4,6 @@
 
 ## High
 
-### transcript turn 切り出し hook の後方読み最適化
-
-Goal: 現 turn を切り出す全 hook が transcript を全文 parse している無駄 (実測 mean 110KB/turn を毎回・長 session で O(N²)) を、 EOF からの後方ブロック読み (`_load_tail` / 128KiB) に置換し、 挙動を保ったまま現 turn 分だけ parse する。
-
-Exit Criteria:
-- [x] stop_checks.py (Stop): `_load_transcript`→`_load_tail`、 _current_turn 無改造。 corpus 4669 件で _current_turn 5-tuple 完全一致・unittest 8/8・ruff/ty clean・/etc deploy・commit 826a165
-- [x] push_prompting_check.py (Stop, user): 同パターン。 corpus 4669 件一致・h2suzuki+root deploy・commit f08ebb9
-- [x] skill_reminder_gate.py (PreToolUse, hot): **設計変更** — 旧 union を後方読みする `_load_window` 案は adversarial review (wtjo8nwin) が monotonicity 依存の under-read (corpus 218/4528 件 ts 逆行・最大17247s で正当編集を誤 DENY し得る) を confirmed ゆえ破棄。統一 `_load_tail(turns=1)` で現 turn のみ後方読み (boundary=positional ゆえ単調性非依存=sound) + `_active_skills` を「現 turn ∩ 直近300s」(>300s drop) に変更。検証: load_tail==現turn slice 全4528件 / synthetic 5/5 / 旧union比差23件全 drop-only(fail-safe)。commit 365cfee・deploy 済
-- [x] declare_and_proceed_gate.py (PreToolUse AskUserQuestion, hot): twin、 同形 `_load_tail(1)` + `_skill_active` 同変更。commit 365cfee・deploy 済
-- [x] session_resume_context.py (SessionStart): **設計変更** — 最後の assistant text 1件 → `_load_tail(turns=3)` で最終3turn の 👤/🤖 text 抽出 (handoff 捕捉、末尾=最新側残し truncate、MAX_INJECT_LEN 4000)。実機検証済。commit fd2cb5a・deploy 済
-- [x] 各 deploy 後 source==deploy 確認、 root 側は sudo (managed 4 + user h2suzuki/root、全 0755 SAME)
-- [x] A の `_load_tail` も turns=1 param で統一形に backport (stop_checks/push_prompting、挙動保全=corpus 4528 件 consumer 等価0mismatch・unittest 8/8)。commit e6e0793
-
-検証ハーネス: `_load_tail`/`_load_window` を import し old 全文 parse 経路と新後方経路を corpus (`~/.claude/projects/*/*.jsonl` 4669 件) で突き合わせ。 pending は別途 ~332k buffer-alignment ケースで検証済 (CR/LF・escaped-NL・multibyte・1byte buffer)。 buffer 128KiB は全 project 2545 turn 実測 (mean 110KB/p75 119KB) で ~77% を 1 read。
-
-Work file: `files/claude_managed-hooks/{stop_checks,skill_reminder_gate,declare_and_proceed_gate,session_resume_context}.py` + `files/claude_user-hooks/push_prompting_check.py` + handoff `last-session-handoff.md`
-
 ### memory_surface BM25+RAG hybrid (OSS 調査 → 導入)
 
 Goal: BM25 surfacer に意味検索 (embedding) 層を足し、 lexical で拾えない recall (terse/言い換え prompt・緊急 trigger) と precision を両立する。 SQLite 同等の導入容易さが理想 (2026-06-04 H.S. 方針)。
