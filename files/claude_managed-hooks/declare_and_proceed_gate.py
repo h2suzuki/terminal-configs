@@ -3,7 +3,7 @@ r"""PreToolUse:^AskUserQuestion$ deny-gate — declare-and-proceed enforcement.
 
 When the question is a DECIDABLE routing ("A経由かB経由か" / "どちらから調査") or
 per-unit/per-batch confirmation ("この draft で良い?"), the gate requires the
-declare-and-proceed skill be invoked in the current turn (∪ recent 5 min);
+declare-and-proceed skill be invoked in the current turn within the last 5 min;
 otherwise it DENIES via JSON permissionDecision so the 3-check (material 取得可? /
 default 可? / parallel 両立可?) runs BEFORE the question, not after.
 
@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import re
 import sys
 import time
@@ -97,21 +98,47 @@ def _detect(text: str) -> str | None:
 # --- current-turn skill scan ---
 
 
-def _load_transcript(path: str) -> list[dict]:
-    out: list[dict] = []
+_TAIL_BUFSIZE = 128 * 1024  # 後方読みブロック。実測 turn mean≈110KB を 1 read で覆う
+
+
+def _load_tail(path: str, turns: int = 1, bufsize: int = _TAIL_BUFSIZE) -> list[dict]:
+    """末尾から turn boundary を turns 個含むまで後方読みで返す; boundary が turns 未満なら全件。"""
     try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
+        with open(path, "rb") as f:
+            pos = f.seek(0, os.SEEK_END)
+            pending = b""  # 行頭が手前ブロックにある途中行 (次の読みで結合)
+            tail: list[dict] = []  # newest-first
+            seen = 0
+            while pos > 0:
+                step = min(bufsize, pos)
+                pos -= step
+                f.seek(pos)
+                parts = (f.read(step) + pending).split(b"\n")
+                pending = parts.pop(0)
+                for raw in reversed(parts):
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    tail.append(obj)
+                    if _is_turn_boundary(obj):
+                        seen += 1
+                        if seen >= turns:
+                            tail.reverse()
+                            return tail
+            line = pending.strip()  # BOF: 先頭断片は完全な 1 行
+            if line:
                 try:
-                    out.append(json.loads(line))
+                    tail.append(json.loads(line))
                 except json.JSONDecodeError:
-                    continue
+                    pass
+            tail.reverse()
+            return tail  # boundary < turns: 集めた全件
     except OSError:
         return []
-    return out
 
 
 def _is_turn_boundary(obj: dict) -> bool:
@@ -141,7 +168,7 @@ def _parse_ts(ts) -> float | None:
 def _skill_active(
     entries: list[dict], skill: str, now: float, window_s: int
 ) -> bool | None:
-    """target skill が 現 turn ∪ 直近 window_s 秒 に invoke 済か。boundary 不在は None (fail-open ALLOW)。
+    """target skill が 現 turn のうち直近 window_s 秒以内に invoke 済か (それより前は drop)。boundary 不在は None (fail-open ALLOW)。
 
     Skill 呼出形: assistant tool_use, name=="Skill", input=={"skill":"<name>"}.
     """
@@ -156,9 +183,11 @@ def _skill_active(
     for idx, obj in enumerate(entries):
         if obj.get("type") != "assistant":
             continue
+        if idx < start_idx:
+            continue  # 現 turn 外
         ep = _parse_ts(obj.get("timestamp"))
-        if not (idx >= start_idx or (ep is not None and ep >= cutoff)):
-            continue
+        if ep is not None and ep < cutoff:
+            continue  # 現 turn 内でも 300 秒以上前は drop
         msg = obj.get("message", {})
         content = msg.get("content") if isinstance(msg, dict) else None
         if not isinstance(content, list):
@@ -218,10 +247,13 @@ def cmd_gate(payload: dict) -> None:
     transcript_path = payload.get("transcript_path")
     if not isinstance(transcript_path, str) or not transcript_path:
         return  # fail-open
-    entries = _load_transcript(transcript_path)
+    now = time.time()
+    entries = _load_tail(
+        transcript_path, 1
+    )  # 現 turn のみ (drop は _skill_active が ts で実施)
     if not entries:
         return  # fail-open
-    active = _skill_active(entries, TARGET_SKILL, time.time(), SKILL_WINDOW_SECONDS)
+    active = _skill_active(entries, TARGET_SKILL, now, SKILL_WINDOW_SECONDS)
     if active is None or active:
         return  # fail-open (boundary 不在) / skill 当 turn invoke 済 → 通す
     _deny(hit)

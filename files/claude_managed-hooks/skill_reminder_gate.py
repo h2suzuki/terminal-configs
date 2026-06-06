@@ -31,7 +31,7 @@ gate flow:
   elif 拡張子あり → required = relevant_skills(path)
   else (拡張子なし・未宣言) → DENY「絶対 path で kind を declare せよ」; return
   required が空            → ALLOW (skill-less file。transcript 非読込)
-  active = 当 turn の Skill invoke 集合 (transcript current-turn scan)
+  active = 現 turn かつ直近 5 分以内の Skill invoke 集合 (現 turn を後方 1 つ読み ts で drop)
   active 判定不能 (corrupted) → ALLOW (fail-open)
   required ⊆ active        → ALLOW
   else                    → DENY「<missing> を invoke してから編集」
@@ -46,12 +46,12 @@ kind 語彙 → skill (additive。else 必須):
   memory → memory-routing  (実 gate は memory_routing_gate、本 hook は通す)
   else   → ∅  (skill の無い file。これが無いと拡張子なし file が Write 不能)
 
-skill-active 窓 (現 turn ∪ 直近 SKILL_WINDOW_SECONDS=5 分) の根拠
+skill-active 窓 (現 turn かつ直近 SKILL_WINDOW_SECONDS=5 分以内) の根拠
 ================================================================
-skill invoke で同 turn 内 + 直近 5 分を active とみなす。5 分窓は長い turn を跨ぐ
-作業の再 invoke friction を抑えつつ無関係な後続 turn が通るリスクをほぼ避ける。
-現 turn を union するのは >5 分の長い turn 内編集を誤 deny しないため (turn 内は
-entry 時刻に関係なく常に active)。
+現 turn を後方 1 つだけ読み (_load_tail、boundary は positional ゆえ ts 単調性に
+非依存で sound)、その中で直近 5 分以内に invoke された skill のみ active とみなす
+(5 分以上前は drop)。5 分は長い作業中の再 invoke friction 抑制と、無関係に古い
+invoke が通るリスク回避の折衷。現 turn のみ読むため cross-turn の recency は無い。
 
 turn boundary 判定 (load-bearing — 変更時は false-allow/deny を再発させる)
 =========================================================================
@@ -329,21 +329,47 @@ def _prune_old_sessions() -> None:
 # --- current-turn skill scan ---
 
 
-def _load_transcript(path: str) -> list[dict]:
-    out: list[dict] = []
+_TAIL_BUFSIZE = 128 * 1024  # 後方読みブロック。実測 turn mean≈110KB を 1 read で覆う
+
+
+def _load_tail(path: str, turns: int = 1, bufsize: int = _TAIL_BUFSIZE) -> list[dict]:
+    """末尾から turn boundary を turns 個含むまで後方読みで返す; boundary が turns 未満なら全件。"""
     try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
+        with open(path, "rb") as f:
+            pos = f.seek(0, os.SEEK_END)
+            pending = b""  # 行頭が手前ブロックにある途中行 (次の読みで結合)
+            tail: list[dict] = []  # newest-first
+            seen = 0
+            while pos > 0:
+                step = min(bufsize, pos)
+                pos -= step
+                f.seek(pos)
+                parts = (f.read(step) + pending).split(b"\n")
+                pending = parts.pop(0)
+                for raw in reversed(parts):
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    tail.append(obj)
+                    if _is_turn_boundary(obj):
+                        seen += 1
+                        if seen >= turns:
+                            tail.reverse()
+                            return tail
+            line = pending.strip()  # BOF: 先頭断片は完全な 1 行
+            if line:
                 try:
-                    out.append(json.loads(line))
+                    tail.append(json.loads(line))
                 except json.JSONDecodeError:
-                    continue
+                    pass
+            tail.reverse()
+            return tail  # boundary < turns: 集めた全件
     except OSError:
         return []
-    return out
 
 
 def _is_turn_boundary(obj: dict) -> bool:
@@ -372,7 +398,7 @@ def _parse_ts(ts) -> float | None:
 
 
 def _active_skills(entries: list[dict], now: float, window_s: int) -> set[str] | None:
-    """invoke 済 skill 集合 = 現 turn ∪ 直近 window_s 秒。boundary 不在は None (fail-open)。"""
+    """invoke 済 skill 集合 = 現 turn のうち直近 window_s 秒以内 (それより前は drop)。boundary 不在は None (fail-open)。"""
     start_idx = -1
     for i in range(len(entries) - 1, -1, -1):
         if _is_turn_boundary(entries[i]):
@@ -386,9 +412,11 @@ def _active_skills(entries: list[dict], now: float, window_s: int) -> set[str] |
     for idx, obj in enumerate(entries):
         if obj.get("type") != "assistant":
             continue
+        if idx < start_idx:
+            continue  # 現 turn 外
         ep = _parse_ts(obj.get("timestamp"))
-        if not (idx >= start_idx or (ep is not None and ep >= cutoff)):
-            continue
+        if ep is not None and ep < cutoff:
+            continue  # 現 turn 内でも 300 秒以上前は drop
         msg = obj.get("message", {})
         content = msg.get("content") if isinstance(msg, dict) else None
         if not isinstance(content, list):
@@ -484,10 +512,13 @@ def cmd_gate(payload: dict) -> None:
     transcript_path = payload.get("transcript_path")
     if not isinstance(transcript_path, str) or not transcript_path:
         return  # fail-open: enforce 不能なら止めない
-    entries = _load_transcript(transcript_path)
+    now = time.time()
+    entries = _load_tail(
+        transcript_path, 1
+    )  # 現 turn のみ (drop は _active_skills が ts で実施)
     if not entries:
         return  # fail-open
-    active = _active_skills(entries, time.time(), SKILL_WINDOW_SECONDS)
+    active = _active_skills(entries, now, SKILL_WINDOW_SECONDS)
     if active is None:
         return  # fail-open: boundary 不在
 
