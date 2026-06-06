@@ -295,21 +295,52 @@ def strip_fences(text: str) -> str:
     return re.sub(r"`[^`\n]*`", " ", text)
 
 
-def _load_transcript(path: str) -> list[dict]:
-    out: list[dict] = []
+_TAIL_BUFSIZE = 128 * 1024  # 実測 2545 turn の mean≈110KB / p75≈119KB を 1 read で覆う
+
+
+def _is_prompt(obj: dict) -> bool:
+    msg = obj.get("message", {})
+    return obj.get("type") == "user" and isinstance(msg.get("content"), str)
+
+
+def _load_tail(path: str, bufsize: int = _TAIL_BUFSIZE) -> list[dict]:
+    """現 turn のエントリ群 (先頭=直近の文字列 user prompt 行, EOF まで) を後方読みで返す; prompt 無しなら []。"""
     try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
+        with open(path, "rb") as f:
+            pos = f.seek(0, os.SEEK_END)
+            pending = b""  # 行頭が手前ブロックにある途中行 (次の読みで結合される)
+            tail: list[dict] = []  # newest-first
+            while pos > 0:
+                step = min(bufsize, pos)
+                pos -= step
+                f.seek(pos)
+                parts = (f.read(step) + pending).split(b"\n")
+                pending = parts.pop(0)
+                for raw in reversed(parts):
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    tail.append(obj)
+                    if _is_prompt(obj):
+                        tail.reverse()
+                        return tail
+            line = pending.strip()  # BOF: 先頭断片はこの時点で完全な 1 行
+            if line:
                 try:
-                    out.append(json.loads(line))
+                    obj = json.loads(line)
+                    if _is_prompt(obj):
+                        tail.append(obj)
+                        tail.reverse()
+                        return tail
                 except json.JSONDecodeError:
-                    continue
+                    pass
+            return []  # prompt 無し → 旧 _load_transcript+_current_turn と同じく空
     except OSError:
         return []
-    return out
 
 
 def _parse_ts(ts) -> float | None:
@@ -528,7 +559,7 @@ def _run(payload: dict) -> tuple[int, float | None]:
     transcript_path = payload.get("transcript_path")
     if not isinstance(transcript_path, str) or not transcript_path:
         return 0, None
-    entries = _load_transcript(transcript_path)
+    entries = _load_tail(transcript_path)
     if not entries:
         return 0, None
     text, tool_names, tool_paths, has_git_verify, prompt_epoch = _current_turn(entries)
@@ -738,6 +769,21 @@ class TurnMarkerTest(unittest.TestCase):
             self._asst("y"),
         ]
         self.assertEqual(_current_turn(tool_only), ("", set(), [], False, None))
+
+    def test_load_tail_matches_whole_transcript(self):
+        u1, a1 = self._user(content="q1"), self._asst("a1")
+        u2, a2 = self._user(content="q2"), self._asst("a2 省略しません")
+        p = self._transcript([u1, a1, u2, a2])
+        tail = _load_tail(p)
+        self.assertTrue(_is_prompt(tail[0]))  # 先頭は境界 prompt
+        self.assertEqual(_current_turn(tail), _current_turn([u1, a1, u2, a2]))
+        self.assertEqual(
+            _load_tail(p, bufsize=1), tail
+        )  # 1-byte buffer でも同一 (pending)
+        no_prompt = self._transcript(
+            [a1, {"type": "user", "message": {"content": [{"type": "tool_result"}]}}]
+        )
+        self.assertEqual(_load_tail(no_prompt), [])  # prompt 無し → 空
 
     def test_bump_persists_count_and_last_stop(self):
         # .turns = "count last_stop"; last_stop feeds the next UPS idle gap.
