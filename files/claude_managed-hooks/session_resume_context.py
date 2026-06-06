@@ -6,6 +6,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 import sys
 
 
@@ -121,6 +122,18 @@ def _turns_text(entries: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
+_HANDOFF_RE = re.compile(r"handoff|ハンドオフ", re.IGNORECASE)
+
+
+def _trim_before_handoff(text: str) -> str:
+    """handoff/ハンドオフ 初出を含む 👤/🤖 ブロック以降を返す; 語が無ければ原文 (現行 tail-truncate に fallback)。"""
+    m = _HANDOFF_RE.search(text)
+    if not m:
+        return text
+    bs = text.rfind("\n\n", 0, m.start())  # 行途中 orphan を避け、初出ブロックの頭から
+    return text[bs + 2 :] if bs >= 0 else text
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -136,7 +149,7 @@ def main() -> int:
     prior = _find_prior_session(cwd, session_id)
     if not prior:
         return 0
-    text = _turns_text(_load_tail(prior, RECENT_TURNS)).strip()
+    text = _trim_before_handoff(_turns_text(_load_tail(prior, RECENT_TURNS))).strip()
     if len(text) < MIN_TEXT_LEN:
         return 0
     if len(text) > MAX_INJECT_LEN:  # 末尾 (最新=handoff 側) を残す
@@ -144,7 +157,7 @@ def main() -> int:
     ctx = (
         "## Prior session tail (resume context)\n"
         f"\nSource: `{prior}`\n"
-        f"\n前回 session の最終 {RECENT_TURNS} turn (👤=ユーザ / 🤖=assistant):\n"
+        f"\n前回 session の最終 {RECENT_TURNS} turn (👤=ユーザ / 🤖=assistant、handoff 検出時はそれ以降):\n"
         f"\n---\n{text}\n---\n"
         "\n必要なら上記 jsonl を Read で full log 確認、 "
         "`todos.md` / handoff doc も併せて参照。"
