@@ -303,13 +303,14 @@ def _is_prompt(obj: dict) -> bool:
     return obj.get("type") == "user" and isinstance(msg.get("content"), str)
 
 
-def _load_tail(path: str, bufsize: int = _TAIL_BUFSIZE) -> list[dict]:
-    """現 turn のエントリ群 (先頭=直近の文字列 user prompt 行, EOF まで) を後方読みで返す; prompt 無しなら []。"""
+def _load_tail(path: str, turns: int = 1, bufsize: int = _TAIL_BUFSIZE) -> list[dict]:
+    """末尾から turn boundary を turns 個含むまで後方読みで返す; boundary が turns 未満なら全件。"""
     try:
         with open(path, "rb") as f:
             pos = f.seek(0, os.SEEK_END)
             pending = b""  # 行頭が手前ブロックにある途中行 (次の読みで結合される)
             tail: list[dict] = []  # newest-first
+            seen = 0
             while pos > 0:
                 step = min(bufsize, pos)
                 pos -= step
@@ -326,19 +327,18 @@ def _load_tail(path: str, bufsize: int = _TAIL_BUFSIZE) -> list[dict]:
                         continue
                     tail.append(obj)
                     if _is_prompt(obj):
-                        tail.reverse()
-                        return tail
+                        seen += 1
+                        if seen >= turns:
+                            tail.reverse()
+                            return tail
             line = pending.strip()  # BOF: 先頭断片はこの時点で完全な 1 行
             if line:
                 try:
-                    obj = json.loads(line)
-                    if _is_prompt(obj):
-                        tail.append(obj)
-                        tail.reverse()
-                        return tail
+                    tail.append(json.loads(line))
                 except json.JSONDecodeError:
                     pass
-            return []  # prompt 無し → 旧 _load_transcript+_current_turn と同じく空
+            tail.reverse()
+            return tail  # boundary < turns: 集めた全件
     except OSError:
         return []
 
@@ -780,10 +780,17 @@ class TurnMarkerTest(unittest.TestCase):
         self.assertEqual(
             _load_tail(p, bufsize=1), tail
         )  # 1-byte buffer でも同一 (pending)
-        no_prompt = self._transcript(
-            [a1, {"type": "user", "message": {"content": [{"type": "tool_result"}]}}]
+        self.assertEqual(len(_load_tail(p, turns=2)), 4)  # turns=2 は 2 turn 分
+        self.assertEqual(sum(_is_prompt(e) for e in _load_tail(p, turns=2)), 2)
+        no_prompt_entries = [
+            a1,
+            {"type": "user", "message": {"content": [{"type": "tool_result"}]}},
+        ]
+        no_prompt = self._transcript(no_prompt_entries)
+        # prompt 無し: tail は全件 (旧は []) だが _current_turn は両者とも空 = consumer 等価
+        self.assertEqual(
+            _current_turn(_load_tail(no_prompt)), _current_turn(no_prompt_entries)
         )
-        self.assertEqual(_load_tail(no_prompt), [])  # prompt 無し → 空
 
     def test_bump_persists_count_and_last_stop(self):
         # .turns = "count last_stop"; last_stop feeds the next UPS idle gap.
