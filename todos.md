@@ -81,8 +81,9 @@ Exit Criteria:
 - [x] 消費側 5 skill 文言更新 (commit beec079): 「Claude Code 仕様 delta」→「Claude Code ＋ Claude Developer Platform」へ broaden、 核心の「不明 spec は findings.md を Read」は保持
 - [x] findings.md 実 fetch 再生成 (`--force` exit0): 先頭 `## v2.1.161` (=`claude --version` 一致で version 整合維持)、 platform section (line 1469) に実物 ant CLI entry (line 1548「We've launched the `ant` CLI …」) 着地、 pre-cutoff 漏れ無し・fetch error log 無し
 - [x] deploy 済: `/etc/claude-code/hooks/feature_findings_build.py` (mode 0755) + 5 skill を `sudo install`、 全 6 件 source==deployed 確認 (symlink `~/.claude/skills/*` 経由で反映)
+- [ ] H.S. レビュー承認 — skill 文言の broaden 表現 + platform section の verbatim-by-date 書式が意図通りか。 承認後に block 削除
 
-Note: 機能は完成・LIVE deploy 済・end-to-end 検証済。 残は H.S. レビュー (skill 文言の broaden 表現 + platform section の verbatim-by-date 書式が意図通りか)。 承認後に block 削除。
+Note: 機能は完成・LIVE deploy 済・end-to-end 検証済。 残る受入条件 (H.S. レビュー承認) は上記 Exit Criterion 化済 (prose Note でなく checkbox で表す規律)。
 
 Work file: builder = `files/claude_managed-hooks/feature_findings_build.py`
 
