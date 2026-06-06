@@ -18,7 +18,7 @@ Exit Criteria:
 
 検証ハーネス: `_load_tail`/`_load_window` を import し old 全文 parse 経路と新後方経路を corpus (`~/.claude/projects/*/*.jsonl` 4669 件) で突き合わせ。 pending は別途 ~332k buffer-alignment ケースで検証済 (CR/LF・escaped-NL・multibyte・1byte buffer)。 buffer 128KiB は全 project 2545 turn 実測 (mean 110KB/p75 119KB) で ~77% を 1 read。
 
-Work file: `files/claude_managed-hooks/{stop_checks,skill_reminder_gate,declare_and_proceed_gate,session_resume_context}.py` + `files/claude_user-hooks/push_prompting_check.py`
+Work file: `files/claude_managed-hooks/{stop_checks,skill_reminder_gate,declare_and_proceed_gate,session_resume_context}.py` + `files/claude_user-hooks/push_prompting_check.py` + handoff `last-session-handoff.md`
 
 ### memory_surface BM25+RAG hybrid (OSS 調査 → 導入)
 
