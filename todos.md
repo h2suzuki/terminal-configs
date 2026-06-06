@@ -4,6 +4,22 @@
 
 ## High
 
+### transcript turn 切り出し hook の後方読み最適化
+
+Goal: 現 turn を切り出す全 hook が transcript を全文 parse している無駄 (実測 mean 110KB/turn を毎回・長 session で O(N²)) を、 EOF からの後方ブロック読み (`_load_tail` / 128KiB) に置換し、 挙動を保ったまま現 turn 分だけ parse する。
+
+Exit Criteria:
+- [x] stop_checks.py (Stop): `_load_transcript`→`_load_tail`、 _current_turn 無改造。 corpus 4669 件で _current_turn 5-tuple 完全一致・unittest 8/8・ruff/ty clean・/etc deploy・commit 826a165
+- [x] push_prompting_check.py (Stop, user): 同パターン。 corpus 4669 件一致・h2suzuki+root deploy・commit f08ebb9
+- [ ] skill_reminder_gate.py (PreToolUse, hot): skill-active 窓 = 現 turn ∪ 直近300s の **union**。 後方読みは境界で止めず「境界通過 AND ep<now-300s」 まで継続 (timestamp 単調 → 安全、 ep=None は無害に over-read)。 `_active_skills` 無改造。 **multi-now corpus smoke** (now を複数値 sweep) で同一性検証 → /etc deploy
+- [ ] declare_and_proceed_gate.py (PreToolUse AskUserQuestion, hot): skill_reminder_gate の twin、 同じ union 窓 (`_skill_active` 100-114/141-174、 SKILL_WINDOW_SECONDS)
+- [ ] session_resume_context.py (SessionStart): prior session の最後の assistant text を後方読み (境界=非空 text を持つ最初の assistant entry)。 現 turn でなく別 session ファイルの tail
+- [ ] 各 deploy 後 source==deploy 確認、 root 側は sudo
+
+検証ハーネス: `_load_tail`/`_load_window` を import し old 全文 parse 経路と新後方経路を corpus (`~/.claude/projects/*/*.jsonl` 4669 件) で突き合わせ。 pending は別途 ~332k buffer-alignment ケースで検証済 (CR/LF・escaped-NL・multibyte・1byte buffer)。 buffer 128KiB は全 project 2545 turn 実測 (mean 110KB/p75 119KB) で ~77% を 1 read。
+
+Work file: `files/claude_managed-hooks/{stop_checks,skill_reminder_gate,declare_and_proceed_gate,session_resume_context}.py` + `files/claude_user-hooks/push_prompting_check.py`
+
 ### memory_surface BM25+RAG hybrid (OSS 調査 → 導入)
 
 Goal: BM25 surfacer に意味検索 (embedding) 層を足し、 lexical で拾えない recall (terse/言い換え prompt・緊急 trigger) と precision を両立する。 SQLite 同等の導入容易さが理想 (2026-06-04 H.S. 方針)。
