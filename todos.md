@@ -126,3 +126,16 @@ Exit Criteria:
 - [ ] 実装方針が決まれば実装 + smoke + deploy
 
 Work file: `files/claude_managed-hooks/stop_checks.py` の `KNOWN_POSSIBLE` 表 + `~/.claude/memory/feedback_partial_stage_foreign_changes.md` 等の既存 sibling entries
+
+### document-editor の bare-invoke 暴発対策
+
+Goal: forked execution の `document-editor` skill が対象ファイル無指定で呼ばれた時、 git working tree の dirty file を勝手に編集対象化して未コミット作業を破壊する挙動を塞ぐ。
+
+Exit Criteria:
+- [ ] SKILL.md の fork 起動部を読み、 「無指定時に dirty file を対象化」 の出所を特定 (skill 本文の指示か fork agent の自律判断か)
+- [ ] 対策方針を決定 (要相談): (a) skill 本文に「対象が args/会話で明示されていなければ編集せず問い返す」 を明記 / (b) skill は据置し呼び出し側規律 (下記 memory entry) のみで運用
+- [ ] 採択方針を実装 → source↔deploy 同期 → 再 deploy 時に反映確認
+
+経緯: 2026-06-06 README 更新 session で実害発生。 README 編集の規律を借りるつもりで `document-editor` を引数なし invoke → fork が `M` だった `SKILL-HOOK-CONTRACT.md` (H.S. のレビュー中 draft、 触らない指示済) を勝手に整理し作業途中スカフォールドを削除。 fork の単一 Edit を transcript から byte 逆適用して復旧済。 cross-project の behavioral 記録は `~/.claude/memory/feedback_document_editor_fork_overwrite.md`。
+
+Work file: `files/claude_managed-skills/document-editor/SKILL.md`
