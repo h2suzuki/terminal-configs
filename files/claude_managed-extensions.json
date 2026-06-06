@@ -40,6 +40,10 @@
       {
         "matcher": "^Write$",
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/memory_routing_gate.py sync" } ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/todos_completion_check.py" } ]
       }
     ],
     "PostToolUseFailure": [
