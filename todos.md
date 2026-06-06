@@ -28,17 +28,9 @@ Exit Criteria:
 - [ ] OSS 調査 (deep-research 候補): 最も導入が楽な構成を提示。 候補 = vector store **sqlite-vec** (既存 FTS5 と同一 SQLite file で hybrid 可)、 local embedding **model2vec / fastembed** 等 (hook 内 offline・高速・日本語対応が要件)。 軸 = 導入容易さ / 依存の軽さ / 日本語 embedding 品質 / hook 実行コスト
 - [ ] 構成決定 → hybrid scoring (FTS5 BM25 ⊕ vector) 実装 → calibration (本 session の corpus 流用) → deploy 両 user
 
-経緯/前提: BM25 層 (下記) を 2026-06-04 commit c7dbcea で deploy 済。 緊急 entry は BM25 lexical に原理的不向き (本物 trigger 血が出てる/暴走 は trigram-phrase の脆さで弱マッチ、 body の英語 ops 語が benign に強マッチ、 両立 weight/floor 無し)。 recall 上限 ~24% も lexical の限界。 ∴ これ以上の精度は H.S. 判断で BM25+RAG hybrid。 現 session は context 長 (crash 多発) ゆえ調査は fresh session 推奨。 corpus = 本 session workflow wyjhtnr4x 出力 (`/tmp/…` 揮発・要再生成)、 sweep harness `/tmp/cal_memory_floor.py` (揮発・read-only で source の `_build_query` import し live DB に当てる)
+経緯/前提: BM25 層は 2026-06-04 commit c7dbcea で deploy 済。 緊急 entry は BM25 lexical に原理的不向き (本物 trigger 血が出てる/暴走 は trigram-phrase の脆さで弱マッチ、 body の英語 ops 語が benign に強マッチ、 両立 weight/floor 無し)。 recall 上限 ~24% も lexical の限界。 ∴ これ以上の精度は H.S. 判断で BM25+RAG hybrid。 現 session は context 長 (crash 多発) ゆえ調査は fresh session 推奨。 corpus = 本 session workflow wyjhtnr4x 出力 (`/tmp/…` 揮発・要再生成)、 sweep harness `/tmp/cal_memory_floor.py` (揮発・read-only で source の `_build_query` import し live DB に当てる)
 
 回収した未起票スレッド (前 session b1b20622、 着手時に正式起票): (a) Stop hook haiku watcher (第三者 LLM が会話状態をメタ解析し助言、 H.S. idea) (b) malformed tool-call ("count") 自動復旧 + Anthropic bug report (c) MCP per-host 多重 spawn 懸念 — root+login 両 install で増幅、 前 session L497 で H.S. 提起・未対応 (d) Medium「Claude Code 拡張 installer」 block の decision-list が commit 35ba90e の rebuild で陳腐化 (dual-loop / GCP / Vercel plugin 採用へ scope 反転) — 要 update
-
-### memory_surface 誤発火修正 (BM25 層) — 完了 c7dbcea (継続は上記 RAG task)
-
-Goal: 緊急 entry 等が非緊急 prompt ("stop hook" 等) で誤 surface する over-fire を BM25 で可能な範囲で解消する。
-
-Exit Criteria:
-- [x] root-cause + 実装 (2026-06-04, commit c7dbcea, deploy 両 user 済): 承認 approach (1) keyword 重み↑は body-only FP に no-op、 floor 厳格化のみも不十分 (緊急 entry が benign 技術 prompt に body 経由 -6〜-10 強マッチ) と 165-prompt corpus calibration で実証。 H.S. 承認の **magnet keyword 是正 + body 重み低下** を実装 — bm25 body 重み 0.3 (keywords 1.0)、 `BM25_SURFACE_FLOOR` -1.0→-2.0、 `_concern_inject` 同型 synthetic-skip、 緊急 entry keywords から英語 ops 衝突語 daemon/kill/cascade 除去 (personal memory)。 結果 "stop hook" 誤発火解消・FP-reg 14→8/32・recall 23/105
-- [x] deploy 両 user (`/home/h2suzuki` + root) `~/.claude/hooks/memory_surface.py` install -m 0755・source==deploy・ruff/ty clean
 
 ### skill 発火率 system 対策
 
