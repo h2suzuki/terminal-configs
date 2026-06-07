@@ -110,15 +110,15 @@ Work file: 現 session の議論
 Goal: repo 直下 `SKILL-HOOK-CONTRACT.md` を 4 部構成で完成 — (A) event 別 hook 利用カタログ (H.S. の番号フロー形式) / (B) Skills フォーマット規約 / (C) 応用編 = CLAUDE.md→skill/hook 化の概要 (Big Picture) / (D) 実装 contract (技術者向け再利用規約)。 一貫性担保が目的 (2026-05-30 起案・A/B 記入は 2026-06-07 前 session で H.S. が依頼したが court バグでセッション腐敗→リセット、 本 session で再開。 「今 session の新指示」ではない)。
 
 Exit Criteria:
-- [ ] `SKILL-HOOK-CONTRACT.md` を repo 直下に作成。 含める実装 contract: capability-grant (skill/declare が mint・hook が check, fail-open) / permission semantics (additionalContext 省略=passthrough・deny は JSON・allow は auto-approve 回避) / session-keyed state (`$CLAUDE_CODE_SESSION_ID`==payload session_id) / transcript current-turn scan (stop_checks 方式) / fail-open (例外 exit0・deny は JSON) / deny-wording 規律 / extensible `LANGUAGES` dispatch table / **use-case 駆動の TTL 選定 (盲目流用しない)** / PostToolUse sync
-- [ ] **除外を厳守** (H.S. 指摘・種類が違う): deploy の決まり (`copy_dir`・exec-bit 0755・settings `copy`) は contract でなく **deploy ルール** ゆえ混ぜない
-- [x] (H.S. 追加依頼) 文書先頭に jargon-free な L1〜L4 概観 (動機/仕組み/狙う効果 の3軸表 + 補足 + 具体例) を記載 (commit 91cf0e0)。 固有名は「相手」に汎用化。 実装 contract 本体は placeholder
+- [x] (D) 実装 contract §0-5 記載 (capability-grant / permission semantics / session-keyed state / transcript current-turn scan / fail-open / deny-wording / extensible dispatch table / use-case 駆動 TTL / PostToolUse sync) — prior session commit 27b498c
+- [x] **除外を厳守**: deploy の決まり (`copy_dir`・exec-bit 0755・settings `copy`) は deploy ルールとして除外し contract に混ぜず (doc 末尾「除外」節)
+- [x] (C) overview/応用編 (動機/仕組み/狙う効果 3軸表 + 具体例、 commit 91cf0e0)。 固有名は「相手」に汎用化
 - [x] event→hook 完全対応表を 3 json から確定 (2026-06-07 本 session、 下記「確定済みファクト」)
-- [ ] **(A) event 別 hook 利用カタログ** を H.S. の番号フロー形式で全 event 分記入 (前 session で依頼・court バグ中断、 本 session 再開)。 SessionStart の H.S. 記入済 3 use-case を範に。 抽出 workflow wdjbl0ux3 が各 hook の検証済みファクトを供給
-- [ ] draft 要修正: SessionEnd 誤り訂正 (session_cleanup.py 実在・N/A は誤り) + `### ConfigChange` 見出し h3→h4 + WorktreeCreate セクション新設 (voicevox 配線あり・現 draft 欠落) + 真の N/A 明記 (PermissionRequest/Denied・PostCompact・CwdChanged現状)
-- [ ] **(B) Skills フォーマット規約** を「## Skills」に記入 (writing-skills/SKILL.md 典拠・frontmatter/本文構造/言語規約/deploy 位置)
-- [ ] draft SessionStart の `xxxx Skill` placeholder を埋める = findings.md 参照を指示する消費側 **5 skill** (単一でない): verify-before-claim / auto-mode-denial-recovery / writing-skills / make-plan-before-coding / skill-and-hook-extraction-workflow
-- [ ] H.S. レビュー承認 → Exit flip + block 削除
+- [x] **(A) event 別 hook 利用カタログ** を全 event 分記入 (commit e5e8b19)。 抽出 workflow wdjbl0ux3 + 敵対検証 w8kl0gkmu (1 error + 6 minor 修正反映)
+- [x] draft 要修正: SessionEnd N/A 訂正 + `### ConfigChange`→`####` + WorktreeCreate 新設 + 真の N/A 明記。 CwdChanged は本 session で voicevox 配線したため実 use-case 記載
+- [x] **(B) Skills フォーマット規約** を「## Skills」に記入 (frontmatter/本文構造/言語規約。 deploy 位置は doc「除外」原則ゆえ割愛)
+- [x] draft SessionStart の `xxxx Skill` placeholder を「複数のスキル (verify-before-claim 等)」で充足
+- [ ] H.S. レビュー承認 → Exit flip + block 削除。 **未解決の要相談 2 件**: (a) Skills 節は ですます prose (応用編 に合わせた)・カタログは である/体言止めで register 不一致、 (b) L60「最終状況を transcript log の出力」は H.S. 原文の述部欠落 (自動修正せず温存・要確認)
 
 確定済みファクト (2026-06-07 本 session・再導出不要):
 - **task 定義** (H.S. 前 session 原文趣旨): 「SessionStart の見出しを少し書いた。 こんな感じで repo のフックを記入していってほしい。 Skill はフォーマットを規約として書ける。 CLAUDE.md のスキル&フック化は後半の応用編で概要 (ここのフックでなく Big Picture)」。
@@ -132,8 +132,8 @@ Exit Criteria:
   - PreToolUse: read_before_edit.py(check,Read|Edit|MultiEdit) | dangling_ref_check.py+memory_routing_gate.py(guard)+skill_reminder_gate.py(gate)+comment_rationale_gate.py(Edit|Write|MultiEdit) | avoid_cd.py+deny_compound_git_add.py+deny_compound_git_commit.py+check_commit_format.py(Bash) | subagent_gate_warn.py(Task|Agent) | declare_and_proceed_gate.py(AskUserQuestion) | check_commit_author.py(user,Bash)
   - PostToolUse: read_before_edit.py(record,Read|Write) / memory_routing_gate.py(sync,Write) / todos_completion_check.py(Bash)
   - PostToolUseFailure: detect_cwd_pollution.py(Bash)
-  - voicevox (`voicevox_claude_alerts <Event>`): Stop / Notification / SubagentStart / SubagentStop / ConfigChange / PreCompact / WorktreeCreate
-  - **真の N/A (hook 無し)**: StopFailure / UserPromptExpansion / PermissionRequest / PermissionDenied / PostCompact / CwdChanged (現状。 CwdChanged は voicevox 追加候補=別 todo block)
+  - voicevox (`voicevox_claude_alerts <Event>`): Stop / Notification / SubagentStart / SubagentStop / ConfigChange / PreCompact / WorktreeCreate / CwdChanged (本 session 追加)
+  - **真の N/A (hook 無し)**: StopFailure / UserPromptExpansion / PermissionRequest / PermissionDenied / PostCompact (CwdChanged は本 session で voicevox 配線済ゆえ N/A から除外)
 - **draft 要修正 3 点**: (1) SessionEnd=N/A は誤り、 (2) `### ConfigChange` は h3 で兄弟 (`####`) と不揃い、 (3) **WorktreeCreate セクションが丸ごと欠落** (voicevox 配線あり)。
 - **voicevox ConfigChange 裏取り (workflow VERIFIED)**: 現状 ConfigChange branch は payload の種別判定を一切していない (source field 等を読まず無条件で固定句「設定をリロードしたよ。」)。 ∴ 別 todo「source field で発話分岐」は実装余地が実在。
 - **編集規律**: doc は H.S. レビュー中 draft だが前 session 指示「記入してほしい」= 私が埋めて可。 document-editor は inline で discipline verbalize して適用 (doc 既読・modest size ゆえ fork でない)。 bare-invoke は dirty file 暴発の前科ありゆえ対象明示必須。 register 等の編集ルール詳細は handoff doc。
