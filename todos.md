@@ -54,7 +54,7 @@ Exit Criteria:
 - [x] bg `/code-review` triage 完了 (confirm-intent: 全 family advise-once は意図的・docstring に regression-proof 明記 / 影響大(?!き) で形容詞 影響大きい 除外 / `_check` を warnings·blocking 分離返しに refactor → f1dab94 に fixup-autosquash / plan 文発火は accept (v1) / no-defect 確認)。 session 自己終了済
 - [x] deploy 済 (LIVE): L3 と同一 file ゆえ bundle、`sudo install -m 0755 files/claude_managed-hooks/stop_checks.py /etc/claude-code/hooks/stop_checks.py` で deploy (source==deploy・mode 755 確認)。 f1dab94 の評価語 family も同時 live 化
 - [ ] 実機確認: deploy 後、 table cell に評価語 + 証拠なし → block、 retry で advise-once pass を観測
-- [ ] (candidate) `/tmp/smoke_stop_checks.py` を committed regression test 化するか判断 (現状 repo に hook test 基盤なし、 cross-hook 不変条件 = 価値あり)
+- [x] (candidate) `/tmp/smoke_stop_checks.py` を committed regression test 化 → **実施**: 評価語 family の block / free-pass / 形容詞除外 を stop_checks.py の embedded `EnforcementFamilyTest` (tracked) に追加 (commit d4b068f、 `python3 -m unittest stop_checks` で 17/17 green)
 - [ ] (v1 known-FP, 観測ベース): `アーキテクチャの見直しを行います` 等の plan 文も発火 (advise-once で 1 回 backstop)。 観測増えたら predicate-proximity で tighten 検討
 
 経緯: 2026-05-28 session で「大改造」 を実コード未読で発話 → report-by-evidence 違反。 既存 skill trigger は文末 judgment 想定で structured doc (table cell) の評価語混入が射程外。 hook 化で補完。
@@ -66,9 +66,9 @@ Work file: `last-session-handoff.md` + commit f1dab94。 残 = deploy (別 sessi
 Goal: `declare_and_proceed_gate` は PreToolUse(`^AskUserQuestion$`) のみを gate するため、 AskUserQuestion tool を使わず **散文で二択質問** (「A するか B するか?」「これで良いですか?」) を出すと素通りする。 `stop_checks.py` には既に `order-question-to-user` block family (順序質問の user 投げを block) があるが narrow で、 CONFIRM/ROUTING 系の散文質問は漏れる。 この coverage gap を埋める。
 
 Exit Criteria:
-- [ ] `stop_checks.py` の `order-question-to-user` family を拡張するか CONFIRM/ROUTING family を新設し、 最終 assistant turn message を `declare_and_proceed_gate` の CONFIRM/ROUTING 相当で走査、 match かつ declare-and-proceed が当 turn (∪直近5分) 未 invoke なら block (decision:block、 既存 advise-once gate 流用で自己 block loop 回避)
-- [ ] SKIP category (destructive pre-approval / user-taste / open which-X の design 質問) は `declare_and_proceed_gate` と同一基準で silent pass (FP 抑制)
-- [ ] smoke (散文 confirm/routing → block / SKIP category → pass / declare-and-proceed invoke 後 → pass / 既存 6 block family 無回帰) + deploy (`/etc/claude-code/hooks/stop_checks.py`、 source==deploy 一致)
+- [x] `stop_checks.py` に CONFIRM/ROUTING family を**新設** (order-question は順序専用ゆえ拡張でなく新設)。 検出 regex は `declare_and_proceed_gate` の prose 版 copy、 `_declare_proceed_active()` で当 turn invoke 判定 → 未 invoke かつ match なら blocking.append (advise-once 自動流用)。 **spec 逸脱**: 「∪直近5分」でなく「当 turn 内 invoke」(Stop は turn 終端発火で 5 分窓が long-turn FP 源ゆえ・H.S. review 対象)
+- [x] SKIP category (destructive pre-approval / user-taste / open which-X design) は skill-active escape hatch で `declare_and_proceed_gate` と同一基準 silent pass
+- [x] smoke (embedded `EnforcementFamilyTest` 9 件: 散文 confirm/routing→block / open design→pass / declare invoke 後→pass / 既存 family 無回帰) + deploy (`/etc/claude-code/hooks/stop_checks.py` parity OK)。 commit d4b068f・unittest 17/17・ruff/ty clean
 
 経緯: 2026-06-08 H.S. 提起。 本 session で assistant が UPE probe の続行可否を AskUserQuestion でなく **散文の二択** で H.S. に問い、 declare-and-proceed 違反 (decidable を自分で決めず外注)。 `declare_and_proceed_gate` は tool matcher ゆえ不発火。 PreToolUse で散文出力を pre-block する手段は無く (= 評価語 post-hoc check と同型の「dead-on-arrival」制約)、 Stop の decision:block で「待たずに自分で決めて続行せよ」と差し戻すのが唯一の channel。 当初 todo は「stop_checks に新規 family 追加」と書いたが、 同 session の SKILL-HOOK-CONTRACT 検証で `order-question-to-user` block family が既存と判明 (私の質問は順序でなく routing ゆえ既存 pattern に漏れた) → 「既存機構の coverage 拡張」へ訂正。
 
