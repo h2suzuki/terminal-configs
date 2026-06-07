@@ -29,6 +29,17 @@ Combined Stop hook for org-managed Claude Code:
     (op が既知可能ゆえ証拠の有無に関わらず否定が誤り)。 strip_fences 適用・不可能/不可避
     等は lookahead 除外。 新たな「実は可能」が判明する度 KNOWN_POSSIBLE に 1 行追加。
 
+  order-question-to-user (enforcement, exit 2):
+    prose で 「どちらを先に/から」 系の順序質問を user に投げたら block。 順序は 3 分解
+    (両方やる / 正解あり / どちらでも) で常に自決可能 (declare-and-proceed)。 pairing 無し。
+    AskUserQuestion 内の同種は declare_and_proceed_gate.py が PreToolUse で deny。
+
+  confirm/routing-to-user (enforcement, exit 2):
+    散文の decidable な per-unit 確認 (「これで良い?」) / routing 二択 (「A するか B するか」) を、
+    当 turn に declare-and-proceed skill の invoke が無ければ block。 検出 regex は
+    declare_and_proceed_gate.py の CONFIRM/ROUTING の prose 版 copy。 skill invoke が SKIP
+    escape hatch (genuine user-taste/design/priority/不可逆 op pre-approval)。
+
   deferral (warning-only, exit 0):
     「後で対処」「別タスクに切り出」等 は、 同 turn 内に TaskCreate/TaskUpdate/
     TodoWrite または todos.md への Write/Edit が無ければ warn。
@@ -69,11 +80,12 @@ entry を current turn とみなす。 corrupted/partial は空値を返し fall
 Exit:
   0: no enforcement triggered, OR a would-be re-block on a stop_hook_active
      retry was demoted to a pass (advise-once). warnings may be emitted on stderr
-  2: one of meta-announce-silence / hollow-claims / recognize-own-work /
-     evaluative-terms triggered, on the turn's first Stop (stop_hook_active false)
+  2: an enforcement block family triggered (meta-announce-silence / hollow-claims /
+     recognize-own-work / evaluative-terms / known-possible-denial / order-question-to-user /
+     confirm-routing-to-user), on the turn's first Stop (stop_hook_active false)
 
 The advise-once gate lives in _run (shared), so it INTENTIONALLY demotes every
-block family — not just evaluative — to one-block-per-turn. All four families
+block family — not just evaluative — to one-block-per-turn. All of them
 fire on their own discussed trigger words, so a turn working on this hook would
 otherwise self-block-loop until the harness's 8-block override, freezing the
 turn counter. Do NOT narrow the gate to evaluative-only: that reintroduces the
@@ -191,6 +203,35 @@ ORDER_QUESTION_PATTERNS: list[str] = [
     r"どっち\s*(を)?\s*(先に|から)\s*[^。\n]{0,20}(ますか|しょうか|でしょう)",
 ]
 ORDER_QUESTION_RE = re.compile("|".join(ORDER_QUESTION_PATTERNS), re.IGNORECASE)
+
+# --- Pattern: confirm/routing-to-user (block unless declare-and-proceed invoked this turn) ---
+# 散文の decidable な確認 (「これで良い?」) / routing 二択 (「A するか B するか」) の user 投げを Stop で捕捉。
+# AskUserQuestion 版は declare_and_proceed_gate.py が PreToolUse で deny、 散文は Stop の decision:block が唯一の channel。
+# CONFIRM/ROUTING regex は declare_and_proceed_gate.py の prose 版 copy (twin・drift 時は両者同期)。 SKIP は skill invoke が escape hatch。
+DECLARE_PROCEED_SKILL = "declare-and-proceed"
+CONFIRM_PATTERNS: list[str] = [
+    r"これで(良|よ)い",
+    r"で(良|よ)いです(か|ね)",
+    r"で(良|よ)い\s*[?？]",
+    r"で問題(ありません|ない)\s*(か|ですか|でしょうか)",
+    r"進めて(も)?(良|よ)い",
+    r"この(まま|style|スタイル|形式|方針|案|内容|draft|wording)で(良|よ|問題な)",
+    r"適用して(も)?(良|よ)い",
+    r"してもよいですか",
+]
+ROUTING_PATTERNS: list[str] = [
+    r"どちら(から|を先に|で進め|を調査)",
+    r"どっち(から|を先に)",
+    r"経由\s*(で|か)[^。\n]{0,20}(経由|か[?？])",
+    r"(から|を)\s*調査しますか",
+    r"(から|を)\s*着手しますか",
+    r"どこから\s*(調査|着手|始め|見)",
+    r"先に\s*(調査|確認|読み?)\s*ますか",
+    r"[ぁ-んァ-ヶ一-鿿\w]+するか\s*[ぁ-んァ-ヶ一-鿿\w]+するか",
+    r"(どう|どの|どれ)を?\s*[ぁ-んァ-ヶ一-鿿\w]+\s*しますか",
+]
+CONFIRM_RE = re.compile("|".join(CONFIRM_PATTERNS), re.IGNORECASE)
+ROUTING_RE = re.compile("|".join(ROUTING_PATTERNS), re.IGNORECASE)
 
 # --- Pattern: deferral (warning, no block) ---
 DEFERRAL_RE = re.compile(
@@ -408,6 +449,37 @@ def _current_turn(
     return "\n".join(text_parts), tool_names, tool_paths, has_git_verify, prompt_epoch
 
 
+def _declare_proceed_active(entries: list[dict]) -> bool:
+    """declare-and-proceed が現 turn 内 (境界は _current_turn と同じ str-content user) で invoke 済か。"""
+    start_idx = -1
+    for i in range(len(entries) - 1, -1, -1):
+        obj = entries[i]
+        if obj.get("type") == "user":
+            msg = obj.get("message", {})
+            if isinstance(msg, dict) and isinstance(msg.get("content"), str):
+                start_idx = i + 1
+                break
+    if start_idx == -1:
+        return False
+    for obj in entries[start_idx:]:
+        if obj.get("type") != "assistant":
+            continue
+        msg = obj.get("message", {})
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "tool_use"
+                and block.get("name") == "Skill"
+            ):
+                inp = block.get("input") or {}
+                if isinstance(inp, dict) and inp.get("skill") == DECLARE_PROCEED_SKILL:
+                    return True
+    return False
+
+
 def _known_possible_denial(text: str) -> str | None:
     """Block message when an op known to be doable is asserted impossible on one line; else None."""
     for line in strip_fences(text).splitlines():
@@ -430,6 +502,7 @@ def _check(
     tool_names: set[str],
     tool_paths: list[str],
     has_git_verify: bool,
+    declare_active: bool,
 ) -> tuple[int, list[str], list[str]]:
     """Return (exit_code, warnings, blocking)."""
     warnings: list[str] = []
@@ -499,6 +572,22 @@ def _check(
             f"(declare-and-proceed skill, feedback_order_questions_are_avoidable)。 "
             f"該当文を delete し、 3 分解 self-check して自分で proceed してから再出力してください。"
         )
+
+    # confirm/routing-to-user (block unless declare-and-proceed invoked this turn)
+    if not declare_active:
+        stripped = strip_fences(text)
+        m = CONFIRM_RE.search(stripped) or ROUTING_RE.search(stripped)
+        if m:
+            blocking.append(
+                f"declare-and-proceed (prose): 「{m.group(0)}」 と decidable な確認/routing 質問を "
+                f"散文で user に投げていますが、 当 turn に declare-and-proceed skill の invoke が "
+                f"ありません (AskUserQuestion は declare_and_proceed_gate が PreToolUse で gate しますが "
+                f"散文は Stop でしか捕捉できません)。 /declare-and-proceed を invoke し 3-check "
+                f"(material が code/log/config/doc で取れるか / default で進めるか / parallel 両立か) を "
+                f"verbalize → いずれか yes なら自分で決めて proceed、 genuine な user-taste / design / "
+                f"priority / 不可逆 op の pre-approval なら質問のまま再出力 (skill invoke 後は本 gate を "
+                f"通過) してください。"
+            )
 
     # deferral (warning-only)
     m = DEFERRAL_RE.search(text)
@@ -571,7 +660,10 @@ def _run(payload: dict) -> tuple[int, float | None]:
         text = (text + "\n" + last_msg) if text else last_msg
     if not text:
         return 0, prompt_epoch
-    exit_code, warnings, blocking = _check(text, tool_names, tool_paths, has_git_verify)
+    declare_active = _declare_proceed_active(entries)
+    exit_code, warnings, blocking = _check(
+        text, tool_names, tool_paths, has_git_verify, declare_active
+    )
     # advise-once: a stop_hook_active retry never re-blocks — demote to pass (see docstring turn-marker / Exit).
     if exit_code == 2 and payload.get("stop_hook_active"):
         for line in blocking:
@@ -842,6 +934,110 @@ class TurnMarkerTest(unittest.TestCase):
         # _run tolerates non-dict input via its isinstance guard; verify it.
         self.assertEqual(_run("nope"), (0, None))  # ty: ignore[invalid-argument-type]
         self.assertEqual(_run({}), (0, None))
+
+
+class EnforcementFamilyTest(unittest.TestCase):
+    """H3 evaluative regression + H4 confirm/routing gate. Run: python3 -m unittest stop_checks"""
+
+    @staticmethod
+    def _c(text, tools=None, declare_active=False):
+        return _check(text, set(tools or []), [], False, declare_active)
+
+    def _blk(self, *a, **k):
+        return self._c(*a, **k)[2]
+
+    # --- H3: evaluative-terms (lost /tmp smoke, now tracked) ---
+    def test_evaluative_blocks_without_evidence(self):
+        code, _w, blk = self._c("これは大改造になります")
+        self.assertEqual(code, 2)
+        self.assertTrue(any("evaluative-term" in b for b in blk))
+
+    def test_evaluative_freepass_with_evidence(self):
+        blk = self._blk("これは大改造になります", tools=["Read"])
+        self.assertFalse(any("evaluative-term" in b for b in blk))
+
+    def test_evaluative_adjective_excluded(self):
+        # 影響大きい (形容詞) は除外、 影響大 (label) は発火。
+        self.assertFalse(any("evaluative" in b for b in self._blk("影響大きいと思う")))
+        self.assertTrue(any("evaluative" in b for b in self._blk("影響大と評価")))
+
+    # --- H4: confirm/routing-to-user prose gate ---
+    def test_confirm_prose_blocks_without_skill(self):
+        for q in (
+            "この方針で良いですか?",
+            "これで良い?",
+            "進めて良いですか",
+            "適用して良いですか",
+        ):
+            self.assertTrue(
+                any("declare-and-proceed (prose)" in b for b in self._blk(q)), q
+            )
+
+    def test_routing_prose_blocks_without_skill(self):
+        for q in (
+            "実装するか削除するか迷います?",
+            "どこから着手しますか?",
+            "どちらから調査しますか?",
+        ):
+            blk = self._blk(q)
+            self.assertTrue(
+                any(
+                    ("declare-and-proceed (prose)" in b) or ("order-question" in b)
+                    for b in blk
+                ),
+                q,
+            )
+
+    def test_passes_when_declare_active(self):
+        # declare-and-proceed invoked this turn -> escape hatch.
+        for q in ("この方針で良いですか?", "実装するか削除するか?"):
+            blk = self._blk(q, declare_active=True)
+            self.assertFalse(any("declare-and-proceed (prose)" in b for b in blk), q)
+
+    def test_open_design_question_not_flagged(self):
+        # open design question (no closed-form / route anchor) -> no prose block.
+        blk = self._blk("命名はどうするのが良いと思いますか?")
+        self.assertFalse(any("declare-and-proceed (prose)" in b for b in blk))
+
+    def test_declare_proceed_active_detection(self):
+        user = {"type": "user", "message": {"content": "do it"}}
+        dp = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Skill",
+                        "input": {"skill": "declare-and-proceed"},
+                    }
+                ]
+            },
+        }
+        other = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Skill",
+                        "input": {"skill": "writing-code"},
+                    }
+                ]
+            },
+        }
+        self.assertTrue(_declare_proceed_active([user, dp]))
+        self.assertFalse(_declare_proceed_active([user, other]))
+        self.assertFalse(_declare_proceed_active([user]))
+        self.assertFalse(_declare_proceed_active([]))
+
+    def test_existing_block_families_still_fire(self):
+        # regression: pre-existing block families unaffected by the new declare_active param.
+        self.assertEqual(self._c("省略しません")[0], 2)
+        self.assertEqual(self._c("学習しました")[0], 2)
+        self.assertEqual(self._c("想定外でした")[0], 2)
+        self.assertTrue(
+            any("known-possible" in b for b in self._blk("部分コミットはできない"))
+        )
 
 
 if __name__ == "__main__":
