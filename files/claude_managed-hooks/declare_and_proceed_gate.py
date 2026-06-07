@@ -30,7 +30,7 @@ import sys
 import time
 
 TARGET_SKILL = "declare-and-proceed"
-SKILL_WINDOW_SECONDS = 300  # 現 turn ∪ 直近 5 分 (skill_reminder_gate と同じ窓)
+SKILL_WINDOW_SECONDS = 300  # active 窓 = 現 turn かつ直近 5 分以内
 
 # Per-unit/per-batch 確認 ("これで良い?" 系) の closed form のみ拾う。 design は
 # 通常 open form ("which X?") なので除外。 高確度語限定で false positive 抑制。

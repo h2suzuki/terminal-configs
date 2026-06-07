@@ -102,7 +102,7 @@ import time
 HOME = os.path.expanduser("~")
 STATE_DIR = os.path.join(HOME, ".claude", "hooks", "state", "skill_reminder")
 DECL_STALE_SECONDS = 7 * 24 * 3600  # 放置宣言 session dir の自己掃除閾値
-SKILL_WINDOW_SECONDS = 300  # skill-active 窓 (現 turn ∪ 直近 5 分。H.S. 指定)
+SKILL_WINDOW_SECONDS = 300  # skill-active 窓 = 現 turn かつ直近 5 分以内
 GATE_TOOLS = ("Edit", "Write", "MultiEdit")
 
 # kind → 当該 kind が要求する skill 集合 (additive。else は ∅)。
