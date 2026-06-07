@@ -126,12 +126,12 @@ _HANDOFF_RE = re.compile(r"handoff|ハンドオフ", re.IGNORECASE)
 
 
 def _trim_before_handoff(text: str) -> str:
-    """handoff/ハンドオフ 初出を含む 👤/🤖 ブロック以降を返す; 語が無ければ原文 (現行 tail-truncate に fallback)。"""
-    m = _HANDOFF_RE.search(text)
-    if not m:
-        return text
-    bs = text.rfind("\n\n", 0, m.start())  # 行途中 orphan を避け、初出ブロックの頭から
-    return text[bs + 2 :] if bs >= 0 else text
+    """初の 👤(user) ブロック内 handoff 言及 (= 実 trigger) 以降を返す; assistant 言及・否定 (handoff 不要/省略) は anchor 外、 user 一致無しは原文。"""
+    blocks = text.split("\n\n")
+    for i, b in enumerate(blocks):
+        if b.startswith("👤 ") and _HANDOFF_RE.search(b):
+            return "\n\n".join(blocks[i:])
+    return text
 
 
 def main() -> int:
