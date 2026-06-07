@@ -177,19 +177,6 @@ Exit Criteria:
 
 Work file: `files/voicevox_claude_alerts` + `files/claude_managed-voicevox.json`
 
-### skill_reminder_gate: 既存ファイルの shebang で kind 自動判定
-
-Goal: skill_reminder_gate の write gate が file kind 不明時に declare を強制する friction を、 既存ファイルの 1 行目 shebang から kind を自動判定して減らす。
-
-Exit Criteria:
-- [x] 既存ファイル (path 実在 + 1 行目が読める) の編集時、 shebang (`#!.../bash`・`#!/usr/bin/env bash` → bash、 `#!.../python` → python 等) で kind を auto-detect し required skill を決める (拡張子 auto-detect の補完)。 `_shebang_kind()` + cmd_gate else 分岐。 declared 分岐は非適用 = 「declare が真実源」を維持 (env -S・sh・rbash も判定)
-- [x] 新規ファイル / 1 行目が読めない場合は既存動作 (拡張子判定 → 不明なら declare 要求) を維持。 未知 interp (node/ruby/zsh) も declare 要求で regression 無し
-- [x] smoke 26/26 (unit 15 + nonexistent 1 + 統合 10、 work file `/tmp/smoke_srg_shebang.py`) + deploy (`sudo install -m 0755` で `/etc/claude-code/hooks/`、 diff -q parity OK)。 ruff/ty clean
-
-経緯: 2026-06-07 H.S. 提起。 拡張子なし script (voicevox_claude_alerts 等) は現状 declare 必須で friction (本 session でも declare bash が必要だった)。 既存ファイルなら shebang から bash/python を判定でき declare 不要ケースを増やせる。
-
-Work file: `files/claude_managed-hooks/skill_reminder_gate.py`
-
 ### skill_reminder_gate: PreToolUse:Skill で発火検出を state 化 (transcript-scan 簡素化)
 
 Goal: `skill_reminder_gate` の skill 発火検出を、 現在の transcript 末尾 scan から `PreToolUse(matcher:"Skill")` hook による state 刻印方式へ移行できるか検討し、 移行すれば fragile な turn-boundary 判定群を削減する。
