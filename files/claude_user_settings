@@ -2,16 +2,21 @@
 
 # Pseudo drop-in for ~/.claude/settings.json (Claude Code has no user settings.d).
 #
-#   Usage: claude_user_settings {inject|remove} <fragment.json>
+#   Usage: claude_user_settings {inject|remove} <fragment.json|->   ("-" = stdin)
 
 command -v jq >/dev/null || { echo "Cannot find jq"; exit 1; }
 
 CMD="$1"
 FRAGMENT="$2"
 if [ -z "$CMD" ] || [ -z "$FRAGMENT" ]; then
-    echo "Usage: $(basename "$0") {inject|remove} <fragment.json>"; exit 1
+    echo "Usage: $(basename "$0") {inject|remove} <fragment.json|->"; exit 1
 fi
-[ -s "$FRAGMENT" ] || { echo "Fragment not found: $FRAGMENT"; exit 1; }
+# "-" reads the fragment from stdin (home dir may be unreadable)
+if [ "$FRAGMENT" = "-" ]; then
+    FRAGMENT=/dev/stdin
+else
+    [ -s "$FRAGMENT" ] || { echo "Fragment not found: $FRAGMENT"; exit 1; }
+fi
 
 TARGET="$HOME/.claude/settings.json"
 [ -s "$TARGET" ] || { echo "Target not found: $TARGET"; exit 1; }
