@@ -36,7 +36,7 @@ Exit Criteria:
 - [x] stop_checks 拡張 (commit 5b7baf3・deploy 済 LIVE): provide-user-instructions family (manual-exec 文脈 + host-cmd が fence/inline-backtick 外に残れば warn、strip_fences・ホスト側 は exec 動詞必須化) + verify-before-claim positive side (網羅した等 completeness self-claim を EVIDENCE_TOOLS 無しで warn、確認済み除外・reasonable default は assertion anchor 要・strip_fences 適用)。 設計 = corpus calibration workflow (wirtge98z、8295 blocks/2115 turns 実測) → 実装 → adversarial review workflow (wzfly2hxj、3 lens 再現) で HIGH FP 2 件 (bare ホスト側 over-fire = 156c671 と同型) 修正 → smoke 36/36 (9 既存 regression + 21 family + 6 review-FP guard、work file `/tmp/smoke_stop_checks_l3.py`)。 warning-only・advise-once 継承・block/turn-marker 不変
 - [x] UserPromptSubmit concern/correction injector (L4, commit b30363d・deploy 済 LIVE): `memory_surface.py` に `_concern_inject` を 1 block 統合。 user prompt を走査し concern→illuminate-not-reassure / correction→memory-routing を raise (enforce 不可ゆえ reminder 注入のみ、 discipline body は semantic 残)。 corpus calibration workflow (w32196ybw、 890 実 prompt) で tight phrase set 確定 → adversarial review (wuc1k7zmz) で 間違 を DROP (一般的「誤り」に発火し off-target・本 repo 最大 FP)・compaction continuation skip・OSError fail-open→drop を修正 → smoke 24/24 (work file `/tmp/smoke_l4_concern.py`)。 既存 throttle を sentinel key で channel ごと 900s 再利用・reminder は名前非埋込・fail-open。 発火率実測 ~2.8% (throttle 後 <1-2%)
 - [ ] (要相談) attribute-existing-issues は PreToolUse arm を**未構築** (2026-06-08 audit: find＋両 extensions json で不在確認、 CUT 対象なし)。 残るは design 判断 — (i) skill を semantic-only 据置で本項 close か (ii) stop_checks.py に honest-attribution warn family (既存/繰り越し/段階的拡張 等を誤 pattern 文脈と対で warn・advise-once) 新設か。 (ii) は 既存/段階的拡張 が通常散文に出る FP risk (POS_CLAIM/HOST_CMD と同 class) ゆえ H.S. 判断要
-- [ ] smoke 再現: skill_reminder_gate / declare_and_proceed_gate のみ embedded unittest 無し (stop_checks=12・memory_surface=10 は既存) → 2 gate の emit-vs-comply smoke を再作成 (旧 /tmp 揮発) → commit。 OLD 移動は**ほぼ完了** (illuminate/honest-commit/declare の 3 entry を 2026-05-27 退役済、 active MEMORY.md に 4 機構 cover 対象の残無し)
+- [x] smoke 再現: skill_reminder_gate (19 test) / declare_and_proceed_gate (14 test) に embedded `unittest.TestCase` (`GateTest`) を追加 — stop_checks の `EnforcementFamilyTest` 同方式で旧 /tmp smoke を再構築。 `python3 -m unittest <module>` で **33/33 green**・ruff/ty clean・両 `/etc/claude-code/hooks/` parity OK。 emit-vs-comply + branch/mutation/fail-open を網羅、 6-agent 敵対 review (coverage-gap/tautology/intent-fidelity) の真の gap を反映し既 cover/misuse 提案は drop。 commit 434cb99。 OLD 移動は完了済 (illuminate/honest-commit/declare の 3 entry を 2026-05-27 退役)
 
 経緯: 2026-05-28/29 session b188f677 で user 提起: 「信用を高めるためのスキルをたくさん作ったのだけれど、 それを高確率で発火できないシステム上の問題があるようだから、 そこをなんとかできると、 本当はベスト。 発火できなければ無価値」。 本 session でも writing-code/writing-python を .py hook 編集前に invoke 漏らした (= 本 task が解く問題の live 実例。 debug-guardrail 分析: ambient trigger 低 salience + 親 skill frame crowding + tool 層 enforcement 不在 = self-recall 構造不信頼)。
 
@@ -177,6 +177,16 @@ Exit Criteria:
 経緯: 2026-06-07 H.S. が SKILL-HOOK-CONTRACT.md 作業中に脱線提起 → 本 session で実装。 CwdChanged は v2.1.83 の実 event。 **ConfigChange の `source` field は findings.md に無かったが公式 hooks reference で実在確認** (入力例 `"source":"project_settings"`、 verify-before-claim 充足)。 CwdChanged 読み上げ文面は H.S. 指定「作業ディレクトリが変わりました。スラッシュ ホーム …」。 編集は拡張子なし script ゆえ declare bash + writing-bash/code invoke 経由。
 
 Work file: `files/voicevox_claude_alerts` + `files/claude_managed-voicevox.json`
+
+### voicevox SubagentStop 空入力 fix の回帰 test 恒久化
+
+Goal: 2026-06-08 に直した「SubagentStop で `last_assistant_message` 空 → Haiku が『テキストが提供されていません』を返し発話」バグ (commit 1cdc677、入力空なら Haiku を呼ばず固定句 `speak_cached`) の回帰 test を、 揮発でなく repo 追跡された形で残す。
+
+Exit Criteria:
+- [x] バグ修正 + deploy + commit (1cdc677、`/usr/local/bin/voicevox_claude_alerts` parity OK・mode 755)。 no-audio smoke (claude/voicevox_paplay stub・隔離 XDG) で 空→SKIPPED 固定句・claude 非呼出 / 非空→speak_summary / 空白のみ→fallback の 3 case PASS を確認
+- [ ] 恒久化: 上記 smoke (現状 `/tmp/smoke_voicevox_subagentstop.sh` 揮発) を repo 追跡 test 化。 voicevox は bash ゆえ embedded unittest 不可 — `files/` 配下に stub-based smoke script を置くか、 既存 voicevox smoke 群 (CwdChanged/ConfigChange も揮発) と束ねた harness を新設するか方針決定 (要相談・bash test の置き場規約が未確立)
+
+Work file: `files/voicevox_claude_alerts` (SubagentStop branch L661 付近) + 揮発 smoke `/tmp/smoke_voicevox_subagentstop.sh`
 
 ### skill_reminder_gate: PreToolUse:Skill で発火検出を state 化 (transcript-scan 簡素化)
 
