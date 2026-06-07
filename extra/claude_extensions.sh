@@ -146,7 +146,7 @@ copy --nobackup claude_user-hooks/check_commit_author.py    ~/.claude/hooks/chec
 copy --nobackup claude_user-hooks/push_prompting_check.py   ~/.claude/hooks/push_prompting_check.py
 copy --nobackup claude_user-hooks/memory_surface.py         ~/.claude/hooks/memory_surface.py
 copy --nobackup claude_user-hooks/subagent_gate_suggest.py  ~/.claude/hooks/subagent_gate_suggest.py
-run claude_user_settings inject "$TOP_DIR/files/claude_user-extensions.json"
+run claude_user_settings inject - < "$TOP_DIR/files/claude_user-extensions.json"
 
 # Deploy the user skills
 pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
@@ -232,7 +232,8 @@ if [ -n "$LOGIN_USER" ]; then
     copy --nobackup claude_user-hooks/push_prompting_check.py   $LOGIN_HOME/.claude/hooks/push_prompting_check.py --owner $LOGIN_USER --group $LOGIN_GROUP
     copy --nobackup claude_user-hooks/memory_surface.py         $LOGIN_HOME/.claude/hooks/memory_surface.py       --owner $LOGIN_USER --group $LOGIN_GROUP
     copy --nobackup claude_user-hooks/subagent_gate_suggest.py  $LOGIN_HOME/.claude/hooks/subagent_gate_suggest.py --owner $LOGIN_USER --group $LOGIN_GROUP
-    run sudo -i -u $LOGIN_USER claude_user_settings inject "$TOP_DIR/files/claude_user-extensions.json"
+    # Feed the fragment on stdin: root opens it here, so the demoted user needs no read access
+    run sudo -i -u $LOGIN_USER claude_user_settings inject - < "$TOP_DIR/files/claude_user-extensions.json"
 
     # Deploy the user skills (dir absent when no user skills exist)
     pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
