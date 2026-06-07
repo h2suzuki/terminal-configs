@@ -268,6 +268,14 @@ Related: `subagent_gate_suggest.py`
 
 Related: `stop_checks.py`
 
+**push 催促の却下**
+
+1. Stop で、 `push_prompting_check` がこのターンの assistant 発言を走査し、 push を提案／確認／予定告知するフレーズ（「push しますか?」等）を検出する
+2. 命中したら exit 2 で却下し、 該当発話を取り消して再応答するよう stderr で促す
+3. git push は user 指示を待つ規律 (commit-discipline / push silence) を機械的に担保する
+
+Related: `push_prompting_check.py`
+
 **応答待ちの音声催促**
 
 1. Stop で、 voicevox_claude_alerts が最終発言の末尾文を取得し、 末尾が「？」または「?」(全角・半角の疑問符) の時だけ発話対象とする
