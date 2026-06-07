@@ -1,6 +1,313 @@
-# スキル・フックによるガードレイルの仕組み
+# スキルとフックの実装パターン
 
-## 背景と本ドキュメントの意図
+この文章は、本レポジトリに含まれる Claude Code Skills と Hooks の実装パターンについて解説する。
+
+
+## Skills
+
+skill は `SKILL.md` 1 ファイルで定義し、 YAML frontmatter と Markdown 本文から成ります。 「いつ・何を守るか」を frontmatter で宣言し、 規律の中身を本文に書きます。
+
+### Frontmatter
+
+必須フィールドは 3 つです。
+
+- `name` — skill 識別子 (英語・kebab-case)。 ディレクトリ名と一致させます。
+- `description` — skill が何をするかの 1 文 (英語)。 常時の skill 一覧に表示されます。
+- `when_to_use` — 発火条件 (英語)。 `TRIGGER when ...` と `SKIP when / for ...` を必ず両方書きます。 片方だけでは曖昧で、 誤発火・不発火を招きます。 trigger に埋め込むキーワードは、 引用符付きの日本語 (例 `"網羅した"`) を許容します。
+
+任意フィールドは、 必要な skill だけが付けます。
+
+- `argument-hint` / `arguments` — invocation 引数のヒントと引数名。
+- `context: fork` / `agent: general-purpose` — fork (subagent) 内で実行し、 main session の context を持たせない場合に付けます。
+- `paths` — 編集中ファイルでの auto-load 化。 ただし付けると skill 一覧・`/name`・Skill tool から description が外れて不可視になる副作用があるため、 真にパス限定が要る時だけ使います。
+- `disable-model-invocation: true` / `user-invocable: false` — それぞれ model から不可視・user から不可視。 意図しない限り付けません。
+
+frontmatter は英語で統一します。 日英の中途半端な mix は避けます。 description を短縮する際は、 削った詳細を本文へ書き残します (短縮は情報削除ではありません)。
+
+### 本文
+
+- frontmatter と `##` 見出しは英語、 本文は日本語で書けます。
+- 見出しは `Process` / `Rules` / `Output` / `Related` を優先し、 合わない時だけ他の英語名 (`Sources` / `Input` / `Examples` 等) を使います。
+- 冒頭は `# <Title Case のスキル名>` の H1 と、 防ぎたい失敗が滲む 1 段落で始めます。
+- `Related` では隣接 skill をシンボリックに引用し (例 `writing-code`)、 重複や直交する scope を明示して family 化します。
+- trigger の列挙では具体フレーズを引用します。 一般化しすぎると発火しません。
+- 本文に deploy 範囲外のパス・skill ディレクトリ外のファイル参照・会話文脈依存の参照を残しません (宙吊り防止)。
+
+
+
+## Hooks
+
+フック利用の概観を列挙します。
+
+
+### セッション
+
+セッションに関わるフック利用について説明する。
+
+
+#### SessionStart
+
+**Claude Feature Research**
+
+1. SessionStart で、Hook script が Claude の最新機能を調査し `$XDG_CACHE_DIR/claude-code-feature-research/findings.md` に書き込み
+2. Claude Code の機能に言及すると、複数のスキル (verify-before-claim 等) が findings.md 参照を指示
+3. LLM cut-over 後の最新仕様を把握して設計に生かす
+
+
+**コンテキスト引き継ぎ**
+
+1. ユーザーの「セッションを終わります」「セッションリセットします」といった言葉で /handoff スキルが起動するよう設定しておく
+2. /handoff がセッションの最終状況を transcript log の出力
+3. SessionStart で、同じプロジェクトの以前の transcript logs の最後を数ターン分読み、コンテキストを注入することで再開をスムーズにする
+
+
+**CLAUDE.md Linter**
+
+1. SessionStart で、CLAUDE.md ３レイヤー（managed / user / project）を読み、評価用のファイルを作成
+2. Recursive Entrance Guard: この後 claude background session を作るので、再入しないようにロックファイルを掴む（掴めなかったら再入扱いで即 exit）
+3. claude --bg .... で、background session をスタート → Hook script は直ちにリターン
+4. Haiku が、重複や矛盾がないかチェックし、System Prompt とも比較
+5. 処理が終わったら、background session は結果をファイルで返却
+6. UserPromptSubmit hook で結果ファイルを拾い、background session reap
+
+
+#### SessionEnd
+
+**セッション一時ファイルの掃除**
+
+1. SessionEnd で、 フックが session_id 由来の statusline cache・turn counter・transcript 隣接の `.turns` を削除
+2. 同時に両 cache dir を走査し、 mtime が 7 日 (CRUFT_TTL) より古い orphan だけを reap (active session は新しい mtime で除外)
+3. statusline.sh / stop_checks.py が撒く per-session cruft を確定的に回収。 crash/kill では SessionEnd が不発火ゆえ、 孤児は他セッションの clean exit に便乗して間接 GC
+
+
+
+### ターン
+
+ターンに関わるフック利用について説明する。
+
+#### UserPromptSubmit
+
+**過去事例の強制想起**
+
+1. UserPromptSubmit で、ユーザーのプロンプトから過去事例を検索
+2. マッチした事例のファイルパスと、事例に紐付く reminder ノートを additional context として挿入
+3. LLM は、その事例を繰り返さないように回避行動できる
+
+**懸念・訂正へのスキル喚起**
+
+1. UserPromptSubmit で、 フックがプロンプトを懸念フレーズ (心配 / 大丈夫? / 壊れない? 等) と訂正フレーズ (じゃなくて / 勝手に / 前も言った 等) に照合
+2. 懸念命中なら illuminate-not-reassure を、 訂正命中なら memory-routing を additional context で耳打ち (channel ごと 15 分 throttle)
+3. 安心や言いくるめで懸念を覆わず深掘りへ、 同じ指摘の再発を memory entry 化へ向かわせる
+
+**未コミットの取りこぼし防止**
+
+1. UserPromptSubmit で、 プロンプトに「handoff」「お疲れさま」「終わります」等の終了示唆を検出
+2. 検出時のみ `git status` を確認し、 未コミット変更があれば件数とパスを additional context で提示
+3. dirty なままセッションを閉じる regression を、 終了の意図が出た瞬間にだけ警告 (毎ターンのノイズを避ける)
+
+**サブエージェント委譲の助言**
+
+1. UserPromptSubmit で、 プロンプトに sweep / 全件 / 並列 / 複数対象 / 範囲不明 等のパターンを検出
+2. subagent-gate の 4 条件のうち 並列 / 大出力 / 3+ クエリ探索 の 3 つに該当しうると additional context で示唆 (専門領域は提示しない)
+3. main で Read / Grep を漫然と連発する前に、 委譲を一度 verbalize する機会を作る (判定自体は LLM に委ねる)
+
+#### Stop
+
+**不適当な発言の自動抑止**
+
+1. Stop で、このターンの会話を transcript log と `last_message` （フックを起動した末尾のメッセージ）から取得
+2. 不穏当フレーズを見つけたら、却下もしくはアドバイス判定
+3. 却下（例: A or B どちらからやりますか？）なら理由を添えてターン継続を指示
+   アドバイス（例: 心に刻みます）なら次のアクションをコンテキストに挿入
+
+**push 催促の抑止**
+
+1. Stop で、 `push_prompting_check` が直近ユーザー入力以降の assistant 発言だけを後方読みで抽出
+2. 「push しますか?」「push する予定」等の催促フレーズに命中したらターンを却下 (「push しました」等の事実報告は除外)
+3. push はユーザー駆動という原則を hard guard 化し、 Claude 由来の push 誘導を排除
+
+**応答待ちの音声催促**
+
+1. Stop で、 voicevox_claude_alerts が最終発言の末尾文を取得し、 末尾が「？」または「?」(全角・半角の疑問符) の時だけ発話対象とする
+2. 短い和文はそのまま、 長文や英単語入りは Haiku でカタカナ要約してから読み上げ
+3. 画面を見ていない相手が応答待ちを取りこぼさないよう耳で知らせる (バックグラウンド session は沈黙)
+
+
+#### StopFailure
+
+N/A
+
+
+### ツール
+
+ツール利用に関わるフック利用について説明する。
+
+#### PreToolUse
+
+**スキルを飛ばした行動の矯正 (capability-grant)**
+
+1. skill 発動 (または `declare` CLI) が「この対象を編集/質問/メモリ書き込みしてよい」という capability を発行 (編集・質問は当 turn ∪ 直近 5 分の窓、 メモリ書込は対象 path の grant を 1 時間鮮度で判定 — turn 概念は持たない)
+2. PreToolUse でフックが capability の有無を確認し、 無ければ却下 — `skill_reminder_gate` がコード編集を、 `memory_routing_gate` (guard) がメモリ書き込みを、 `declare_and_proceed_gate` が AskUserQuestion を gate
+3. 正しい kind を declare しスキルを通れば編集が通る。 発火依存をやめ、 スキルのルールに沿わせる
+
+**読まずに編集を防ぐ**
+
+1. PreToolUse で、 `read_before_edit` (check) が編集対象の最新 mtime に一致する Read 記録を要求
+2. 未読なら「未 Read」、 読後に内容が変わっていれば「内容が変化」を理由に却下 (Read 自体は止めない)
+3. ディスク上の最新内容を見ずに書き換える盲目編集を塞ぐ
+
+**宙吊り参照のブロック**
+
+1. PreToolUse で、 `dangling_ref_check` が永続ファイルへの new content を走査
+2. deploy 範囲外のパスや ephemeral タグ (Plan X / Phase α 等) を見つけたら却下し、 inline 化やタグ削除を指示
+3. 再 deploy や時間経過で参照が宙吊りになる regression を防ぐ (意図的記載は `dangling-ref-check: allow` で opt-out)
+
+**コメントへの経緯混入を防ぐ**
+
+1. PreToolUse で、 `comment_rationale_gate` が new content のコメント行だけを抽出
+2. 「以前は」「移行用」等の経緯マーカーに命中したら却下し、 経緯は commit message へ寄せるよう誘導
+3. コードの進化と乖離して未来の読み手を誤誘導するコメントを残さない
+
+**commit 規律**
+
+1. PreToolUse:Bash で、 `deny_compound_git_add` / `deny_compound_git_commit` が `git add` / `git commit` の compound 形 (`&&` 等) を却下し、 staged 状態を確定させてから後続 gate へ渡す
+2. `check_commit_format` が subject を `<area>: <Capital>` 形式で検証し、 72 字超または形式不一致は却下、 50 字超 (51-72) は soft warn で通す (`-F`/`--file` は内容到達不能ゆえ却下)
+3. `check_commit_author` が effective な user.email を期待値と照合し、 別人名義の commit を阻止
+
+**cwd 汚染の予防**
+
+1. PreToolUse:Bash で、 `avoid_cd` が行頭の `cd` を検出
+2. ブロックはせず、 絶対パス・`git -C`・`pushd`/`popd` への置換を additional context で提案
+3. cwd drift で後続コマンドが突然失敗する事故を未然に減らす
+
+**サブエージェント乱発の助言**
+
+1. PreToolUse:Task|Agent で、 `subagent_gate_warn` が prompt・agent 種別・description を機械的に検査
+2. 単一 Read / 単一 grep 相当の軽い spawn と判定したら、 subagent-gate の 4 条件のどれに該当するか verbalize せよと助言 (却下はしない)
+3. spawn overhead が見合わない委譲を抑え、 直接実行の安い経路へ誘導
+
+#### PostToolUse
+
+**読んだ事実の刻印 (読まずに編集を防ぐ、の後段)**
+
+1. PostToolUse:Read|Write で、 `read_before_edit` (record) が読んだ範囲 (Read は offset/limit、 Write は file 全体) と現 mtime を state に追記
+2. PreToolUse (check) がこの派生 state を参照して編集可否を判定
+3. record と check が対になり、 刻印が次の編集 gate の根拠になる (7 日で prune)
+
+**メモリ index の自己修復**
+
+1. PostToolUse:Write で、 memory entry の書き込みを検知し、 `memory_routing_gate` (sync) が `memory_surface --upsert` を起動
+2. FTS DB を再同期し、 スキル側の upsert 漏れを保険として self-heal
+3. PostToolUse ゆえ却下はせず、 後の検索 (過去事例の想起) が新 entry を拾える状態を保つ
+
+**完了済み todos block の削除催促**
+
+1. PostToolUse:Bash で、 `todos_completion_check` が todos.md に触れた `git commit` を検知
+2. working tree の todos.md を直読し、 全 checkbox が [x] の親 block が残っていれば検出
+3. 次 commit での block 削除か、 保留作業の checkbox 化かを additional context で促す (完了記録の残置を防ぐ)
+
+#### PostToolUseFailure
+
+**cwd 汚染の検出**
+
+1. Bash 失敗時、 `detect_cwd_pollution` が出力を pathspec / no-such-file パターンと照合
+2. cwd 由来のエラーと判定したら、 現在の cwd を添えた助言を additional context で注入
+3. 原因に気付かず推測 retry を繰り返す前に、 絶対パス・`git -C` での書き直しへ導く (ブロックはしない)
+
+
+### スキル
+
+スキル利用に関わるフック利用について説明する。
+
+#### UserPromptExpansion
+
+N/A
+
+
+
+### 権限
+
+権限判定に関わるフック利用について説明する。
+
+#### PermissionRequest
+
+N/A
+
+#### PermissionDenied
+
+N/A
+
+### サブエージェント
+
+サブエージェントの活用状況に関わるフック利用について説明する。
+
+#### SubagentStart
+
+**サブエージェント起動の通知**
+
+1. SubagentStart で、voicevox_claude_alerts が内部 subagent (agent 種別が空) を除外
+2. 一定時間 throttle した上で「サブエージェントを起動しています。」を発話
+3. 起動を聞き逃さず、 内部 subagent 連発での発話氾濫を抑える
+
+#### SubagentStop
+
+**サブエージェント成果の要約読み上げ**
+
+1. SubagentStop で、voicevox_claude_alerts が内部 subagent を除外
+2. 最終報告を Haiku で 30 字程度の和文に要約して読み上げ (失敗時は固定句)
+3. サブエージェントが何を完了したかを耳で受け取る
+
+### 通知
+
+状態変化の通知に関わるフック利用について説明する。
+
+#### Notification
+
+**通知種別ごとの注意喚起**
+
+1. Notification で、voicevox_claude_alerts が通知種別 (idle / permission) を判定
+2. idle は一定時間の沈黙後に「作業が終わりました。」、 permission は message が needs your attention / needs your permission を含む時のみ「お伺いしたいことがあります。」を発話 (未知 message は誤発話回避で沈黙)
+3. 許可待ちや放置を見落とさないよう耳で知らせる (バックグラウンド session は沈黙)
+
+#### PreCompact
+
+**圧縮開始の前置き通知**
+
+1. PreCompact で、voicevox_claude_alerts がフォア/バックグラウンドを判定
+2. フォアは「コンテキストを圧縮します。」、 バックグラウンドは UUID 読み上げを避け session 特定はログ参照に促す句を発話
+3. コンテキスト圧縮の開始を耳で知らせる
+
+#### PostCompact
+
+N/A
+
+#### CwdChanged
+
+**作業ディレクトリ変更の読み上げ**
+
+1. CwdChanged で、voicevox_claude_alerts が移動後の cwd を取得 (30s throttle・バックグラウンドは沈黙)
+2. パスを Haiku でカタカナ読み (「/」→「スラッシュ」・各階層名カタカナ) に変換し「作業ディレクトリが変わりました。…」と発話
+3. path→読みを cache し、 同じ dir 再訪では Haiku を省く
+
+#### ConfigChange
+
+**設定リロードの確認発話**
+
+1. ConfigChange で、voicevox_claude_alerts がフォアグラウンド session のみ「設定をリロードしたよ。」を発話
+2. 設定の再読み込みが起きたことを耳で確認 (バックグラウンドは多重 ack 抑止で沈黙)
+3. 現状は payload の種別を見ず固定句のみ。 source 別に文言を分ける拡張余地あり
+
+#### WorktreeCreate
+
+**ワークツリー作成の通知**
+
+1. WorktreeCreate で、voicevox_claude_alerts が「ワークツリーを作成します。」を発話
+2. 作業ディレクトリの切り替わりを耳で知らせる最小ハンドラ (throttle なし)
+
+
+## 応用： スキル・フックによるガードレイルの仕組み
+
+これら
 
 ### CLAUDE.md
 
