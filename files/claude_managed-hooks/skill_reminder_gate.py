@@ -98,6 +98,7 @@ import os
 import re
 import sys
 import time
+import unittest
 
 HOME = os.path.expanduser("~")
 STATE_DIR = os.path.join(HOME, ".claude", "hooks", "state", "skill_reminder")
@@ -622,6 +623,430 @@ def main() -> int:
             pass  # fail-open: hook bug が tool を block しない
         return 0
     return 0
+
+
+class GateTest(unittest.TestCase):
+    """emit-vs-comply + branch coverage (lost /tmp smoke, now tracked).
+    Run: python3 -m unittest skill_reminder_gate"""
+
+    HOOKDIR = "/x/claude_managed-hooks"
+
+    @staticmethod
+    def _iso(ep):
+        return datetime.datetime.fromtimestamp(ep, datetime.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%S.%fZ"
+        )
+
+    @staticmethod
+    def _user(content="do it"):
+        return {"type": "user", "message": {"content": content}}
+
+    @classmethod
+    def _skill(cls, name, ts=None):
+        e = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "tool_use", "name": "Skill", "input": {"skill": name}}
+                ]
+            },
+        }
+        if ts is not None:
+            e["timestamp"] = cls._iso(ts)
+        return e
+
+    @staticmethod
+    def _transcript(entries):
+        import tempfile
+
+        p = os.path.join(tempfile.mkdtemp(), "t.jsonl")
+        with open(p, "w", encoding="utf-8") as f:
+            for e in entries:
+                f.write(json.dumps(e) + "\n")
+        return p
+
+    @staticmethod
+    def _declare_quiet(argv):
+        import io
+        from contextlib import redirect_stderr
+
+        with redirect_stderr(io.StringIO()):
+            return cmd_declare(argv)
+
+    def _gate(self, file_path, entries=None, sid="s1", tool="Edit", transcript=True):
+        import io
+        from contextlib import redirect_stdout
+
+        payload = {
+            "tool_name": tool,
+            "tool_input": {"file_path": file_path},
+            "cwd": "/tmp",
+            "session_id": sid,
+        }
+        if transcript:
+            payload["transcript_path"] = self._transcript(entries or [])
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            cmd_gate(payload)
+        out = buf.getvalue().strip()
+        return json.loads(out) if out else None
+
+    def _reason(self, result):
+        self.assertIsNotNone(result)
+        hso = result["hookSpecificOutput"]
+        self.assertEqual(hso["permissionDecision"], "deny")
+        return hso["permissionDecisionReason"]
+
+    # --- C1: extensioned auto-detect (relevant_skills) ---
+    def test_relevant_skills_by_extension(self):
+        self.assertEqual(
+            relevant_skills("/p/foo.py"), {"writing-code", "writing-python"}
+        )
+        self.assertEqual(relevant_skills("/p/foo.sh"), {"writing-code", "writing-bash"})
+        self.assertEqual(relevant_skills("/p/foo.zsh"), {"writing-code"})  # no add-on
+        self.assertEqual(
+            relevant_skills("/p/test_foo.py"),
+            {"writing-code", "writing-python", "writing-tests"},
+        )
+        self.assertEqual(
+            relevant_skills("/p/foo_test.go"), {"writing-code", "writing-tests"}
+        )
+        self.assertEqual(relevant_skills("/p/todos.md"), {"writing-todos"})
+        self.assertEqual(relevant_skills("/p/SKILL.md"), {"writing-skills"})
+        self.assertEqual(relevant_skills("/p/README.md"), set())  # skill-less
+        self.assertEqual(
+            relevant_skills(self.HOOKDIR + "/g.py"),
+            {"writing-skills", "writing-code", "writing-python"},
+        )
+
+    def test_relevant_skills_strips_backup_suffix(self):
+        self.assertEqual(
+            relevant_skills("/p/foo.py.bak"), {"writing-code", "writing-python"}
+        )
+        self.assertEqual(
+            relevant_skills("/p/foo.bash~"), {"writing-code", "writing-bash"}
+        )
+
+    # --- C2: shebang kind for extensionless existing files ---
+    def test_shebang_kind(self):
+        import tempfile
+
+        d = tempfile.mkdtemp()
+        cases = {
+            "#!/usr/bin/env python3\n": "python",
+            "#!/bin/bash\n": "bash",
+            "#!/bin/sh\n": "bash",
+            "#!/usr/bin/env -S python3 -u\n": "python",
+            "#!/usr/bin/perl\n": None,
+            "no shebang here\n": None,
+            "": None,
+        }
+        for i, (data, want) in enumerate(cases.items()):
+            p = os.path.join(d, f"f{i}")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(data)
+            self.assertEqual(_shebang_kind(p), want, repr(data))
+        self.assertIsNone(_shebang_kind(os.path.join(d, "does-not-exist")))
+
+    # --- C5: active = current turn AND within 5 min ---
+    def test_active_skills_window_and_turn(self):
+        now, w = 1_000_000.0, SKILL_WINDOW_SECONDS
+        u = self._user()
+        self.assertEqual(
+            _active_skills([u, self._skill("writing-code", now - 60)], now, w),
+            {"writing-code"},
+        )
+        self.assertEqual(  # same turn but older than window -> dropped
+            _active_skills([u, self._skill("writing-code", now - 600)], now, w), set()
+        )
+        self.assertEqual(  # prior-turn skill excluded (boundary = last user)
+            _active_skills(
+                [u, self._skill("writing-code", now - 10), self._user()], now, w
+            ),
+            set(),
+        )
+        meta = {"type": "user", "isMeta": True, "message": {"content": "expand"}}
+        self.assertEqual(  # isMeta is not a turn boundary
+            _active_skills([u, self._skill("writing-code", now - 10), meta], now, w),
+            {"writing-code"},
+        )
+        self.assertEqual(  # exactly at window edge -> kept (cutoff is strict <)
+            _active_skills([u, self._skill("writing-code", now - w)], now, w),
+            {"writing-code"},
+        )
+        self.assertEqual(  # no timestamp -> not dropped (counts as active)
+            _active_skills([u, self._skill("writing-code")], now, w), {"writing-code"}
+        )
+        self.assertIsNone(  # boundary absent -> fail-open signal
+            _active_skills([self._skill("writing-code")], now, w)
+        )
+
+    # --- C8: declare CLI round-trip ---
+    def test_declare_roundtrip(self):
+        import tempfile
+        from unittest import mock
+
+        d = tempfile.mkdtemp()
+        abs_path = os.path.join(d, "runme")
+        real = os.path.realpath(abs_path)
+        with (
+            mock.patch.object(sys.modules[__name__], "STATE_DIR", d),
+            mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "t1"}),
+        ):
+            self.assertEqual(self._declare_quiet([abs_path, "python"]), 0)
+            self.assertEqual(_declared_kinds("t1", real), ["python"])
+            self.assertEqual(self._declare_quiet([abs_path, "else"]), 0)  # overwrite
+            self.assertEqual(_declared_kinds("t1", real), ["else"])
+            self.assertEqual(
+                self._declare_quiet([abs_path, "frobnicate"]), 2
+            )  # unknown
+            self.assertEqual(self._declare_quiet(["rel/path", "python"]), 2)  # relative
+            self.assertEqual(self._declare_quiet([abs_path, ""]), 2)  # empty kind
+            self.assertEqual(self._declare_quiet([]), 2)  # too few args
+        with (
+            mock.patch.object(sys.modules[__name__], "STATE_DIR", d),
+            mock.patch.dict(os.environ, {}, clear=True),
+        ):
+            self.assertEqual(self._declare_quiet([abs_path, "python"]), 2)  # no sid
+
+    # --- C7/C6: cmd_gate emit-vs-comply ---
+    def test_gate_denies_code_file_without_skill(self):
+        r = self._reason(self._gate("/tmp/foo.py", entries=[self._user()]))
+        self.assertIn("writing-code", r)
+        self.assertIn("writing-python", r)
+
+    def test_gate_allows_code_file_with_skills_active(self):
+        self.assertIsNone(
+            self._gate(
+                "/tmp/foo.py",
+                entries=[
+                    self._user(),
+                    self._skill("writing-code"),
+                    self._skill("writing-python"),
+                ],
+            )
+        )
+
+    def test_gate_allows_skill_less_file(self):
+        self.assertIsNone(self._gate("/tmp/README.md", entries=[self._user()]))
+        self.assertIsNone(self._gate("/tmp/README.md", transcript=False))  # unread
+
+    def test_gate_denies_extensionless_undeclared(self):
+        import tempfile
+
+        p = os.path.join(tempfile.mkdtemp(), "newcmd")  # nonexistent -> no shebang
+        self.assertIn("declare", self._reason(self._gate(p, entries=[self._user()])))
+
+    def test_gate_declare_else_cannot_bypass_extensioned(self):
+        # C3: declare is additive; "else" on a .py cannot drop below auto-detect.
+        import tempfile
+        from unittest import mock
+
+        d = tempfile.mkdtemp()
+        py = os.path.join(d, "foo.py")
+        with (
+            mock.patch.object(sys.modules[__name__], "STATE_DIR", d),
+            mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "s1"}),
+        ):
+            self.assertEqual(self._declare_quiet([py, "else"]), 0)
+            r = self._reason(self._gate(py, entries=[self._user()], sid="s1"))
+        self.assertIn("writing-code", r)
+
+    def test_gate_extensionless_declared_else_allows(self):
+        import tempfile
+        from unittest import mock
+
+        d = tempfile.mkdtemp()
+        cmdfile = os.path.join(d, "runme")
+        with (
+            mock.patch.object(sys.modules[__name__], "STATE_DIR", d),
+            mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "s1"}),
+        ):
+            self.assertEqual(self._declare_quiet([cmdfile, "else"]), 0)
+            self.assertIsNone(self._gate(cmdfile, entries=[self._user()], sid="s1"))
+
+    def test_gate_failopen(self):
+        self.assertIsNone(self._gate("/tmp/foo.py", tool="Read"))  # non-gate tool
+        self.assertIsNone(  # no transcript -> enforce 不能で素通り
+            self._gate("/tmp/foo.py", entries=[self._user()], transcript=False)
+        )
+        self.assertIsNone(  # boundary absent -> fail-open
+            self._gate("/tmp/foo.py", entries=[self._skill("writing-code")])
+        )
+        self.assertIsNone(self._gate("/tmp/foo.py", entries=[]))  # empty transcript
+        self.assertEqual(self._raw("nope"), "")  # non-dict payload
+        self.assertEqual(  # non-dict tool_input
+            self._raw({"tool_name": "Edit", "tool_input": None}), ""
+        )
+        self.assertEqual(  # empty file_path
+            self._raw({"tool_name": "Edit", "tool_input": {"file_path": ""}}), ""
+        )
+
+    @staticmethod
+    def _raw(payload):
+        import io
+        from contextlib import redirect_stdout
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            cmd_gate(payload)
+        return buf.getvalue().strip()
+
+    def test_gate_denies_when_skill_too_old(self):
+        # C5 end-to-end: same-turn invoke older than 5 min is dropped -> deny.
+        old = 1_000_000  # epoch far before real time.time()
+        r = self._reason(
+            self._gate(
+                "/tmp/foo.py",
+                entries=[
+                    self._user(),
+                    self._skill("writing-code", old),
+                    self._skill("writing-python", old),
+                ],
+            )
+        )
+        self.assertIn("writing-code", r)
+
+    def test_gate_shebang_extensionless(self):
+        # C2 end-to-end: undeclared extensionless file, kind from shebang.
+        import tempfile
+
+        p = os.path.join(tempfile.mkdtemp(), "runme")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("#!/usr/bin/env python3\n")
+        self.assertIn(
+            "writing-python", self._reason(self._gate(p, entries=[self._user()]))
+        )
+        self.assertIsNone(  # both required skills active -> allow
+            self._gate(
+                p,
+                entries=[
+                    self._user(),
+                    self._skill("writing-code"),
+                    self._skill("writing-python"),
+                ],
+            )
+        )
+
+    def test_gate_declared_kinds(self):
+        # C3: extensionless uses declared kinds only; extensioned unions with auto-detect.
+        import tempfile
+        from unittest import mock
+
+        d = tempfile.mkdtemp()
+        cmdfile = os.path.join(d, "runme")
+        py = os.path.join(d, "mod.py")
+        with (
+            mock.patch.object(sys.modules[__name__], "STATE_DIR", d),
+            mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "s1"}),
+        ):
+            self.assertEqual(self._declare_quiet([cmdfile, "python"]), 0)
+            self.assertIn(  # extensionless declared python -> needs code+python
+                "writing-python",
+                self._reason(self._gate(cmdfile, entries=[self._user()], sid="s1")),
+            )
+            self.assertIsNone(
+                self._gate(
+                    cmdfile,
+                    entries=[
+                        self._user(),
+                        self._skill("writing-code"),
+                        self._skill("writing-python"),
+                    ],
+                    sid="s1",
+                )
+            )
+            self.assertEqual(self._declare_quiet([py, "test"]), 0)
+            self.assertIn(  # .py auto-detect {code,python} ∪ declared test -> +tests
+                "writing-tests",
+                self._reason(
+                    self._gate(
+                        py,
+                        entries=[
+                            self._user(),
+                            self._skill("writing-code"),
+                            self._skill("writing-python"),
+                        ],
+                        sid="s1",
+                    )
+                ),
+            )
+
+    def test_gate_session_isolation(self):
+        # declared state is keyed by session_id; another session does not inherit it.
+        import tempfile
+        from unittest import mock
+
+        d = tempfile.mkdtemp()
+        cmdfile = os.path.join(d, "runme")
+        with (
+            mock.patch.object(sys.modules[__name__], "STATE_DIR", d),
+            mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "s1"}),
+        ):
+            self.assertEqual(self._declare_quiet([cmdfile, "else"]), 0)
+            self.assertIsNone(self._gate(cmdfile, entries=[self._user()], sid="s1"))
+            self.assertIn(  # sid s2 has no declaration -> falls to declare-deny
+                "declare",
+                self._reason(self._gate(cmdfile, entries=[self._user()], sid="s2")),
+            )
+
+    def test_main_failopen_on_exception(self):
+        # 全例外を握り潰し exit 0 (fail-open): _load_tail raising must not deny.
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        payload = json.dumps(
+            {
+                "tool_name": "Edit",
+                "tool_input": {"file_path": "/tmp/foo.py"},
+                "cwd": "/tmp",
+                "session_id": "s1",
+                "transcript_path": "/x",
+            }
+        )
+        buf = io.StringIO()
+        with (
+            mock.patch.object(sys, "stdin", io.StringIO(payload)),
+            mock.patch.object(sys, "argv", ["x", "gate"]),
+            mock.patch.object(
+                sys.modules[__name__], "_load_tail", side_effect=RuntimeError("boom")
+            ),
+            redirect_stdout(buf),
+        ):
+            rc = main()
+        self.assertEqual(rc, 0)
+        self.assertEqual(buf.getvalue().strip(), "")  # no deny emitted
+
+    def test_is_turn_boundary(self):
+        self.assertTrue(
+            _is_turn_boundary({"type": "user", "message": {"content": "hi"}})
+        )
+        self.assertFalse(  # isMeta (skill expansion) is not a boundary
+            _is_turn_boundary(
+                {"type": "user", "isMeta": True, "message": {"content": "x"}}
+            )
+        )
+        self.assertFalse(_is_turn_boundary({"type": "assistant", "message": {}}))
+        self.assertFalse(  # list of only tool_result -> continuation
+            _is_turn_boundary(
+                {"type": "user", "message": {"content": [{"type": "tool_result"}]}}
+            )
+        )
+        self.assertTrue(  # list with a non-tool_result block -> boundary
+            _is_turn_boundary(
+                {
+                    "type": "user",
+                    "message": {"content": [{"type": "tool_result"}, {"type": "text"}]},
+                }
+            )
+        )
+        self.assertFalse(_is_turn_boundary({"type": "user", "message": {}}))
+
+    def test_parse_ts(self):
+        self.assertIsNotNone(_parse_ts("2026-06-02T04:45:24.945Z"))
+        for bad in (None, "", "not-a-date", 123):
+            self.assertIsNone(_parse_ts(bad))
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ import os
 import re
 import sys
 import time
+import unittest
 
 TARGET_SKILL = "declare-and-proceed"
 SKILL_WINDOW_SECONDS = 300  # active 窓 = 現 turn かつ直近 5 分以内
@@ -269,6 +270,254 @@ def main() -> int:
     except Exception:
         pass  # fail-open: hook bug が tool を block しない
     return 0
+
+
+class GateTest(unittest.TestCase):
+    """emit-vs-comply + branch coverage (lost /tmp smoke, now tracked).
+    Run: python3 -m unittest declare_and_proceed_gate"""
+
+    @staticmethod
+    def _iso(ep):
+        return datetime.datetime.fromtimestamp(ep, datetime.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%S.%fZ"
+        )
+
+    @staticmethod
+    def _user(content="do it"):
+        return {"type": "user", "message": {"content": content}}
+
+    @classmethod
+    def _skill(cls, name, ts=None):
+        e = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "tool_use", "name": "Skill", "input": {"skill": name}}
+                ]
+            },
+        }
+        if ts is not None:
+            e["timestamp"] = cls._iso(ts)
+        return e
+
+    @staticmethod
+    def _transcript(entries):
+        import tempfile
+
+        p = os.path.join(tempfile.mkdtemp(), "t.jsonl")
+        with open(p, "w", encoding="utf-8") as f:
+            for e in entries:
+                f.write(json.dumps(e) + "\n")
+        return p
+
+    @staticmethod
+    def _q(text):
+        return [
+            {
+                "question": text,
+                "header": "x",
+                "options": [{"label": "A"}, {"label": "B"}],
+            }
+        ]
+
+    def _gate(self, questions, entries=None, tool="AskUserQuestion", transcript=True):
+        import io
+        from contextlib import redirect_stdout
+
+        payload = {"tool_name": tool, "tool_input": {"questions": questions}}
+        if transcript:
+            payload["transcript_path"] = self._transcript(entries or [])
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            cmd_gate(payload)
+        out = buf.getvalue().strip()
+        return json.loads(out) if out else None
+
+    def _reason(self, result):
+        self.assertIsNotNone(result)
+        hso = result["hookSpecificOutput"]
+        self.assertEqual(hso["permissionDecision"], "deny")
+        return hso["permissionDecisionReason"]
+
+    # --- D4: question-text aggregation ---
+    def test_question_text_aggregates(self):
+        ti = {
+            "questions": [
+                {
+                    "question": "Q1",
+                    "header": "H1",
+                    "options": [{"label": "L1"}, {"label": "L2"}],
+                },
+                "not-a-dict",
+            ]
+        }
+        text = _question_text(ti)
+        for part in ("Q1", "H1", "L1", "L2"):
+            self.assertIn(part, text)
+        self.assertNotIn("not-a-dict", text)  # non-dict entries skipped
+        self.assertEqual(_question_text({}), "")
+
+    # --- D5: detect CONFIRM / ROUTING / open-design ---
+    def test_detect_confirm(self):
+        for q in (
+            "これで良いですか?",
+            "この方針で良いですか",
+            "適用して良いですか",
+            "進めて良いですか",
+        ):
+            self.assertTrue((_detect(q) or "").startswith("per-unit"), q)
+
+    def test_detect_routing(self):
+        for q in (
+            "どちらから調査しますか?",
+            "実装するか削除するか迷う",
+            "どこから着手しますか",
+        ):
+            self.assertTrue((_detect(q) or "").startswith("routing"), q)
+
+    def test_detect_open_design_none(self):
+        for q in ("命名はどうするのが良いと思いますか?", "次に何をすべきでしょうか"):
+            self.assertIsNone(_detect(q), q)
+
+    # --- D6: skill-active = current turn AND within 5 min ---
+    def test_skill_active(self):
+        now, w, s = 1_000_000.0, SKILL_WINDOW_SECONDS, TARGET_SKILL
+        u = self._user()
+        self.assertTrue(_skill_active([u, self._skill(s, now - 60)], s, now, w))
+        self.assertFalse(  # different skill
+            _skill_active([u, self._skill("writing-code", now - 60)], s, now, w)
+        )
+        self.assertFalse(  # same turn but older than window
+            _skill_active([u, self._skill(s, now - 600)], s, now, w)
+        )
+        self.assertFalse(  # prior-turn invoke excluded
+            _skill_active([u, self._skill(s, now - 10), self._user()], s, now, w)
+        )
+        self.assertTrue(  # exactly at window edge -> kept (cutoff is strict <)
+            _skill_active([u, self._skill(s, now - w)], s, now, w)
+        )
+        self.assertTrue(  # no timestamp -> not dropped
+            _skill_active([u, self._skill(s)], s, now, w)
+        )
+        self.assertIsNone(_skill_active([self._skill(s)], s, now, w))  # boundary absent
+
+    # --- D1/D2/D3/D7: cmd_gate emit-vs-comply ---
+    def test_gate_denies_confirm_without_skill(self):
+        r = self._reason(
+            self._gate(self._q("この方針で良いですか?"), entries=[self._user()])
+        )
+        self.assertIn("declare-and-proceed", r)
+
+    def test_gate_denies_routing_without_skill(self):
+        r = self._reason(
+            self._gate(self._q("どちらから調査しますか?"), entries=[self._user()])
+        )
+        self.assertIn("declare-and-proceed", r)
+        self.assertIn("routing", r)  # routing-specific citation, not confirm
+
+    def test_gate_allows_when_skill_active(self):  # D2 escape hatch
+        self.assertIsNone(
+            self._gate(
+                self._q("この方針で良いですか?"),
+                entries=[self._user(), self._skill(TARGET_SKILL)],
+            )
+        )
+
+    def test_gate_allows_open_design(self):  # D3 not detected
+        self.assertIsNone(
+            self._gate(
+                self._q("命名はどうするのが良いと思いますか?"), entries=[self._user()]
+            )
+        )
+
+    def test_gate_failopen(self):
+        q = self._q("この方針で良いですか?")
+        self.assertIsNone(self._gate(q, tool="Edit"))  # non-AskUserQuestion
+        self.assertIsNone(self._gate(q, transcript=False))  # no transcript
+        self.assertIsNone(  # boundary absent
+            self._gate(q, entries=[self._skill(TARGET_SKILL)])
+        )
+        self.assertIsNone(self._gate([], entries=[self._user()]))  # empty text
+        self.assertIsNone(self._gate(q, entries=[]))  # empty transcript
+        self.assertEqual(self._raw("nope"), "")  # non-dict payload
+        self.assertEqual(  # non-dict tool_input
+            self._raw({"tool_name": "AskUserQuestion", "tool_input": None}), ""
+        )
+
+    @staticmethod
+    def _raw(payload):
+        import io
+        from contextlib import redirect_stdout
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            cmd_gate(payload)
+        return buf.getvalue().strip()
+
+    def test_gate_denies_when_skill_too_old(self):
+        # D6 end-to-end: same-turn invoke older than 5 min is dropped -> deny.
+        old = 1_000_000  # epoch far before real time.time()
+        self.assertIsNotNone(
+            self._gate(
+                self._q("この方針で良いですか?"),
+                entries=[self._user(), self._skill(TARGET_SKILL, old)],
+            )
+        )
+
+    def test_main_failopen_on_exception(self):
+        # fail-open: hook bug が tool を block しない (_load_tail raising -> no deny).
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        payload = json.dumps(
+            {
+                "tool_name": "AskUserQuestion",
+                "tool_input": {"questions": self._q("この方針で良いですか?")},
+                "transcript_path": "/x",
+            }
+        )
+        buf = io.StringIO()
+        with (
+            mock.patch.object(sys, "stdin", io.StringIO(payload)),
+            mock.patch.object(
+                sys.modules[__name__], "_load_tail", side_effect=RuntimeError("boom")
+            ),
+            redirect_stdout(buf),
+        ):
+            rc = main()
+        self.assertEqual(rc, 0)
+        self.assertEqual(buf.getvalue().strip(), "")  # no deny emitted
+
+    def test_is_turn_boundary(self):
+        self.assertTrue(
+            _is_turn_boundary({"type": "user", "message": {"content": "hi"}})
+        )
+        self.assertFalse(  # isMeta (skill expansion) is not a boundary
+            _is_turn_boundary(
+                {"type": "user", "isMeta": True, "message": {"content": "x"}}
+            )
+        )
+        self.assertFalse(_is_turn_boundary({"type": "assistant", "message": {}}))
+        self.assertFalse(  # list of only tool_result -> continuation
+            _is_turn_boundary(
+                {"type": "user", "message": {"content": [{"type": "tool_result"}]}}
+            )
+        )
+        self.assertTrue(  # list with a non-tool_result block -> boundary
+            _is_turn_boundary(
+                {
+                    "type": "user",
+                    "message": {"content": [{"type": "tool_result"}, {"type": "text"}]},
+                }
+            )
+        )
+        self.assertFalse(_is_turn_boundary({"type": "user", "message": {}}))
+
+    def test_parse_ts(self):
+        self.assertIsNotNone(_parse_ts("2026-06-02T04:45:24.945Z"))
+        for bad in (None, "", "not-a-date", 123):
+            self.assertIsNone(_parse_ts(bad))
 
 
 if __name__ == "__main__":
