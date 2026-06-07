@@ -102,7 +102,7 @@ Exit Criteria:
 - [x] draft 要修正: SessionEnd N/A 訂正 + `### ConfigChange`→`####` + WorktreeCreate 新設 + 真の N/A 明記。 CwdChanged は本 session で voicevox 配線したため実 use-case 記載
 - [x] **(B) Skills フォーマット規約** を「## Skills」に記入 (frontmatter/本文構造/言語規約。 deploy 位置は doc「除外」原則ゆえ割愛)
 - [x] draft SessionStart の `xxxx Skill` placeholder を「複数のスキル (verify-before-claim 等)」で充足
-- [ ] H.S. レビュー承認 → Exit flip + block 削除。 register は ですます に統一済 (2026-06-07 H.S. 指定・commit 9fe0933、 prose 8 行を である→ですます・番号フロー step は体言止め維持)。 **残 1 件**: 現 SessionStart「コンテキスト引き継ぎ」step2「最終状況を transcript log の出力」は H.S. 原文の述部欠落 (自動修正せず温存・要確認)
+- [ ] H.S. レビュー承認 → Exit flip + block 削除。 register は ですます に統一済 (commit 9fe0933、 prose 8 行を である→ですます・番号フロー step は体言止め維持)、 SessionStart step2 の述部欠落も修正済 (commit d56b27c)。 残るは H.S. の最終 review (構成/粒度) のみ
 
 確定済みファクト (2026-06-07 本 session・再導出不要):
 - **task 定義** (H.S. 前 session 原文趣旨): 「SessionStart の見出しを少し書いた。 こんな感じで repo のフックを記入していってほしい。 Skill はフォーマットを規約として書ける。 CLAUDE.md のスキル&フック化は後半の応用編で概要 (ここのフックでなく Big Picture)」。
@@ -176,3 +176,16 @@ Exit Criteria:
 経緯: 2026-06-07 H.S. 提起。 拡張子なし script (voicevox_claude_alerts 等) は現状 declare 必須で friction (本 session でも declare bash が必要だった)。 既存ファイルなら shebang から bash/python を判定でき declare 不要ケースを増やせる。
 
 Work file: `files/claude_managed-hooks/skill_reminder_gate.py`
+
+### hooks in skills へ移行可能な hook の洗い出し
+
+Goal: Claude Code の「hooks in skills」(v2.1.0+、 特定 skill 限定の hook を settings.json でなく SKILL.md frontmatter に書ける機能) に移せる既存 hook があるか洗い出す。
+
+Exit Criteria:
+- [ ] feature 仕様確認: SKILL.md frontmatter の hook 書式・発火条件 (skill ロード中のみ発火)・scope を公式 hooks reference / findings.md (v2.1.0「hooks support for skill frontmatter」・v2.1.152 `reloadSkills`) で確定
+- [ ] 既存 hook (3 json の managed + user) を「特定 1 skill 専属 かつ その skill ロード済を前提に成立するか」で判定。 **skill ロード自体を目的とする gate (skill_reminder_gate / declare_and_proceed_gate / memory_routing_gate guard) は対象外** (skill 未ロードでは hook も不発火 = chicken-and-egg、 H.S. 指摘)。 候補を列挙 (ゼロも可)
+- [ ] 候補ごと移行 trade-off (settings.json 集中管理から外れる影響・常時発火要否・deploy 経路変更) を verbalize → 移行 or 据置を決定
+
+経緯: 2026-06-07 H.S. 提起。 feature 実在は findings.md (v2.1.0「Added hooks support for skill and slash command frontmatter」) で確認済。
+
+Work file: 3 json (`files/claude_managed-extensions.json` / `claude_user-extensions.json` / `claude_managed-voicevox.json`) + `SKILL-HOOK-CONTRACT.md` (hook カタログ・移行時に更新)
