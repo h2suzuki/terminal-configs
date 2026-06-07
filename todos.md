@@ -132,3 +132,16 @@ Exit Criteria:
 経緯: 2026-06-06 README 更新 session で実害発生。 README 編集の規律を借りるつもりで `document-editor` を引数なし invoke → fork が `M` だった `SKILL-HOOK-CONTRACT.md` (H.S. のレビュー中 draft、 触らない指示済) を勝手に整理し作業途中スカフォールドを削除。 fork の単一 Edit を transcript から byte 逆適用して復旧済。 cross-project の behavioral 記録は `~/.claude/memory/feedback_document_editor_fork_overwrite.md`。
 
 Work file: `files/claude_managed-skills/document-editor/SKILL.md`
+
+### voicevox_claude_alerts: CwdChanged 発話 + ConfigChange の種別分岐
+
+Goal: voicevox 通知を 2 点拡充 — (a) `CwdChanged` event で cwd 変化を発話、 (b) `ConfigChange` を payload 種別で発話文言を分岐 (現状は固定句「設定をリロードしたよ。」で種別無視)。
+
+Exit Criteria:
+- [ ] CwdChanged: `HOOK_EVENTS` + `case` 分岐 + `EVENT_PHRASES` に追加し、 `files/claude_managed-voicevox.json` に wiring 追加。 cd 連発のノイズ頻度抑止 (marker throttle 等) と bg session silent を考慮
+- [ ] ConfigChange: 種別を判定できる field (H.S. 推測 = `source`) が実在するかを **公式 hooks reference または実 payload (`CLAUDE_NOTIFY_DEBUG=1` の dump.jsonl) で確認** してから、 種別ごとに発話文言を分岐
+- [ ] 両者 smoke (CLI `say` / 実 event 発火) + source↔deploy sync (`files/voicevox_claude_alerts` ↔ `/usr/local/bin/`、 `files/claude_managed-voicevox.json` ↔ deploy 先)
+
+経緯: 2026-06-07 H.S. が SKILL-HOOK-CONTRACT.md 作業中に脱線提起 (発言者 H.S.・status 未着手・実装承認は未取得)。 CwdChanged は v2.1.83 の実 event (reactive env mgmt 用、 findings.md 確認済) だが voicevox 未処理。 **ConfigChange の `source` field は findings.md に記載なし = 未確認** — verify-before-claim: 実装前に payload schema を一次資料 or 実 dump で裏取り。 編集は拡張子なし script ゆえ `skill_reminder_gate.py declare <絶対path> bash` → writing-bash invoke が必要。
+
+Work file: `files/voicevox_claude_alerts` + `files/claude_managed-voicevox.json`
