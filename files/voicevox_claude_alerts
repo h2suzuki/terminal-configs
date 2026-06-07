@@ -661,12 +661,17 @@ $LAST_SENTENCE" "${EVENT_PHRASES[Stop]}"
   SubagentStop)
     is_internal_subagent && exit 0
     LAST_MSG=$(printf '%s' "$INPUT" | jq -r '.last_assistant_message // ""')
-    speak_summary "以下は AI サブエージェントが最後に出力したテキストです。
+    # 空入力(最終 turn が tool 呼出のみ等)を Haiku 要約させると「テキスト無し」旨を発話するため、固定句で通知する。
+    if [ -z "${LAST_MSG//[[:space:]]/}" ]; then
+      speak_cached "${EVENT_PHRASES[SubagentStop]}"
+    else
+      speak_summary "以下は AI サブエージェントが最後に出力したテキストです。
 このサブエージェントが何を完了・報告したかを、30 文字以下の自然な日本語で簡潔にまとめてください。アルファベットの単語・略語はそのまま残さず、すべて発音通りのカタカナに置き換えてください (例: commit → コミット、PR → ピーアール、push → プッシュ)。
 出力は要約のみ。装飾・引用符・改行・前置きなし。
 
 応答:
 $LAST_MSG" "${EVENT_PHRASES[SubagentStop]}"
+    fi
     ;;
   ConfigChange)
     is_background_session && exit 0  # 全 session が ack するので bg は silent (多重発話抑止)
