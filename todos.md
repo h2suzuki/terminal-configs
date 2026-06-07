@@ -115,7 +115,7 @@ Exit Criteria:
 - [x] draft 要修正: SessionEnd N/A 訂正 + `### ConfigChange`→`####` + WorktreeCreate 新設 + 真の N/A 明記。 CwdChanged は本 session で voicevox 配線したため実 use-case 記載
 - [x] **(B) Skills フォーマット規約** を「## Skills」に記入 (frontmatter/本文構造/言語規約。 deploy 位置は doc「除外」原則ゆえ割愛)
 - [x] draft SessionStart の `xxxx Skill` placeholder を「複数のスキル (verify-before-claim 等)」で充足
-- [ ] H.S. レビュー承認 → Exit flip + block 削除。 register は ですます に統一済 (commit 9fe0933、 prose 8 行を である→ですます・番号フロー step は体言止め維持)、 SessionStart step2 の述部欠落も修正済 (commit d56b27c)。 残るは H.S. の最終 review (構成/粒度) のみ
+- [ ] H.S. レビュー承認 → Exit flip + block 削除。 register は ですます に統一済 (commit 9fe0933、 prose 8 行を である→ですます・番号フロー step は体言止め維持)、 SessionStart step2 の述部欠落も修正済 (commit d56b27c)。 残るは H.S. の最終 review (構成/粒度) のみ。 2026-06-08 本 session で skill 一覧 (全 22 entry に category＋≤2文概要)・全 hook の Related 記入・UserPromptExpansion 節 (probe 結果)・Stop の push_prompting_check 欠落補完・応用節 bridge 文を追記し、 hook 記述を 20-agent workflow で実 source 検証して修正 (stop_checks 重複統合・§0 表 block family 4→6) — これらも H.S. review 対象 (commit 20a4858 / 0cf974c)
 
 確定済みファクト (2026-06-07 本 session・再導出不要):
 - **task 定義** (H.S. 前 session 原文趣旨): 「SessionStart の見出しを少し書いた。 こんな感じで repo のフックを記入していってほしい。 Skill はフォーマットを規約として書ける。 CLAUDE.md のスキル&フック化は後半の応用編で概要 (ここのフックでなく Big Picture)」。
@@ -201,7 +201,7 @@ Exit Criteria:
 
 経緯: 2026-06-08 UPE 調査の副産物 (probe 実機確認)。 UserPromptExpansion は user-typed slash command 展開でのみ発火し model 自己 invoke では鳴らない (→ UPE は skill_reminder_gate 代替に使えない) 一方、 PreToolUse は `tool_name:"Skill"` / `tool_input.skill` 付きで model 自己 invoke を直接捕捉すると判明 (先の claude-code-guide subagent「PreToolUse は Skill を intercept 不可」は実機で誤りと確認)。 現 gate は transcript 末尾を後方読みして Skill block を探す (docstring 56-66 行が turn-boundary 判定を load-bearing と明記) が、 PreToolUse:Skill なら検出を event 化でき fragile ロジックを削れる可能性。
 
-Work file: `files/claude_managed-hooks/skill_reminder_gate.py` (SKILL-HOOK-CONTRACT.md の UserPromptExpansion 節 (現「N/A」) も移行時に "user-typed のみ発火" へ追記候補)
+Work file: `files/claude_managed-hooks/skill_reminder_gate.py` (SKILL-HOOK-CONTRACT.md の UserPromptExpansion 節は本 session で "user-typed のみ発火" を記載済 — commit 20a4858)
 
 ### hooks in skills へ移行可能な hook の洗い出し
 
