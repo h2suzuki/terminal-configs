@@ -20,6 +20,9 @@
     ],
     "WorktreeCreate": [
       { "hooks": [ { "type": "command", "command": "/usr/local/bin/voicevox_claude_alerts WorktreeCreate" } ] }
+    ],
+    "CwdChanged": [
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/voicevox_claude_alerts CwdChanged" } ] }
     ]
   }
 }

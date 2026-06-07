@@ -30,6 +30,8 @@
 #       SubagentStop      + last_assistant_message, agent_type
 #       SubagentStart     + agent_type
 #       Notification      + notification_type, message
+#       ConfigChange      + source (user_settings|project_settings|local_settings|policy_settings|skills)
+#       CwdChanged        + cwd (common field; the new working directory)
 #     For Notification, notification_type ∈ permission_prompt, idle_prompt,
 #     auth_success, elicitation_dialog, elicitation_complete,
 #     elicitation_response — only the first two are handled below.
@@ -151,6 +153,7 @@ HOOK_EVENTS=(
   ConfigChange
   PreCompact
   WorktreeCreate
+  CwdChanged
 )
 
 # Per-event default / fallback phrase. Single source of truth shared by the
@@ -167,6 +170,7 @@ declare -A EVENT_PHRASES=(
   [ConfigChange]="設定をリロードしたよ。"
   [PreCompact]="コンテキストを圧縮します。"
   [WorktreeCreate]="ワークツリーを作成します。"
+  [CwdChanged]="作業ディレクトリが変わりました。"
 )
 
 # Derive the program name from $0 so renaming the script also moves its
@@ -421,7 +425,7 @@ ensure_lock "$HAIKU_LOCK"
 # Stale per-session markers accumulate when XDG_RUNTIME_DIR is persistent
 # (e.g. some non-systemd setups). 1h is well past any meaningful suppression
 # window (idle = 90s, subagent inhibition = 30s).
-find "$RUNTIME_DIR" -type f \( -name 'spoke-recently-*' -o -name 'subagent-start-*' \) \
+find "$RUNTIME_DIR" -type f \( -name 'spoke-recently-*' -o -name 'subagent-start-*' -o -name 'cwd-changed-*' \) \
   -mmin +60 -delete 2>/dev/null
 
 INPUT="$(cat)"
@@ -451,6 +455,7 @@ fi
 
 SPOKE_MARKER="$RUNTIME_DIR/spoke-recently-$SESSION_ID"
 SUBAGENT_MARKER="$RUNTIME_DIR/subagent-start-$SESSION_ID"
+CWD_MARKER="$RUNTIME_DIR/cwd-changed-$SESSION_ID"
 
 # All three speak_* helpers detach via `setsid -f` (the parent script
 # returns to Claude Code immediately) and serialize voicevox playback
@@ -527,6 +532,38 @@ speak_summary() {
     printf "%s %-14s sid=%s %-13s %-11s %s\n" "$(date -Iseconds)" "$event" "$sid" "haiku=$status" "dur=${dur_ms}ms" "$summary" >> "$log"
     flock "$vvox_lock" timeout "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS "$summary"
   ' _ "$prompt" "$fallback" "$VVOX_LOCK" "$EVENT" "$SPOKEN_LOG" "$HAIKU_TIMEOUT" "$SESSION_ID" </dev/null >/dev/null 2>&1
+}
+
+# CwdChanged: cwd を「作業ディレクトリが変わりました。」+ スラッシュ区切りカタカナ読みで発話。 path→読みを cache し再訪で Haiku を省く。
+speak_cwd() {
+  local cwd="$1"
+  setsid -f bash -c '
+    cwd=$1
+    vvox_lock=$2
+    log=$3
+    sid=$4
+    fallback=$5
+    cache_dir=$6
+    mkdir -p "$cache_dir"
+    # path 内容ハッシュで読みを cache。 Haiku 出力は非決定的なので読みを固定し、 合成 --cache も効かせる。
+    key=$(cksum <<<"$cwd"); key=${key%% *}
+    cache_file="$cache_dir/$key"
+    if [ -s "$cache_file" ]; then
+      reading=$(<"$cache_file"); status=CACHED
+    else
+      reading=$(haiku_katakanize_sync "次は変更後の作業ディレクトリの絶対パスです。音声読み上げ用に、文頭へ「作業ディレクトリが変わりました。」を付け、続けてパスを、区切りの / は「スラッシュ」と読み、各階層名のアルファベットは発音どおりのカタカナにして、空白区切りの一文で返してください。出力は一文のみ。装飾・引用符・改行・前置きなし。
+パス:
+$cwd")
+      if [ -n "$reading" ]; then
+        printf "%s" "$reading" >"$cache_file"; status=OK
+      else
+        reading=$fallback; status=EMPTY
+      fi
+    fi
+    reading=${reading:0:200}
+    printf "%s %-14s sid=%s %-13s %-11s %s\n" "$(date -Iseconds)" "CwdChanged" "$sid" "haiku=$status" "dur=N/A" "$reading" >> "$log"
+    flock "$vvox_lock" timeout "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS --cache "$reading"
+  ' _ "$cwd" "$VVOX_LOCK" "$SPOKEN_LOG" "$SESSION_ID" "${EVENT_PHRASES[CwdChanged]}" "$STATE_DIR/cwd-readings" </dev/null >/dev/null 2>&1
 }
 
 age_of() {
@@ -633,7 +670,15 @@ $LAST_MSG" "${EVENT_PHRASES[SubagentStop]}"
     ;;
   ConfigChange)
     is_background_session && exit 0  # 全 session が ack するので bg は silent (多重発話抑止)
-    speak_cached "${EVENT_PHRASES[ConfigChange]}"
+    # source field (公式 hooks reference で確認) で設定種別ごとに文言を分岐。 未知 source は既定句。
+    case "$(printf '%s' "$INPUT" | jq -r '.source // ""')" in
+      user_settings)    speak_cached "ユーザー設定を変更したよ。" ;;
+      project_settings) speak_cached "プロジェクト設定を変更したよ。" ;;
+      local_settings)   speak_cached "ローカル設定を変更したよ。" ;;
+      policy_settings)  speak_cached "ポリシー設定を変更したよ。" ;;
+      skills)           speak_cached "スキルを変更したよ。" ;;
+      *)                speak_cached "${EVENT_PHRASES[ConfigChange]}" ;;
+    esac
     ;;
   PreCompact)
     # bg は発話を短縮 (UUID 読み上げが冗長になるため)、 sessionId は spoken.log の
@@ -646,6 +691,16 @@ $LAST_MSG" "${EVENT_PHRASES[SubagentStop]}"
     ;;
   WorktreeCreate)
     speak_cached "${EVENT_PHRASES[WorktreeCreate]}"
+    ;;
+  CwdChanged)
+    is_background_session && exit 0  # bg は cwd 追従不要なので silent
+    if [ "$(age_of "$CWD_MARKER")" -ge 30 ]; then  # cd 連発のノイズ抑止
+      NEW_CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // ""')
+      if [ -n "$NEW_CWD" ]; then
+        speak_cwd "$NEW_CWD"
+        touch "$CWD_MARKER"
+      fi
+    fi
     ;;
 esac
 
