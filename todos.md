@@ -61,18 +61,18 @@ Exit Criteria:
 
 Work file: `last-session-handoff.md` + commit f1dab94。 残 = deploy (別 session) + 実機確認
 
-### declare-and-proceed gate: 散文の二択質問への post-hoc 検出
+### declare-and-proceed gate: 散文の二択質問への coverage 拡張
 
-Goal: `declare_and_proceed_gate` は PreToolUse(`^AskUserQuestion$`) のみを gate するため、 AskUserQuestion tool を使わず **散文で二択質問** (「A するか B するか?」「これで良いですか?」) を出すと不発火で素通りする。 この死角を Stop hook (`stop_checks.py`) で assistant turn message を走査して塞ぐ。
+Goal: `declare_and_proceed_gate` は PreToolUse(`^AskUserQuestion$`) のみを gate するため、 AskUserQuestion tool を使わず **散文で二択質問** (「A するか B するか?」「これで良いですか?」) を出すと素通りする。 `stop_checks.py` には既に `order-question-to-user` block family (順序質問の user 投げを block) があるが narrow で、 CONFIRM/ROUTING 系の散文質問は漏れる。 この coverage gap を埋める。
 
 Exit Criteria:
-- [ ] `stop_checks.py` に declare-and-proceed family を追加: 最終 assistant turn message を `declare_and_proceed_gate` の CONFIRM/ROUTING regex で走査し、 match かつ declare-and-proceed が当 turn (∪直近5分) 未 invoke なら block (decision:block、 stop_checks 既存の advise-once gate 流用で自己 block loop 回避)
+- [ ] `stop_checks.py` の `order-question-to-user` family を拡張するか CONFIRM/ROUTING family を新設し、 最終 assistant turn message を `declare_and_proceed_gate` の CONFIRM/ROUTING 相当で走査、 match かつ declare-and-proceed が当 turn (∪直近5分) 未 invoke なら block (decision:block、 既存 advise-once gate 流用で自己 block loop 回避)
 - [ ] SKIP category (destructive pre-approval / user-taste / open which-X の design 質問) は `declare_and_proceed_gate` と同一基準で silent pass (FP 抑制)
-- [ ] smoke (散文 confirm/routing 二択 → block / SKIP category → pass / declare-and-proceed invoke 後 → pass / 既存 stop_checks family 無回帰) + deploy (`/etc/claude-code/hooks/stop_checks.py`、 source==deploy 一致)
+- [ ] smoke (散文 confirm/routing → block / SKIP category → pass / declare-and-proceed invoke 後 → pass / 既存 6 block family 無回帰) + deploy (`/etc/claude-code/hooks/stop_checks.py`、 source==deploy 一致)
 
-経緯: 2026-06-08 H.S. 提起。 本 session で assistant が UPE probe の続行可否を AskUserQuestion でなく **散文の二択** で H.S. に問い、 declare-and-proceed 違反 (decidable を自分で決めず外注)。 `declare_and_proceed_gate` は tool matcher ゆえ不発火だった。 PreToolUse で散文出力を pre-block する手段は無く (= 評価語 post-hoc check と同型の「dead-on-arrival」制約)、 Stop の decision:block で「待たずに自分で決めて続行せよ」と差し戻すのが唯一の channel (post-hoc・reactive だが model を継続させ実質 decide を強制)。 `stop_checks.py` は既に assistant turn message を走査し block + advise-once を持つため拡張で対応可。
+経緯: 2026-06-08 H.S. 提起。 本 session で assistant が UPE probe の続行可否を AskUserQuestion でなく **散文の二択** で H.S. に問い、 declare-and-proceed 違反 (decidable を自分で決めず外注)。 `declare_and_proceed_gate` は tool matcher ゆえ不発火。 PreToolUse で散文出力を pre-block する手段は無く (= 評価語 post-hoc check と同型の「dead-on-arrival」制約)、 Stop の decision:block で「待たずに自分で決めて続行せよ」と差し戻すのが唯一の channel。 当初 todo は「stop_checks に新規 family 追加」と書いたが、 同 session の SKILL-HOOK-CONTRACT 検証で `order-question-to-user` block family が既存と判明 (私の質問は順序でなく routing ゆえ既存 pattern に漏れた) → 「既存機構の coverage 拡張」へ訂正。
 
-Work file: `files/claude_managed-hooks/stop_checks.py` (拡張先) + `files/claude_managed-hooks/declare_and_proceed_gate.py` (検出 regex の流用元)
+Work file: `files/claude_managed-hooks/stop_checks.py` (拡張先・既存 `order-question-to-user` family L185/491) + `files/claude_managed-hooks/declare_and_proceed_gate.py` (検出 regex の流用元)
 
 ## Medium
 
