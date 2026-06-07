@@ -170,10 +170,25 @@ Work file: `files/claude_managed-skills/document-editor/SKILL.md`
 Goal: voicevox 通知を 2 点拡充 — (a) `CwdChanged` event で cwd 変化を発話、 (b) `ConfigChange` を payload 種別で発話文言を分岐 (現状は固定句「設定をリロードしたよ。」で種別無視)。
 
 Exit Criteria:
-- [ ] CwdChanged: `HOOK_EVENTS` + `case` 分岐 + `EVENT_PHRASES` に追加し、 `files/claude_managed-voicevox.json` に wiring 追加。 cd 連発のノイズ頻度抑止 (marker throttle 等) と bg session silent を考慮
-- [ ] ConfigChange: 種別を判定できる field (H.S. 推測 = `source`) が実在するかを **公式 hooks reference または実 payload (`CLAUDE_NOTIFY_DEBUG=1` の dump.jsonl) で確認** してから、 種別ごとに発話文言を分岐
-- [ ] 両者 smoke (CLI `say` / 実 event 発火) + source↔deploy sync (`files/voicevox_claude_alerts` ↔ `/usr/local/bin/`、 `files/claude_managed-voicevox.json` ↔ deploy 先)
+- [x] CwdChanged: `HOOK_EVENTS` + `case` + `EVENT_PHRASES` + json wiring 追加・30s marker throttle・bg silent (commit 22ce4fd)。 cwd は H.S. 指定で Haiku カタカナ読み (専用 `speak_cwd`、 path→読みを STATE_DIR に cache し再訪で Haiku 省略)
+- [x] ConfigChange: `source` field 実在を**公式 hooks reference で確認** (payload に `"source"` あり・値 user/project/local/policy_settings + skills の 5 種) → source 別に発話分岐、 未知 source は既定句 fallback
+- [x] no-audio smoke (voicevox_paplay/claude を stub・隔離 XDG dir) で 全 5 source 分岐 + 未知 fallback + CwdChanged の Haiku→cache HIT を spoken.log で確認
+- [x] source↔deploy sync 済 (`sudo install`: script→`/usr/local/bin/voicevox_claude_alerts` 0755、 json→`/etc/claude-code/managed-settings.d/voicevox.json`、 両 `diff -q` 一致)
+- [ ] 実機で実 event 発火 + 音声を H.S. が確認 (deploy 済み LIVE だが stub smoke のみで live audio 未観測。 audio 経路自体は既存 7 event と同一の proven path)
 
-経緯: 2026-06-07 H.S. が SKILL-HOOK-CONTRACT.md 作業中に脱線提起 (発言者 H.S.・status 未着手・実装承認は未取得)。 CwdChanged は v2.1.83 の実 event (reactive env mgmt 用、 findings.md 確認済) だが voicevox 未処理。 **ConfigChange の `source` field は findings.md に記載なし = 未確認** — verify-before-claim: 実装前に payload schema を一次資料 or 実 dump で裏取り。 編集は拡張子なし script ゆえ `skill_reminder_gate.py declare <絶対path> bash` → writing-bash invoke が必要。
+経緯: 2026-06-07 H.S. が SKILL-HOOK-CONTRACT.md 作業中に脱線提起 → 本 session で実装。 CwdChanged は v2.1.83 の実 event。 **ConfigChange の `source` field は findings.md に無かったが公式 hooks reference で実在確認** (入力例 `"source":"project_settings"`、 verify-before-claim 充足)。 CwdChanged 読み上げ文面は H.S. 指定「作業ディレクトリが変わりました。スラッシュ ホーム …」。 編集は拡張子なし script ゆえ declare bash + writing-bash/code invoke 経由。
 
 Work file: `files/voicevox_claude_alerts` + `files/claude_managed-voicevox.json`
+
+### skill_reminder_gate: 既存ファイルの shebang で kind 自動判定
+
+Goal: skill_reminder_gate の write gate が file kind 不明時に declare を強制する friction を、 既存ファイルの 1 行目 shebang から kind を自動判定して減らす。
+
+Exit Criteria:
+- [ ] 既存ファイル (path 実在 + 1 行目が読める) の編集時、 shebang (`#!.../bash`・`#!/usr/bin/env bash` → bash、 `#!.../python` → python 等) で kind を auto-detect し required skill を決める (拡張子 auto-detect の補完)
+- [ ] 新規ファイル / 1 行目が読めない場合は既存動作 (拡張子判定 → 不明なら declare 要求) を維持
+- [ ] smoke (shebang ありの拡張子なし既存 file は declare 不要で writing-bash 経由のみ要求 / 新規・空・shebang なし file は従来通り declare 要求) + deploy (`/etc/claude-code/hooks/`)
+
+経緯: 2026-06-07 H.S. 提起。 拡張子なし script (voicevox_claude_alerts 等) は現状 declare 必須で friction (本 session でも declare bash が必要だった)。 既存ファイルなら shebang から bash/python を判定でき declare 不要ケースを増やせる。
+
+Work file: `files/claude_managed-hooks/skill_reminder_gate.py`
