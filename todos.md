@@ -69,6 +69,7 @@ Exit Criteria:
 - [x] `stop_checks.py` に CONFIRM/ROUTING family を**新設** (order-question は順序専用ゆえ拡張でなく新設)。 検出 regex は `declare_and_proceed_gate` の prose 版 copy、 `_declare_proceed_active()` で当 turn invoke 判定 → 未 invoke かつ match なら blocking.append (advise-once 自動流用)。 **spec 逸脱**: 「∪直近5分」でなく「当 turn 内 invoke」(Stop は turn 終端発火で 5 分窓が long-turn FP 源ゆえ・H.S. review 対象)
 - [x] SKIP category (destructive pre-approval / user-taste / open which-X design) は skill-active escape hatch で `declare_and_proceed_gate` と同一基準 silent pass
 - [x] smoke (embedded `EnforcementFamilyTest` 9 件: 散文 confirm/routing→block / open design→pass / declare invoke 後→pass / 既存 family 無回帰) + deploy (`/etc/claude-code/hooks/stop_checks.py` parity OK)。 commit d4b068f・unittest 17/17・ruff/ty clean
+- [ ] H.S. review + 観測: (1) spec 「∪直近5分」→「当 turn 内 invoke」変更 (turn-blocking hook の FP 最小化) の承認可否、 (2) 散文 CONFIRM/ROUTING を whole-message 走査する prose-FP (declarative 文の誤発火) を観測 → 必要なら `?` anchor / tail-only 走査で tighten (sibling family の v1-FP 同様 observe-then-tighten)
 
 経緯: 2026-06-08 H.S. 提起。 本 session で assistant が UPE probe の続行可否を AskUserQuestion でなく **散文の二択** で H.S. に問い、 declare-and-proceed 違反 (decidable を自分で決めず外注)。 `declare_and_proceed_gate` は tool matcher ゆえ不発火。 PreToolUse で散文出力を pre-block する手段は無く (= 評価語 post-hoc check と同型の「dead-on-arrival」制約)、 Stop の decision:block で「待たずに自分で決めて続行せよ」と差し戻すのが唯一の channel。 当初 todo は「stop_checks に新規 family 追加」と書いたが、 同 session の SKILL-HOOK-CONTRACT 検証で `order-question-to-user` block family が既存と判明 (私の質問は順序でなく routing ゆえ既存 pattern に漏れた) → 「既存機構の coverage 拡張」へ訂正。
 
