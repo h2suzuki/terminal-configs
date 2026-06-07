@@ -63,22 +63,6 @@ Work file: `last-session-handoff.md` + commit f1dab94。 残 = deploy (別 sessi
 
 ## Medium
 
-### feature-research に Claude Developer Platform source 追加
-
-Goal: SessionStart の `feature_findings_build.py` に第 2 source (Claude Developer Platform release notes) を足し、 cutoff 後の公式ツール (`ant` CLI 等) / API / Managed Agents の delta も findings.md で認知できるようにする (2026-06-04 H.S. 依頼)。
-
-Exit Criteria:
-- [x] builder に platform parser + section emit 追加 (commit 2a52abd): `parse_platform` + `build_platform_section`、 source `platform.claude.com/docs/en/release-notes/overview.md`、 `### <date>` ブロック verbatim、 cutoff>=2026-01、 `_parse_date` を序数 `15th` 許容の superset 拡張。 findings.md 先頭 `## v<claude_ver>` 不変・platform fetch fail-soft (CC のみ出力+`_log_err`)・rebuild trigger は claude version 据置
-- [x] smoke offline (`--platform-input` sample `--stdout`): pre-cutoff 序数 (`Dec 20th, 2025`/`Jul 15th, 2024`) DROP・`Jan 1, 2026` 境界 KEEP・nested 子 bullet 保全・`<Tip>` 前文 skip を確認。 ruff lint+format + ty all clean
-- [x] 消費側 5 skill 文言更新 (commit beec079): 「Claude Code 仕様 delta」→「Claude Code ＋ Claude Developer Platform」へ broaden、 核心の「不明 spec は findings.md を Read」は保持
-- [x] findings.md 実 fetch 再生成 (`--force` exit0): 先頭 `## v2.1.161` (=`claude --version` 一致で version 整合維持)、 platform section (line 1469) に実物 ant CLI entry (line 1548「We've launched the `ant` CLI …」) 着地、 pre-cutoff 漏れ無し・fetch error log 無し
-- [x] deploy 済: `/etc/claude-code/hooks/feature_findings_build.py` (mode 0755) + 5 skill を `sudo install`、 全 6 件 source==deployed 確認 (symlink `~/.claude/skills/*` 経由で反映)
-- [x] H.S. レビュー承認 (2026-06-07 H.S.「閉じられると思います」で承認) — skill 文言 broaden + platform section verbatim-by-date 書式 OK
-
-Note: 機能は完成・LIVE deploy 済・end-to-end 検証済。 残る受入条件 (H.S. レビュー承認) は上記 Exit Criterion 化済 (prose Note でなく checkbox で表す規律)。
-
-Work file: builder = `files/claude_managed-hooks/feature_findings_build.py`
-
 ### Claude Code 拡張 installer (extra/claude_extensions.sh)
 
 Goal: agent-browser (Vercel skill+CLI) / Playwright MCP (Microsoft @playwright/mcp) / Figma plugin (Anthropic marketplace) を per-user (scope=user) で入れる opt-in script を提供し、 再実行で in-place upgrade できる。
