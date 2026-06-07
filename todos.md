@@ -102,7 +102,7 @@ Exit Criteria:
 - [x] draft 要修正: SessionEnd N/A 訂正 + `### ConfigChange`→`####` + WorktreeCreate 新設 + 真の N/A 明記。 CwdChanged は本 session で voicevox 配線したため実 use-case 記載
 - [x] **(B) Skills フォーマット規約** を「## Skills」に記入 (frontmatter/本文構造/言語規約。 deploy 位置は doc「除外」原則ゆえ割愛)
 - [x] draft SessionStart の `xxxx Skill` placeholder を「複数のスキル (verify-before-claim 等)」で充足
-- [ ] H.S. レビュー承認 → Exit flip + block 削除。 **未解決の要相談 2 件**: (a) Skills 節は ですます prose (応用編 に合わせた)・カタログは である/体言止めで register 不一致、 (b) L60「最終状況を transcript log の出力」は H.S. 原文の述部欠落 (自動修正せず温存・要確認)
+- [ ] H.S. レビュー承認 → Exit flip + block 削除。 register は ですます に統一済 (2026-06-07 H.S. 指定・commit 9fe0933、 prose 8 行を である→ですます・番号フロー step は体言止め維持)。 **残 1 件**: 現 SessionStart「コンテキスト引き継ぎ」step2「最終状況を transcript log の出力」は H.S. 原文の述部欠落 (自動修正せず温存・要確認)
 
 確定済みファクト (2026-06-07 本 session・再導出不要):
 - **task 定義** (H.S. 前 session 原文趣旨): 「SessionStart の見出しを少し書いた。 こんな感じで repo のフックを記入していってほしい。 Skill はフォーマットを規約として書ける。 CLAUDE.md のスキル&フック化は後半の応用編で概要 (ここのフックでなく Big Picture)」。
