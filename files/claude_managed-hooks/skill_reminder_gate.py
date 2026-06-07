@@ -29,7 +29,9 @@ gate flow:
                     .py を else 宣言で gating 無効化する穴を塞ぐ)
       拡張子なし → required = ∪(宣言 kind の skill)  (declare が唯一の真実源)
   elif 拡張子あり → required = relevant_skills(path)
-  else (拡張子なし・未宣言) → DENY「絶対 path で kind を declare せよ」; return
+  else (拡張子なし・未宣言):
+      既存 file の shebang (#!.../bash|python) → required = KIND_SKILLS[kind]
+      shebang 無し/未知 interp/新規 file        → DENY「kind を declare せよ」; return
   required が空            → ALLOW (skill-less file。transcript 非読込)
   active = 現 turn かつ直近 5 分以内の Skill invoke 集合 (現 turn を後方 1 つ読み ts で drop)
   active 判定不能 (corrupted) → ALLOW (fail-open)
@@ -74,7 +76,8 @@ boundary 不在のときも ALLOW に倒す。
 residual (閉じない・既知)
 =========================
 - 拡張子なし file の kind 語彙選択は model 判断 (bash を else 誤宣言ですり抜け)。
-  detour deny で declare は強制できるが語彙は model が選ぶ。
+  detour deny で declare は強制できるが語彙は model が選ぶ。 未宣言 file は shebang で
+  bash/python を auto-detect (declared 分岐は従来通り declare が真実源・shebang 非適用)。
 - 未収載の exotic 言語拡張子 (CODE_EXTENSIONS 外) は skill-less 扱い。
 - .j2/.in/.tmpl 等 templating 拡張子は config 多数ゆえ skill-less 許容 (.bak/
   .orig/.swp/~ の backup/swap は元拡張子を復元して gate)。
@@ -280,6 +283,34 @@ def relevant_skills(path: str) -> set[str]:
         if _is_test(path):
             skills.add("writing-tests")
     return skills
+
+
+SHEBANG_MAXLEN = 256
+
+
+def _shebang_kind(path: str) -> str | None:
+    """既存 file の 1 行目 shebang から kind (bash|python) を判定。無し/未知/読めない → None。"""
+    try:
+        with open(path, "rb") as f:
+            first = f.readline(SHEBANG_MAXLEN).decode("utf-8", "replace").strip()
+    except OSError:
+        return None
+    if not first.startswith("#!"):
+        return None
+    tokens = first[2:].split()
+    if not tokens:
+        return None
+    interp = os.path.basename(tokens[0])
+    if interp == "env":  # `#!/usr/bin/env [VAR=v]... <interp>`
+        rest = [t for t in tokens[1:] if not t.startswith("-") and "=" not in t]
+        if not rest:
+            return None
+        interp = os.path.basename(rest[0])
+    if interp.startswith("python"):
+        return "python"
+    if interp == "sh" or interp.endswith("bash"):
+        return "bash"
+    return None
 
 
 # --- declare state (拡張子なし file 用・session persistent) ---
@@ -503,8 +534,11 @@ def cmd_gate(payload: dict) -> None:
     elif _has_extension(path):
         required = relevant_skills(path)
     else:
-        _deny_declare(os.path.basename(path))
-        return
+        kind = _shebang_kind(path)  # 既存 file の shebang で bash|python を補完
+        if kind is None:
+            _deny_declare(os.path.basename(path))
+            return
+        required = set(KIND_SKILLS[kind])
 
     if not required:
         return  # skill-less file。transcript 非読込。

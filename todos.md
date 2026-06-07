@@ -182,9 +182,9 @@ Work file: `files/voicevox_claude_alerts` + `files/claude_managed-voicevox.json`
 Goal: skill_reminder_gate の write gate が file kind 不明時に declare を強制する friction を、 既存ファイルの 1 行目 shebang から kind を自動判定して減らす。
 
 Exit Criteria:
-- [ ] 既存ファイル (path 実在 + 1 行目が読める) の編集時、 shebang (`#!.../bash`・`#!/usr/bin/env bash` → bash、 `#!.../python` → python 等) で kind を auto-detect し required skill を決める (拡張子 auto-detect の補完)
-- [ ] 新規ファイル / 1 行目が読めない場合は既存動作 (拡張子判定 → 不明なら declare 要求) を維持
-- [ ] smoke (shebang ありの拡張子なし既存 file は declare 不要で writing-bash 経由のみ要求 / 新規・空・shebang なし file は従来通り declare 要求) + deploy (`/etc/claude-code/hooks/`)
+- [x] 既存ファイル (path 実在 + 1 行目が読める) の編集時、 shebang (`#!.../bash`・`#!/usr/bin/env bash` → bash、 `#!.../python` → python 等) で kind を auto-detect し required skill を決める (拡張子 auto-detect の補完)。 `_shebang_kind()` + cmd_gate else 分岐。 declared 分岐は非適用 = 「declare が真実源」を維持 (env -S・sh・rbash も判定)
+- [x] 新規ファイル / 1 行目が読めない場合は既存動作 (拡張子判定 → 不明なら declare 要求) を維持。 未知 interp (node/ruby/zsh) も declare 要求で regression 無し
+- [x] smoke 26/26 (unit 15 + nonexistent 1 + 統合 10、 work file `/tmp/smoke_srg_shebang.py`) + deploy (`sudo install -m 0755` で `/etc/claude-code/hooks/`、 diff -q parity OK)。 ruff/ty clean
 
 経緯: 2026-06-07 H.S. 提起。 拡張子なし script (voicevox_claude_alerts 等) は現状 declare 必須で friction (本 session でも declare bash が必要だった)。 既存ファイルなら shebang から bash/python を判定でき declare 不要ケースを増やせる。
 
