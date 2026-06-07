@@ -190,6 +190,19 @@ Exit Criteria:
 
 Work file: `files/claude_managed-hooks/skill_reminder_gate.py`
 
+### skill_reminder_gate: PreToolUse:Skill で発火検出を state 化 (transcript-scan 簡素化)
+
+Goal: `skill_reminder_gate` の skill 発火検出を、 現在の transcript 末尾 scan から `PreToolUse(matcher:"Skill")` hook による state 刻印方式へ移行できるか検討し、 移行すれば fragile な turn-boundary 判定群を削減する。
+
+Exit Criteria:
+- [ ] `PreToolUse(matcher:"Skill")` で model 自己 invoke を skill 名付きで捕捉し `(sid, skill, ts)` を session state に刻印する record arm を実装 (gate arm はその state を読む)
+- [ ] 移行 trade-off を verbalize: 現 transcript-scan (実機 verified・smoke 51/51) の維持コスト vs state 方式の利得 (turn-boundary/isMeta/5分窓ロジック削減) と新リスク (state 永続化・PreToolUse 発火順・edit が skill invoke と同 batch のとき record が gate より先に走るか) → 移行 or 据置を決定
+- [ ] 移行する場合: smoke (model invoke → record → 同 turn edit allow / skill 無し → deny / fail-open) + deploy。 据置なら本 block を理由付きで close
+
+経緯: 2026-06-08 UPE 調査の副産物 (probe 実機確認)。 UserPromptExpansion は user-typed slash command 展開でのみ発火し model 自己 invoke では鳴らない (→ UPE は skill_reminder_gate 代替に使えない) 一方、 PreToolUse は `tool_name:"Skill"` / `tool_input.skill` 付きで model 自己 invoke を直接捕捉すると判明 (先の claude-code-guide subagent「PreToolUse は Skill を intercept 不可」は実機で誤りと確認)。 現 gate は transcript 末尾を後方読みして Skill block を探す (docstring 56-66 行が turn-boundary 判定を load-bearing と明記) が、 PreToolUse:Skill なら検出を event 化でき fragile ロジックを削れる可能性。
+
+Work file: `files/claude_managed-hooks/skill_reminder_gate.py` (SKILL-HOOK-CONTRACT.md の UserPromptExpansion 節 (現「N/A」) も移行時に "user-typed のみ発火" へ追記候補)
+
 ### hooks in skills へ移行可能な hook の洗い出し
 
 Goal: Claude Code の「hooks in skills」(v2.1.0+、 特定 skill 限定の hook を settings.json でなく SKILL.md frontmatter に書ける機能) に移せる既存 hook があるか洗い出す。
