@@ -20,7 +20,8 @@
           { "type": "command", "command": "/etc/claude-code/hooks/avoid_cd.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/deny_compound_git_add.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/deny_compound_git_commit.py" },
-          { "type": "command", "command": "/etc/claude-code/hooks/check_commit_format.py" }
+          { "type": "command", "command": "/etc/claude-code/hooks/check_commit_format.py" },
+          { "type": "command", "command": "/etc/claude-code/hooks/deny_unsafe_git_reset.py" }
         ]
       },
       {
