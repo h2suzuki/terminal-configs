@@ -9,6 +9,7 @@ import os
 import re
 import sys
 import time
+import unittest
 
 
 HOME = os.path.expanduser("~")
@@ -135,16 +136,17 @@ def _turns_text(entries: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
-# /handoff skill が chat 出力冒頭に出す区切りマーカー (~~~~ … Handoff … ~~~~)。
-# user 語の keyword 推測 (誤マッチ多) でなく、 この明示マーカーのみを anchor にする。
+# /handoff skill が chat 出力冒頭に出す区切りマーカー (~~~~ … Handoff (<sid>) … ~~~~)。
+# SKILL.md の例・body 抜粋・過去 handoff も同形ゆえ、 prior session の full sid を含む marker のみを anchor とする。
 _MARKER_RE = re.compile(r"~{4,}[^\n]*\bHandoff\b[^\n]*~{2,}", re.IGNORECASE)
 
 
-def _trim_before_handoff(text: str) -> str:
-    """handoff マーカーを含むブロック以降を返す; マーカー不在は trim せず原文 (keyword 推測は廃止)。"""
-    m = _MARKER_RE.search(text)
-    if not m:
+def _trim_before_handoff(text: str, sid: str = "") -> str:
+    """prior session の full sid を含む handoff マーカー以降を返す。 template/抜粋 marker (sid 無し) は除外、 該当無し・sid 空は原文。"""
+    cands = [m for m in _MARKER_RE.finditer(text) if sid and sid in m.group()]
+    if not cands:
         return text
+    m = cands[-1]  # 同 sid 複数 = 同 session 再 handoff、 最新 (最後) を採る
     bs = text.rfind("\n\n", 0, m.start())
     return text[bs + 2 :] if bs >= 0 else text
 
@@ -164,7 +166,10 @@ def main() -> int:
     prior = _find_prior_session(cwd, session_id)
     if not prior:
         return 0
-    text = _trim_before_handoff(_turns_text(_load_tail(prior, RECENT_TURNS))).strip()
+    prior_sid = os.path.basename(prior).rsplit(".", 1)[0]
+    text = _trim_before_handoff(
+        _turns_text(_load_tail(prior, RECENT_TURNS)), prior_sid
+    ).strip()
     if len(text) < MIN_TEXT_LEN:
         return 0
     if len(text) > MAX_INJECT_LEN:  # 末尾 (最新=handoff 側) を残す
@@ -185,6 +190,86 @@ def main() -> int:
     }
     json.dump(out, sys.stdout)
     return 0
+
+
+class TrimBeforeHandoffTest(unittest.TestCase):
+    """_trim_before_handoff の sid-anchor 回帰 (SKILL.md L98: marker は full $CLAUDE_CODE_SESSION_ID を埋める)。
+    出所: 2026-06-08 実機 — 直近 3 turn の text に SKILL.md の template marker (placeholder sid) と
+    handoff body 内の省略引用 (~~~~ … Handoff (<8桁>…) ~~~~) が混入し、 first-match search が
+    template を誤 anchor → wind-down が trim されず 4000 字超で truncate した。"""
+
+    SID = "5262c4b2-7933-4f6b-893f-35405925375c"
+
+    def _mk(self, *blocks: str) -> str:
+        return "\n\n".join(blocks)
+
+    def test_picks_sid_marker_over_earlier_template(self):
+        text = self._mk(
+            "👤 wind-down 議論",
+            "🤖 例: ~~~~ Monday Handoff (session ID) ~~~~ という形式です",
+            f"🤖 ~~~~~~~~ Monday, 2026/6/8 09:19 Handoff ({self.SID}) ~~~~~~\n## 引き継ぎ本体",
+        )
+        out = _trim_before_handoff(text, self.SID)
+        self.assertTrue(out.startswith("🤖 ~~~~~~~~ Monday"))
+        self.assertIn("## 引き継ぎ本体", out)
+        self.assertNotIn("wind-down 議論", out)
+        self.assertNotIn("session ID", out)
+
+    def test_ignores_abbreviated_body_quote_after_real_marker(self):
+        real = (
+            f"🤖 ~~~~~~~~ Mon Handoff ({self.SID}) ~~~~~~\n"
+            "## 本体\n上の marker (~~~~ … Handoff (5262c4b2…) ~~~~) 以降だけ"
+        )
+        out = _trim_before_handoff(self._mk("👤 q", "🤖 中間", real), self.SID)
+        self.assertTrue(out.startswith("🤖 ~~~~~~~~ Mon Handoff"))
+        self.assertNotIn("中間", out)
+
+    def test_no_sid_marker_returns_full(self):
+        text = self._mk("👤 q", "🤖 例 ~~~~ Handoff (other999) ~~~~", "🤖 結び")
+        self.assertEqual(_trim_before_handoff(text, self.SID), text)
+
+    def test_no_marker_returns_full(self):
+        text = self._mk("👤 q", "🤖 ただの会話")
+        self.assertEqual(_trim_before_handoff(text, self.SID), text)
+
+    def test_rehandoff_picks_last(self):
+        text = self._mk(
+            "👤 q",
+            f"🤖 ~~~~ Handoff ({self.SID}) ~~~~\n古い handoff",
+            "👤 やり直し",
+            f"🤖 ~~~~ Handoff ({self.SID}) ~~~~\n新しい handoff",
+        )
+        out = _trim_before_handoff(text, self.SID)
+        self.assertIn("新しい handoff", out)
+        self.assertNotIn("古い handoff", out)
+
+    def test_empty_sid_returns_full(self):
+        text = self._mk("👤 q", f"🤖 ~~~~ Handoff ({self.SID}) ~~~~\n本体")
+        self.assertEqual(_trim_before_handoff(text, ""), text)
+
+    def test_marker_at_text_start_returns_full(self):
+        text = f"🤖 ~~~~ Handoff ({self.SID}) ~~~~\n本体"  # 先頭 = preceding \n\n 無し
+        self.assertEqual(_trim_before_handoff(text, self.SID), text)
+
+
+class TurnBoundaryTest(unittest.TestCase):
+    """_is_turn_boundary: human-input turn のみ起点 (isMeta / tool_result 継続は非起点)。 窓選択の load-bearing 不変。"""
+
+    def test_str_user_content_is_boundary(self):
+        self.assertTrue(
+            _is_turn_boundary({"type": "user", "message": {"content": "hi"}})
+        )
+
+    def test_meta_is_not_boundary(self):
+        self.assertFalse(
+            _is_turn_boundary(
+                {"type": "user", "isMeta": True, "message": {"content": "x"}}
+            )
+        )
+
+    def test_tool_result_only_list_is_not_boundary(self):
+        obj = {"type": "user", "message": {"content": [{"type": "tool_result"}]}}
+        self.assertFalse(_is_turn_boundary(obj))
 
 
 if __name__ == "__main__":
