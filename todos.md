@@ -211,16 +211,3 @@ Exit Criteria:
 経緯: 2026-06-08 UPE 調査の副産物 (probe 実機確認)。 UserPromptExpansion は user-typed slash command 展開でのみ発火し model 自己 invoke では鳴らない (→ UPE は skill_reminder_gate 代替に使えない) 一方、 PreToolUse は `tool_name:"Skill"` / `tool_input.skill` 付きで model 自己 invoke を直接捕捉すると判明 (先の claude-code-guide subagent「PreToolUse は Skill を intercept 不可」は実機で誤りと確認)。 現 gate は transcript 末尾を後方読みして Skill block を探す (docstring 56-66 行が turn-boundary 判定を load-bearing と明記) が、 PreToolUse:Skill なら検出を event 化でき fragile ロジックを削れる可能性。
 
 Work file: `files/claude_managed-hooks/skill_reminder_gate.py` (SKILL-HOOK-CONTRACT.md の UserPromptExpansion 節は本 session で "user-typed のみ発火" を記載済 — commit 20a4858)
-
-### hooks in skills へ移行可能な hook の洗い出し
-
-Goal: Claude Code の「hooks in skills」(v2.1.0+、 特定 skill 限定の hook を settings.json でなく SKILL.md frontmatter に書ける機能) に移せる既存 hook があるか洗い出す。
-
-Exit Criteria:
-- [x] feature 仕様確認: skill-frontmatter hook は SKILL.md の `hooks:` key で宣言・**その skill が active な間のみ発火**・settings.json hook に加算(置換でない)・**停止点 docs 未文書化**(曖昧)と確定。always-on global policy 不適、skill-active 窓限定の turn-scoped 挙動のみ安全 (findings.md L1064 v2.1.0 / L887 v2.1.152 reloadSkills + 公式 hooks/skills reference を claude-code-guide 照合)
-- [x] 既存 hook 判定: 全 26 entry (managed 14・user 4・voicevox + arm 分割) を実 source 読みで criterion 判定 (workflow w224loe9f、4 evaluator 並列 + 敵対 completeness critic、両方 candidate=0)。**候補 = 0**。excluded_gate = 3 (skill_reminder_gate / declare_and_proceed_gate / memory_routing_gate guard、H.S. 指定通り)、not_candidate = 23 (always-on global discipline で window-sufficient/single-skill/timing いずれか不成立)
-- [x] trade-off → 決定: 候補ゼロゆえ移行対象なし → **全 hook を settings.json 据置**。構造的理由 = skill-adjacent な hook (check_uncommitted_at_handoff / session_resume_context / subagent_gate_* / memory_surface / memory_routing_gate sync / check_push_prompting) は全て「関連 skill 未 invoke のケースを捕まえる backstop/proxy」で窓限定だと母集団を取り逃す。check_uncommitted_at_handoff は criterion-4 timing trap (handoff 起動の wind-down prompt 上で skill ロード前に発火)、session_resume_context は前 session の handoff 成果物を新 session 開始時に読む、stop_checks は 5+ skill 横断で single-skill 不成立
-
-経緯: 2026-06-07 H.S. 提起。 feature 実在は findings.md (v2.1.0「Added hooks support for skill and slash command frontmatter」) で確認済。
-
-Work file: 3 json (`files/claude_managed-extensions.json` / `claude_user-extensions.json` / `claude_managed-voicevox.json`) + `SKILL-HOOK-CONTRACT.md` (hook カタログ・移行時に更新)
