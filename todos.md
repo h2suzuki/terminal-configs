@@ -183,7 +183,7 @@ Exit Criteria:
 - [x] ConfigChange: `source` field 実在を**公式 hooks reference で確認** (payload に `"source"` あり・値 user/project/local/policy_settings + skills の 5 種) → source 別に発話分岐、 未知 source は既定句 fallback
 - [x] no-audio smoke (voicevox_paplay/claude を stub・隔離 XDG dir) で 全 5 source 分岐 + 未知 fallback + CwdChanged の Haiku→cache HIT を spoken.log で確認
 - [x] source↔deploy sync 済 (`sudo install`: script→`/usr/local/bin/voicevox_claude_alerts` 0755、 json→`/etc/claude-code/managed-settings.d/voicevox.json`、 両 `diff -q` 一致)
-- [ ] 実機で実 event 発火 + 音声を H.S. が確認 (deploy 済み LIVE だが stub smoke のみで live audio 未観測。 audio 経路自体は既存 7 event と同一の proven path)
+- [x] 実機で実 event 発火 + 音声を H.S. が確認 (2026-06-08: LIVE `/usr/local/bin/voicevox_claude_alerts` に実 payload 投入 → spoken.log に 4 発話記録 [CwdChanged カタカナ path 読み + ConfigChange user/skills/unknown-fallback 分岐]・`--loopback` 経由再生・**H.S. が実音声を確認**)
 
 経緯: 2026-06-07 H.S. が SKILL-HOOK-CONTRACT.md 作業中に脱線提起 → 本 session で実装。 CwdChanged は v2.1.83 の実 event。 **ConfigChange の `source` field は findings.md に無かったが公式 hooks reference で実在確認** (入力例 `"source":"project_settings"`、 verify-before-claim 充足)。 CwdChanged 読み上げ文面は H.S. 指定「作業ディレクトリが変わりました。スラッシュ ホーム …」。 編集は拡張子なし script ゆえ declare bash + writing-bash/code invoke 経由。
 
