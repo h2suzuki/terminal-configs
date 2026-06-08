@@ -167,9 +167,10 @@ Goal: 次 session 起動時の resume context が、 直前 interactive session 
 Exit Criteria:
 - [x] 欠陥2 (handoff-trim): /handoff が chat 出力冒頭に区切りマーカー (`~~~~ … Handoff (sid) ~~~~`) を出力 → resume はそのマーカーのみで trim (user-block keyword 推測は廃止)。 commit eb03462 (handoff SKILL.md + session_resume_context)、 smoke 4/4・deploy parity
 - [x] 欠陥1 (並行 session 誤選択): `_find_prior_session` が直近 `ACTIVE_MARGIN_SECONDS`(5s) 以内に書込中の jsonl (live 並行) を除外し「終了済」の最新を選ぶ (全 live は最新で fallback)。 commit eb03462
-- [ ] **セッションリセット後の実機確認 (H.S. 依頼)**: 次 session 起動時の resume が、 本 session の handoff marker を anchor に handoff 以降を正しく表示するか確認。 NG なら marker 形式 (`date "+%A, %Y/%-m/%-d %H:%M"` + `$CLAUDE_CODE_SESSION_ID`) と `_MARKER_RE` の突き合わせを点検
+- [x] **セッションリセット後の実機確認 (H.S. 依頼)**: 実施し**第3の欠陥を発見・修正**。 旧 `_trim_before_handoff` は `_MARKER_RE.search` の **first-match** を anchor にしていたため、 直近 3 turn text に混入する SKILL.md template marker (placeholder sid) や handoff body 内の省略引用 marker (短縮 sid) を誤掴みし、 wind-down 未 trim + 4000 字超 truncate していた (今 session 起動時 resume で実発生)。 → prior session の **full sid を含む marker のみ** anchor (複数なら最新=再 handoff) に変更 + producer SKILL.md に full-sid contract 明記 (commit 5293e0d)。 deployed hook を production stdin path で実 jsonl (5262c4b2) に当て end-to-end 検証 = marker 先頭開始・truncate 消滅・wind-down 除去。 embedded unittest 10 件で恒久化 (旧 /tmp smoke は揮発)
+- [ ] 次 session 起動時の auto-injection で **fixed hook** の出力を passive 確認 (zero-action — 今 session が handoff marker を full sid で出していれば次 startup の resume block が marker 先頭で trim されるはず)
 
-経緯: 2026-06-08。 marker producer=`/handoff` SKILL.md、 consumer=`session_resume_context.py` (`_MARKER_RE` / `_trim_before_handoff` / `_find_prior_session`)。 並行 session race (本 session で実発生) への対処。 Work file: `files/claude_managed-hooks/session_resume_context.py` + `files/claude_managed-skills/handoff/SKILL.md`
+経緯: 2026-06-08。 marker producer=`/handoff` SKILL.md、 consumer=`session_resume_context.py` (`_MARKER_RE` / `_trim_before_handoff` / `_find_prior_session`)。 並行 session race (本 session で実発生) + multi-marker first-match 誤 anchor (2026-06-08 実機確認で発見) への対処。 Work file: `files/claude_managed-hooks/session_resume_context.py` (embedded `TrimBeforeHandoffTest`/`TurnBoundaryTest`) + `files/claude_managed-skills/handoff/SKILL.md`
 
 ### KNOWN_POSSIBLE 表の自動拡張
 
