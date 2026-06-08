@@ -296,6 +296,10 @@ copy --nobackup claude_managed-settings.json                /etc/claude-code/man
 copy --nobackup claude_user-CLAUDE.md                       ~/.claude/CLAUDE.md
 copy --nobackup claude_user-settings.json                   ~/.claude/settings.json
 
+# Reset above orphaned the extras: ~/.claude/skills symlinks now dangle, hooks/*.py are stale
+run "[ -d ~/.claude/skills ] && find ~/.claude/skills/ -maxdepth 1 -xtype l -delete || true"
+run "rm -f ~/.claude/hooks/*.py"
+
 # Warm up Claude Code
 run "claude --model haiku --effort low --no-session-persistence --tools \"\" --setting-sources \"\" --disable-slash-commands -p hello || true"
 
@@ -398,6 +402,10 @@ EOF
     [ -e $LOGIN_HOME/.claude/CLAUDE.md ] ||
     copy --nobackup claude_user-CLAUDE.md                       $LOGIN_HOME/.claude/CLAUDE.md --owner $LOGIN_USER --group $LOGIN_GROUP
     copy --nobackup claude_user-settings.json                   $LOGIN_HOME/.claude/settings.json --owner $LOGIN_USER --group $LOGIN_GROUP
+
+    # Same stale-extras cleanup for the login user
+    run "[ -d $LOGIN_HOME/.claude/skills ] && find $LOGIN_HOME/.claude/skills/ -maxdepth 1 -xtype l -delete || true"
+    run "rm -f $LOGIN_HOME/.claude/hooks/*.py"
 
     run sudo -i -u $LOGIN_USER bash -i -c '"claude --model haiku --effort low --no-session-persistence --tools \"\" --setting-sources \"\" --disable-slash-commands -p hello || true"'
 
