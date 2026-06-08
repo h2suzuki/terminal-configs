@@ -217,9 +217,9 @@ Work file: `files/claude_managed-hooks/skill_reminder_gate.py` (SKILL-HOOK-CONTR
 Goal: Claude Code の「hooks in skills」(v2.1.0+、 特定 skill 限定の hook を settings.json でなく SKILL.md frontmatter に書ける機能) に移せる既存 hook があるか洗い出す。
 
 Exit Criteria:
-- [ ] feature 仕様確認: SKILL.md frontmatter の hook 書式・発火条件 (skill ロード中のみ発火)・scope を公式 hooks reference / findings.md (v2.1.0「hooks support for skill frontmatter」・v2.1.152 `reloadSkills`) で確定
-- [ ] 既存 hook (3 json の managed + user) を「特定 1 skill 専属 かつ その skill ロード済を前提に成立するか」で判定。 **skill ロード自体を目的とする gate (skill_reminder_gate / declare_and_proceed_gate / memory_routing_gate guard) は対象外** (skill 未ロードでは hook も不発火 = chicken-and-egg、 H.S. 指摘)。 候補を列挙 (ゼロも可)
-- [ ] 候補ごと移行 trade-off (settings.json 集中管理から外れる影響・常時発火要否・deploy 経路変更) を verbalize → 移行 or 据置を決定
+- [x] feature 仕様確認: skill-frontmatter hook は SKILL.md の `hooks:` key で宣言・**その skill が active な間のみ発火**・settings.json hook に加算(置換でない)・**停止点 docs 未文書化**(曖昧)と確定。always-on global policy 不適、skill-active 窓限定の turn-scoped 挙動のみ安全 (findings.md L1064 v2.1.0 / L887 v2.1.152 reloadSkills + 公式 hooks/skills reference を claude-code-guide 照合)
+- [x] 既存 hook 判定: 全 26 entry (managed 14・user 4・voicevox + arm 分割) を実 source 読みで criterion 判定 (workflow w224loe9f、4 evaluator 並列 + 敵対 completeness critic、両方 candidate=0)。**候補 = 0**。excluded_gate = 3 (skill_reminder_gate / declare_and_proceed_gate / memory_routing_gate guard、H.S. 指定通り)、not_candidate = 23 (always-on global discipline で window-sufficient/single-skill/timing いずれか不成立)
+- [x] trade-off → 決定: 候補ゼロゆえ移行対象なし → **全 hook を settings.json 据置**。構造的理由 = skill-adjacent な hook (check_uncommitted_at_handoff / session_resume_context / subagent_gate_* / memory_surface / memory_routing_gate sync / check_push_prompting) は全て「関連 skill 未 invoke のケースを捕まえる backstop/proxy」で窓限定だと母集団を取り逃す。check_uncommitted_at_handoff は criterion-4 timing trap (handoff 起動の wind-down prompt 上で skill ロード前に発火)、session_resume_context は前 session の handoff 成果物を新 session 開始時に読む、stop_checks は 5+ skill 横断で single-skill 不成立
 
 経緯: 2026-06-07 H.S. 提起。 feature 実在は findings.md (v2.1.0「Added hooks support for skill and slash command frontmatter」) で確認済。
 
