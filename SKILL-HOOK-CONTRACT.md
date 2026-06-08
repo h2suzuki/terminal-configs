@@ -325,11 +325,19 @@ Related: `comment_rationale_gate.py`
 
 **commit 規律**
 
-1. PreToolUse:Bash で、 `deny_compound_git_add` / `deny_compound_git_commit` が `git add` / `git commit` の compound 形 (`&&` 等) を却下し、 staged 状態を確定させてから後続 gate へ渡す
+1. PreToolUse:Bash で、 `deny_compound_git_add` / `deny_compound_git_commit` が `git add` / `git commit` の compound 形 (`&&` 等) を却下し、 staged 状態を確定させてから後続 gate へ渡す (`deny_compound_git_add` の broad/pathless 検出は次節「広域 git add の cross-session 巻き込み防止」)
 2. `check_commit_format` が subject を `<area>: <Capital>` 形式で検証し、 72 字超または形式不一致は却下、 50 字超 (51-72) は soft warn で通す (`-F`/`--file` は内容到達不能ゆえ却下)
 3. `check_commit_author` が effective な user.email を期待値と照合し、 別人名義の commit を阻止
 
 Related: `deny_compound_git_add.py` `deny_compound_git_commit.py` `check_commit_format.py` `check_commit_author.py`
+
+**広域 git add の cross-session 巻き込み防止**
+
+1. PreToolUse:Bash で、 `deny_compound_git_add` が broad/pathless な standalone `git add` (`-A` / `--all` / `-u` / `--update` / `.`・`:/`・`*` 等の whole-tree pathspec / `A`・`u` を含む短縮 flag 束 / path 無し) を検出
+2. 共有 working tree で並列セッションの未コミット変更を自セッションの commit へ巻き込む危険ゆえ exit 2 で却下し、 stderr で各 path の明示的な名指しを促す
+3. 明示 path のみの `git add` (`git -C`・benign flag・`--`・quoted path 込) は通す。 reset/restore 節と異なり advise-once でなく常時 deny (compound 形は同 hook の別 branch が先に却下)
+
+Related: `deny_compound_git_add.py`
 
 **破壊的 reset / restore の advise-once 防止**
 
