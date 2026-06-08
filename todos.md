@@ -160,18 +160,6 @@ Exit Criteria:
 
 経緯: 417 行の複雑な orchestration ゆえ単純 rename でなく本格 port。 上記「hook 命名統一」の lint_claude_mds rename と統合可。 Work file: `files/claude_managed-hooks/claude-md-lint.sh`
 
-### resume が handoff を正しく引き継ぐ (session_resume_context)
-
-Goal: 次 session 起動時の resume context が、 直前 interactive session の handoff を正しく読み取れる状態にする。
-
-Exit Criteria:
-- [x] 欠陥2 (handoff-trim): /handoff が chat 出力冒頭に区切りマーカー (`~~~~ … Handoff (sid) ~~~~`) を出力 → resume はそのマーカーのみで trim (user-block keyword 推測は廃止)。 commit eb03462 (handoff SKILL.md + session_resume_context)、 smoke 4/4・deploy parity
-- [x] 欠陥1 (並行 session 誤選択): `_find_prior_session` が直近 `ACTIVE_MARGIN_SECONDS`(5s) 以内に書込中の jsonl (live 並行) を除外し「終了済」の最新を選ぶ (全 live は最新で fallback)。 commit eb03462
-- [x] **セッションリセット後の実機確認 (H.S. 依頼)**: 実施し**第3の欠陥を発見・修正**。 旧 `_trim_before_handoff` は `_MARKER_RE.search` の **first-match** を anchor にしていたため、 直近 3 turn text に混入する SKILL.md template marker (placeholder sid) や handoff body 内の省略引用 marker (短縮 sid) を誤掴みし、 wind-down 未 trim + 4000 字超 truncate していた (今 session 起動時 resume で実発生)。 → prior session の **full sid を含む marker のみ** anchor (複数なら最新=再 handoff) に変更 + producer SKILL.md に full-sid contract 明記 (commit 5293e0d)。 deployed hook を production stdin path で実 jsonl (5262c4b2) に当て end-to-end 検証 = marker 先頭開始・truncate 消滅・wind-down 除去。 embedded unittest 10 件で恒久化 (旧 /tmp smoke は揮発)
-- [x] 次 session 起動時の auto-injection で **fixed hook** の出力を passive 確認 (zero-action)。 本 session (prev=307056d0) 起動時の "Prior session tail" block を production stdin path で実機観測: Source=307056d0 jsonl・full-sid marker `Handoff (307056d0-68ac-4fdd-bbd2-fa92a548b41a)` 以降のみ・truncate 無し・wind-down 無し・body 内短縮引用 `(307056d0…)` を誤 anchor せず。 5 条件 pass で第3欠陥 fix を実証
-
-経緯: 2026-06-08。 marker producer=`/handoff` SKILL.md、 consumer=`session_resume_context.py` (`_MARKER_RE` / `_trim_before_handoff` / `_find_prior_session`)。 並行 session race (本 session で実発生) + multi-marker first-match 誤 anchor (2026-06-08 実機確認で発見) への対処。 Work file: `files/claude_managed-hooks/session_resume_context.py` (embedded `TrimBeforeHandoffTest`/`TurnBoundaryTest`) + `files/claude_managed-skills/handoff/SKILL.md`
-
 ### KNOWN_POSSIBLE 表の自動拡張
 
 Goal: `stop_checks.py` の `KNOWN_POSSIBLE` (既知で可能な op × 既知 method hint 表) は手で 1 行ずつ追加する設計だが、 「実は可能」 が判明する度に user memory entry も書かれるので、 memory entry から KNOWN_POSSIBLE への追記を semi-automated にする余地を検討する。 ※2026-06-08 audit 訂正: 当初想定の `feedback_*_can_*.md` 命名規約は**存在しない** (47 entry 中 0)。 machine-detectable な signal は entry の `reminder:` 行の 可能/不可断定 phrasing。 現状 KNOWN_POSSIBLE は 2 行 (partial-stage / autosquash) で両方とも既に配線済・未配線の「可能」候補は 0 ゆえ ROI は現時点ほぼ無し (手追加の痛みが再発したら着手で可)。
