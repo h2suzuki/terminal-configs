@@ -174,16 +174,6 @@ Exit Criteria:
 
 Work file: `files/claude_managed-skills/document-editor/SKILL.md`
 
-### voicevox SubagentStop 空入力 fix の回帰 test 恒久化
-
-Goal: 2026-06-08 に直した「SubagentStop で `last_assistant_message` 空 → Haiku が『テキストが提供されていません』を返し発話」バグ (commit 1cdc677、入力空なら Haiku を呼ばず固定句 `speak_cached`) の回帰 test を、 揮発でなく repo 追跡された形で残す。
-
-Exit Criteria:
-- [x] バグ修正 + deploy + commit (1cdc677、`/usr/local/bin/voicevox_claude_alerts` parity OK・mode 755)。 no-audio smoke (claude/voicevox_paplay stub・隔離 XDG) で 空→SKIPPED 固定句・claude 非呼出 / 非空→speak_summary / 空白のみ→fallback の 3 case PASS を確認
-- [x] 恒久化 (2026-06-08): `files/voicevox_claude_alerts.smoke.sh` 新設 (subject 隣接 `*.smoke.sh` を bash test の置き場規約に確定)。 PATH-stub (voicevox_paplay + claude の agents-probe/Haiku 二役 dispatch)・隔離 XDG・unique-basename symlink で canonical script を逐語実行・setsid detach を bounded poll。 9 case (SubagentStop 空/空白/非空/internal + CwdChanged + ConfigChange 4-source) を網羅し **9/9 PASS・shellcheck clean・exec 755**。 揮発 `/tmp/smoke_voicevox_subagentstop.sh` を置換
-
-Work file: `files/voicevox_claude_alerts` (SubagentStop branch L661 付近) + 揮発 smoke `/tmp/smoke_voicevox_subagentstop.sh`
-
 ### skill_reminder_gate: PreToolUse:Skill で発火検出を state 化 (transcript-scan 簡素化)
 
 Goal: `skill_reminder_gate` の skill 発火検出を、 現在の transcript 末尾 scan から `PreToolUse(matcher:"Skill")` hook による state 刻印方式へ移行できるか検討し、 移行すれば fragile な turn-boundary 判定群を削減する。
