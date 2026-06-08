@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+import time
 
 
 HOME = os.path.expanduser("~")
@@ -23,19 +24,31 @@ def _encoded_project_id(cwd: str) -> str:
     return cwd.replace("/", "-")
 
 
+# 直近 ACTIVE_MARGIN_SECONDS 以内に書込みのある jsonl は live な並行 session とみなし除外。
+ACTIVE_MARGIN_SECONDS = 5
+
+
 def _find_prior_session(cwd: str, current_session_id: str) -> str | None:
     project_dir = os.path.join(PROJECTS_DIR, _encoded_project_id(cwd))
     if not os.path.isdir(project_dir):
         return None
-    files = glob.glob(os.path.join(project_dir, "*.jsonl"))
+    files = [
+        f
+        for f in glob.glob(os.path.join(project_dir, "*.jsonl"))
+        if os.path.basename(f).rsplit(".", 1)[0] != current_session_id
+    ]
     if not files:
         return None
     files.sort(key=os.path.getmtime, reverse=True)
+    now = time.time()
+    # 今まさに書込中 = live 並行 session を飛ばし、 直近の「終了済」を選ぶ
     for f in files:
-        sid = os.path.basename(f).rsplit(".", 1)[0]
-        if sid != current_session_id:
-            return f
-    return None
+        try:
+            if now - os.path.getmtime(f) >= ACTIVE_MARGIN_SECONDS:
+                return f
+        except OSError:
+            continue
+    return files[0]  # 全て margin 内 (全 live) → 最新で best-effort
 
 
 _TAIL_BUFSIZE = 128 * 1024  # 後方読みブロック
@@ -122,16 +135,18 @@ def _turns_text(entries: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
-_HANDOFF_RE = re.compile(r"handoff|ハンドオフ", re.IGNORECASE)
+# /handoff skill が chat 出力冒頭に出す区切りマーカー (~~~~ … Handoff … ~~~~)。
+# user 語の keyword 推測 (誤マッチ多) でなく、 この明示マーカーのみを anchor にする。
+_MARKER_RE = re.compile(r"~{4,}[^\n]*\bHandoff\b[^\n]*~{2,}", re.IGNORECASE)
 
 
 def _trim_before_handoff(text: str) -> str:
-    """初の 👤(user) ブロック内 handoff 言及 (= 実 trigger) 以降を返す; assistant 言及・否定 (handoff 不要/省略) は anchor 外、 user 一致無しは原文。"""
-    blocks = text.split("\n\n")
-    for i, b in enumerate(blocks):
-        if b.startswith("👤 ") and _HANDOFF_RE.search(b):
-            return "\n\n".join(blocks[i:])
-    return text
+    """handoff マーカーを含むブロック以降を返す; マーカー不在は trim せず原文 (keyword 推測は廃止)。"""
+    m = _MARKER_RE.search(text)
+    if not m:
+        return text
+    bs = text.rfind("\n\n", 0, m.start())
+    return text[bs + 2 :] if bs >= 0 else text
 
 
 def main() -> int:

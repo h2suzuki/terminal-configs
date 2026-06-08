@@ -95,12 +95,14 @@ next-me は handoff の該当 section を read 後 1 拍 verbalize する: Statu
 - **同一 task の並行 session は user 運用で回避**: 同じ task を 2 session で同時進行すると section overwrite で進捗ロスト risk あり。 「1 task 1 active session」 ルールで回避 (skill が race 検出する機構は持たない)
 - **Memory / rule 更新は当該 file に書き handoff には pointer のみ**: `~/.claude/CLAUDE.md` や memory entry に rule 追加した場合は当該 file 本体に書き、 handoff Caveat には「rule X 追加 (@<file>)」 形式の参照だけ
 - **Intent retention は当該 commit / comment / rule file に**: 「なぜそうしたか」 は commit message body / code comment / rule file に残す (Commander's Intent)。 handoff にダブって書かない
+- **resume マーカーを session-end message 冒頭に出す**: handoff を実施する session では、 ユーザーへの最終報告 message の **1 行目** に区切りマーカー `~~~~~~~~ <Weekday>, <YYYY>/<M>/<D> <HH:MM> Handoff (<session-id>) ~~~~~~` を出力する (例: `~~~~~~~~ Monday, 2026/6/8 8:58 Handoff (4cf3a925) ~~~~~~`)。 日時は `date "+%A, %Y/%-m/%-d %H:%M"`、 `<session-id>` は `$CLAUDE_CODE_SESSION_ID`。 次 session 起動時に `session_resume_context` hook が transcript 内のこのマーカーを唯一の anchor として resume context を trim する (handoff より前の wind-down を捨て、 handoff 以降だけ引き継ぐ) ため、 file でなく **chat 出力** に出すこと。 handoff を skip する (再開不要) session では出さない
 
 ## Output
 
 - `last-session-handoff.md` または `drafts/<task-slug>-handoff.md` に新 section を append または既存 section を overwrite (作業途中で再開必要な場合のみ、 そうでなければ skip)
 - `todos.md` 対応 parent task block の `Work file:` フィールドに handoff doc path を記載・維持
 - session 内の commit 完了 (`commit-discipline`)
+- handoff 実施時は session-end message 冒頭に resume マーカー行 (`~~~~ … Handoff (sid) ~~~~`) を出力 (次 session の resume trim anchor)
 
 ## Related
 
