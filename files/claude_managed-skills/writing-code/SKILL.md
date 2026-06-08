@@ -148,7 +148,7 @@ deterministic ならコードを書いて、毎回それを呼び出す。
 skill 機能上 path-matching の対象として扱う path 言及は citation ではなく機械 reference (他環境で空 match で動作する設計):
 
 - `claude-md-lint` が `/etc/claude-code/CLAUDE.md`, `~/.claude/CLAUDE.md`, `<cwd>/.claude/CLAUDE.md` を scan target として listing
-- `stop_checks.py` / `claude-md-lint.sh` が `~/.claude/global-memory/` を path-matching 対象として参照
+- `stop_checks.py` / `claude-md-lint` が `~/.claude/global-memory/` を path-matching 対象として参照 <!-- dangling-ref-check: allow -->
 - `memory-routing` skill が memory dir 自体の routing を define
 
 ## Related

@@ -198,7 +198,7 @@ Related: `session_resume_context.py`
 5. Background session は結果をファイルで返却
 6. 次の UserPromptSubmit で結果ファイルを拾い Background session reap
 
-Related: `claude-md-lint.sh`
+Related: `claude_md_lint.py`
 
 
 #### SessionEnd
