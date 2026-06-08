@@ -331,6 +331,14 @@ Related: `comment_rationale_gate.py`
 
 Related: `deny_compound_git_add.py` `deny_compound_git_commit.py` `check_commit_format.py` `check_commit_author.py`
 
+**破壊的 reset / restore の advise-once 防止**
+
+1. PreToolUse:Bash で、 `deny_unsafe_git_reset` が `git reset --hard` / file 名無しの `git reset` / `git restore .` / file 名無しの `git restore` を検出
+2. 共有 working tree で並列セッションの未コミット変更を黙って破棄する危険ゆえ exit 2 で一旦却下し、 stderr で対象ファイルの名指しとユーザー許可を促す
+3. 同一コマンドの再実行は許可 (advise-once = 並列セッション無しを確認済とみなす。 session-keyed marker・TTL 600s・fail-open)。 対象外: `git reset --soft` / `git reset -- <path>` / `git restore <file>`
+
+Related: `deny_unsafe_git_reset.py`
+
 **cwd 汚染の予防**
 
 1. PreToolUse:Bash で、 `avoid_cd` が行頭の `cd` を検出
