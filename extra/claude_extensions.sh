@@ -143,7 +143,7 @@ copy --nobackup claude_user_settings                       /usr/local/bin/claude
 
 # Deploy the user hooks
 copy --nobackup claude_user-hooks/check_commit_author.py    ~/.claude/hooks/check_commit_author.py
-copy --nobackup claude_user-hooks/push_prompting_check.py   ~/.claude/hooks/push_prompting_check.py
+copy --nobackup claude_user-hooks/check_push_prompting.py   ~/.claude/hooks/check_push_prompting.py
 copy --nobackup claude_user-hooks/memory_surface.py         ~/.claude/hooks/memory_surface.py
 copy --nobackup claude_user-hooks/subagent_gate_suggest.py  ~/.claude/hooks/subagent_gate_suggest.py
 run claude_user_settings inject - < "$TOP_DIR/files/claude_user-extensions.json"
@@ -229,7 +229,7 @@ if [ -n "$LOGIN_USER" ]; then
 
     # Deploy $LOGIN_HOME/.claude/ hooks
     copy --nobackup claude_user-hooks/check_commit_author.py    $LOGIN_HOME/.claude/hooks/check_commit_author.py  --owner $LOGIN_USER --group $LOGIN_GROUP
-    copy --nobackup claude_user-hooks/push_prompting_check.py   $LOGIN_HOME/.claude/hooks/push_prompting_check.py --owner $LOGIN_USER --group $LOGIN_GROUP
+    copy --nobackup claude_user-hooks/check_push_prompting.py   $LOGIN_HOME/.claude/hooks/check_push_prompting.py --owner $LOGIN_USER --group $LOGIN_GROUP
     copy --nobackup claude_user-hooks/memory_surface.py         $LOGIN_HOME/.claude/hooks/memory_surface.py       --owner $LOGIN_USER --group $LOGIN_GROUP
     copy --nobackup claude_user-hooks/subagent_gate_suggest.py  $LOGIN_HOME/.claude/hooks/subagent_gate_suggest.py --owner $LOGIN_USER --group $LOGIN_GROUP
     # Feed the fragment on stdin: root opens it here, so the demoted user needs no read access

@@ -117,7 +117,7 @@ Exit Criteria:
 - [x] **(B) Skills フォーマット規約** を「## Skills」に記入 (frontmatter/本文構造/言語規約。 deploy 位置は doc「除外」原則ゆえ割愛)
 - [x] draft SessionStart の `xxxx Skill` placeholder を「複数のスキル (verify-before-claim 等)」で充足
 - [ ] **`deny_unsafe_git_reset` を PreToolUse:Bash catalog に追記** (2026-06-08 H.S. 指摘・gap 監査で全 24 hook 中**唯一の未記載**と確定。 verb-first で新規追加され rename 統一の発端になった hook。 番号フロー形式 entry + Related を記入)
-- [ ] H.S. レビュー承認 → Exit flip + block 削除。 register は ですます に統一済 (commit 9fe0933、 prose 8 行を である→ですます・番号フロー step は体言止め維持)、 SessionStart step2 の述部欠落も修正済 (commit d56b27c)。 残るは H.S. の最終 review (構成/粒度) のみ。 2026-06-08 本 session で skill 一覧 (全 22 entry に category＋≤2文概要)・全 hook の Related 記入・UserPromptExpansion 節 (probe 結果)・Stop の push_prompting_check 欠落補完・応用節 bridge 文を追記し、 hook 記述を 20-agent workflow で実 source 検証して修正 (stop_checks 重複統合・§0 表 block family 4→6) — これらも H.S. review 対象 (commit 20a4858 / 0cf974c)。 **追従要**: 2ca11ff で deny_compound_git_add を broad/pathless add (`-A`/`.`/`-u`/pathless) deny にも拡張したため、 PreToolUse:Bash catalog の同 hook 記述 (現状「compound のみ」想定) を review 時に更新する
+- [ ] H.S. レビュー承認 → Exit flip + block 削除。 register は ですます に統一済 (commit 9fe0933、 prose 8 行を である→ですます・番号フロー step は体言止め維持)、 SessionStart step2 の述部欠落も修正済 (commit d56b27c)。 残るは H.S. の最終 review (構成/粒度) のみ。 2026-06-08 本 session で skill 一覧 (全 22 entry に category＋≤2文概要)・全 hook の Related 記入・UserPromptExpansion 節 (probe 結果)・Stop の check_push_prompting 欠落補完・応用節 bridge 文を追記し、 hook 記述を 20-agent workflow で実 source 検証して修正 (stop_checks 重複統合・§0 表 block family 4→6) — これらも H.S. review 対象 (commit 20a4858 / 0cf974c)。 **追従要**: 2ca11ff で deny_compound_git_add を broad/pathless add (`-A`/`.`/`-u`/pathless) deny にも拡張したため、 PreToolUse:Bash catalog の同 hook 記述 (現状「compound のみ」想定) を review 時に更新する
 
 確定済みファクト (2026-06-07 本 session・再導出不要):
 - **task 定義** (H.S. 前 session 原文趣旨): 「SessionStart の見出しを少し書いた。 こんな感じで repo のフックを記入していってほしい。 Skill はフォーマットを規約として書ける。 CLAUDE.md のスキル&フック化は後半の応用編で概要 (ここのフックでなく Big Picture)」。
@@ -126,10 +126,10 @@ Exit Criteria:
 - **完全 event→hook 対応表**:
   - SessionStart: claude-md-lint.sh / feature_findings_build.py / session_resume_context.py
   - SessionEnd: session_cleanup.py (**draft の N/A は誤り**)
-  - UserPromptSubmit: handoff_uncommitted_check.py(managed) / memory_surface.py(user・過去事例 surfacer ＋ concern/correction inject) / subagent_gate_suggest.py(user)
-  - Stop: stop_checks.py(managed) / push_prompting_check.py(user) / voicevox Stop
-  - PreToolUse: read_before_edit.py(check,Read|Edit|MultiEdit) | dangling_ref_check.py+memory_routing_gate.py(guard)+skill_reminder_gate.py(gate)+comment_rationale_gate.py(Edit|Write|MultiEdit) | avoid_cd.py+deny_compound_git_add.py+deny_compound_git_commit.py+check_commit_format.py(Bash) | subagent_gate_warn.py(Task|Agent) | declare_and_proceed_gate.py(AskUserQuestion) | check_commit_author.py(user,Bash)
-  - PostToolUse: read_before_edit.py(record,Read|Write) / memory_routing_gate.py(sync,Write) / todos_completion_check.py(Bash)
+  - UserPromptSubmit: check_uncommitted_at_handoff.py(managed) / memory_surface.py(user・過去事例 surfacer ＋ concern/correction inject) / subagent_gate_suggest.py(user)
+  - Stop: stop_checks.py(managed) / check_push_prompting.py(user) / voicevox Stop
+  - PreToolUse: read_before_edit.py(check,Read|Edit|MultiEdit) | check_dangling_refs.py+memory_routing_gate.py(guard)+skill_reminder_gate.py(gate)+comment_rationale_gate.py(Edit|Write|MultiEdit) | avoid_cd.py+deny_compound_git_add.py+deny_compound_git_commit.py+check_commit_format.py(Bash) | subagent_gate_warn.py(Task|Agent) | declare_and_proceed_gate.py(AskUserQuestion) | check_commit_author.py(user,Bash)
+  - PostToolUse: read_before_edit.py(record,Read|Write) / memory_routing_gate.py(sync,Write) / check_todo_completion.py(Bash)
   - PostToolUseFailure: detect_cwd_pollution.py(Bash)
   - voicevox (`voicevox_claude_alerts <Event>`): Stop / Notification / SubagentStart / SubagentStop / ConfigChange / PreCompact / WorktreeCreate / CwdChanged (本 session 追加)
   - **真の N/A (hook 無し)**: StopFailure / UserPromptExpansion / PermissionRequest / PermissionDenied / PostCompact (CwdChanged は本 session で voicevox 配線済ゆえ N/A から除外)

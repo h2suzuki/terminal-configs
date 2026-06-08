@@ -248,7 +248,7 @@ Related: `memory_surface.py`
 2. `git status` を確認し、 未コミット変更があれば件数とパスを additional context で提示
 3. 終了の合図で警告
 
-Related: `handoff_uncommitted_check.py`
+Related: `check_uncommitted_at_handoff.py`
 
 **サブエージェント委譲の助言**
 
@@ -270,11 +270,11 @@ Related: `stop_checks.py`
 
 **push 催促の却下**
 
-1. Stop で、 `push_prompting_check` がこのターンの assistant 発言を走査し、 push を提案／確認／予定告知するフレーズ（「push しますか?」等）を検出する
+1. Stop で、 `check_push_prompting` がこのターンの assistant 発言を走査し、 push を提案／確認／予定告知するフレーズ（「push しますか?」等）を検出する
 2. 命中したら exit 2 で却下し、 該当発話を取り消して再応答するよう stderr で促す
 3. git push は user 指示を待つ規律 (commit-discipline / push silence) を機械的に担保する
 
-Related: `push_prompting_check.py`
+Related: `check_push_prompting.py`
 
 **応答待ちの音声催促**
 
@@ -309,11 +309,11 @@ Related: `read_before_edit.py`
 
 **宙吊り参照のブロック**
 
-1. PreToolUse で、 `dangling_ref_check` が永続ファイルへの new content を走査
+1. PreToolUse で、 `check_dangling_refs` が永続ファイルへの new content を走査
 2. deploy 範囲外のパスや ephemeral タグ (Plan X / Phase α 等) を見つけたら却下し、 inline 化やタグ削除を指示
 3. 再 deploy や時間経過で参照が宙吊りになる regression を防ぐ (意図的記載は `dangling-ref-check: allow` で opt-out)
 
-Related: `dangling_ref_check.py`
+Related: `check_dangling_refs.py`
 
 **コメントへの経緯混入を防ぐ**
 
@@ -367,11 +367,11 @@ Related: `memory_routing_gate.py`
 
 **完了済み todos block の削除催促**
 
-1. PostToolUse:Bash で、 `todos_completion_check` が todos.md に触れた `git commit` を検知
+1. PostToolUse:Bash で、 `check_todo_completion` が todos.md に触れた `git commit` を検知
 2. working tree の todos.md を直読し、 全 checkbox が [x] の親 block が残っていれば検出
 3. 次 commit での block 削除か、 保留作業の checkbox 化かを additional context で促す (完了記録の残置を防ぐ)
 
-Related: `todos_completion_check.py`
+Related: `check_todo_completion.py`
 
 #### PostToolUseFailure
 

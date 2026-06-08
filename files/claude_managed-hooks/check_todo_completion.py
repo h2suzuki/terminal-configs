@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""todos_completion_check hook for Claude Code.
+"""check_todo_completion hook for Claude Code.
 
 PostToolUse:Bash. After a successful `git commit` that touched a repo-top
 todos.md, reads that todos.md from the working tree and reminds Claude if any
@@ -137,7 +137,7 @@ def _run(payload: dict) -> None:
     names = "\n".join(f"  - {n}" for n in done)
     # 文面は意図的に冗長: trim せず維持 (両 resolution を reader=LLM に明示する)
     _emit(
-        "todos_completion_check: todos.md に全 checkbox が [x] の完了済み block が "
+        "check_todo_completion: todos.md に全 checkbox が [x] の完了済み block が "
         "残っています:\n"
         f"{names}\n"
         "writing-todos の block-level deletion: 完了 block は完了 commit の直後の "

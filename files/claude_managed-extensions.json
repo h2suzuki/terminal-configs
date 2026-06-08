@@ -8,7 +8,7 @@
       {
         "matcher": "^(Edit|Write|MultiEdit)$",
         "hooks": [
-          { "type": "command", "command": "/etc/claude-code/hooks/dangling_ref_check.py" },
+          { "type": "command", "command": "/etc/claude-code/hooks/check_dangling_refs.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/memory_routing_gate.py guard" },
           { "type": "command", "command": "/etc/claude-code/hooks/skill_reminder_gate.py gate" },
           { "type": "command", "command": "/etc/claude-code/hooks/comment_rationale_gate.py" }
@@ -44,7 +44,7 @@
       },
       {
         "matcher": "Bash",
-        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/todos_completion_check.py" } ]
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/check_todo_completion.py" } ]
       }
     ],
     "PostToolUseFailure": [
@@ -59,7 +59,7 @@
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/session_resume_context.py" } ] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/handoff_uncommitted_check.py" } ] }
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/check_uncommitted_at_handoff.py" } ] }
     ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/stop_checks.py" } ] }
