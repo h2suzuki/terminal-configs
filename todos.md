@@ -156,8 +156,8 @@ Exit Criteria:
 Goal: `stop_checks.py` の `KNOWN_POSSIBLE` (既知で可能な op × 既知 method hint 表) は手で 1 行ずつ追加する設計だが、 「実は可能」 が判明する度に user memory entry も書かれるので、 memory entry から KNOWN_POSSIBLE への追記を semi-automated にする余地を検討する。 ※2026-06-08 audit 訂正: 当初想定の `feedback_*_can_*.md` 命名規約は**存在しない** (47 entry 中 0)。 machine-detectable な signal は entry の `reminder:` 行の 可能/不可断定 phrasing。 現状 KNOWN_POSSIBLE は 2 行 (partial-stage / autosquash) で両方とも既に配線済・未配線の「可能」候補は 0 ゆえ ROI は現時点ほぼ無し (手追加の痛みが再発したら着手で可)。
 
 Exit Criteria:
-- [ ] 設計: memory entry の命名規約や frontmatter で「KNOWN_POSSIBLE 候補」 を mark する仕組みを置くか、 hook が memory dir を scan して候補を列挙し人 review するか、 設計 trade-off を verbalize
-- [ ] 実装方針が決まれば実装 + smoke + deploy
+- [x] 設計 trade-off verbalize (2026-06-08, workflow wt6xkt7ha): memory dir 61 entry を実 scan — `可能/不可` reminder は 3 hit のみで全て非候補 (1 = 既配線 partial-stage、 2 = false positive [generic「可能」/ permission-mode 制約])。 signal は lossy (autosquash row は別 lexeme「no-op/無効」ゆえ未マッチ)。 semi-automation 2 案 (frontmatter mark / hook-scans-dir) はいずれも irreducible labor (op-regex + method-hint の人手 authoring) を消さず、 standing scanner/schema + dedup + review surface を 2-line edit のために増やす net-negative
+- [x] 実装方針 → **defer (manual 維持) 決定**: unwired candidate = 0・ROI net-negative ゆえ今は実装せず。 痛み再発 (3rd/4th の genuine「実は可能」op 出現で手追加が friction 化) 時に再起票で着手
 
 Work file: `files/claude_managed-hooks/stop_checks.py` の `KNOWN_POSSIBLE` 表 + `~/.claude/memory/feedback_partial_stage_foreign_changes.md` 等の既存 sibling entries
 
@@ -179,9 +179,9 @@ Work file: `files/claude_managed-skills/document-editor/SKILL.md`
 Goal: `skill_reminder_gate` の skill 発火検出を、 現在の transcript 末尾 scan から `PreToolUse(matcher:"Skill")` hook による state 刻印方式へ移行できるか検討し、 移行すれば fragile な turn-boundary 判定群を削減する。
 
 Exit Criteria:
-- [ ] `PreToolUse(matcher:"Skill")` で model 自己 invoke を skill 名付きで捕捉し `(sid, skill, ts)` を session state に刻印する record arm を実装 (gate arm はその state を読む)
-- [ ] 移行 trade-off を verbalize: 現 transcript-scan (実機 verified・smoke 51/51) の維持コスト vs state 方式の利得 (turn-boundary/isMeta/5分窓ロジック削減) と新リスク (state 永続化・PreToolUse 発火順・edit が skill invoke と同 batch のとき record が gate より先に走るか) → 移行 or 据置を決定
-- [ ] 移行する場合: smoke (model invoke → record → 同 turn edit allow / skill 無し → deny / fail-open) + deploy。 据置なら本 block を理由付きで close
+- [x] record arm 実装: 不要 (下記決定が据置ゆえ moot)
+- [x] 移行 trade-off verbalize → **据置 (KEEP-AS-IS) 決定** (2026-06-08, workflow wt6xkt7ha + 公式 hook docs 照合): 移行は `_load_tail`/`_is_turn_boundary`/`_active_skills`/5分窓 約100行を削れるが、 同一 assistant message の同 batch で Skill+Edit が並列発火する時に record arm (PreToolUse:Skill) が gate arm (PreToolUse:Edit) より先に刻印する保証が docs に無い (PreToolUse 間の発火順未保証・`PostToolBatch` の存在が batch 並列を裏付け) → happy-path を間欠誤 deny する race を導入する
+- [x] 据置ゆえ理由付き close: 現 transcript-scan は両 tool_use を含む assistant message が tool 実行前に commit される性質で同 batch Skill block を必ず読め、 この race に構造的免疫を持つ。 現機構は実機 verified・smoke 51/51 green。 移行は新 failure surface (state lifecycle cleanup / race 再 verify) を同一振る舞いのために増やすだけ → simplification 利得を上回ると判断し移行せず close
 
 経緯: 2026-06-08 UPE 調査の副産物 (probe 実機確認)。 UserPromptExpansion は user-typed slash command 展開でのみ発火し model 自己 invoke では鳴らない (→ UPE は skill_reminder_gate 代替に使えない) 一方、 PreToolUse は `tool_name:"Skill"` / `tool_input.skill` 付きで model 自己 invoke を直接捕捉すると判明 (先の claude-code-guide subagent「PreToolUse は Skill を intercept 不可」は実機で誤りと確認)。 現 gate は transcript 末尾を後方読みして Skill block を探す (docstring 56-66 行が turn-boundary 判定を load-bearing と明記) が、 PreToolUse:Skill なら検出を event 化でき fragile ロジックを削れる可能性。
 
