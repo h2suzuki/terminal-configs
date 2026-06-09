@@ -63,13 +63,10 @@ def _is_short_description(desc: str) -> bool:
     stripped = desc.strip()
     if not stripped:
         return False
-    # word count check (whitespace 分割)
-    if len(stripped.split()) <= DESC_WORD_THRESHOLD:
-        return True
-    # lookup verb prefix check (longer descriptions も対象に)
-    if DESC_PATTERN_RE.match(stripped):
-        return True
-    return False
+    # ≤N words、 または lookup verb 始まり (長い description も対象)
+    return len(stripped.split()) <= DESC_WORD_THRESHOLD or bool(
+        DESC_PATTERN_RE.match(stripped)
+    )
 
 
 def _is_overuse_candidate(

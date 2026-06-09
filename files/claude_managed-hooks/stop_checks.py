@@ -532,6 +532,7 @@ def _check(
     """Return (exit_code, warnings, blocking)."""
     warnings: list[str] = []
     blocking: list[str] = []
+    stripped = strip_fences(text)  # fenced-block を除いた判定用 (各チェックで共有)
 
     # meta-announce-silence (block, no pairing)
     m = META_ANNOUNCE_RE.search(text)
@@ -587,7 +588,7 @@ def _check(
         blocking.append(denial)
 
     # order-question-to-user (block, no pairing): 順序質問の user 投げは judgment 回避
-    m = ORDER_QUESTION_RE.search(strip_fences(text))
+    m = ORDER_QUESTION_RE.search(stripped)
     if m:
         blocking.append(
             f"order-question-to-user: 「{m.group(0)}」 と順序質問を user に投げています。 "
@@ -600,7 +601,6 @@ def _check(
 
     # confirm/routing-to-user (block unless declare-and-proceed invoked this turn)
     if not declare_active:
-        stripped = strip_fences(text)
         m = CONFIRM_RE.search(stripped) or ROUTING_RE.search(stripped)
         if m:
             blocking.append(
@@ -641,7 +641,7 @@ def _check(
     # provide-user-instructions (warning-only): manual-exec 文脈 + 未 fence host cmd
     instr = MANUAL_EXEC_RE.search(text)
     if instr:
-        cmd = HOST_CMD_RE.search(strip_fences(text))
+        cmd = HOST_CMD_RE.search(stripped)
         if cmd:
             warnings.append(
                 f"provide-user-instructions: 手動実行を依頼する文脈 (「{instr.group(0)}」) "
@@ -652,7 +652,7 @@ def _check(
             )
 
     # verify-before-claim positive side (warning-only): completeness claim w/o evidence
-    m = POS_CLAIM_RE.search(strip_fences(text))
+    m = POS_CLAIM_RE.search(stripped)
     if m and not (tool_names & EVIDENCE_TOOLS):
         warnings.append(
             f"verify-before-claim (positive): 「{m.group(0)}」 と網羅・完了の self-claim "

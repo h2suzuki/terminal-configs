@@ -63,6 +63,7 @@ HEREDOC_RE = re.compile(
 # After quoting -> `__Q<i>__` placeholders, `-m`/`--message` takes one ws-delimited token
 # (placeholder or bare word) — no triple-alternative regex needed.
 M_FLAG_RE = re.compile(r"(?:^|\s)(?:-m|--message)(?:\s+|=)(\S+)")
+STMT_DELIM_RE = re.compile(r"\n|&&|\|\||;|\|")  # statement 境界 (改行 / compound op)
 SUBJECT_FORMAT_RE = re.compile(r"^\S+: [A-Z]")
 
 SOFT_SUBJECT_LIMIT = 50
@@ -112,12 +113,8 @@ def _extract_message(cmd: str) -> str | None:
     if not git_commit_match:
         return None
     start = git_commit_match.end()
-    end_pos = len(stripped)
-    for stop_str in ("\n", "&&", "||", ";", "|"):
-        p = stripped.find(stop_str, start)
-        if 0 <= p < end_pos:
-            end_pos = p
-    segment = stripped[start:end_pos]
+    delim = STMT_DELIM_RE.search(stripped, start)
+    segment = stripped[start : delim.start() if delim else len(stripped)]
     pieces: list[str] = []
     for m in M_FLAG_RE.finditer(segment):
         pieces.append(_resolve_placeholder(m.group(1), quoted_contents))
