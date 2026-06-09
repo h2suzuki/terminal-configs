@@ -59,6 +59,11 @@ Combined Stop hook for org-managed Claude Code:
     EVIDENCE_TOOLS が無ければ warn。 claim-without-evidence と pairing 同一、 polarity と
     message のみ別。 確認済み は meta-text/Bash-backed 多数で意図的に除外 (FN 承知)。
 
+  honest-attribution (warning-only, exit 0):
+    自セッションの誤 pattern を 「既存/繰り越し/reasonable default/段階的拡張」 等で
+    ownership ぼかしする発話を warn。 attribute-existing-issues skill の機械 proxy。
+    blur phrase と wrong-marker の 60 字近接 pairing で FP 抑制 (v1 observe-then-tighten)。
+
   turn-marker (bonus, exit 0 only):
     enforcement が pass した turn 終了時のみ、 per-turn marker (時刻 / Turn #N / context
     size / User Prompt からの経過) を JSON `systemMessage` で USER に表示 (Claude には非可視)。
@@ -283,6 +288,21 @@ POS_CLAIM_PATTERNS: list[str] = [
     r"reasonable\s+default\s*(として|を採用|で(良|い)|だと|です)",
 ]
 POS_CLAIM_RE = re.compile("|".join(POS_CLAIM_PATTERNS), re.IGNORECASE)
+
+# --- Pattern: honest-attribution (warning, no block) ---
+# 自セッションの誤 pattern を「既存/繰り越し/reasonable default」等で ownership ぼかしする発話を warn (attribute-existing-issues proxy)。
+# blur phrase と wrong-marker の 60 字近接 pairing で FP 抑制 (whole-message AND より tight、 v1 observe-then-tighten)。
+HONEST_BLUR_RE = re.compile(
+    r"既存(?:の)?(?:まま|パターン|挙動|設計|もの)|繰り越し|carried[ -]?over|"
+    r"reasonable default|段階的(?:な)?拡張|incremental extension|見落と|"
+    r"didn'?t notice|気づか(?:なかった|ず)",
+    re.IGNORECASE,
+)
+HONEST_WRONG_RE = re.compile(
+    r"誤(?:り|った|字|用|認識)|間違|wrong|バグ|\bbug\b|違反|欠陥|regression|"
+    r"壊し|不正|不適切|問題(?:だ|の|が|点)|に過ぎ|だっただけ",
+    re.IGNORECASE,
+)
 
 # --- Pattern: known-possible-denial (block, no pairing) ---
 # 既知で可能と判明済みの操作を「できない/不可」と断定したら却下を促す。 op-keyword と
@@ -642,6 +662,19 @@ def _check(
             f"実体まで読んだか self-check し、 未読があれば 「INDEX 上位 N entry のみ確認、 "
             f"残りは未読」 等と scope を明示してください。"
         )
+
+    # honest-attribution (warning-only): 誤 pattern を ownership ぼかしで attribute
+    mb = HONEST_BLUR_RE.search(text)
+    if mb:
+        near = text[max(0, mb.start() - 60) : mb.end() + 60]
+        if HONEST_WRONG_RE.search(near):
+            warnings.append(
+                f"honest-attribution: 「{mb.group(0)}」 と誤 pattern を ownership "
+                f"ぼかし的に attribute している可能性 (attribute-existing-issues skill)。 "
+                f"persisted text (commit message / memory / doc) では自セッションの "
+                f"action を 「既存」「繰り越し」「reasonable default」 で曖昧化せず、 "
+                f"pre-existing pattern に対する自分の行為を honest に名指してください。"
+            )
 
     exit_code = 2 if blocking else 0
     return exit_code, warnings, blocking
@@ -1040,6 +1073,26 @@ class EnforcementFamilyTest(unittest.TestCase):
         self.assertFalse(
             _declare_proceed_active([user, asst("declare-and-proceed", now - 600)], now)
         )
+
+    # --- honest-attribution (warning-only) ---
+    def _warn(self, *a, **k):
+        return self._c(*a, **k)[1]
+
+    def test_honest_attribution_warns_on_blur_plus_wrong(self):
+        w = self._warn("既存のパターンを踏襲しただけだが、 これは誤った挙動だった")
+        self.assertTrue(any("honest-attribution" in x for x in w))
+
+    def test_honest_attribution_no_warn_without_wrong_marker(self):
+        w = self._warn("既存のパターンを踏襲して実装した")
+        self.assertFalse(any("honest-attribution" in x for x in w))
+
+    def test_honest_attribution_no_warn_without_blur(self):
+        w = self._warn("これは誤った挙動だった")
+        self.assertFalse(any("honest-attribution" in x for x in w))
+
+    def test_honest_attribution_proximity_bound(self):
+        far = "既存のパターンを採用した。" + ("あ" * 70) + "別件で誤りがあった"
+        self.assertFalse(any("honest-attribution" in x for x in self._warn(far)))
 
     def test_existing_block_families_still_fire(self):
         # regression: pre-existing block families unaffected by the new declare_active param.
