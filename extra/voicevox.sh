@@ -19,6 +19,8 @@ case ":$PATH:" in
     *) export PATH="$HOME/.local/bin:$PATH" ;;
 esac
 
+export LC_ALL=C.UTF-8  # for the voicevox expect script to work
+
 
 
 command -v tty       >/dev/null || { echo "Cannot find tty";         exit 1; }
@@ -128,9 +130,8 @@ echo -e "=> ${COLOR_YELLOW}Installing VoiceVox ...${COLOR_CLEAR}"
 # lands in the terminal scrollback. Set OMIT_TUI_OUTPUT=1 in the parent shell to silence that relay
 export OMIT_TUI_OUTPUT=1
 
-expect -c '
-# GitHub login can relax the ratelimit restriction posed by this downloader
-set env(GH_TOKEN) '"$(gh auth token)"'
+# GH_TOKEN relaxes this downloader's GitHub ratelimit
+GH_TOKEN="$(gh auth token)" expect -c '
 set timeout 300
 
 if {[info exists env(OMIT_TUI_OUTPUT)] && $env(OMIT_TUI_OUTPUT) eq "1"} { log_user 0; }
