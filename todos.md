@@ -95,11 +95,9 @@ Work file: extra/claude_extensions.sh
 Goal: 2026-05-28 session で発生した「比較表 cell に評価形容詞 (`大改造`) を ungrounded で混入」 事例を memory entry に save、 advisory hook 完成までの reminder とする。
 
 Exit Criteria:
-- [ ] `feedback_evaluative_term_in_table_cell.md` を user memory (`~/.claude/memory/`、 cross-project applicable な評価語 hedge pattern) に作成
-- [ ] user MEMORY.md index に新 entry を追加 (user explicit authorize 必要)
-- [ ] hook DB sync (`memory_surface.py --upsert`)
-
-Note: 上記 High task (advisory hook) 完成後は本 entry を `~/.claude/memory/OLD-MEMORY.md` に移動 (= memory-routing rule 通り、 Managed hook で cover された退役 entry)
+- [x] `feedback_evaluative_term_in_table_cell.md` を user memory に作成 (2026-06-09、 memory_routing_gate 受理: reminder/keywords 形式)
+- [x] index 追加: H.S. 判断「記録として作成+即 retire」ゆえ MEMORY.md でなく **OLD-MEMORY.md に退役 line** を追加 (advisory hook=stop_checks 評価語 family で cover 済・authorize は本 turn の H.S. 選択)
+- [x] DB sync: Write で auto-upsert 後 retire ゆえ `--delete`、 自 keywords で surface されないことを確認
 
 Work file: 現 session の議論
 
