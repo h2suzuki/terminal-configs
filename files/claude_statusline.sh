@@ -18,7 +18,28 @@
 set -o pipefail
 
 input="$(cat)"
-get() { printf '%s' "$input" | jq -r "$1 // empty"; }
+# 全 stdin フィールドを 1 回の jq で抽出 (per-field の jq fork を回避)。 読取順は配列順と一致。
+{
+    read -r _cur_session
+    read -r ctx_pct
+    read -r h5_pct
+    read -r h5_at
+    read -r wk_pct
+    read -r wk_at
+    read -r model
+    read -r effort
+    read -r proj_dir
+} < <(jq -r '[
+    .session_id,
+    .context_window.used_percentage,
+    .rate_limits.five_hour.used_percentage,
+    .rate_limits.five_hour.resets_at,
+    .rate_limits.seven_day.used_percentage,
+    .rate_limits.seven_day.resets_at,
+    .model.display_name,
+    (.effort.level // .effort_level // .effortLevel),
+    (.workspace.project_dir // .cwd)
+] | map(. // "") | .[]' <<< "$input")
 
 # -- Cache dump (per session) --
 # Dump this session's statusline stdin to
@@ -28,7 +49,6 @@ get() { printf '%s' "$input" | jq -r "$1 // empty"; }
 # session_started_epoch is stamped on first render and preserved, letting readers
 # (stop_checks.py turn marker) show elapsed-since-session-start. A SessionEnd hook deletes the file.
 _cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/claude-tui-statusline"
-_cur_session="$(get '.session_id')"
 if [ -n "$_cur_session" ]; then
     mkdir -p "$_cache_dir"
     _cache_file="${_cache_dir}/${_cur_session}.json"
@@ -78,7 +98,6 @@ seg() {
 empty_bar='[░░░░░░░░░░]'
 
 # -- Context --
-ctx_pct="$(get '.context_window.used_percentage')"
 if [ -n "$ctx_pct" ]; then
     ctx="$(seg 'Context' "$ctx_pct")"
 else
@@ -86,8 +105,6 @@ else
 fi
 
 # -- 5H --
-h5_pct="$(get '.rate_limits.five_hour.used_percentage')"
-h5_at="$(get  '.rate_limits.five_hour.resets_at')"
 if [ -n "$h5_at" ]; then
     h5="$(seg '5H' "$h5_pct" "$(date -d "@$h5_at" +%H:%M)")"
 else
@@ -95,8 +112,6 @@ else
 fi
 
 # -- Weekly --
-wk_pct="$(get '.rate_limits.seven_day.used_percentage')"
-wk_at="$(get  '.rate_limits.seven_day.resets_at')"
 if [ -n "$wk_at" ]; then
     wk="$(seg '1W' "$wk_pct" "$(date -d "@$wk_at" '+%H:%M %A')")"
 else
@@ -104,13 +119,9 @@ else
 fi
 
 # -- Model + Effort (color by level) --
-model="$(get '.model.display_name')"
 model="${model#Claude }"        # strip "Claude " if present
 model="${model%% (*}"           # drop " (1M context)" suffix
 [ -z "$model" ] && model='?'
-effort="$(get '.effort.level')"
-[ -z "$effort" ] && effort="$(get '.effort_level')"
-[ -z "$effort" ] && effort="$(get '.effortLevel')"
 [ -z "$effort" ] && effort="$(jq -r '.effortLevel // empty' "$HOME/.claude/settings.json" 2>/dev/null)"
 
 RESET=$'\033[0m'
@@ -132,8 +143,6 @@ fi
 
 # -- Project (workspace) --
 HOME_DIR="${HOME:-/home/$(id -un)}"
-proj_dir="$(get '.workspace.project_dir')"
-[ -z "$proj_dir" ] && proj_dir="$(get '.cwd')"
 
 PROJ_MAX=20
 truncate_str() {
