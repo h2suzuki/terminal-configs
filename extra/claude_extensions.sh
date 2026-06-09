@@ -25,6 +25,12 @@
 }
 
 
+# Put $HOME/.local/bin on PATH (claude often lives there) so the checks below resolve
+case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) export PATH="$HOME/.local/bin:$PATH" ;;
+esac
+
 
 command -v tty      >/dev/null || { echo "Cannot find tty";         exit 1; }
 command -v readlink >/dev/null || { echo "Cannot find readlink";    exit 1; }
