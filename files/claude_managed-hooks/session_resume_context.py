@@ -9,7 +9,6 @@ import os
 import re
 import subprocess
 import sys
-import time
 import unittest
 
 
@@ -26,13 +25,11 @@ def _encoded_project_id(cwd: str) -> str:
     return cwd.replace("/", "-")
 
 
-# registry 取得不能時の fallback: 直近この秒数内に書込のある jsonl を live とみなし除外 (mtime は live を厳密判定できない — idle-alive を取りこぼす)。
-ACTIVE_MARGIN_SECONDS = 5
 AGENTS_TIMEOUT = 5  # `claude agents --json` の上限 (startup blocking ゆえ短く)
 
 
 def _live_session_ids() -> set[str] | None:
-    """`claude agents --json` の active session sid 集合。 取得失敗時 None = 判定不能 (→ mtime fallback)。"""
+    """`claude agents --json` が報告する live session の sid 集合。 取得失敗時 None。"""
     try:
         r = subprocess.run(
             ["claude", "agents", "--json"],
@@ -54,20 +51,12 @@ def _live_session_ids() -> set[str] | None:
     return {a["sessionId"] for a in data if isinstance(a, dict) and a.get("sessionId")}
 
 
-def _select_prior(files: list[str], live: set[str] | None, now: float) -> str | None:
-    """files=mtime 降順。 live 既知なら live でない最新を返す; 不明 (registry 失敗) なら旧 mtime margin で best-effort。"""
+def _select_prior(files: list[str], live_sids: set[str] | None) -> str | None:
+    """files=mtime 降順 (= 最近使った順)。 live でない最新を継ぐ; registry 不明 (None) なら最新で best-effort。"""
     for f in files:
-        if live is not None:
-            if os.path.basename(f).rsplit(".", 1)[0] not in live:
-                return f
-        else:
-            try:
-                if now - os.path.getmtime(f) >= ACTIVE_MARGIN_SECONDS:
-                    return f
-            except OSError:
-                continue
-    # live 既知で全員 live → 引き継ぐ「終了済」無し (None)。 不明時のみ最新で best-effort。
-    return None if live is not None else files[0]
+        if live_sids is None or os.path.basename(f).rsplit(".", 1)[0] not in live_sids:
+            return f
+    return None  # 候補が全て live → 引き継ぐ「終了済」session 無し
 
 
 def _find_prior_session(cwd: str, current_session_id: str) -> str | None:
@@ -81,8 +70,9 @@ def _find_prior_session(cwd: str, current_session_id: str) -> str | None:
     ]
     if not files:
         return None
+    # 最近使った順に並べ、 live でない先頭を継ぐ
     files.sort(key=os.path.getmtime, reverse=True)
-    return _select_prior(files, _live_session_ids(), time.time())
+    return _select_prior(files, _live_session_ids())
 
 
 _TAIL_BUFSIZE = 128 * 1024  # 後方読みブロック
@@ -306,7 +296,7 @@ class TurnBoundaryTest(unittest.TestCase):
 
 
 class SelectPriorTest(unittest.TestCase):
-    """_select_prior: registry 既知なら live sid を除外 (idle-alive も)、 不明なら旧 mtime margin に degrade。"""
+    """_select_prior: registry 既知なら live sid を除外 (idle-alive も)、 不明 (None) なら最新で best-effort。"""
 
     @staticmethod
     def _p(sid: str) -> str:
@@ -314,30 +304,19 @@ class SelectPriorTest(unittest.TestCase):
 
     def test_live_known_skips_live_returns_newest_dead(self):
         files = [self._p("A"), self._p("B"), self._p("C")]  # mtime 降順
-        self.assertEqual(_select_prior(files, {"A"}, 0.0), self._p("B"))
+        self.assertEqual(_select_prior(files, {"A"}), self._p("B"))
 
     def test_live_known_all_live_returns_none(self):
         files = [self._p("A"), self._p("B")]
-        self.assertIsNone(_select_prior(files, {"A", "B"}, 0.0))
+        self.assertIsNone(_select_prior(files, {"A", "B"}))
 
     def test_live_known_none_live_returns_newest(self):
         files = [self._p("A"), self._p("B")]
-        self.assertEqual(_select_prior(files, set(), 0.0), self._p("A"))
+        self.assertEqual(_select_prior(files, set()), self._p("A"))
 
-    def test_registry_unknown_falls_back_to_mtime_margin(self):
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as d:
-            fresh = os.path.join(d, "fresh.jsonl")
-            old = os.path.join(d, "old.jsonl")
-            open(fresh, "w").close()
-            open(old, "w").close()
-            now = time.time()
-            os.utime(fresh, (now, now))  # 書込中相当 → skip
-            os.utime(old, (now - 3600, now - 3600))  # 終了済相当 → 採用
-            self.assertEqual(_select_prior([fresh, old], None, now), old)
-            os.utime(old, (now, now))  # 全て margin 内 → 先頭で best-effort
-            self.assertEqual(_select_prior([fresh, old], None, now), fresh)
+    def test_registry_unknown_returns_newest(self):
+        files = [self._p("A"), self._p("B")]
+        self.assertEqual(_select_prior(files, None), self._p("A"))
 
 
 if __name__ == "__main__":
