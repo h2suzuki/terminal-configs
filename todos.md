@@ -42,39 +42,6 @@ Exit Criteria:
 
 Work file: `last-session-handoff.md` の 「skill 発火率 system 対策」 section ＋ plan `~/.claude/plans/breezy-bubbling-quiche.md` (skill-active gate の full 設計 + 本 session の訂正 + 次 session 手順の durable copy)
 
-### advisory hook for evaluative term post-hoc check
-
-Goal: LLM output 内の評価語 (`大改造` / `影響大` / `アーキテクチャ再設計系` / `改造が少ない`) を Stop hook で捕捉し、 同 turn に証拠 tool (EVIDENCE_TOOLS) が無ければ block して report-by-evidence へ誘導する。 Stop の model 到達 channel は exit2 / decision:block の 2 つだけで両方 block と一次資料で確定 → soft 不可 → block route + `stop_hook_active` advise-once gate で自己 block loop を断つ設計に pivot 済 (H.S. 承認)。
-
-Exit Criteria:
-- [x] Stop hook spec 一次資料確認 (stop_hook_active 意味論 / exit2・decision:block の 2 channel / additionalContext は Stop 非対応 / 8-block override cap)
-- [x] hook 実装: 評価語 family (bare-term, EVIDENCE_TOOLS free-pass) + 全 block family への advise-once gate + docstring rewrite (commit f1dab94, e2800b8 を rebase で rewrite)
-- [x] settings/copy 行は不要と確認 (`copy_dir claude_managed-hooks/` で hooks dir 丸ごと deploy 済、 既存 file 改造ゆえ新規 wiring 不要)
-- [x] smoke 12/12 (block / free-pass / 既存 family 無回帰 / stop_hook_active demote + marker 1-bump guard / 評価語 影響大(?!き) で形容詞除外)
-- [x] bg `/code-review` triage 完了 (confirm-intent: 全 family advise-once は意図的・docstring に regression-proof 明記 / 影響大(?!き) で形容詞 影響大きい 除外 / `_check` を warnings·blocking 分離返しに refactor → f1dab94 に fixup-autosquash / plan 文発火は accept (v1) / no-defect 確認)。 session 自己終了済
-- [x] deploy 済 (LIVE): L3 と同一 file ゆえ bundle、`sudo install -m 0755 files/claude_managed-hooks/stop_checks.py /etc/claude-code/hooks/stop_checks.py` で deploy (source==deploy・mode 755 確認)。 f1dab94 の評価語 family も同時 live 化
-- [x] 実機確認 (2026-06-09): deployed stop_checks.py に合成 Stop payload (「アーキテクチャ再設計」+ EVIDENCE_TOOLS 無し) を投入 → exit2 block を実観測、 stop_hook_active=true で advise-once demote (exit0)、 評価語なし control で free-pass を確認
-- [x] (candidate) `/tmp/smoke_stop_checks.py` を committed regression test 化 → **実施**: 評価語 family の block / free-pass / 形容詞除外 を stop_checks.py の embedded `EnforcementFamilyTest` (tracked) に追加 (commit d4b068f、 `python3 -m unittest stop_checks` で 17/17 green)
-- [x] (v1 known-FP) plan 文への発火: H.S. 判断「live trigger してから close」で **v1-FP 許容**。 advise-once で 1 warn のみゆえ blast radius 小、 頻発観測時に predicate-proximity で tighten 再起票
-
-経緯: 2026-05-28 session で「大改造」 を実コード未読で発話 → report-by-evidence 違反。 既存 skill trigger は文末 judgment 想定で structured doc (table cell) の評価語混入が射程外。 hook 化で補完。
-
-Work file: `last-session-handoff.md` + commit f1dab94。 残 = deploy (別 session) + 実機確認
-
-### declare-and-proceed gate: 散文の二択質問への coverage 拡張
-
-Goal: `declare_and_proceed_gate` は PreToolUse(`^AskUserQuestion$`) のみを gate するため、 AskUserQuestion tool を使わず **散文で二択質問** (「A するか B するか?」「これで良いですか?」) を出すと素通りする。 `stop_checks.py` には既に `order-question-to-user` block family (順序質問の user 投げを block) があるが narrow で、 CONFIRM/ROUTING 系の散文質問は漏れる。 この coverage gap を埋める。
-
-Exit Criteria:
-- [x] `stop_checks.py` に CONFIRM/ROUTING family を**新設** (order-question は順序専用ゆえ拡張でなく新設)。 検出 regex は `declare_and_proceed_gate` の prose 版 copy、 `_declare_proceed_active(entries, now)` が「現 turn かつ直近 5 分以内」(twin `_skill_active` と同一 AND 窓・5 分超の同 turn invoke は drop) で invoke 判定 → 未 invoke かつ match なら blocking.append (advise-once 自動流用)
-- [x] SKIP category (destructive pre-approval / user-taste / open which-X design) は skill-active escape hatch で `declare_and_proceed_gate` と同一基準 silent pass
-- [x] smoke (embedded `EnforcementFamilyTest` 9 件: 散文 confirm/routing→block / open design→pass / declare invoke 後→pass / 既存 family 無回帰) + deploy (`/etc/claude-code/hooks/stop_checks.py` parity OK)。 commit d4b068f・unittest 17/17・ruff/ty clean
-- [x] (v1-FP) 散文 CONFIRM/ROUTING の prose-FP 余地: H.S. 判断 accept-close (2026-06-09)。 本 turn で実際に私の散文質問を2回正しく捕捉・実害 FP 未観測。 頻発観測時に `?` anchor / tail-only 走査で tighten 再起票
-
-経緯: 2026-06-08 H.S. 提起。 本 session で assistant が UPE probe の続行可否を AskUserQuestion でなく **散文の二択** で H.S. に問い、 declare-and-proceed 違反 (decidable を自分で決めず外注)。 `declare_and_proceed_gate` は tool matcher ゆえ不発火。 PreToolUse で散文出力を pre-block する手段は無く (= 評価語 post-hoc check と同型の「dead-on-arrival」制約)、 Stop の decision:block で「待たずに自分で決めて続行せよ」と差し戻すのが唯一の channel。 当初 todo は「stop_checks に新規 family 追加」と書いたが、 同 session の SKILL-HOOK-CONTRACT 検証で `order-question-to-user` block family が既存と判明 (私の質問は順序でなく routing ゆえ既存 pattern に漏れた) → 「既存機構の coverage 拡張」へ訂正。
-
-Work file: `files/claude_managed-hooks/stop_checks.py` (拡張先・既存 `order-question-to-user` family L185/491) + `files/claude_managed-hooks/declare_and_proceed_gate.py` (検出 regex の流用元)
-
 ## Medium
 
 ### Claude Code 拡張 installer (extra/claude_extensions.sh)
