@@ -91,6 +91,13 @@ copy()
 }
 
 
+# curl is needed below; minimal images lack it and apt lists, so update first
+command -v curl >/dev/null || {
+    run apt update
+    run apt install -y --no-install-recommends curl
+}
+
+
 [ -e ~/.bashrc ] &&
 run sed -i ~/.bashrc \
     -e '/export\ LS_OPTIONS/s/^\ *#*\ *//' \
