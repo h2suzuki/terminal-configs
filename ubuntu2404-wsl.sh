@@ -95,6 +95,13 @@ copy()
 }
 
 
+# uv/claude install into $HOME/.local/bin below; put it on PATH so later invocations resolve
+case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) export PATH="$HOME/.local/bin:$PATH" ;;
+esac
+
+
 # curl is needed below; minimal images lack it and apt lists, so update first
 command -v curl >/dev/null || {
     run apt update
