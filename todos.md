@@ -20,12 +20,11 @@ Goal: agent-browser (Vercel skill+CLI) / Playwright MCP (@playwright/mcp) / Figm
 
 Exit Criteria:
 - [x] 実装 + 静的検証 (shellcheck: SC2145/SC2068 は base script の `run()` 由来の repo 規約として既知・許容 / `bash -n` / 全 claude サブコマンド syntax を live 2.1.161 binary で裏とり)、 再実行 upgrade 対応 — commit 38d511f (HEAD は +256/-90 で大幅拡張済)
-- [ ] 実機 fresh provisioning で end-to-end 実行確認: (a) skills CLI が `--agent claude-code` を受理し `~/.claude/skills` へ global install / (b) `agent-browser install` の apt-sudo 挙動 (system lib 不足時) / (c) figma・security-guidance plugin の install/update が非対話で通る / (d) playwright が system Chrome を headless 起動 (現状 `@playwright/mcp@latest` 直指定・PW_MCP_VER は撤去済) / (e) serena(uvx)・codegraph(npm)・cloud-run・toolbox・vercel MCP add が全成功
-- [ ] 実機確認 (2026-06-05 hook settings 分離): managed hooks drop-in (`/etc/claude-code/managed-settings.d/extensions.json`) と user hooks の `claude_user_settings inject` が root / LOGIN_USER 双方の `~/.claude/settings.json` に反映され、 base-only 機は hook 登録ゼロ (dangling なし) であること
+- [x] 実機 fresh provisioning end-to-end 実施済 (2026-06-09 H.S. 実機確認・私の todo が stale だった): fresh install を settings 分離込みで完走、 その過程で user-settings の fragment injection bug を検知→stdin 渡しに修正 (commit 1c0a8f8 + 74f8c53)
+- [x] hook settings 分離 実機確認済 (H.S.): managed hooks drop-in (`/etc/claude-code/managed-settings.d/extensions.json`) + user hooks の pseudo drop-in CLI inject が両 user の `~/.claude/settings.json` に反映 (実装 commit 47c4f87 + 06680c0)
+- [ ] (回収スレッド・任意残務、 installer 本体は done ゆえ drop 可) (c) MCP per-host 多重 spawn の実機検証 (root+login 両 install で重複 spawn しないか・前 session で H.S. 提起・未対応) / (d) 下記決定事項 list の陳腐化 update (commit 35ba90e rebuild で dual-loop/GCP/Vercel plugin へ scope 反転)
 
 決定事項 (rejected — 再検討時の参照): GitHub MCP 不採用 (gh と重複・優位性 incremental・Linux remote OAuth 不可 #3433、 案内のみ) / managed-mcp.json 不採用 (排他制御で plugin + claude.ai connector を suppress・単一ユーザー機に過剰) / Vercel Plugin 未採用 (依頼外・Next.js 開発向けの束、 欲しければ `npx plugins add vercel/vercel-plugin`) / per-user `claude mcp add -s user` 採用 (files/ deploy でなく runtime config ゆえ canonical-source 非該当)。
-
-回収スレッド (2026-06-09 BM25 block close で移設・着手時に criteria 化): (c) MCP per-host 多重 spawn 懸念 — root+login 両 install で増幅、 前 session で H.S. 提起・未対応 (d) 上記決定事項 list が commit 35ba90e の rebuild で陳腐化 (dual-loop / GCP / Vercel plugin 採用へ scope 反転) — 要 update
 
 Work file: extra/claude_extensions.sh
 
