@@ -90,17 +90,6 @@ Exit Criteria:
 
 Work file: extra/claude_extensions.sh
 
-### memory entry: evaluative term in table cell の違反事例
-
-Goal: 2026-05-28 session で発生した「比較表 cell に評価形容詞 (`大改造`) を ungrounded で混入」 事例を memory entry に save、 advisory hook 完成までの reminder とする。
-
-Exit Criteria:
-- [x] `feedback_evaluative_term_in_table_cell.md` を user memory に作成 (2026-06-09、 memory_routing_gate 受理: reminder/keywords 形式)
-- [x] index 追加: H.S. 判断「記録として作成+即 retire」ゆえ MEMORY.md でなく **OLD-MEMORY.md に退役 line** を追加 (advisory hook=stop_checks 評価語 family で cover 済・authorize は本 turn の H.S. 選択)
-- [x] DB sync: Write で auto-upsert 後 retire ゆえ `--delete`、 自 keywords で surface されないことを確認
-
-Work file: 現 session の議論
-
 ### SKILL-HOOK-CONTRACT.md パターン集
 
 Goal: repo 直下 `SKILL-HOOK-CONTRACT.md` を 4 部構成で完成 — (A) event 別 hook 利用カタログ (H.S. の番号フロー形式) / (B) Skills フォーマット規約 / (C) 応用編 = CLAUDE.md→skill/hook 化の概要 (Big Picture) / (D) 実装 contract (技術者向け再利用規約)。 一貫性担保が目的 (2026-05-30 起案・A/B 記入は 2026-06-07 前 session で H.S. が依頼したが court バグでセッション腐敗→リセット、 本 session で再開。 「今 session の新指示」ではない)。
