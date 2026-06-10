@@ -196,7 +196,8 @@ claude mcp remove playwright --scope user
 run "claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"
 
 # Serena MCP
-run "uv tool install --python 3.13 git+https://github.com/oraios/serena"
+# --no-config: bypass a system /etc/uv/uv.toml `no-build = true` so the sdist-only proxy-tools dep can build
+run "uv tool install --no-config --python 3.13 git+https://github.com/oraios/serena"
 claude mcp remove serena --scope user
 run "claude mcp add serena --scope user -e SERENA_USAGE_REPORTING=false -- serena start-mcp-server --context claude-code --project-from-cwd --enable-web-dashboard false"
 
@@ -288,7 +289,7 @@ if [ -n "$LOGIN_USER" ]; then
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"'
 
     # Serena MCP
-    run sudo -i -u $LOGIN_USER bash -i -c '"uv tool install --python 3.13 git+https://github.com/oraios/serena"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"uv tool install --no-config --python 3.13 git+https://github.com/oraios/serena"'
     sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove serena --scope user"
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add serena --scope user -e SERENA_USAGE_REPORTING=false -- serena start-mcp-server --context claude-code --project-from-cwd --enable-web-dashboard false"'
 
