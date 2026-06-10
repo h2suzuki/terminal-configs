@@ -5,11 +5,14 @@
 # See the man page for details on how to write a sudoers file.
 #
 
-# "sudo scp" or "sudo rsync" should be able to use your SSH agent.
+# "sudo scp" or "sudo rsync" should be able to use your SSH agent
 Defaults:%sudo env_keep += "SSH_AGENT_PID SSH_AUTH_SOCK"
 
-# PulseAudio server; WSLg provides it at least.
+# PulseAudio server; WSLg provides it
 Defaults:%sudo env_keep += "PULSE_SERVER"
+
+# Lets Claude use the Kitty protocol by inheriting it
+Defaults:%sudo env_keep += "WT_SESSION"
 
 # Allow members of group sudo to execute anything without pass
 %sudo	ALL=(ALL:ALL) NOPASSWD:ALL
