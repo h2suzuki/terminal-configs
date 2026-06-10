@@ -147,15 +147,12 @@ run echo 'grip\(\) \{ rg --sort path --smart-case --json -C 2 \"\$@\" \| delta\;
 run echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' '>>' ~/.bashrc
 
 
-[ -d /etc/sudoers.d ] &&
-copy sudoers    /etc/sudoers.d/terminal-config -m 0440
-copy gitconfig  /etc/gitconfig
-copy inputrc    ~/.inputrc
-copy share_ssh_x11forwarding  ~/.share_ssh_x11forwarding
+copy sudoers                    /etc/sudoers.d/terminal-config -m 0440
+copy gitconfig                  /etc/gitconfig
+copy inputrc                    ~/.inputrc
+copy share_ssh_x11forwarding    ~/.share_ssh_x11forwarding
 
-copy ssh_keepalive_wtsess.conf   /etc/ssh/ssh_config.d/10-keepalive.conf   -m 0644
-copy sshd_keepalive_wtsess.conf  /etc/ssh/sshd_config.d/10-keepalive.conf  -m 0644
-systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+
 
 # Neovim, Git / Git-LFS, tree, ripgrep, shellcheck
 run apt update
@@ -263,8 +260,8 @@ run apt install -y --no-install-recommends \
 openssh-server openssh-client
 
 # SSH keepalive so idle sessions survive the WSL2/Hyper-V NAT idle timeout
-copy ssh_keepalive_wtsess.conf   /etc/ssh/ssh_config.d/10-keepalive.conf   -m 0644
-copy sshd_keepalive_wtsess.conf  /etc/ssh/sshd_config.d/10-keepalive.conf  -m 0644
+copy ssh_keepalive_wtsess.conf  /etc/ssh/ssh_config.d/10-keepalive_wtsess.conf  -m 0644
+copy sshd_keepalive_wtsess.conf /etc/ssh/sshd_config.d/10-keepalive_wtsess.conf -m 0644
 
 
 # Chrome
@@ -398,9 +395,10 @@ if [ -n "$LOGIN_USER" ]; then
     [ -n "$LOGIN_HOME" ] || LOGIN_HOME="/home/$LOGIN_USER"
     BASHRC="$LOGIN_HOME/.bashrc"
 
-    # files/sudoers grants NOPASSWD to a %group; make sure the login user is in it (secondary group).
+    # files/sudoers grants NOPASSWD to a %group; make sure the login user is in it
     SUDO_GROUP="$(sed -n '/NOPASSWD:/s/^%\([^[:space:]]*\).*/\1/p' "$TOP_DIR/files/sudoers")"
     [ -n "$SUDO_GROUP" ] && run usermod -aG "$SUDO_GROUP" "$LOGIN_USER"
+
     run [ -s $BASHRC ]
     run sed -i $BASHRC \
             -e '/^\ *PS1=/s/32m/35m/' \
