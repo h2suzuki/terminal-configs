@@ -174,6 +174,8 @@ done
 run find ~/.claude/skills/ -maxdepth 1 -xtype l -delete
 
 
+# Seed the registry first: never-launched users have no marketplace, so bare `update` fails (re-add is idempotent, exit 0)
+run claude plugin marketplace add anthropics/claude-plugins-official
 run claude plugin marketplace update claude-plugins-official
 
 # Security-guidance plugin (disabled by default)
@@ -260,6 +262,8 @@ if [ -n "$LOGIN_USER" ]; then
     # Prune dangling symlinks (skills renamed/removed since a prior run)
     run find $LOGIN_HOME/.claude/skills/ -maxdepth 1 -xtype l -delete
 
+    # Seed the registry first: never-launched users have no marketplace, so bare `update` fails (re-add is idempotent, exit 0)
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin marketplace add anthropics/claude-plugins-official"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin marketplace update claude-plugins-official"'
 
     # Security-guidance plugin (disabled by default)
