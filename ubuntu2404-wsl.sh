@@ -263,6 +263,8 @@ openssh-server openssh-client
 copy ssh_keepalive_wtsess.conf  /etc/ssh/ssh_config.d/10-keepalive_wtsess.conf  -m 0644
 copy sshd_keepalive_wtsess.conf /etc/ssh/sshd_config.d/10-keepalive_wtsess.conf -m 0644
 
+run systemctl restart ssh.service
+
 
 # Chrome
 [ -s /tmp/google-chrome.deb ] ||
