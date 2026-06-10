@@ -196,8 +196,9 @@ claude mcp remove playwright --scope user
 run "claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"
 
 # Serena MCP
+run "uv tool install --python 3.13 git+https://github.com/oraios/serena"
 claude mcp remove serena --scope user
-run "claude mcp add serena --scope user -e SERENA_USAGE_REPORTING=false -- uvx --python 3.13 --from git+https://github.com/oraios/serena serena start-mcp-server --context claude-code --project-from-cwd --enable-web-dashboard false"
+run "claude mcp add serena --scope user -e SERENA_USAGE_REPORTING=false -- serena start-mcp-server --context claude-code --project-from-cwd --enable-web-dashboard false"
 
 # CodeGraph MCP
 claude mcp remove codegraph --scope user
@@ -287,8 +288,9 @@ if [ -n "$LOGIN_USER" ]; then
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"'
 
     # Serena MCP
+    run sudo -i -u $LOGIN_USER bash -i -c '"uv tool install --python 3.13 git+https://github.com/oraios/serena"'
     sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove serena --scope user"
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add serena --scope user -e SERENA_USAGE_REPORTING=false -- uvx --python 3.13 --from git+https://github.com/oraios/serena serena start-mcp-server --context claude-code --project-from-cwd --enable-web-dashboard false"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add serena --scope user -e SERENA_USAGE_REPORTING=false -- serena start-mcp-server --context claude-code --project-from-cwd --enable-web-dashboard false"'
 
     # CodeGraph MCP
     sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove codegraph --scope user"

@@ -1,13 +1,27 @@
 {
   "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "~/.local/bin/serena-hooks activate --client=claude-code" } ] }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
         "hooks": [ { "type": "command", "command": "~/.claude/hooks/check_commit_author.py h2suzuki@gmail.com" } ]
+      },
+      {
+        "matcher": "",
+        "hooks": [ { "type": "command", "command": "~/.local/bin/serena-hooks remind --client=claude-code" } ]
+      },
+      {
+        "matcher": "mcp__serena__*",
+        "hooks": [ { "type": "command", "command": "~/.local/bin/serena-hooks auto-approve --client=claude-code" } ]
       }
     ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "~/.claude/hooks/check_push_prompting.py" } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "~/.local/bin/serena-hooks cleanup --client=claude-code" } ] }
     ],
     "UserPromptSubmit": [
       { "hooks": [ { "type": "command", "command": "~/.claude/hooks/memory_surface.py" } ] },
