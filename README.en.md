@@ -115,7 +115,7 @@ Adds Claude Code's "trust-building" machinery plus external tool integrations.
 - **Plugins**: security-guidance (disabled by default), figma, vercel (Vercel's MCP is provided through this plugin)
 - **CLI**: agent-browser (Vercel Labs), Vercel CLI
 
-After installing, run `/mcp` and `/doctor` in the Claude Code console to finish OAuth2 authentication.
+After installing, run `/mcp` and `/doctor` in the Claude Code console to finish OAuth2 authentication. Using Toolbox (BigQuery) also requires gcloud-side setup: `gcloud config set project <PROJECT_ID>` and `gcloud auth application-default login`.
 
 
 ### B. Voice notifications (`extra/voicevox.sh`)

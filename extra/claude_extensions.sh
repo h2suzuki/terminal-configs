@@ -210,9 +210,10 @@ run "claude mcp add codegraph --scope user -- codegraph serve --mcp"
 claude mcp remove cloud-run --scope user
 run "claude mcp add cloud-run --scope user -- npx -y @google-cloud/cloud-run-mcp"
 
-# Toolbox MCP
+# Toolbox MCP (launcher derives BIGQUERY_PROJECT, required at startup, from gcloud)
+copy --nobackup toolbox_bigquery_mcp                       /usr/local/bin/toolbox_bigquery_mcp -m 0755
 claude mcp remove toolbox --scope user
-run "claude mcp add toolbox --scope user -- npx -y @toolbox-sdk/server@latest --prebuilt=bigquery --stdio"
+run "claude mcp add toolbox --scope user -- toolbox_bigquery_mcp"
 
 # Vercel CLI + plugin (MCP comes from the plugin)
 run npm install -g @vercel/vc-native
@@ -304,7 +305,7 @@ if [ -n "$LOGIN_USER" ]; then
 
     # Toolbox MCP
     sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove toolbox --scope user"
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add toolbox --scope user -- npx -y @toolbox-sdk/server@latest --prebuilt=bigquery --stdio"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add toolbox --scope user -- toolbox_bigquery_mcp"'
 
     # Vercel CLI
     run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g @vercel/vc-native"'

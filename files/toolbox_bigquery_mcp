@@ -1,0 +1,16 @@
+#!/bin/bash
+#
+# MCP stdio launcher for Toolbox: the bigquery prebuilt refuses to start
+# without BIGQUERY_PROJECT, so derive it from gcloud when the caller unset it.
+
+set -euo pipefail
+
+BIGQUERY_PROJECT="${BIGQUERY_PROJECT:-${GOOGLE_CLOUD_PROJECT:-}}"
+if [ -z "$BIGQUERY_PROJECT" ] && command -v gcloud >/dev/null 2>&1; then
+    BIGQUERY_PROJECT="$(gcloud config get-value project 2>/dev/null || true)"
+fi
+if [ -n "$BIGQUERY_PROJECT" ]; then
+    export BIGQUERY_PROJECT
+fi
+
+exec npx -y @toolbox-sdk/server@latest --prebuilt=bigquery --stdio
