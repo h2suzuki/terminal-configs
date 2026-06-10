@@ -68,14 +68,3 @@ Exit Criteria:
 Note: doc 本体 (L1〜L4 概観 head + 実装 contract 0〜5 + 除外) 記載・commit 27b498c・SendUserFile 送付済。 目次 = 二つの family → capability-grant → 判定/検出/状態/安全 → 除外、 各項に実フック名の具体例。 **H.S. レビュー待ち** (外出先・後日)。 承認後に Exit flip + block 削除 (body 構成/粒度の直しがあれば反映してから)。 2026-05-31: コード照合 audit (workflow wvsbvz52x、 34 claim 中 30 accurate、 adversarial 確認・誤 flag 1 件棄却) 実施し確定 3 finding を commit eedd808 で反映 — (A) 中核 dichotomy 訂正 (L3 stop_checks の 4 family は exit2 で block、 overview L3 行+段階補足+§0 表)、 (B) §3 synthetic-skip を path 別に (BM25 surfacer `_memory_surface` は非 skip・本 turn live 確認)、 (C) §1/§2 に advisory-allow + content-embedded opt-out token 追記。 **事実精度は audit 済**、 残は H.S. の構成/粒度レビュー。 任意候補: 補足「L3とL4どう違うか」の「指摘する」(現 line 24) も同根で、 H.S. が望めば「介入する」系へ。 follow-up (doc外・コード): `_memory_surface` が synthetic prompt を surface する挙動の許容可否。 2026-06-01〜02: H.S. live レビューで overview を全面改稿 (歴史先行 CLAUDE.md→skill→hook / L1-L4 jargon 撤去 / 一人称除去 / です・ます / 表 A-D 化+俳句 / capability-grant をフロー番号リスト化 / 事実確認) + ファイル名 `_`→`-` リネーム (commit 025a3c6・14cf6d0)。 **レビュー継続中** — 次 session も H.S. の追加指摘を反映。 確立した編集ルールは handoff doc 参照。
 
 Work file: handoff = `last-session-handoff.md` の「SKILL-HOOK-CONTRACT.md パターン集」 section ＋ plan `~/.claude/plans/breezy-bubbling-quiche.md` の「並行 deliverable」節
-
-### Terminal bell 抑止をログインユーザーにも適用
-
-Goal: `files/inputrc` の bell 抑止を root 以外にも効かせるか方針を決め、採用なら installer にログインユーザー向け配置を実装する。
-
-Exit Criteria:
-- [x] H.S. が採否を判断 — 2026-06-11「ログインユーザーにもinputrcを配置してください」で採用
-- [x] 採用時: 両 installer に `copy inputrc $LOGIN_HOME/.inputrc` を追加（commit 9d2e78a、4 files）し、本機ログインユーザーへ配置して `bind -v` → `set bell-style none` を実機確認
-- [x] 採用時: README.md / README.en.md §1 の「（root のみ）」表記を更新（同 commit）
-
-経緯: 2026-06-11 README 検証 workflow finding。inputrc は ubuntu2404-wsl.sh:152 / debian12.sh:147 で `/root/.inputrc` にのみ copy され、ログインユーザーには未配置。README は「root のみ」と記載済みで現状とは整合。
