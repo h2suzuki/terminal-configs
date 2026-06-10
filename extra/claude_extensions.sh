@@ -218,7 +218,10 @@ run CI=1 npx -y plugins add vercel/vercel-plugin --yes
 run claude plugin update vercel@claude-plugins-official
 
 
+# serena --project-from-cwd auto-activates (seeds .serena/) when cwd is a repo; run the check from $HOME
+pushd "$HOME" >/dev/null
 run claude mcp list
+popd >/dev/null
 run claude plugin list
 
 
