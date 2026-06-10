@@ -115,7 +115,19 @@ Adds Claude Code's "trust-building" machinery plus external tool integrations.
 - **Plugins**: security-guidance (disabled by default), figma, vercel (Vercel's MCP is provided through this plugin)
 - **CLI**: agent-browser (Vercel Labs), Vercel CLI
 
-After installing, run `/mcp` and `/doctor` in the Claude Code console to finish OAuth2 authentication. Using Toolbox (BigQuery) also requires gcloud-side setup: `gcloud config set project <PROJECT_ID>` and `gcloud auth application-default login`.
+After installing, complete the authentication below (only the MCP servers this script registers; `claude mcp list` also shows MCP servers configured elsewhere).
+
+| MCP | Authentication |
+|---|---|
+| playwright | none |
+| serena | none |
+| codegraph | none |
+| cloud-run | `gcloud auth login` and `gcloud auth application-default login` |
+| toolbox | `gcloud config set project <PROJECT_ID>` and `gcloud auth application-default login` |
+| figma | OAuth2 via `/mcp` in the Claude Code console |
+| vercel | OAuth2 via `/mcp` in the Claude Code console |
+
+After authenticating, check the connections with `/mcp` and `/doctor`.
 
 
 ### B. Voice notifications (`extra/voicevox.sh`)
@@ -125,6 +137,9 @@ through VoiceVox — idle warnings, subagent completion reports, questions from 
 and so on. The alert hooks are registered as a managed-settings drop-in
 (`/etc/claude-code/managed-settings.d/voicevox.json`), so a base machine that never ran
 this script has no references to hooks that don't exist.
+
+Downloading VoiceVox Core is subject to GitHub API rate limits, so we recommend
+running `gh auth login` before this script.
 
 `voicevox_claude_alerts` also works as a CLI with the following subcommands:
 
