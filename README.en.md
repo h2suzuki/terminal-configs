@@ -115,15 +115,13 @@ Adds Claude Code's "trust-building" machinery plus external tool integrations.
 - **Plugins**: security-guidance (disabled by default), figma, vercel (Vercel's MCP is provided through this plugin)
 - **CLI**: agent-browser (Vercel Labs), Vercel CLI
 
-After installing, complete the authentication below (only the MCP servers this script registers; `claude mcp list` also shows MCP servers configured elsewhere).
+After installing, complete the authentication / initial setup below (only the MCP servers this script registers; `claude mcp list` also shows MCP servers configured elsewhere).
 
-| MCP | Authentication |
+| MCP | Authentication / initial setup |
 |---|---|
-| playwright | none |
-| serena | none |
-| codegraph | none |
-| cloud-run | `gcloud auth login` and `gcloud auth application-default login` |
-| toolbox | `gcloud config set project <PROJECT_ID>` and `gcloud auth application-default login` |
+| codegraph | `codegraph init -i` at the top directory of each repository |
+| cloud-run | `gcloud auth login`<br>`gcloud auth application-default login` |
+| toolbox | `gcloud config set project <PROJECT_ID>`<br>`gcloud auth application-default login` |
 | figma | OAuth2 via `/mcp` in the Claude Code console |
 | vercel | OAuth2 via `/mcp` in the Claude Code console |
 
@@ -139,7 +137,8 @@ and so on. The alert hooks are registered as a managed-settings drop-in
 this script has no references to hooks that don't exist.
 
 Downloading VoiceVox Core is subject to GitHub API rate limits, so we recommend
-running `gh auth login` before this script.
+running `gh auth login` before this script. The same credentials also serve GitHub
+user authentication for `git clone` and friends, delegated through `/etc/gitconfig`.
 
 `voicevox_claude_alerts` also works as a CLI with the following subcommands:
 
