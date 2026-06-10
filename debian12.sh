@@ -367,6 +367,9 @@ if [ -n "$LOGIN_USER" ]; then
     SUDO_GROUP="$(sed -n '/NOPASSWD:/s/^%\([^[:space:]]*\).*/\1/p' "$TOP_DIR/files/sudoers")"
     [ -n "$SUDO_GROUP" ] && run usermod -aG "$SUDO_GROUP" "$LOGIN_USER"
 
+    # Suppress the terminal bell for the login user as well
+    copy inputrc $LOGIN_HOME/.inputrc --owner $LOGIN_USER --group $LOGIN_GROUP
+
     run [ -s $BASHRC ]
     run sed -i $BASHRC \
             -e '/^\ *PS1=/s/32m/35m/' \

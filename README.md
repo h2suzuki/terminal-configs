@@ -39,7 +39,7 @@
 - プロンプト色の調整（ログインユーザーの緑 → 紫）
 - Bash エイリアスの調整・追加（`tree`, `diffy`, `rg`, `grip`, `mdr`, `node-x` など）
 - Git の設定調整（エイリアス `git st`, `git diffc`, `git log1`, `git graph` など、delta による見やすい diff 表示、gh と連携した GitHub 認証）
-- Terminal bell の抑止（root のみ）
+- Terminal bell の抑止
 - 標準エディタ： Neovim
 - 標準ブラウザ： `powershell.exe start` [WSL2のみ]
 

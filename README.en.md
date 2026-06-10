@@ -39,7 +39,7 @@ Configures both the login user and root.
 - Prompt color tweak (login user green → purple)
 - Bash aliases tuned and extended (`tree`, `diffy`, `rg`, `grip`, `mdr`, `node-x`, ...)
 - Git configuration tweaks (aliases `git st`, `git diffc`, `git log1`, `git graph` and so on, readable diffs via delta, GitHub authentication through gh)
-- Suppress the terminal bell (root only)
+- Suppress the terminal bell
 - Default editor: Neovim
 - Default browser: `powershell.exe start` [WSL2 only]
 
