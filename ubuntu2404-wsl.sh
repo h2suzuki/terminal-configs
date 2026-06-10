@@ -402,7 +402,7 @@ if [ -n "$LOGIN_USER" ]; then
     BASHRC="$LOGIN_HOME/.bashrc"
 
     # files/sudoers grants NOPASSWD to a %group; make sure the login user is in it (secondary group).
-    SUDO_GROUP="$(sed -n 's/^%\([^[:space:]]*\)[[:space:]].*NOPASSWD.*/\1/p' "$TOP_DIR/files/sudoers")"
+    SUDO_GROUP="$(sed -n '/NOPASSWD:/s/^%\([^[:space:]]*\).*/\1/p' "$TOP_DIR/files/sudoers")"
     [ -n "$SUDO_GROUP" ] && run usermod -aG "$SUDO_GROUP" "$LOGIN_USER"
     run [ -s $BASHRC ]
     run sed -i $BASHRC \
