@@ -148,13 +148,13 @@ run echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' '>>' ~/.bashrc
 
 
 [ -d /etc/sudoers.d ] &&
-copy sudoers    /etc/sudoers.d/nopasswd -m 0440
+copy sudoers    /etc/sudoers.d/terminal-config -m 0440
 copy gitconfig  /etc/gitconfig
 copy inputrc    ~/.inputrc
 copy share_ssh_x11forwarding  ~/.share_ssh_x11forwarding
 
-copy ssh_keepalive.conf   /etc/ssh/ssh_config.d/10-keepalive.conf   -m 0644
-copy sshd_keepalive.conf  /etc/ssh/sshd_config.d/10-keepalive.conf  -m 0644
+copy ssh_keepalive_wtsess.conf   /etc/ssh/ssh_config.d/10-keepalive.conf   -m 0644
+copy sshd_keepalive_wtsess.conf  /etc/ssh/sshd_config.d/10-keepalive.conf  -m 0644
 systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
 
 # Neovim, Git / Git-LFS, tree, ripgrep, shellcheck
@@ -263,8 +263,8 @@ run apt install -y --no-install-recommends \
 openssh-server openssh-client
 
 # SSH keepalive so idle sessions survive the WSL2/Hyper-V NAT idle timeout
-copy ssh_keepalive.conf   /etc/ssh/ssh_config.d/10-keepalive.conf   -m 0644
-copy sshd_keepalive.conf  /etc/ssh/sshd_config.d/10-keepalive.conf  -m 0644
+copy ssh_keepalive_wtsess.conf   /etc/ssh/ssh_config.d/10-keepalive.conf   -m 0644
+copy sshd_keepalive_wtsess.conf  /etc/ssh/sshd_config.d/10-keepalive.conf  -m 0644
 
 
 # Chrome
