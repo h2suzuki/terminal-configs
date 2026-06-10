@@ -9,10 +9,6 @@
         "hooks": [ { "type": "command", "command": "~/.claude/hooks/check_commit_author.py h2suzuki@gmail.com" } ]
       },
       {
-        "matcher": "",
-        "hooks": [ { "type": "command", "command": "~/.local/bin/serena-hooks remind --client=claude-code" } ]
-      },
-      {
         "matcher": "mcp__serena__*",
         "hooks": [ { "type": "command", "command": "~/.local/bin/serena-hooks auto-approve --client=claude-code" } ]
       }
