@@ -357,6 +357,10 @@ if [ -n "$LOGIN_USER" ]; then
     LOGIN_HOME="$(getent passwd "$LOGIN_USER" | cut -d: -f6)"
     [ -n "$LOGIN_HOME" ] || LOGIN_HOME="/home/$LOGIN_USER"
     BASHRC="$LOGIN_HOME/.bashrc"
+
+    # files/sudoers grants NOPASSWD to a %group; make sure the login user is in it (secondary group).
+    SUDO_GROUP="$(sed -n 's/^%\([^[:space:]]*\)[[:space:]].*NOPASSWD.*/\1/p' "$TOP_DIR/files/sudoers")"
+    [ -n "$SUDO_GROUP" ] && run usermod -aG "$SUDO_GROUP" "$LOGIN_USER"
     run [ -s $BASHRC ]
     run sed -i $BASHRC \
             -e '/^\ *PS1=/s/32m/35m/' \
