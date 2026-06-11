@@ -7,30 +7,37 @@ Use-case scenarios
 
 PostToolUse — fix knowledge state
 ---------------------------------
-On Read / Write: INSERT record (mtime_ns; Read range = offset+limit, Write = whole file).
-On Edit / MultiEdit / NotebookEdit: no action — the mtime change auto-excludes
-prior records from the next check's current-mtime filter.
+On Read / Write / Edit / MultiEdit: INSERT record {tool, agent_id, mtime_ns}
+(Read adds offset+limit). Edit / MultiEdit record the post-edit mtime so the
+editing agent's own next Edit passes without a re-Read.
+On NotebookEdit: no action (not routed; its PreToolUse is unconditional allow).
 
 PreToolUse — gate or prompt the tool call
 -----------------------------------------
+A record is "own" when session_id + agent_id match the caller (main loop
+agent_id = null). An own record at the file's current mtime means the caller
+produced or already saw the current content.
 On Read:
-  No record at current mtime -> cache invalidated -> allow (silent advisory).
-  Record(s) -> advise duplicate range already in context; allow.
+  Own record(s) at current mtime -> advise duplicate range already in context.
+  Otherwise -> allow silently.
 On Write / NotebookEdit: unconditional allow.
 On Edit / MultiEdit:
-  No record at current mtime -> DENY with a Read-before-Edit instruction.
-  Any Write covers whole file -> stay silent.
-  Read records only -> advise Edit region may fall outside Read scope; allow.
+  Own record at current mtime -> allow silently (prior Read, own Write, or
+  own successful Edit).
+  Sibling-agent Write / Edit / MultiEdit at current mtime -> DENY (content
+  unseen here).
+  Otherwise -> DENY: never read by this agent, or changed since its Read.
 
 Subcommands
 ===========
 
-  record  PostToolUse for Read / Write. Appends {tool, mtime_ns, [offset, limit | -]}.
+  record  PostToolUse for Read / Write / Edit / MultiEdit. Appends an access entry.
   check   PreToolUse for Read / Edit / MultiEdit. Emits hookSpecificOutput per above.
 
-  Write / NotebookEdit PreToolUse and Edit / MultiEdit / NotebookEdit PostToolUse must
-  not route here (excluded at the settings.json matcher — anchored `^(Read|Edit|MultiEdit)$`
-  and `^(Read|Write)$`). The hook is defensive and early-returns on unexpected tools.
+  Write / NotebookEdit PreToolUse and NotebookEdit PostToolUse must not route
+  here (excluded at the settings.json matcher — anchored `^(Read|Edit|MultiEdit)$`
+  and `^(Read|Write|Edit|MultiEdit)$`). The hook is defensive and early-returns
+  on unexpected tools.
 
 State lives in ~/.claude/hooks/state/read_mtime.sqlite3 (WAL). Rows older than
 TTL_SECONDS (default 7 days) are pruned opportunistically on each write;
@@ -59,8 +66,9 @@ from pathlib import Path
 TTL_SECONDS = 7 * 24 * 3600
 ACCESS_HISTORY_CAP = 50
 DB_PATH = Path.home() / ".claude" / "hooks" / "state" / "read_mtime.sqlite3"
-RECORD_TOOLS = {"Read", "Write"}
+RECORD_TOOLS = {"Read", "Write", "Edit", "MultiEdit"}
 CHECK_TOOLS = {"Read", "Edit", "MultiEdit"}
+MUTATING_TOOLS = {"Write", "Edit", "MultiEdit"}
 EXPECTED_COLUMNS = {"session_id", "path", "recorded_at", "accesses_json"}
 
 
@@ -131,22 +139,28 @@ def _emit_deny(reason: str) -> None:
     sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
-def _extract(payload: dict) -> tuple[str, str, str, dict]:
+def _agent_of(obj: dict) -> str | None:
+    agent = obj.get("agent_id")
+    return agent if isinstance(agent, str) and agent else None
+
+
+def _extract(payload: dict) -> tuple[str, str, str | None, str, dict]:
     if not isinstance(payload, dict):
-        return "", "", "", {}
+        return "", "", None, "", {}
     tool = payload.get("tool_name") or ""
     sid = payload.get("session_id") or ""
+    agent = _agent_of(payload)
     cwd = payload.get("cwd") or ""
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):
-        return tool, sid, "", {}
+        return tool, sid, agent, "", {}
     raw_path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
     path = _canonical(raw_path, cwd)
-    return tool, sid, path, tool_input
+    return tool, sid, agent, path, tool_input
 
 
-def _build_entry(tool: str, tool_input: dict, mtime_ns: int) -> dict:
-    entry: dict = {"tool": tool, "mtime_ns": mtime_ns}
+def _build_entry(tool: str, tool_input: dict, mtime_ns: int, agent: str | None) -> dict:
+    entry: dict = {"tool": tool, "mtime_ns": mtime_ns, "agent_id": agent}
     if tool == "Read":
         entry["offset"] = tool_input.get("offset")
         entry["limit"] = tool_input.get("limit")
@@ -173,14 +187,14 @@ def _format_entry(a: dict) -> str:
 
 
 def cmd_record(payload: dict) -> None:
-    tool, sid, path, tool_input = _extract(payload)
+    tool, sid, agent, path, tool_input = _extract(payload)
     if tool not in RECORD_TOOLS or not sid or not path:
         return
     mtime_ns = _file_mtime_ns(path)
     if mtime_ns is None:
         return
     now = int(time.time())
-    entry = _build_entry(tool, tool_input, mtime_ns)
+    entry = _build_entry(tool, tool_input, mtime_ns, agent)
 
     conn = _open_db()
     try:
@@ -214,7 +228,7 @@ def cmd_record(payload: dict) -> None:
 
 
 def cmd_check(payload: dict) -> None:
-    tool, sid, path, _ = _extract(payload)
+    tool, sid, agent, path, _ = _extract(payload)
     if tool not in CHECK_TOOLS or not sid or not path:
         return
     if not os.path.exists(path):
@@ -233,38 +247,51 @@ def cmd_check(payload: dict) -> None:
         conn.close()
 
     accesses = _load_accesses(row[0]) if row else []
-    same_mtime = [a for a in accesses if a.get("mtime_ns") == current_ns]
+    own = [a for a in accesses if _agent_of(a) == agent]
+    own_now = [a for a in own if a.get("mtime_ns") == current_ns]
 
     if tool == "Read":
-        if same_mtime:
-            formatted = ", ".join(_format_entry(a) for a in same_mtime)
+        if own_now:
+            formatted = ", ".join(_format_entry(a) for a in own_now)
             _emit_allow(
                 f"{path}: current mtime に対し既に "
-                f"{len(same_mtime)} 件 Read/Write 済 [{formatted}]。 "
+                f"{len(own_now)} 件 Read/Write/Edit 済 [{formatted}]。 "
                 "重複 scope の Read は context に既保持。 "
                 "新 scope (異なる offset/limit) の Read は問題ありません。"
             )
         return
 
-    # Edit / MultiEdit
-    if same_mtime:
-        if any(a.get("tool") == "Write" for a in same_mtime):
-            return
-        formatted = ", ".join(_format_entry(a) for a in same_mtime)
-        _emit_allow(
-            f"{path}: current mtime に対する Read scope [{formatted}] あり。 "
-            "Edit 対象 region が Read scope 外の場合は再 Read 推奨 "
-            "(Write は無いため file 全件は cover されていません)。"
-        )
+    # Edit / MultiEdit: own record at current mtime = content already known.
+    if own_now:
         return
 
-    # No Read/Write at current mtime → cache invalidated, must Read first.
-    # 簡潔指示形。 path は Edit input 側で既知なので reason に含めない。
-    if not accesses:
-        reason = "未 Read。 編集前に、 Read で内容の確認が必要。"
+    sibling_mut = [
+        a
+        for a in accesses
+        if a.get("mtime_ns") == current_ns
+        and _agent_of(a) != agent
+        and a.get("tool") in MUTATING_TOOLS
+    ]
+    # 文面は意図的に冗長 (hook 誤読防止 + corrective 行動の書き下し)。 trim せず維持。
+    if sibling_mut:
+        reason = (
+            "同じ session の別 agent がこのファイルを更新しているため、現在の内容は"
+            "この agent からまだ見えていません。お手数ですが、該当範囲を Read してから"
+            "編集してください。Read 後はこの hook は deny しません (内容差分により "
+            "Edit の old_string 調整が必要な場合があります。hook 自身はファイルを"
+            "変更していません)。"
+        )
+    elif own:
+        reason = (
+            "前回内容を確認した時点からファイルが更新されています。お手数ですが、"
+            "該当範囲を Read し直してから編集してください。Read 後はこの hook は "
+            "deny しません (内容差分により Edit の old_string 調整が必要な場合が"
+            "あります。hook 自身はファイルを変更していません)。"
+        )
     else:
         reason = (
-            "前回の Read から内容が変化。 編集前に、 再 Read で現内容の確認が必要。"
+            "このファイルはまだ Read していません。お手数ですが、編集の前に Read で"
+            "内容を確認してください。Read 後はこの hook は deny しません。"
         )
     _emit_deny(reason)
 

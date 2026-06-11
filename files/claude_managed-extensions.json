@@ -35,7 +35,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "^(Read|Write)$",
+        "matcher": "^(Read|Write|Edit|MultiEdit)$",
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/read_before_edit.py record" } ]
       },
       {
