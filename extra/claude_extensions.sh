@@ -11,7 +11,6 @@
 #   Agent-browser CLI   Vercel Labs CLI + Claude Code skill
 #   Playwright MCP      Microsoft playwright/mcp (stdio; reuses the system Chrome, headless)
 #
-#   Serena MCP          LSP (stdio; telemetry off)
 #   Codegraph MCP       Tree-sitter + SQLite MCP (stdio)
 #
 #   Cloud-run MCP       Google Cloud Run MCP (stdio; deploy/logs)
@@ -195,12 +194,6 @@ run npx -y skills add vercel-labs/agent-browser --skill agent-browser --agent cl
 claude mcp remove playwright --scope user
 run "claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"
 
-# Serena MCP
-# --no-config: bypass a system /etc/uv/uv.toml `no-build = true` so the sdist-only proxy-tools dep can build
-run "uv tool install --no-config --python 3.13 git+https://github.com/oraios/serena"
-claude mcp remove serena --scope user
-run "claude mcp add serena --scope user -e SERENA_USAGE_REPORTING=false -- serena start-mcp-server --context claude-code --project-from-cwd --enable-web-dashboard false"
-
 # CodeGraph MCP
 claude mcp remove codegraph --scope user
 run npm install -g @colbymchenry/codegraph
@@ -221,10 +214,7 @@ run CI=1 npx -y plugins add vercel/vercel-plugin --yes
 run claude plugin update vercel@claude-plugins-official
 
 
-# serena --project-from-cwd auto-activates (seeds .serena/) when cwd is a repo; run the check from $HOME
-pushd "$HOME" >/dev/null
 run claude mcp list
-popd >/dev/null
 run claude plugin list
 
 
@@ -288,11 +278,6 @@ if [ -n "$LOGIN_USER" ]; then
     # Playwright MCP
     sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove playwright --scope user"
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"'
-
-    # Serena MCP
-    run sudo -i -u $LOGIN_USER bash -i -c '"uv tool install --no-config --python 3.13 git+https://github.com/oraios/serena"'
-    sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove serena --scope user"
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add serena --scope user -e SERENA_USAGE_REPORTING=false -- serena start-mcp-server --context claude-code --project-from-cwd --enable-web-dashboard false"'
 
     # CodeGraph MCP
     sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove codegraph --scope user"
