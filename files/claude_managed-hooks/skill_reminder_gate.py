@@ -30,8 +30,9 @@ gate flow:
       拡張子なし → required = ∪(宣言 kind の skill)  (declare が唯一の真実源)
   elif 拡張子あり → required = relevant_skills(path)
   else (拡張子なし・未宣言):
-      既存 file の shebang (#!.../bash|python) → required = KIND_SKILLS[kind]
-      shebang 無し/未知 interp/新規 file        → DENY「kind を declare せよ」; return
+      shebang (#!.../bash|python) → required = KIND_SKILLS[kind]
+        (Write は新 content の 1 行目 — 全置換ゆえ disk より優先。 Edit は既存 file)
+      shebang 無し/未知 interp → DENY「kind を declare せよ」; return
   required が空            → ALLOW (skill-less file。transcript 非読込)
   active = 現 turn かつ直近 5 分以内の Skill invoke 集合 (現 turn を後方 1 つ読み ts で drop)
   active 判定不能 (corrupted) → ALLOW (fail-open)
@@ -293,9 +294,17 @@ def _shebang_kind(path: str) -> str | None:
     """既存 file の 1 行目 shebang から kind (bash|python) を判定。無し/未知/読めない → None。"""
     try:
         with open(path, "rb") as f:
-            first = f.readline(SHEBANG_MAXLEN).decode("utf-8", "replace").strip()
+            first = f.readline(SHEBANG_MAXLEN).decode("utf-8", "replace")
     except OSError:
         return None
+    return _shebang_kind_text(first)
+
+
+def _shebang_kind_text(text) -> str | None:
+    """text 先頭行の shebang から kind (bash|python) を判定。無し/未知/非 str → None。"""
+    if not isinstance(text, str):
+        return None
+    first = text[:SHEBANG_MAXLEN].split("\n", 1)[0].strip()
     if not first.startswith("#!"):
         return None
     tokens = first[2:].split()
@@ -535,7 +544,11 @@ def cmd_gate(payload: dict) -> None:
     elif _has_extension(path):
         required = relevant_skills(path)
     else:
-        kind = _shebang_kind(path)  # 既存 file の shebang で bash|python を補完
+        # Write は全置換ゆえ新 content の shebang が真実源、Edit は既存 file の shebang
+        if payload.get("tool_name") == "Write":
+            kind = _shebang_kind_text(inp.get("content"))
+        else:
+            kind = _shebang_kind(path)
         if kind is None:
             _deny_declare(os.path.basename(path))
             return
@@ -673,7 +686,15 @@ class GateTest(unittest.TestCase):
         with redirect_stderr(io.StringIO()):
             return cmd_declare(argv)
 
-    def _gate(self, file_path, entries=None, sid="s1", tool="Edit", transcript=True):
+    def _gate(
+        self,
+        file_path,
+        entries=None,
+        sid="s1",
+        tool="Edit",
+        transcript=True,
+        content=None,
+    ):
         import io
         from contextlib import redirect_stdout
 
@@ -683,6 +704,8 @@ class GateTest(unittest.TestCase):
             "cwd": "/tmp",
             "session_id": sid,
         }
+        if content is not None:
+            payload["tool_input"]["content"] = content
         if transcript:
             payload["transcript_path"] = self._transcript(entries or [])
         buf = io.StringIO()
@@ -742,11 +765,13 @@ class GateTest(unittest.TestCase):
             "": None,
         }
         for i, (data, want) in enumerate(cases.items()):
+            self.assertEqual(_shebang_kind_text(data), want, repr(data))
             p = os.path.join(d, f"f{i}")
             with open(p, "w", encoding="utf-8") as f:
                 f.write(data)
             self.assertEqual(_shebang_kind(p), want, repr(data))
         self.assertIsNone(_shebang_kind(os.path.join(d, "does-not-exist")))
+        self.assertIsNone(_shebang_kind_text(None))
 
     # --- C5: active = current turn AND within 5 min ---
     def test_active_skills_window_and_turn(self):
@@ -926,6 +951,43 @@ class GateTest(unittest.TestCase):
                     self._skill("writing-python"),
                 ],
             )
+        )
+
+    def test_gate_write_shebang_from_content(self):
+        # C2-W: Write は全置換ゆえ新 content の 1 行目 shebang が真実源 (disk より優先)。
+        import tempfile
+
+        p = os.path.join(tempfile.mkdtemp(), "newtool")  # not on disk yet
+        bash = "#!/bin/bash\necho hi\n"
+        r = self._reason(
+            self._gate(p, entries=[self._user()], tool="Write", content=bash)
+        )
+        self.assertIn("writing-bash", r)
+        self.assertIsNone(  # required skills active -> allow
+            self._gate(
+                p,
+                entries=[
+                    self._user(),
+                    self._skill("writing-code"),
+                    self._skill("writing-bash"),
+                ],
+                tool="Write",
+                content=bash,
+            )
+        )
+        with open(p, "w", encoding="utf-8") as f:  # disk says python; content wins
+            f.write("#!/usr/bin/env python3\n")
+        self.assertIn(
+            "writing-bash",
+            self._reason(
+                self._gate(p, entries=[self._user()], tool="Write", content=bash)
+            ),
+        )
+        self.assertIn(  # shebang-less content -> declare deny (unchanged path)
+            "declare",
+            self._reason(
+                self._gate(p, entries=[self._user()], tool="Write", content="plain\n")
+            ),
         )
 
     def test_gate_declared_kinds(self):
