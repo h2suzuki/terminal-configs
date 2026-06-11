@@ -23,8 +23,8 @@ Exit Criteria:
 - [x] WSL2 client 実機で 3 機構を検証 — `ssh -G`→sendenv WT_SESSION / `sshd -T`→acceptenv WT_SESSION（LANG/LC_* 保持）/ `sudo -i`→GUID 保持（baseline は空、 before/after で確認）
 - [x] guest へ deploy（`debian12.sh` 再実行 or 手動 install + `systemctl reload ssh`、 dest 改名ゆえ旧 `/etc/sudoers.d/nopasswd` は手動削除）し、 **新規** SSH session で `echo $WT_SESSION` が WSL2 と同一 GUID（SSH 転送 OK）— H.S. が Debian12 実機で確認 (2026-06-12 報告)
 - [x] guest で `sudo -i` 後も同 GUID 保持（検証時は /root/.bashrc の placeholder を一時無効化し real GUID と確認）— 同上、 sudo -i 後の引き継ぎも H.S. 確認済
-- [ ] guest root で claude 起動・`/terminal-setup` が Windows Terminal をネイティブ認識、 Shift+Enter 改行・マウス・再描画を実機確認
-- [ ] 全確認後、 guest /root/.bashrc の暫定 fallback `${WT_SESSION:-ssh-windows-terminal}` を削除 or 見直し（本 task の最後、 要動作確認後）
+- [x] guest root で claude 起動・`/terminal-setup` が Windows Terminal をネイティブ認識、 Shift+Enter 改行・マウス・再描画を実機確認 — H.S. が Debian12 実機で確認 (2026-06-12 報告)
+- [x] 全確認後、 guest /root/.bashrc の暫定 fallback `${WT_SESSION:-ssh-windows-terminal}` を削除 or 見直し（本 task の最後、 要動作確認後）— H.S. が削除済み (2026-06-12 報告)
 
 Note（敵対監査 workflow wf_41c6407f-ecb の要点）:
 - guest 検証は必ず**新規** SSH session で。 reload/HUP は新規接続のみ反映、 `usermod -aG sudo` も次 login から有効。 deploy を走らせた当の session は旧 config のまま
