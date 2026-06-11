@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 # dangling-ref-check: allow (this hook's function is to scan that path).
-"""UserPromptSubmit hook surfacing the best-matching memory entry via FTS5 BM25.
+"""UserPromptSubmit hook surfacing the best-matching memory entry via hybrid retrieval.
 
 Modes:
 
-- (no argv) — UserPromptSubmit handler. FTS5 BM25 against the prompt, top-1
-  (plus a 2nd only if it clears a strong bar), confidence floor + per-session
-  throttle (15 min same-entry suppression). Fail-open: any error exits 0 with
-  no output so a hook bug never blocks the prompt.
+- (no argv) — UserPromptSubmit handler. Hybrid score = weighted fusion of
+  FTS5 BM25 and dense cosine (static embeddings served from a local SQLite
+  vocab table; stdlib-only at query time). Top-1 (plus a 2nd only if it
+  clears a strong bar), confidence floor + per-session throttle (15 min
+  same-entry suppression). Falls back to BM25-only floors when the embed
+  model DB is absent. Fail-open: any error exits 0 with no output so a hook
+  bug never blocks the prompt.
 
 - `--upsert <abs_path> [project_id]` — replace one entry. Called by
   /memory-routing after writing a feedback file. Exit 1 on error so the
@@ -20,6 +23,11 @@ Modes:
   `<memory_dir>/MEMORY.md` (initial population / disaster recovery). Defaults
   to user memory.
 
+- `--build-model [model_dir]` — one-time build of the embed model DB (vocab
+  token -> fp16 vector) from a model2vec HF snapshot. Needs numpy +
+  safetensors, so run it with the helper venv python; all other modes are
+  stdlib-only.
+
 The query mode does NOT scan the filesystem — the DB is the source of truth,
 maintained by /memory-routing via --upsert / --delete.
 """
@@ -27,11 +35,14 @@ maintained by /memory-routing via --upsert / --delete.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import sqlite3
+import struct
 import sys
 import time
+import unicodedata
 import unittest
 
 
@@ -49,6 +60,26 @@ MIN_ASCII_LEN = 4
 MIN_CJK_RUN = 3
 QUERY_EXCERPT_LEN = 200
 MAX_ENTRY_SIZE = 50_000  # skip absurdly large feedback files
+
+# --- hybrid RAG: dense embeddings (model2vec static vectors in SQLite) ---
+MODEL_DB_PATH = os.path.join(
+    HOME, ".claude", "hooks", "state", "memory_embed_model.sqlite3"
+)
+EMBED_MAX_CHARS = 2000  # prompt cap before normalization (mean-pool dilutes anyway)
+EMBED_MAX_NORM_CHARS = 3000  # cap after punct spacing inflates length
+# h = alpha*min(1,-bm25/DIV) + (1-alpha)*cos。 transcript 評価で BM25 単独比
+# recall 同等以上・surface 数 6 割減・MRR 0.75→0.91 を確認した動作点
+HYBRID_ALPHA = 0.5
+BM25_NORM_DIV = 10.0
+HYBRID_FLOOR = 0.40
+HYBRID_STRONG_FLOOR = 0.50
+# hybrid 全滅時の救済: lexical 無 match でも cos がこれ以上なら top-1 を surface
+# (評価で recall +6pt / precision 不変)
+DENSE_RESCUE_FLOOR = 0.55
+BM25_CANDIDATES = 10
+_UNK_ID = 1
+_VITERBI_UNK_SCORE = -20.0  # below any real token score; spm uses min_score - 10
+_SQL_VAR_CHUNK = 500
 
 # --- L4: concern / correction injector (UserPromptSubmit) ---
 # Raises (not enforces) illuminate-not-reassure / memory-routing via tight prompt phrases (precision>recall — noisy L4 is net-negative; per-channel throttle).
@@ -109,6 +140,11 @@ def _connect() -> sqlite3.Connection | None:
             "file_path TEXT NOT NULL, project_id TEXT, "
             "session_id TEXT, "
             "ts REAL NOT NULL, score REAL, query_excerpt TEXT)"
+        )
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS entries_vec ("
+            "file_path TEXT NOT NULL, project_id TEXT, "
+            "vec BLOB NOT NULL, last_modified REAL)"
         )
         # Idempotent migration for DBs created before session_id column existed.
         try:
@@ -190,6 +226,24 @@ def _upsert_entry(
             "VALUES (?, ?, ?, ?, ?, ?)",
             (file_path, project_id, reminder, keywords, body, mtime),
         )
+        con.execute(
+            "DELETE FROM entries_vec WHERE file_path = ? "
+            "AND coalesce(project_id, '') = coalesce(?, '')",
+            (file_path, project_id),
+        )
+        model = _model_open()
+        if model is not None:
+            mcon, dim, max_len = model
+            try:
+                vec = _embed(mcon, dim, max_len, _embed_entry_text(reminder, keywords))
+            finally:
+                mcon.close()
+            if vec is not None:
+                con.execute(
+                    "INSERT INTO entries_vec(file_path, project_id, vec, "
+                    "last_modified) VALUES (?, ?, ?, ?)",
+                    (file_path, project_id, struct.pack("<%de" % dim, *vec), mtime),
+                )
         con.commit()
     except sqlite3.Error:
         return 1
@@ -205,6 +259,11 @@ def _delete_entry(
     try:
         con.execute(
             "DELETE FROM entries_fts WHERE file_path = ? "
+            "AND coalesce(project_id, '') = coalesce(?, '')",
+            (file_path, project_id),
+        )
+        con.execute(
+            "DELETE FROM entries_vec WHERE file_path = ? "
             "AND coalesce(project_id, '') = coalesce(?, '')",
             (file_path, project_id),
         )
@@ -258,6 +317,132 @@ def _build_query(prompt: str) -> str | None:
     if not terms:
         return None
     return " OR ".join(terms)
+
+
+# --- dense encoder: mirrors model2vec encode for the bundled Unigram tokenizer ---
+# (NFKC ~ precompiled charsmap, then the model's own punct-spacing Replace chain)
+_EMBED_PUNCT_RE = re.compile(
+    "([" + re.escape("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~") + "])"
+)
+_EMBED_WS_RE = re.compile(r"\s+")
+_EMBED_MULTISPACE_RE = re.compile(" {2,}")
+_EMBED_CTRL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f​-‏‪-‮﻿]")
+
+
+def _embed_normalize(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text)
+    text = _EMBED_CTRL_RE.sub(" ", text)
+    text = _EMBED_MULTISPACE_RE.sub(" ", text)
+    text = _EMBED_PUNCT_RE.sub(r" \1 ", text)
+    text = _EMBED_WS_RE.sub(" ", text)
+    return text.strip()
+
+
+def _viterbi_ids(
+    text: str, vocab: dict[str, tuple[int, float]], max_len: int
+) -> list[int]:
+    """Unigram segmentation maximizing sum of log-probs; OOV chars become UNK."""
+    n = len(text)
+    neg = -math.inf
+    best = [neg] * (n + 1)
+    back: list[tuple[int, int] | None] = [None] * (n + 1)  # (start, token_id)
+    best[0] = 0.0
+    for i in range(n):
+        if best[i] == neg:
+            continue
+        for j in range(i + 1, min(i + max_len, n) + 1):
+            hit = vocab.get(text[i:j])
+            if hit is None:
+                continue
+            score = best[i] + hit[1]
+            if score > best[j]:
+                best[j] = score
+                back[j] = (i, hit[0])
+        if back[i + 1] is None and best[i] + _VITERBI_UNK_SCORE > best[i + 1]:
+            best[i + 1] = best[i] + _VITERBI_UNK_SCORE
+            back[i + 1] = (i, _UNK_ID)
+    ids: list[int] = []
+    pos = n
+    while pos > 0:
+        step = back[pos]
+        if step is None:
+            return []
+        ids.append(step[1])
+        pos = step[0]
+    ids.reverse()
+    return ids
+
+
+def _model_open() -> tuple[sqlite3.Connection, int, int] | None:
+    """Read-only open of the embed model DB; None when absent/invalid (BM25 fallback)."""
+    if not os.path.exists(MODEL_DB_PATH):
+        return None
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % MODEL_DB_PATH, uri=True, timeout=2.0)
+        meta = dict(con.execute("SELECT key, value FROM meta"))
+        return con, int(meta["dim"]), int(meta["max_token_len"])
+    except (sqlite3.Error, KeyError, ValueError):
+        return None
+
+
+def _embed(
+    mcon: sqlite3.Connection, dim: int, max_len: int, text: str
+) -> list[float] | None:
+    """Unit-norm mean of token vectors, or None when nothing tokenizes."""
+    norm = _embed_normalize(text[:EMBED_MAX_CHARS])[:EMBED_MAX_NORM_CHARS]
+    if not norm:
+        return None
+    seq = "▁" + norm.replace(" ", "▁")  # Metaspace pre-tokenizer
+    subs: set[str] = set()
+    for i in range(len(seq)):
+        for j in range(i + 1, min(i + max_len, len(seq)) + 1):
+            subs.add(seq[i:j])
+    vocab: dict[str, tuple[int, float]] = {}
+    sub_list = list(subs)
+    for k in range(0, len(sub_list), _SQL_VAR_CHUNK):
+        chunk = sub_list[k : k + _SQL_VAR_CHUNK]
+        rows = mcon.execute(
+            "SELECT token, id, score FROM vocab WHERE token IN (%s)"
+            % ",".join("?" * len(chunk)),
+            chunk,
+        ).fetchall()
+        for tok, tid, score in rows:
+            vocab[tok] = (tid, score)
+    ids = [i for i in _viterbi_ids(seq, vocab, max_len) if i != _UNK_ID]
+    if not ids:
+        return None
+    uniq = sorted(set(ids))
+    vecs: dict[int, tuple[float, ...]] = {}
+    for k in range(0, len(uniq), _SQL_VAR_CHUNK):
+        chunk = uniq[k : k + _SQL_VAR_CHUNK]
+        rows = mcon.execute(
+            "SELECT id, vec FROM vocab WHERE id IN (%s)" % ",".join("?" * len(chunk)),
+            chunk,
+        ).fetchall()
+        for tid, blob in rows:
+            vecs[tid] = struct.unpack("<%de" % dim, blob)
+    acc = [0.0] * dim
+    n = 0
+    for tid in ids:
+        v = vecs.get(tid)
+        if v is None:
+            continue
+        n += 1
+        for d in range(dim):
+            acc[d] += v[d]
+    if n == 0:
+        return None
+    norm2 = math.sqrt(sum(x * x for x in acc)) + 1e-32
+    return [x / norm2 for x in acc]
+
+
+def _embed_entry_text(reminder: str, keywords: str) -> str:
+    # 評価で body 込みより reminder+keywords が一貫して高精度だった
+    return ("%s %s" % (reminder, keywords)).strip()
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    return sum(x * y for x, y in zip(a, b, strict=True))  # both unit-norm
 
 
 def _throttle_check(
@@ -374,20 +559,24 @@ def _memory_surface(payload: dict) -> str | None:
                 f"SELECT file_path, reminder, bm25(entries_fts, 0, 0, 0, 1.0, {BM25_BODY_WEIGHT}, 0) "
                 "FROM entries_fts WHERE entries_fts MATCH ? "
                 "AND (project_id IS NULL OR project_id = ?) "
-                f"ORDER BY bm25(entries_fts, 0, 0, 0, 1.0, {BM25_BODY_WEIGHT}, 0) LIMIT 2",
+                f"ORDER BY bm25(entries_fts, 0, 0, 0, 1.0, {BM25_BODY_WEIGHT}, 0) "
+                f"LIMIT {BM25_CANDIDATES}",
                 (query, project_id),
             ).fetchall()
         except sqlite3.Error:
             return None
-        if not rows:
-            return None
+        picks = _hybrid_picks(con, prompt, project_id, rows)
+        if picks is None:
+            # legacy BM25-only floors (embed model DB 不在 / embed 失敗)
+            picks = []
+            for rank, (file_path, reminder, score) in enumerate(rows[:2]):
+                floor = BM25_SURFACE_FLOOR if rank == 0 else BM25_STRONG_FLOOR
+                if score is None or score > floor:
+                    continue
+                picks.append((file_path, reminder, score))
         now = time.time()
         blocks = []
-        for rank, (file_path, reminder, score) in enumerate(rows):
-            # rank0 (top-1) は弱 noise floor、 rank1 は強候補の時だけ追加 (大抵 1 件)。
-            floor = BM25_SURFACE_FLOOR if rank == 0 else BM25_STRONG_FLOOR
-            if score is None or score > floor:
-                continue
+        for file_path, reminder, score in picks:
             if _throttle_check(con, file_path, session_id, now):
                 continue
             _record_inject(con, file_path, project_id, session_id, now, score, prompt)
@@ -398,6 +587,85 @@ def _memory_surface(payload: dict) -> str | None:
         return "\n".join(blocks) if blocks else None
     finally:
         con.close()
+
+
+def _hybrid_picks(
+    con: sqlite3.Connection,
+    prompt: str,
+    project_id: str,
+    bm_rows: list,
+) -> list[tuple[str, str, float]] | None:
+    """Fuse BM25 + cosine into surface picks; None -> caller falls back to BM25-only."""
+    model = _model_open()
+    if model is None:
+        return None
+    mcon, dim, max_len = model
+    try:
+        qvec = _embed(mcon, dim, max_len, prompt)
+    except Exception:
+        qvec = None
+    finally:
+        mcon.close()
+    if qvec is None:
+        return None
+    bm_by_path = {fp: s for fp, _r, s in bm_rows if s is not None}
+    reminders = {fp: r for fp, r, _s in bm_rows}
+    try:
+        vrows = con.execute(
+            "SELECT file_path, vec FROM entries_vec "
+            "WHERE project_id IS NULL OR project_id = ?",
+            (project_id,),
+        ).fetchall()
+    except sqlite3.Error:
+        vrows = []
+    scored: dict[str, float] = {}
+    cos_by_path: dict[str, float] = {}
+    for fp, blob in vrows:
+        try:
+            ev = struct.unpack("<%de" % dim, blob)
+        except struct.error:
+            continue
+        cos_by_path[fp] = sum(x * y for x, y in zip(qvec, ev, strict=True))
+        scored[fp] = _fuse(bm_by_path.get(fp), cos_by_path[fp])
+    for fp, s in bm_by_path.items():
+        scored.setdefault(fp, _fuse(s, 0.0))  # entry without vec: BM25 part only
+    picks: list[tuple[str, str, float]] = []
+    for fp, h in _select_picks(scored, cos_by_path):
+        reminder = reminders.get(fp)
+        if reminder is None:
+            try:
+                row = con.execute(
+                    "SELECT reminder FROM entries_fts WHERE file_path = ? "
+                    "AND (project_id IS NULL OR project_id = ?) LIMIT 1",
+                    (fp, project_id),
+                ).fetchone()
+            except sqlite3.Error:
+                row = None
+            reminder = row[0] if row else ""
+        picks.append((fp, reminder, h))
+    return picks
+
+
+def _select_picks(
+    scored: dict[str, float], cos_by_path: dict[str, float]
+) -> list[tuple[str, float]]:
+    """Floor-gated top-2 by hybrid score; dense-only rescue when nothing clears."""
+    ranked = sorted(scored.items(), key=lambda kv: -kv[1])[:2]
+    picks = [
+        (fp, h)
+        for rank, (fp, h) in enumerate(ranked)
+        if h >= (HYBRID_FLOOR if rank == 0 else HYBRID_STRONG_FLOOR)
+    ]
+    if not picks and cos_by_path:
+        fp, cos = max(cos_by_path.items(), key=lambda kv: kv[1])
+        if cos >= DENSE_RESCUE_FLOOR:
+            picks = [(fp, cos)]
+    return picks
+
+
+def _fuse(bm_score: float | None, cos: float) -> float:
+    bm_part = 0.0 if bm_score is None else min(1.0, max(0.0, -bm_score / BM25_NORM_DIV))
+    return HYBRID_ALPHA * bm_part + (1.0 - HYBRID_ALPHA) * cos
 
 
 def _concern_inject(payload: dict) -> str | None:
@@ -518,6 +786,11 @@ def _main_rebuild(argv: list[str]) -> int:
                 "coalesce(?, '')",
                 (project_id,),
             )
+            con.execute(
+                "DELETE FROM entries_vec WHERE coalesce(project_id, '') = "
+                "coalesce(?, '')",
+                (project_id,),
+            )
         except sqlite3.Error:
             return 1
         errs = 0
@@ -532,6 +805,90 @@ def _main_rebuild(argv: list[str]) -> int:
         con.close()
 
 
+def _main_build_model(argv: list[str]) -> int:
+    """Bake a model2vec snapshot into the vocab->fp16-vector SQLite model DB."""
+    try:
+        import numpy as np
+        from safetensors import safe_open
+    except ImportError as e:
+        sys.stderr.write(f"--build-model needs numpy + safetensors: {e}\n")
+        return 1
+
+    if argv:
+        model_dir = os.path.abspath(argv[0])
+    else:
+        try:
+            from huggingface_hub import snapshot_download
+
+            model_dir = snapshot_download(
+                "minishlab/potion-multilingual-128M",
+                allow_patterns=["tokenizer.json", "model.safetensors", "config.json"],
+            )
+        except Exception as e:
+            sys.stderr.write(f"model download failed: {e}\n")
+            return 1
+    try:
+        with open(os.path.join(model_dir, "tokenizer.json"), encoding="utf-8") as f:
+            tok = json.load(f)
+        if tok.get("model", {}).get("type") != "Unigram":
+            sys.stderr.write("unsupported tokenizer type (expected Unigram)\n")
+            return 1
+        vocab = tok["model"]["vocab"]
+        with safe_open(
+            os.path.join(model_dir, "model.safetensors"), framework="numpy"
+        ) as sf:
+            emb = sf.get_tensor("embeddings").astype(np.float16)
+    except (OSError, KeyError, ValueError) as e:
+        sys.stderr.write(f"failed reading model files: {e}\n")
+        return 1
+    if len(vocab) != emb.shape[0]:
+        sys.stderr.write(f"vocab/embedding mismatch: {len(vocab)} vs {emb.shape[0]}\n")
+        return 1
+    max_token_len = 24  # cap: longer pieces never match real text; bounds Viterbi cost
+    tmp = MODEL_DB_PATH + ".tmp"
+    os.makedirs(os.path.dirname(MODEL_DB_PATH), exist_ok=True)
+    if os.path.exists(tmp):
+        os.remove(tmp)
+    con = sqlite3.connect(tmp)
+    try:
+        con.execute("PRAGMA journal_mode = OFF")  # bulk build; replaced atomically
+        con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        con.execute(
+            "CREATE TABLE vocab (token TEXT PRIMARY KEY, id INTEGER NOT NULL, "
+            "score REAL NOT NULL, vec BLOB NOT NULL) WITHOUT ROWID"
+        )
+        con.executemany(
+            "INSERT OR IGNORE INTO vocab VALUES (?, ?, ?, ?)",
+            (
+                (t, i, s, emb[i].tobytes())
+                for i, (t, s) in enumerate(vocab)
+                if i > _UNK_ID and len(t) <= max_token_len
+            ),
+        )
+        con.execute("CREATE INDEX vocab_id ON vocab(id)")
+        con.executemany(
+            "INSERT INTO meta VALUES (?, ?)",
+            [
+                ("dim", str(emb.shape[1])),
+                ("max_token_len", str(max_token_len)),
+                ("source", os.path.basename(model_dir.rstrip(os.sep))),
+            ],
+        )
+        con.commit()
+        n = con.execute("SELECT COUNT(*) FROM vocab").fetchone()[0]
+    except sqlite3.Error as e:
+        con.close()
+        sys.stderr.write(f"model DB build failed: {e}\n")
+        return 1
+    con.close()
+    os.replace(tmp, MODEL_DB_PATH)
+    sys.stderr.write(
+        f"built {MODEL_DB_PATH}: {n} tokens, dim={emb.shape[1]}, "
+        f"{os.path.getsize(MODEL_DB_PATH) // 1_000_000} MB\n"
+    )
+    return 0
+
+
 def main() -> int:
     argv = sys.argv[1:]
     if not argv:
@@ -543,6 +900,8 @@ def main() -> int:
         return _main_delete(argv[1:])
     if cmd == "--rebuild":
         return _main_rebuild(argv[1:])
+    if cmd == "--build-model":
+        return _main_build_model(argv[1:])
     sys.stderr.write(f"unknown command: {cmd}\n")
     return 1
 
@@ -604,6 +963,67 @@ class TurnMarkerTest(unittest.TestCase):
         self.assertIsNone(
             _turn_marker({"prompt": "<task-notification> x", "transcript_path": "/x"})
         )
+
+
+class HybridEncoderTest(unittest.TestCase):
+    """Dense-encoder + fusion tests. Run: python3 -m unittest memory_surface"""
+
+    def test_normalize_spaces_punct_and_collapses_ws(self):
+        self.assertEqual(_embed_normalize("a,b  c\nd"), "a , b c d")
+
+    def test_normalize_nfkc_fullwidth(self):
+        self.assertEqual(_embed_normalize("ＡＢ１"), "AB1")
+
+    def test_viterbi_prefers_higher_logprob_segmentation(self):
+        vocab = {"ab": (7, -1.0), "a": (8, -3.0), "b": (9, -3.0)}
+        self.assertEqual(_viterbi_ids("ab", vocab, 24), [7])
+
+    def test_viterbi_unk_fallback_for_oov_char(self):
+        vocab = {"a": (8, -3.0)}
+        self.assertEqual(_viterbi_ids("aXa", vocab, 24), [8, _UNK_ID, 8])
+
+    def test_fp16_blob_roundtrip(self):
+        vec = [0.5, -0.25, 0.125]
+        blob = struct.pack("<3e", *vec)
+        self.assertEqual(list(struct.unpack("<3e", blob)), vec)
+
+    def test_fuse_combines_bm25_and_cosine(self):
+        self.assertAlmostEqual(_fuse(-10.0, 0.6), 0.5 * 1.0 + 0.5 * 0.6)
+        self.assertAlmostEqual(_fuse(None, 0.6), 0.5 * 0.6)
+        self.assertAlmostEqual(_fuse(-5.0, 0.0), 0.25)
+
+    def test_select_picks_floor_gate_and_second(self):
+        self.assertEqual(
+            _select_picks({"a": 0.55, "b": 0.52, "c": 0.1}, {}),
+            [("a", 0.55), ("b", 0.52)],
+        )
+        # rank1 は strong floor (0.50) 未満なので落ちる
+        self.assertEqual(_select_picks({"a": 0.45, "b": 0.46}, {}), [("b", 0.46)])
+
+    def test_select_picks_dense_rescue_when_below_floor(self):
+        scored = {"a": 0.30, "b": 0.20}
+        self.assertEqual(_select_picks(scored, {"a": 0.62, "b": 0.40}), [("a", 0.62)])
+        self.assertEqual(_select_picks(scored, {"a": 0.50}), [])
+
+    def test_model_open_none_when_db_missing(self):
+        from unittest import mock
+
+        with mock.patch(f"{__name__}.MODEL_DB_PATH", "/nonexistent/model.sqlite3"):
+            self.assertIsNone(_model_open())
+
+    @unittest.skipUnless(os.path.exists(MODEL_DB_PATH), "embed model DB not built")
+    def test_embed_separates_paraphrase_from_unrelated(self):
+        model = _model_open()
+        assert model is not None
+        mcon, dim, max_len = model
+        try:
+            a = _embed(mcon, dim, max_len, "push する前にユーザーの許可を取る")
+            b = _embed(mcon, dim, max_len, "勝手に push しないでと言ったよね")
+            c = _embed(mcon, dim, max_len, "今日の天気は晴れです")
+        finally:
+            mcon.close()
+        assert a and b and c
+        self.assertGreater(_cosine(a, b), _cosine(a, c) + 0.15)
 
 
 if __name__ == "__main__":

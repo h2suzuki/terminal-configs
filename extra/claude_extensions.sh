@@ -153,6 +153,14 @@ copy --nobackup claude_user-hooks/memory_surface.py         ~/.claude/hooks/memo
 copy --nobackup claude_user-hooks/subagent_gate_suggest.py  ~/.claude/hooks/subagent_gate_suggest.py
 run claude_user_settings inject - < "$TOP_DIR/files/claude_user-extensions.json"
 
+# Memory-surface hybrid RAG: build the embed model DB (helper venv is build-time
+# only; the hook queries it with stdlib sqlite3), then refresh the user index
+run apt-get install -y --no-install-recommends python3-venv
+run python3 -m venv ~/.claude/hooks/.venv
+run ~/.claude/hooks/.venv/bin/pip install -q numpy safetensors huggingface_hub
+run ~/.claude/hooks/.venv/bin/python ~/.claude/hooks/memory_surface.py --build-model
+run ~/.claude/hooks/memory_surface.py --rebuild
+
 # Deploy the user skills
 pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
 for skill_dir in */; do
@@ -238,6 +246,13 @@ if [ -n "$LOGIN_USER" ]; then
     copy --nobackup claude_user-hooks/subagent_gate_suggest.py  $LOGIN_HOME/.claude/hooks/subagent_gate_suggest.py --owner $LOGIN_USER --group $LOGIN_GROUP
     # Feed the fragment on stdin: root opens it here, so the demoted user needs no read access
     run sudo -i -u $LOGIN_USER claude_user_settings inject - < "$TOP_DIR/files/claude_user-extensions.json"
+
+    # Memory-surface hybrid RAG: share the root-built embed model DB, then refresh the user index
+    run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory $LOGIN_HOME/.claude/hooks/state
+    if ! cmp -s ~/.claude/hooks/state/memory_embed_model.sqlite3 $LOGIN_HOME/.claude/hooks/state/memory_embed_model.sqlite3; then
+        run install --mode 0644 --owner $LOGIN_USER --group $LOGIN_GROUP ~/.claude/hooks/state/memory_embed_model.sqlite3 $LOGIN_HOME/.claude/hooks/state/memory_embed_model.sqlite3
+    fi
+    run sudo -i -u $LOGIN_USER bash -i -c '"~/.claude/hooks/memory_surface.py --rebuild"'
 
     # Deploy the user skills (dir absent when no user skills exist)
     pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
