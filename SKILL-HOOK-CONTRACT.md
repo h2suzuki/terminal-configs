@@ -1,14 +1,14 @@
 # スキルとフックの実装パターン
 
-この文章は、本レポジトリに含まれる Claude Code Skills と Hooks の実装パターンについて解説します。
+この文章は、本レポジトリに含まれる Claude Code Skills と Hooks の実装パターンについて解説します。コードに沿って説明するのではなく、背後の考え方にフォーカスします。
 
 --------
 
 ## Skills
 
-Claude Code に守らせたいルールや手順を文章化します。Anthropic では９カテゴリーで利用を推奨しています。
+Claude Code に守らせたいルールや手順を文章化する仕組みです。Anthropic では９カテゴリーで利用を推奨しています。
 
-Categories:
+9 Categories:
 
 1. Library and API reference: explain how to correctly use a library, CLI, or SDKs
 2. Product verification: describe how to test or verify that your code is working
@@ -21,6 +21,128 @@ Categories:
 9. Infrastructure ops: perform routine maintenance and operational procedures with safety guardrails
 
 引用: https://claude.com/blog/lessons-from-building-claude-code-how-we-use-skills
+
+
+### スキル一覧
+
+本リポジトリのスキルは大半が LLM の行動規律（ガードレイル）です。
+タイトルの Category は、綺麗に９カテゴリーに分類できる訳ではないので、目安として示しています。
+
+
+#### Category 4: Business process and team automation
+
+**declare-and-proceed**
+
+素材があり妥当な既定があるなら、ルーティングや細かい選択を自分で決め、AskUserQuestion や散文の選択肢を使ってユーザーに質問を投げないようにする案内です。
+
+人手（HITL）の往復を減らします。
+
+
+**handoff**
+
+セッション境界で引き継ぎドキュメント (固定スキーマ) を生成し、現在の作業を、新しいセッションで再開できるようにします。
+次のセッションで「作業を再開して」と言うだけで、続きを始められます。
+「handoff して」「終わります」「セッションリセットします」等の合図で発動する UserPromptSubmit Hook や SessionStart Hook と連携します。
+
+セッションリセットによる Context Rot (セッションが長引くほどコンテキストが汚れて応答品質が落ちる現象) 対策です。
+
+
+**illuminate-not-reassure**
+
+ユーザーの懸念に、安心の言葉や一見正しい説得で蓋をせず、(1) ユーザーのプロンプトに含まれる核心を言い直し (2) 可能性を本気で深掘り (3) 実機構と状態を中立に晒す、の 3 段で応じます。
+解決は実態を照らすことから生まれます。
+
+コミュニケーションのフリクションを減らします。
+
+
+**make-plan-before-coding**
+
+実装に入る前に、設計空間の探索・合意・根拠の継承を揃えます。
+research 後に本格的な Edit を始める前や、既に文書化済みの選択を蒸し返す前に発動します。
+
+実装後に問題が見つかって作業をやり直すことにより発生する "トークンの無駄" を減らします。
+
+
+**memory-routing**
+
+標準の自動メモリ (project-local) に代わる、独自のメモリ方式を規定します。
+これは project-local の自動メモリに user の自動メモリ（プロジェクト横断）を加えた２階層メモリ管理です。
+覚えておくべき教訓の保存場所、タイミング、書式、退役ルールを案内します。
+保存したメモリを Just-in-time でコンテキストに注入する UserPromptSubmit Hook と連携します。
+
+保存されたメモリが、二度と読み返されない人間の気休めに終わらないようにします。
+
+※ このスキルでメモリ管理するため、自動メモリは OFF 設定です。
+
+
+**provide-user-instructions**
+
+ユーザーが手で実行するコマンド（host 側の cp・git push・curl 等）を、地の文に混ぜず、完全パスでコピペ即実行できる独立コード枠で提示します。
+
+**skill-and-hook-extraction-workflow**
+
+CLAUDE.md のルールを hook／skill へ抽出する反復作業の進め方を定めます。実装→smoke→ペア commit→背景レビューの spawn→次項目を並行→idle で triage→fixup、の流れです。
+
+**subagent-gate**
+
+subagent を spawn する前に、4 条件（並列化可能・大出力・3+ query 探索・専門領域）のいずれかが成立するか確認します。spawn overhead に見合わない小さな lookup では使いません。
+
+
+#### attribute-existing-issues (Category 6)
+
+永続テキスト（commit message・memory・doc・SKILL.md 等）で誤ったパターンを説明するとき、「既存」「引き継いだだけ」等の表現で当セッションの関与をぼかすのを禁じます。自分が何をしたかを正直に書かせます。
+
+#### auto-mode-denial-recovery (Category 8)
+
+auto モードで tool 呼び出しが拒否されたとき、settings.json に権限を足しても classifier の gate は迂回できない、という誤解を正します。有効な復旧は手動実行・skip・ユーザーへの再依頼だけだと示します。
+
+#### claude-md-lint (Category 6)
+
+起動時に自動ロードされる CLAUDE.md チェーン（org / user / project と @-import）を lint します。System Prompt との重複・ファイル間の矛盾・曖昧なトリガーを検出し、CLAUDE.md を小さくタイトに保ちます。
+
+#### commit-discipline (Category 7)
+
+commit の粒度・タイミング・保留判断を LLM 自律で行い、毎回ユーザーに可否を聞かないようにします（cheap & reversible なため）。push・force・reset --hard 等の破壊的操作だけは許可を要求します。
+
+#### debug-guardrail (Category 8)
+
+「動かない」「失敗した」系の不可解な現象に対し、2-3 個の仮説をコード／ログで裏づけて artifact レベルの修正に着地させます。修正がバグと代数的に同一でないか検証してから確定します。
+
+#### document-editor (Category 6)
+
+README・公開 doc・spec・設計書などの永続成果物を fork（subagent）内で編集します。編集前に意図を verbalize し、本体は fork で書き戻して main には変更サマリだけ返すことで、context の肥大を防ぎます。
+
+#### intent-preserving-rephrase (Category 6)
+
+CLAUDE.md・spec・SKILL.md 等を言い換え／翻訳するとき、意味を厳密に保ちます。否定形→肯定形の変換は同義になる時だけ行い、指摘箇所だけでなく同種の変換を全て自己監査します。
+
+#### lost-track-recovery (Category 8)
+
+長い作業で現状を 1 文に言い直せない（lost track の signal）状態を検知し、タスクの現在地を立て直します。describe-back 不能をリカバリの起点にします。
+
+#### rejection-via-actual-cost (Category 6)
+
+設計案を却下する根拠を、採用時に増える実コスト（部品数・LoC・IO・既存経路との重複等）で論じます。「実機検証が要る」等のやれば済むコストを却下理由にしません。
+
+#### report-by-evidence (Category 6)
+
+判定・推奨・結論・規模／影響評価を述べる前に、公式情報・コード・文書・設定を必要範囲で読み、根拠を示します。読んでいなければ「未確認」と明言します。
+
+#### scope-mismatch-detector (Category 6)
+
+過去のルール／経験／skill を別状況に再利用する前に、trigger と scope の一致を検証します。過剰適用と過少適用の両方（LLM の calibration error）を補正します。
+
+#### verbalize-before-action (Category 6)
+
+判定・推奨・影響評価を、行動の前に 1 文で言語化して自己反証してから動きます。暗黙の意図推測に頼らないための代替手段です。
+
+#### verify-before-claim (Category 6)
+
+肯定主張（「網羅した」等）・否定断定（「できない」等）・実行可能成果物の暗黙の done 報告の前に、一次情報・実コード・参照先を自分で直接 verify します。確認できなければ scope を明示します。
+
+#### writing-code / tests / bash / python / skills / todos (Category 6)
+
+コード・テスト・bash・python・skill・todos を書く際の規約集です。writing-code が全言語共通の土台で、言語別 add-on（bash / python）やテスト・skill・todos の規約がその上に積み重なります。
 
 
 ### SKILL.md の書き方
@@ -63,99 +185,6 @@ Frontmatter はセッションのコンテキストに乗るので `description`
 `Related` では隣接 skill をシンボリックに引用し (例 `writing-code`)、 重複や直交する scope を明示して family 化します。
 
 本文から、このレポジトリのデプロイ先がカバーしないファイル・skill ディレクトリ外のファイル・会話文脈の単語を入れてはいけません。デプロイ先マシンに開発マシンのファイルや会話は存在しないからです (宙吊り防止)。
-
-
-### スキル一覧
-
-本リポジトリのスキルは大半が LLM の行動規律（ガードレイル）です。上記 9 カテゴリーは開発タスク向けの分類なので綺麗には収まりません。各スキルには最も近い番号を当てています。
-
-#### attribute-existing-issues (Category 6)
-
-永続テキスト（commit message・memory・doc・SKILL.md 等）で誤ったパターンを説明するとき、「既存」「引き継いだだけ」等の表現で当セッションの関与をぼかすのを禁じます。自分が何をしたかを正直に書かせます。
-
-#### auto-mode-denial-recovery (Category 8)
-
-auto モードで tool 呼び出しが拒否されたとき、settings.json に権限を足しても classifier の gate は迂回できない、という誤解を正します。有効な復旧は手動実行・skip・ユーザーへの再依頼だけだと示します。
-
-#### claude-md-lint (Category 6)
-
-起動時に自動ロードされる CLAUDE.md チェーン（org / user / project と @-import）を lint します。System Prompt との重複・ファイル間の矛盾・曖昧なトリガーを検出し、CLAUDE.md を小さくタイトに保ちます。
-
-#### commit-discipline (Category 7)
-
-commit の粒度・タイミング・保留判断を LLM 自律で行い、毎回ユーザーに可否を聞かないようにします（cheap & reversible なため）。push・force・reset --hard 等の破壊的操作だけは許可を要求します。
-
-#### debug-guardrail (Category 8)
-
-「動かない」「失敗した」系の不可解な現象に対し、2-3 個の仮説をコード／ログで裏づけて artifact レベルの修正に着地させます。修正がバグと代数的に同一でないか検証してから確定します。
-
-#### declare-and-proceed (Category 4)
-
-素材があり妥当な既定があるなら、ルーティングや細かい選択を自分で決め、AskUserQuestion や散文の二択でユーザーに丸投げしないようにします。人手（HITL）の往復を減らします。
-
-#### document-editor (Category 6)
-
-README・公開 doc・spec・設計書などの永続成果物を fork（subagent）内で編集します。編集前に意図を verbalize し、本体は fork で書き戻して main には変更サマリだけ返すことで、context の肥大を防ぎます。
-
-#### handoff (Category 4)
-
-セッション境界で、固定スキーマの引き継ぎドキュメントを生成し、次の自分が 5 分で再開できるようにします。「handoff して」「終わります」等の終了合図で発動します。
-
-#### illuminate-not-reassure (Category 4)
-
-ユーザーの懸念に、安心の言葉や一見正しい説得で蓋をせず、(1) 核心を言い直し (2) 可能性を本気で深掘り (3) 実機構と状態を中立に晒す、の 3 段で応じます。解決は実態を照らすことから生まれます。
-
-#### intent-preserving-rephrase (Category 6)
-
-CLAUDE.md・spec・SKILL.md 等を言い換え／翻訳するとき、意味を厳密に保ちます。否定形→肯定形の変換は同義になる時だけ行い、指摘箇所だけでなく同種の変換を全て自己監査します。
-
-#### lost-track-recovery (Category 8)
-
-長い作業で現状を 1 文に言い直せない（lost track の signal）状態を検知し、タスクの現在地を立て直します。describe-back 不能をリカバリの起点にします。
-
-#### make-plan-before-coding (Category 4)
-
-実装に入る前に、設計空間の探索・合意・根拠の継承を揃えます。research 後に本格的な Edit を始める前や、既に文書化済みの選択を蒸し返す前に発動します。
-
-#### memory-routing (Category 4)
-
-memory entry の保存先（user か project-local か）・世代（MEMORY.md か OLD-MEMORY.md か）・保存タイミング・日付書式を判断します。skill / hook / CLAUDE.md で cover された entry は OLD へ退役させます。
-
-#### provide-user-instructions (Category 4)
-
-ユーザーが手で実行するコマンド（host 側の cp・git push・curl 等）を、地の文に混ぜず、完全パスでコピペ即実行できる独立コード枠で提示します。
-
-#### rejection-via-actual-cost (Category 6)
-
-設計案を却下する根拠を、採用時に増える実コスト（部品数・LoC・IO・既存経路との重複等）で論じます。「実機検証が要る」等のやれば済むコストを却下理由にしません。
-
-#### report-by-evidence (Category 6)
-
-判定・推奨・結論・規模／影響評価を述べる前に、公式情報・コード・文書・設定を必要範囲で読み、根拠を示します。読んでいなければ「未確認」と明言します。
-
-#### scope-mismatch-detector (Category 6)
-
-過去のルール／経験／skill を別状況に再利用する前に、trigger と scope の一致を検証します。過剰適用と過少適用の両方（LLM の calibration error）を補正します。
-
-#### skill-and-hook-extraction-workflow (Category 4)
-
-CLAUDE.md のルールを hook／skill へ抽出する反復作業の進め方を定めます。実装→smoke→ペア commit→背景レビューの spawn→次項目を並行→idle で triage→fixup、の流れです。
-
-#### subagent-gate (Category 4)
-
-subagent を spawn する前に、4 条件（並列化可能・大出力・3+ query 探索・専門領域）のいずれかが成立するか確認します。spawn overhead に見合わない小さな lookup では使いません。
-
-#### verbalize-before-action (Category 6)
-
-判定・推奨・影響評価を、行動の前に 1 文で言語化して自己反証してから動きます。暗黙の意図推測に頼らないための代替手段です。
-
-#### verify-before-claim (Category 6)
-
-肯定主張（「網羅した」等）・否定断定（「できない」等）・実行可能成果物の暗黙の done 報告の前に、一次情報・実コード・参照先を自分で直接 verify します。確認できなければ scope を明示します。
-
-#### writing-code / tests / bash / python / skills / todos (Category 6)
-
-コード・テスト・bash・python・skill・todos を書く際の規約集です。writing-code が全言語共通の土台で、言語別 add-on（bash / python）やテスト・skill・todos の規約がその上に積み重なります。
 
 
 --------
@@ -254,7 +283,7 @@ Related: `check_uncommitted_at_handoff.py`
 
 1. UserPromptSubmit で、プロンプトに sweep / 並列 / 複数対象 等のパターンをキャッチ
 2. Subagent に適する条件か検査し、適するなら additional context で示唆
-3. LLM は、漫然と Tool を連発する前に、委譲を一度 verbalize する機会をえる
+3. LLM は、漫然と Tool を連発する前に、委譲を一度 verbalize する機会を得る
 
 Related: `subagent_gate_suggest.py`
 
@@ -301,8 +330,8 @@ Related: `skill_reminder_gate.py` `memory_routing_gate.py` `declare_and_proceed_
 
 **読まずに編集を防ぐ**
 
-1. PreToolUse で、 `read_before_edit` (check) が編集対象の最新 mtime に一致する Read 記録を要求
-2. 未読なら「未 Read」、 読後に内容が変わっていれば「内容が変化」を理由に却下 (Read 自体は止めない)
+1. PreToolUse で、 `read_before_edit` (check) が編集対象の最新 mtime に一致する同一 agent (session_id + agent_id、 main loop は null) の Read/Write/Edit 記録を要求
+2. 未 Read / Read 後の内容変化 / 同 session の別 agent による更新 (専用文面) を理由に却下 (Read 自体は止めない)
 3. ディスク上の最新内容を見ずに書き換える盲目編集を塞ぐ
 
 Related: `read_before_edit.py`
@@ -367,7 +396,7 @@ Related: `subagent_gate_warn.py`
 
 **読んだ事実の刻印 (読まずに編集を防ぐ、の後段)**
 
-1. PostToolUse:Read|Write で、 `read_before_edit` (record) が読んだ範囲 (Read は offset/limit、 Write は file 全体) と現 mtime を state に追記
+1. PostToolUse:Read|Write|Edit|MultiEdit で、 `read_before_edit` (record) が tool 種別・agent_id・現 mtime (Read は offset/limit も) を state に追記
 2. PreToolUse (check) がこの派生 state を参照して編集可否を判定
 3. record と check が対になり、 刻印が次の編集 gate の根拠になる (7 日で prune)
 
@@ -573,7 +602,7 @@ Claude によるスキルの自動ロード（自動発火）に頼らず、Hook
 
 - **deny は JSON、exit 0**: `{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":...}}` を stdout に出して exit 0 とします。exit 2 でなく JSON にするのは、フックの bug が誤って tool を block しないためです（fail-open と整合）。
 - **output 省略 = そのまま通す**（passthrough）。`allow` を明示すると以降のフック / permission を skip します（意図せぬ auto-approve）ので、通すときは原則何も出しません。
-- **advisory-allow（pass しつつ助言する）**: PreToolUse でも `permissionDecision:"allow"` に `additionalContext` を併せれば、 行動を通しながら model 可視の助言を inject できます（`read_before_edit` の重複 Read 警告 / Read scope 外 Edit 警告）。 前項「通すときは原則何も出さない」の意図的な例外で、 §0 の「Gate は deny で止めるだけ」という二分にも乗りません（PreToolUse hook が advisory な pass を出す形です）。 乱用は auto-approve 化を招くので、 deny に値しないが助言したい場面に限ります。
+- **advisory-allow（pass しつつ助言する）**: PreToolUse でも `permissionDecision:"allow"` に `additionalContext` を併せれば、 行動を通しながら model 可視の助言を inject できます（`read_before_edit` の重複 Read 警告 — 同一 agent の記録に限定）。 前項「通すときは原則何も出さない」の意図的な例外で、 §0 の「Gate は deny で止めるだけ」という二分にも乗りません（PreToolUse hook が advisory な pass を出す形です）。 乱用は auto-approve 化を招くので、 deny に値しないが助言したい場面に限ります。
 - **channel は event ごとに違う**: PreToolUse は `permissionDecision` です。UserPromptSubmit は `additionalContext`（model 可視）です — fullscreen TUI は UPS の `systemMessage` を塗らない未文書 gap があるので additionalContext が確実です。Stop は exit 2 / `decision:block` の 2 つだけです（additionalContext 非対応）。
 
 ### 3. trigger の検出（input contract）
@@ -590,7 +619,7 @@ Claude によるスキルの自動ロード（自動発火）に頼らず、Hook
 - **path は絶対 path で keying**: gate は payload cwd、declare は shell cwd で解決するので、相対 path だと cwd drift で hash 不一致 → 永久 deny loop となります。絶対 path 必須です。
 - **TTL は use-case 駆動で選ぶ（盲目流用禁止）**: skill-active = 現 turn ∪ 5 分（guidance は invoke した turn の context にあります）/ memory-surface = 900s（同 entry の 15 分掃除）/ `_concern_inject` = 900s × channel（debugging 往復での再 inject 抑止）。同じ理由で `memory_routing` の 1hr grant を skill-active に流用するのは誤りです。
 - **throttle 機構の多目的再利用**: `_concern_inject` は memory-surface の inject_log throttle を sentinel key（`<L4-concern>` 等）で流用し、schema 変更ゼロで channel ごとの抑止を得ました。
-- **PostToolUse で derived state を同期**: `read_before_edit` の `record` mode が PostToolUse(Read/Write) で「読んだ」事実を state に追記し、PreToolUse gate がそれを読みます。派生 index は `memory_surface --upsert` で同期します。
+- **PostToolUse で derived state を同期**: `read_before_edit` の `record` mode が PostToolUse(Read/Write/Edit/MultiEdit) で「内容を見た / 自ら更新した」事実を agent_id 付きで state に追記し、PreToolUse gate がそれを読みます。派生 index は `memory_surface --upsert` で同期します。
 - 放置 state は self-prune します（`skill_reminder_gate` は 7 日で session dir を掃除）。
 
 ### 5. 安全側への倒し方（robustness）
