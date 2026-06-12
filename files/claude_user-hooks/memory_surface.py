@@ -23,10 +23,9 @@ Modes:
   `<memory_dir>/MEMORY.md` (initial population / disaster recovery). Defaults
   to user memory.
 
-- `--build-model [model_dir]` — one-time build of the embed model DB (vocab
-  token -> fp16 vector) from a model2vec HF snapshot. Needs numpy +
-  safetensors, so run it with the helper venv python; all other modes are
-  stdlib-only.
+The embed model DB (vocab token -> fp16 vector) is built once by the
+standalone stdlib-only builder CLI that the installer deploys to
+/usr/local/bin; every mode here is stdlib-only too.
 
 The query mode does NOT scan the filesystem — the DB is the source of truth,
 maintained by /memory-routing via --upsert / --delete.
@@ -805,90 +804,6 @@ def _main_rebuild(argv: list[str]) -> int:
         con.close()
 
 
-def _main_build_model(argv: list[str]) -> int:
-    """Bake a model2vec snapshot into the vocab->fp16-vector SQLite model DB."""
-    try:
-        import numpy as np
-        from safetensors import safe_open
-    except ImportError as e:
-        sys.stderr.write(f"--build-model needs numpy + safetensors: {e}\n")
-        return 1
-
-    if argv:
-        model_dir = os.path.abspath(argv[0])
-    else:
-        try:
-            from huggingface_hub import snapshot_download
-
-            model_dir = snapshot_download(
-                "minishlab/potion-multilingual-128M",
-                allow_patterns=["tokenizer.json", "model.safetensors", "config.json"],
-            )
-        except Exception as e:
-            sys.stderr.write(f"model download failed: {e}\n")
-            return 1
-    try:
-        with open(os.path.join(model_dir, "tokenizer.json"), encoding="utf-8") as f:
-            tok = json.load(f)
-        if tok.get("model", {}).get("type") != "Unigram":
-            sys.stderr.write("unsupported tokenizer type (expected Unigram)\n")
-            return 1
-        vocab = tok["model"]["vocab"]
-        with safe_open(
-            os.path.join(model_dir, "model.safetensors"), framework="numpy"
-        ) as sf:
-            emb = sf.get_tensor("embeddings").astype(np.float16)
-    except (OSError, KeyError, ValueError) as e:
-        sys.stderr.write(f"failed reading model files: {e}\n")
-        return 1
-    if len(vocab) != emb.shape[0]:
-        sys.stderr.write(f"vocab/embedding mismatch: {len(vocab)} vs {emb.shape[0]}\n")
-        return 1
-    max_token_len = 24  # cap: longer pieces never match real text; bounds Viterbi cost
-    tmp = MODEL_DB_PATH + ".tmp"
-    os.makedirs(os.path.dirname(MODEL_DB_PATH), exist_ok=True)
-    if os.path.exists(tmp):
-        os.remove(tmp)
-    con = sqlite3.connect(tmp)
-    try:
-        con.execute("PRAGMA journal_mode = OFF")  # bulk build; replaced atomically
-        con.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
-        con.execute(
-            "CREATE TABLE vocab (token TEXT PRIMARY KEY, id INTEGER NOT NULL, "
-            "score REAL NOT NULL, vec BLOB NOT NULL) WITHOUT ROWID"
-        )
-        con.executemany(
-            "INSERT OR IGNORE INTO vocab VALUES (?, ?, ?, ?)",
-            (
-                (t, i, s, emb[i].tobytes())
-                for i, (t, s) in enumerate(vocab)
-                if i > _UNK_ID and len(t) <= max_token_len
-            ),
-        )
-        con.execute("CREATE INDEX vocab_id ON vocab(id)")
-        con.executemany(
-            "INSERT INTO meta VALUES (?, ?)",
-            [
-                ("dim", str(emb.shape[1])),
-                ("max_token_len", str(max_token_len)),
-                ("source", os.path.basename(model_dir.rstrip(os.sep))),
-            ],
-        )
-        con.commit()
-        n = con.execute("SELECT COUNT(*) FROM vocab").fetchone()[0]
-    except sqlite3.Error as e:
-        con.close()
-        sys.stderr.write(f"model DB build failed: {e}\n")
-        return 1
-    con.close()
-    os.replace(tmp, MODEL_DB_PATH)
-    sys.stderr.write(
-        f"built {MODEL_DB_PATH}: {n} tokens, dim={emb.shape[1]}, "
-        f"{os.path.getsize(MODEL_DB_PATH) // 1_000_000} MB\n"
-    )
-    return 0
-
-
 def main() -> int:
     argv = sys.argv[1:]
     if not argv:
@@ -900,8 +815,6 @@ def main() -> int:
         return _main_delete(argv[1:])
     if cmd == "--rebuild":
         return _main_rebuild(argv[1:])
-    if cmd == "--build-model":
-        return _main_build_model(argv[1:])
     sys.stderr.write(f"unknown command: {cmd}\n")
     return 1
 

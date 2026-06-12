@@ -153,12 +153,10 @@ copy --nobackup claude_user-hooks/memory_surface.py         ~/.claude/hooks/memo
 copy --nobackup claude_user-hooks/subagent_gate_suggest.py  ~/.claude/hooks/subagent_gate_suggest.py
 run claude_user_settings inject - < "$TOP_DIR/files/claude_user-extensions.json"
 
-# Memory-surface hybrid RAG: build the embed model DB (helper venv is build-time
-# only; the hook queries it with stdlib sqlite3), then refresh the user index
-run apt-get install -y --no-install-recommends python3-venv
-run python3 -m venv ~/.claude/hooks/.venv
-run ~/.claude/hooks/.venv/bin/pip install -q numpy safetensors huggingface_hub
-run ~/.claude/hooks/.venv/bin/python ~/.claude/hooks/memory_surface.py --build-model
+# Memory-surface hybrid RAG: build the embed model DB with the standalone
+# stdlib-only builder (skips when already built), then refresh the user index
+copy --nobackup claude_memory_embed_build                  /usr/local/bin/claude_memory_embed_build -m 0755
+run claude_memory_embed_build
 run ~/.claude/hooks/memory_surface.py --rebuild
 
 # Deploy the user skills
