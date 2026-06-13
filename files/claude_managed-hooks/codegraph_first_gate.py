@@ -28,18 +28,18 @@ Read (v1 は advisory のみ。 H.S. の deny 基準「確実な symbol/call-tre
   code file (CODE_EXTENSIONS) ＆ 除外 dir 外                   -> ADVISORY (codegraph_explore)
   非 code / 除外 dir                                            -> ALLOW
 
-advise-once detour (loop-safe・retry passes)
-============================================
-deny / advisory 文面 1 行目に sentinel `[codegraph-first]` を置く。 当 turn の
-transcript に sentinel が既出なら以後 ALLOW。 = 1 turn 1 回だけ案内し、 同じ操作を
-再実行すれば通る (read -> deny -> 再 read -> allow)。 sentinel は固定文字列ゆえ現在の
-tool 引数とは衝突せず self-match しない。
+advise-once detour (per-operation・loop-safe・retry passes)
+==========================================================
+gate した (tool, target) を session-state file に時刻付きで記録し、 同一操作が
+ADVISE_WINDOW_SECONDS 以内に再来したら ALLOW (read -> deny -> 再 read -> allow)。
+操作単位ゆえ別操作の gate は互いに干渉しない。 transcript の substring scan は hook
+file の Read 等で `[codegraph-first]` を誤検出するため不採用 (codex adversarial review)。
 
 emit / fail-open
 ================
 DENY は permissionDecision: deny、 ADVISORY は additionalContext (tool は走る)。
-全例外を握り潰し exit 0 (fail-open) — gate bug が tool を止めない。 transcript が
-読めなければ advise-once 判定不能ゆえ ALLOW に倒す。
+全例外を握り潰し exit 0 (fail-open) — gate bug が tool を止めない。 state file が
+読めなければ retry 追跡を諦め gate は通常 emit (single deny は loop しない)。
 
 canonical source: files/claude_managed-hooks/codegraph_first_gate.py
 deploy: /etc/claude-code/hooks/ (copy_dir で自動)。 両者を同 session で同内容に保つ。
@@ -47,10 +47,12 @@ deploy: /etc/claude-code/hooks/ (copy_dir で自動)。 両者を同 session で
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import sys
+import time
 import unittest
 
 GATE_TOOLS = ("Grep", "Read")
@@ -291,77 +293,79 @@ def _grep_code_signal(inp: dict) -> str | None:
     return None
 
 
-# --- current-turn scan (advise-once) ---
+# --- advise-once state (per-operation, session-keyed, time-windowed) ---
 
-_TAIL_BUFSIZE = 128 * 1024
+STATE_DIR = os.path.join(
+    os.path.expanduser("~"), ".claude", "hooks", "state", "codegraph_first"
+)
+ADVISE_WINDOW_SECONDS = 300  # 同一操作の retry を通す窓 (これ以降は再 gate)
+_STALE_SESSION_SECONDS = 7 * 24 * 3600
 
 
-def _is_turn_boundary(obj: dict) -> bool:
-    """human-input turn の起点か (isMeta / tool_result 継続は起点でない)。"""
-    if obj.get("type") != "user" or obj.get("isMeta"):
-        return False
-    msg = obj.get("message", {})
-    content = msg.get("content") if isinstance(msg, dict) else None
-    if isinstance(content, str):
-        return True
-    if isinstance(content, list):
-        return any(
-            isinstance(b, dict) and b.get("type") != "tool_result" for b in content
+def _op_key(tool: str, inp: dict) -> str:
+    """(tool, target) の安定 hash。 Grep は pattern/path/glob/type、 Read は file_path。"""
+    if tool == "Grep":
+        target = "\x00".join(
+            str(inp.get(k) or "") for k in ("pattern", "path", "glob", "type")
         )
-    return False
+    else:
+        target = str(inp.get("file_path") or "")
+    return hashlib.sha256((tool + "\x00" + target).encode("utf-8")).hexdigest()[:16]
 
 
-def _load_tail(path: str, bufsize: int = _TAIL_BUFSIZE) -> list[dict]:
-    """末尾から直近 1 turn boundary を含むまで後方読み (boundary 不在なら全件)。"""
+def _state_path(sid: str) -> str:
+    return os.path.join(STATE_DIR, sid)
+
+
+def _load_state(sid: str) -> dict:
     try:
-        with open(path, "rb") as f:
-            pos = f.seek(0, os.SEEK_END)
-            pending = b""
-            tail: list[dict] = []
-            while pos > 0:
-                step = min(bufsize, pos)
-                pos -= step
-                f.seek(pos)
-                parts = (f.read(step) + pending).split(b"\n")
-                pending = parts.pop(0)
-                for raw in reversed(parts):
-                    line = raw.strip()
-                    if not line:
-                        continue
-                    try:
-                        obj = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    tail.append(obj)
-                    if _is_turn_boundary(obj):
-                        tail.reverse()
-                        return tail
-            line = pending.strip()
-            if line:
-                try:
-                    tail.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-            tail.reverse()
-            return tail
+        with open(_state_path(sid), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _recently_gated(sid: str, key: str, now: float) -> bool:
+    """この (tool, target) を直近 ADVISE_WINDOW_SECONDS 以内に gate 済か (= retry)。"""
+    if not sid:
+        return False
+    ts = _load_state(sid).get(key)
+    return isinstance(ts, (int, float)) and (now - ts) < ADVISE_WINDOW_SECONDS
+
+
+def _record_gated(sid: str, key: str, now: float) -> None:
+    """gate した op を記録。 書込失敗は retry 追跡を諦めるだけ (gate 自体は emit 済)。"""
+    if not sid:
+        return
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        cutoff = now - ADVISE_WINDOW_SECONDS
+        state = {
+            k: v
+            for k, v in _load_state(sid).items()
+            if isinstance(v, (int, float)) and v >= cutoff
+        }
+        state[key] = now
+        with open(_state_path(sid), "w", encoding="utf-8") as f:
+            json.dump(state, f)
     except OSError:
-        return []
+        pass
+    _prune_old_sessions(now)
 
 
-def _sentinel_seen(transcript_path) -> bool | None:
-    """当 turn の transcript に sentinel が既出か。 読めなければ None (fail-open)。"""
-    if not isinstance(transcript_path, str) or not transcript_path:
-        return None
-    entries = _load_tail(transcript_path)
-    if not entries:
-        return None
-    start = 0
-    for i in range(len(entries) - 1, -1, -1):
-        if _is_turn_boundary(entries[i]):
-            start = i
-            break
-    blob = "\n".join(json.dumps(e, ensure_ascii=False) for e in entries[start:])
-    return SENTINEL in blob
+def _prune_old_sessions(now: float) -> None:
+    try:
+        names = os.listdir(STATE_DIR)
+    except OSError:
+        return
+    for name in names:
+        p = os.path.join(STATE_DIR, name)
+        try:
+            if now - os.path.getmtime(p) > _STALE_SESSION_SECONDS:
+                os.remove(p)
+        except OSError:
+            pass
 
 
 # --- emit ---
@@ -444,17 +448,20 @@ def _advisory_read() -> None:
 def cmd_gate(payload: dict) -> None:
     if not isinstance(payload, dict):
         return
-    if payload.get("tool_name") not in GATE_TOOLS:
+    tool = payload.get("tool_name")
+    if tool not in GATE_TOOLS:
         return
     inp = payload.get("tool_input")
     if not isinstance(inp, dict):
         return
 
-    seen = _sentinel_seen(payload.get("transcript_path"))
-    if seen or seen is None:
-        return  # advise-once 既出、 または判定不能 -> ALLOW (fail-open)
+    sid = payload.get("session_id") or ""
+    now = time.time()
+    key = _op_key(tool, inp)
+    if _recently_gated(sid, key, now):
+        return  # 同一操作の retry -> ALLOW (1 度案内したら通す)
 
-    if payload.get("tool_name") == "Grep":
+    if tool == "Grep":
         sig = _grep_code_signal(inp)
         if sig is None:
             return
@@ -463,18 +470,17 @@ def cmd_gate(payload: dict) -> None:
         call = _is_call_pattern(pat)
         if not (symbol or call):
             return  # text 検索は grep の領分
-        certain = (
-            sig == "type"
-        )  # type 明示 = code 検索宣言。 def keyword は FP 多で不採用
-        if certain:
+        _record_gated(sid, key, now)
+        if sig == "type":  # type 明示 = code 検索宣言 (certain)。 def keyword は FP 多
             _deny_call() if (call and not symbol) else _deny_symbol()
         else:
             _advisory_grep()
         return
 
-    # Read
+    # Read (v1 は advisory のみ)
     fp = inp.get("file_path") or ""
     if _ext(fp) in CODE_EXTENSIONS and not EXCLUDE_DIR_RE.search(fp):
+        _record_gated(sid, key, now)
         _advisory_read()
 
 
@@ -494,18 +500,11 @@ class GateTest(unittest.TestCase):
     """emit-vs-comply + 分類 branch。 Run: python3 -m unittest codegraph_first_gate"""
 
     @staticmethod
-    def _run(tool, tool_input, entries=None, transcript=True):
+    def _run(tool, tool_input, sid=""):
         import io
-        import tempfile
         from contextlib import redirect_stdout
 
-        payload = {"tool_name": tool, "tool_input": tool_input}
-        if transcript:
-            p = os.path.join(tempfile.mkdtemp(), "t.jsonl")
-            with open(p, "w", encoding="utf-8") as f:
-                for e in entries or [{"type": "user", "message": {"content": "go"}}]:
-                    f.write(json.dumps(e) + "\n")
-            payload["transcript_path"] = p
+        payload = {"tool_name": tool, "tool_input": tool_input, "session_id": sid}
         buf = io.StringIO()
         with redirect_stdout(buf):
             cmd_gate(payload)
@@ -608,27 +607,24 @@ class GateTest(unittest.TestCase):
             self._run("Read", {"file_path": "/repo/node_modules/x/index.js"})
         )
 
-    # --- advise-once detour ---
-    def test_advise_once_suppresses_second(self):
-        # 当 turn に sentinel 既出 -> ALLOW (retry passes)。
-        prior_deny = {
-            "type": "user",
-            "message": {
-                "content": [
-                    {"type": "tool_result", "content": f"{SENTINEL} use codegraph"}
-                ]
-            },
-        }
-        entries = [{"type": "user", "message": {"content": "go"}}, prior_deny]
-        self.assertIsNone(
-            self._run("Grep", {"pattern": "parseConfig", "type": "py"}, entries=entries)
-        )
+    # --- advise-once detour (state-file, per-operation) ---
+    def test_advise_once_state_suppresses_retry(self):
+        import tempfile
+        from unittest import mock
 
-    def test_failopen_no_transcript(self):
-        # transcript 読めず -> advise-once 判定不能 -> ALLOW。
-        self.assertIsNone(
-            self._run("Grep", {"pattern": "x", "type": "py"}, transcript=False)
-        )
+        d = tempfile.mkdtemp()
+        op = ("Grep", {"pattern": "parseConfig", "type": "py"})
+        with mock.patch.object(sys.modules[__name__], "STATE_DIR", d):
+            self._deny(self._run(*op, sid="s1"))  # 1 回目 -> deny + 記録
+            self.assertIsNone(self._run(*op, sid="s1"))  # 同一操作 retry -> ALLOW
+            # 別操作 (Read) は干渉しない (cross-suppression なし)
+            self._adv(self._run("Read", {"file_path": "/r/app.py"}, sid="s1"))
+            # session 違いは独立
+            self._deny(self._run(*op, sid="s2"))
+
+    def test_no_sid_gates_without_state(self):
+        # session_id 無し -> state 追跡なしだが gate は通常 emit。
+        self._deny(self._run("Grep", {"pattern": "parseConfig", "type": "py"}))
 
     def test_non_gate_tool(self):
         self.assertIsNone(self._run("Bash", {"command": "ls"}))
