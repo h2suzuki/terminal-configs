@@ -58,6 +58,7 @@ ROUTING_PATTERNS: list[str] = [
     r"先に\s*(調査|確認|読み?)\s*ますか",
     r"[ぁ-んァ-ヶ一-鿿\w]+するか\s*[ぁ-んァ-ヶ一-鿿\w]+するか",  # SKILL の正典 trigger
     r"(どう|どの|どれ)を?\s*[ぁ-んァ-ヶ一-鿿\w]+\s*しますか",  # 「<X> を どう <verb> しますか?」 form (options 列挙されると routing)
+    r"それとも[^。\n]{0,40}(ますか|ましょうか|でしょうか|します[?？])",  # 「A ますか、それとも B ますか」 丁寧 alternation 二択
 ]
 
 CONFIRM_RE = re.compile("|".join(CONFIRM_PATTERNS), re.IGNORECASE)
@@ -372,6 +373,7 @@ class GateTest(unittest.TestCase):
             "どちらから調査しますか?",
             "実装するか削除するか迷う",
             "どこから着手しますか",
+            "設計を詰めますか、それとも実装に入りますか?",
         ):
             self.assertTrue((_detect(q) or "").startswith("routing"), q)
 

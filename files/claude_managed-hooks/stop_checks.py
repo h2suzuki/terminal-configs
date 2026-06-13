@@ -235,6 +235,7 @@ ROUTING_PATTERNS: list[str] = [
     r"先に\s*(調査|確認|読み?)\s*ますか",
     r"[ぁ-んァ-ヶ一-鿿\w]+するか\s*[ぁ-んァ-ヶ一-鿿\w]+するか",
     r"(どう|どの|どれ)を?\s*[ぁ-んァ-ヶ一-鿿\w]+\s*しますか",
+    r"それとも[^。\n]{0,40}(ますか|ましょうか|でしょうか|します[?？])",  # 「A ますか、それとも B ますか」 丁寧 alternation 二択
 ]
 CONFIRM_RE = re.compile("|".join(CONFIRM_PATTERNS), re.IGNORECASE)
 ROUTING_RE = re.compile("|".join(ROUTING_PATTERNS), re.IGNORECASE)
@@ -1017,6 +1018,7 @@ class EnforcementFamilyTest(unittest.TestCase):
             "実装するか削除するか迷います?",
             "どこから着手しますか?",
             "どちらから調査しますか?",
+            "設計を詰めますか、それとも実装に入りますか?",
         ):
             blk = self._blk(q)
             self.assertTrue(
