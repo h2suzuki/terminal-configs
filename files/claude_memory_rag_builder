@@ -16,7 +16,6 @@ import os
 import sqlite3
 import struct
 import sys
-import tempfile
 import urllib.request
 
 
@@ -35,6 +34,12 @@ MAX_TOKEN_LEN = 24
 UNK_ID = 1
 HTTP_TIMEOUT = 60
 CHUNK = 1 << 20
+PROG = os.path.basename(sys.argv[0]) or "claude_memory_rag_builder"
+UA = PROG
+CACHE_DIR = os.path.join(
+    os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
+    PROG,
+)
 
 
 def already_built() -> bool:
@@ -52,10 +57,9 @@ def already_built() -> bool:
 
 def download(url: str, dst: str) -> None:
     log(f"downloading {os.path.basename(dst)} ...")
-    req = urllib.request.Request(
-        url, headers={"User-Agent": "claude-memory-rag-builder"}
-    )
-    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r, open(dst, "wb") as w:
+    part = dst + ".part"
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r, open(part, "wb") as w:
         total_s = r.headers.get("Content-Length")
         total = int(total_s) if total_s and total_s.isdigit() else None
         done = 0
@@ -75,7 +79,32 @@ def download(url: str, dst: str) -> None:
                 else:
                     log(f"  {done // 1_000_000} MB")
                 last_report = done
+    os.replace(part, dst)
     log(f"downloaded {os.path.basename(dst)}: {os.path.getsize(dst):,} bytes")
+
+
+def remote_size(url: str) -> int | None:
+    req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": UA})
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
+            total_s = r.headers.get("Content-Length")
+    except OSError:
+        return None
+    return int(total_s) if total_s and total_s.isdigit() else None
+
+
+def ensure_cached(url: str, dst: str) -> None:
+    if os.path.exists(dst):
+        want = remote_size(url)
+        have = os.path.getsize(dst)
+        if want is None or have == want:
+            log(f"cached {os.path.basename(dst)}: {have:,} bytes (skip download)")
+            return
+        log(
+            f"cached {os.path.basename(dst)} size mismatch: "
+            f"{have:,} != {want:,} bytes; re-downloading"
+        )
+    download(url, dst)
 
 
 def build(model_dir: str) -> int:
@@ -174,14 +203,14 @@ def main() -> int:
         return 0
     if args.model_dir:
         return build(args.model_dir)
-    with tempfile.TemporaryDirectory(prefix="memory-embed-") as tmp_dir:
-        for name in MODEL_FILES:
-            try:
-                download(BASE_URL + name, os.path.join(tmp_dir, name))
-            except OSError as e:
-                sys.stderr.write(f"download failed for {name}: {e}\n")
-                return 1
-        return build(tmp_dir)
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    for name in MODEL_FILES:
+        try:
+            ensure_cached(BASE_URL + name, os.path.join(CACHE_DIR, name))
+        except OSError as e:
+            sys.stderr.write(f"download failed for {name}: {e}\n")
+            return 1
+    return build(CACHE_DIR)
 
 
 if __name__ == "__main__":
