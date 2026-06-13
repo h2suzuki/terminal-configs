@@ -17,7 +17,7 @@ Grep:
   code signal 無し (type/glob/path が code を指さない)        -> ALLOW
   code signal あり ＆ pattern が text 検索                     -> ALLOW (grep の領分)
   code signal あり ＆ pattern が symbol/call ＆ certain        -> DENY
-      certain = type が code 言語 (明示的 code 検索宣言) or pattern に def 系 keyword
+      certain = type が code 言語 (明示的 code 検索宣言)
       symbol -> codegraph_search / codegraph_explore、 call -> codegraph_callers /
       codegraph_callees / codegraph_impact へ誘導
   code signal あり ＆ pattern が symbol/call ＆ suspected      -> ADVISORY
@@ -195,13 +195,38 @@ EXCLUDE_DIR_RE = re.compile(
     r"__pycache__|\.venv|venv|site-packages|\.tox|coverage|\.cache)(/|$)"
 )
 
-# 定義系 keyword を含む pattern は code symbol 検索と確信できる。
-DEF_KEYWORD_RE = re.compile(
-    r"\b(def|class|func|fn|function|interface|struct|impl|trait|enum|"
-    r"type|module|package|fun|sub|method|proc)\b"
-)
-# 識別子の直後に開き括弧 = 呼出 (callers) 検索。
-CALL_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\s*\\?\(")
+# 呼出 (callers) 検索とみなさない制御構文等の keyword (`if (` を call 誤検出しない)。
+CONTROL_KW: set[str] = {
+    "if",
+    "elif",
+    "else",
+    "for",
+    "while",
+    "switch",
+    "case",
+    "catch",
+    "return",
+    "with",
+    "do",
+    "when",
+    "foreach",
+    "sizeof",
+    "typeof",
+    "defer",
+    "go",
+    "match",
+    "yield",
+    "await",
+    "assert",
+    "del",
+    "raise",
+    "in",
+    "and",
+    "or",
+    "not",
+}
+# 識別子 + 開き括弧 = 呼出。 識別子を捕捉して制御 keyword を除外する。
+CALL_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*\\?\(")
 
 
 def _ext(path: str) -> str:
@@ -209,33 +234,43 @@ def _ext(path: str) -> str:
 
 
 def _glob_exts(glob: str) -> list[str]:
-    """glob から拡張子群を抽出 (`**/*.{ts,tsx}` / `*.py` 等)。"""
+    """glob から拡張子群を抽出 (`*.py` / brace の `**/*.{ts,tsx}` 両対応)。"""
     if not isinstance(glob, str):
         return []
-    return ["." + e.lower() for e in re.findall(r"\.([A-Za-z0-9]+)", glob)]
+    exts: list[str] = []
+    for tok in re.findall(r"\.(\{[^}]*\}|[A-Za-z0-9]+)", glob):
+        if tok.startswith("{"):
+            exts.extend(e.strip() for e in tok[1:-1].split(",") if e.strip())
+        else:
+            exts.append(tok)
+    return ["." + e.lower() for e in exts]
 
 
 def _is_symbol_pattern(pat: str) -> bool:
-    """pattern が定義系 keyword か、 anchor / word-boundary を剥がすと裸の識別子か。"""
+    """anchor / word-boundary を剥がすと裸の識別子か (= symbol 検索)。 def 系 keyword は
+    'type error' 等の英語句を誤検出するため signal にしない (codex adversarial review)。"""
     if not isinstance(pat, str):
         return False
-    s = pat.strip()
-    if DEF_KEYWORD_RE.search(s):
-        return True
-    core = re.sub(r"^\^|\$$|\\b", "", s)
+    core = re.sub(r"^\^|\$$|\\b", "", pat.strip())
     return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", core))
 
 
 def _is_call_pattern(pat: str) -> bool:
-    return isinstance(pat, str) and bool(CALL_RE.search(pat))
+    """識別子 + 開き括弧。 制御構文 keyword (`if (` / `for (` 等) は呼出でない。"""
+    if not isinstance(pat, str):
+        return False
+    m = CALL_RE.search(pat)
+    return bool(m) and m.group(1).lower() not in CONTROL_KW
 
 
 def _grep_code_signal(inp: dict) -> str | None:
-    """type / glob / path のどれが code を指すか。 非 code 明示 / 無 signal は None。"""
+    """type / glob / path のどれが code を指すか。 非 code 明示 / 無 signal / scope 外 は None。"""
     t = (inp.get("type") or "").strip().lower()
     if t in CODE_RG_TYPES:
         return "type"
     glob = inp.get("glob") or ""
+    if isinstance(glob, str) and EXCLUDE_DIR_RE.search(glob):
+        return None  # 依存・生成物を指す glob は scope 外
     exts = _glob_exts(glob)
     if exts:
         if any(e in CODE_EXTENSIONS for e in exts):
@@ -428,7 +463,9 @@ def cmd_gate(payload: dict) -> None:
         call = _is_call_pattern(pat)
         if not (symbol or call):
             return  # text 検索は grep の領分
-        certain = sig == "type" or bool(DEF_KEYWORD_RE.search(pat))
+        certain = (
+            sig == "type"
+        )  # type 明示 = code 検索宣言。 def keyword は FP 多で不採用
         if certain:
             _deny_call() if (call and not symbol) else _deny_symbol()
         else:
@@ -487,19 +524,31 @@ class GateTest(unittest.TestCase):
     # --- classification helpers ---
     def test_symbol_and_call_detection(self):
         self.assertTrue(_is_symbol_pattern("parseConfig"))
-        self.assertTrue(_is_symbol_pattern("^class Foo"))
         self.assertTrue(_is_symbol_pattern(r"\bMyType\b"))
+        self.assertFalse(_is_symbol_pattern("^class Foo"))  # 2-token 句は symbol でない
+        self.assertFalse(
+            _is_symbol_pattern("type error")
+        )  # def keyword 句を誤検出しない
         self.assertFalse(_is_symbol_pattern("TODO: fix this"))
         self.assertTrue(_is_call_pattern("parseConfig("))
         self.assertTrue(_is_call_pattern(r"render\("))
+        self.assertFalse(_is_call_pattern("if ("))  # 制御構文は call でない
+        self.assertFalse(_is_call_pattern("for ("))
         self.assertFalse(_is_call_pattern("just text"))
 
     def test_code_signal(self):
         self.assertEqual(_grep_code_signal({"type": "py"}), "type")
         self.assertEqual(_grep_code_signal({"glob": "**/*.ts"}), "glob")
+        self.assertEqual(_grep_code_signal({"glob": "**/*.{ts,tsx}"}), "glob")  # brace
         self.assertEqual(_grep_code_signal({"path": "src/app.go"}), "path")
         self.assertEqual(_grep_code_signal({"path": "src/"}), "path")  # dir
         self.assertIsNone(_grep_code_signal({"glob": "**/*.md"}))
+        self.assertIsNone(
+            _grep_code_signal({"glob": "**/*.{json,yaml}"})
+        )  # brace noncode
+        self.assertIsNone(
+            _grep_code_signal({"glob": "node_modules/**/*.ts"})
+        )  # exclude glob
         self.assertIsNone(_grep_code_signal({"path": "README.md"}))
         self.assertIsNone(_grep_code_signal({"path": "node_modules/x.js"}))
         self.assertIsNone(_grep_code_signal({"pattern": "x"}))  # no signal
@@ -514,10 +563,21 @@ class GateTest(unittest.TestCase):
         r = self._deny(self._run("Grep", {"pattern": "render(", "type": "ts"}))
         self.assertIn("codegraph_callers", r)
 
-    def test_grep_deny_def_keyword_via_glob(self):
-        # glob だけだが def keyword で certain。
-        r = self._deny(self._run("Grep", {"pattern": "def handle", "glob": "**/*.py"}))
-        self.assertIn("codegraph", r)
+    # --- Grep FP regression (codex adversarial review) ---
+    def test_grep_allow_def_keyword_phrase(self):
+        # 'type error' は def keyword を含むが text 検索 -> ALLOW (誤 deny しない)。
+        self.assertIsNone(self._run("Grep", {"pattern": "type error", "type": "ts"}))
+
+    def test_grep_allow_control_flow_call(self):
+        # 'if (' は呼出でなく制御構文 -> ALLOW。
+        self.assertIsNone(self._run("Grep", {"pattern": "if (", "type": "py"}))
+
+    def test_grep_brace_glob_signal(self):
+        # brace glob でも code signal を取り symbol は advisory (type 明示なし)。
+        a = self._adv(
+            self._run("Grep", {"pattern": "parseConfig", "glob": "**/*.{ts,tsx}"})
+        )
+        self.assertIn("codegraph", a)
 
     # --- Grep advisory (suspected) ---
     def test_grep_advisory_symbol_via_glob(self):
