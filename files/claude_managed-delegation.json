@@ -1,0 +1,20 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(Grep|Read)$",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/codegraph_first_gate.py" } ]
+      },
+      {
+        "matcher": "^ExitPlanMode$",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/codex_delegation_surface.py" } ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__codex__.*",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/codex_delegation_surface.py" } ]
+      }
+    ]
+  }
+}

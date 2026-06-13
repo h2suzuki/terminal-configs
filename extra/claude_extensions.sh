@@ -144,6 +144,7 @@ copy_dir        claude_managed-skills/                      /etc/claude-code/ski
 
 # Register the managed hooks
 copy --nobackup claude_managed-extensions.json             /etc/claude-code/managed-settings.d/extensions.json
+copy --nobackup claude_managed-delegation.json             /etc/claude-code/managed-settings.d/delegation.json
 
 # Install the user-hook injector
 copy --nobackup claude_user_settings                       /usr/local/bin/claude_user_settings -m 0755
@@ -210,6 +211,10 @@ run "claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --b
 claude mcp remove codegraph --scope user
 run npm install -g @colbymchenry/codegraph
 run "claude mcp add codegraph --scope user -- codegraph serve --mcp"
+
+# Codex MCP server (tool-role-delegation 委譲先 mcp__codex__codex; codex CLI は base setup で導入済)
+claude mcp remove codex --scope user
+run "claude mcp add codex --scope user -- codex mcp-server"
 
 # Cloud Run MCP
 claude mcp remove cloud-run --scope user
@@ -306,6 +311,10 @@ if [ -n "$LOGIN_USER" ]; then
     sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove codegraph --scope user"
     run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g @colbymchenry/codegraph"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add codegraph --scope user -- codegraph serve --mcp"'
+
+    # Codex MCP server (tool-role-delegation 委譲先; codex CLI は base setup で導入済)
+    sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove codex --scope user"
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add codex --scope user -- codex mcp-server"'
 
     # Cloud Run MCP
     sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove cloud-run --scope user"
