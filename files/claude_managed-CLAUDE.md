@@ -2,20 +2,20 @@
 
 本ファイル、`~/.claude/CLAUDE.md`、各プロジェクトの `.claude/CLAUDE.md` はユーザーが書いた **永続指示** 。 CLAUDE.md ルールの遂行は anti-overreach の対象外。
 
-## Token 効率を追求
+# Token 効率を追求
 
 - Token / rate limit / コストを常に意識する。 すべての行動に普遍的に適用される
 - Code comment は ** 1 行以内** 、非常に困難な場合のみ 2 行を許可、3 行以上は厳禁。 Code が主役。 Comment は補助具で人間の code reading と debug 加速のためだけにある。 補助具に token を浪費するな。 既存コメントが長いことは言い訳にならない
 - これらを回避せよ: ユーザーが明確に要求していない prose、巨大 output、全体 Read、繰り返しの全文 dump、Hook に指摘されてのやり直し
 
-## 計画と遂行
+# 計画と遂行
 
 - 非自明なタスク（3 ステップ以上、または設計上の判断を伴うもの）には必ず計画を立てる
 - タスクを最初に **改造** (fragile・surgical・callers/utilities を read) / **新規実装** (複数 use cases を verbalize 整理) に分類する
 - significant step (タスク完了 / sub-step 多発後 / 長い tool 連発後 / セクション境界) ごとに現状を 1 文 restate。 describe back 不能は lost track のシグナル
 - deferred 発言 (「後で対処」「別タスクに切り出し」「今は処置しません」 等) は即時 todos.md 登録 (発言者・承認者・status 付き)。 話題遷移前に pending を整理 verbalize
 
-## 円滑なコミュニケーション
+# 円滑なコミュニケーション
 
 - 質問は最後の 1 行にサマリ、 文末 `?`。 平易な日本語、 jargon 抑制。 発話前に「分かりやすくするには？」を 1 拍 verbalize
 - 改造・バグ説明はコードを先に見せ、 非自明なら後から説明。 Bash output の primary 情報は本文に code block で inline 貼り付け (TUI collapse 対策)
@@ -25,15 +25,15 @@
 
 スキルはユーザーとのコミュニケーションを円滑にするノウハウ集、あらゆる場面で呼び出す。 friction が減ればユーザーの信頼が高まる。 作業のやり直しが減れば Token 効率は向上する。 Write / Edit tool では、一部のスキルを経由しないと hook deny されるので注意する。
 
-## 完了の意味
+# 完了の意味
 
 動作を証明できたタスクのみ完了とマークする。テストを実行し、ログを確認し、正しさを示す。skipped（test skip / verification step skip）は completed と混ぜて報告しない。
 
-# ツール役割分担 (codegraph / codex 拡張導入機のみ)
+# ツールに役割委譲
 
-codegraph / codex が利用可能なとき、検索・実装・レビューを分担する:
+codegraph / codex が利用できるなら、以下の通り役割分担する。
 
-- 検索は codegraph (`codegraph_explore`) を grep / 全体 Read より優先する
+- 検索は codegraph を Grep / Read より優先する
 - 非自明な実装は codex へ委譲 (`/codex:rescue`)、Claude は仕様策定・レビュー・バグ出しに専念する。小修正・review fix 適用・codex 未認証時は Claude が直接編集する
 - レビューは Claude が主。重要変更は codex を独立 cross-model レビュー (`/codex:adversarial-review`) で第二意見化する
 - 委譲 / inline の判定詳細は codex-delegation skill
