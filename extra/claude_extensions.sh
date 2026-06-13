@@ -8,7 +8,7 @@
 #
 #   Figma plugin        Claude-to-figma plugin (a remote MCP + skills)
 #
-#   Codex plugin        OpenAI codex-plugin-cc (delegate tasks + code review; wraps the codex CLI)
+#   Codex plugin & MCP  OpenAI codex-plugin-cc and MCP setup (codex itself is MCP)
 #
 #   Agent-browser CLI   Vercel Labs CLI + Claude Code skill
 #   Playwright MCP      Microsoft playwright/mcp (stdio; reuses the system Chrome, headless)
@@ -194,9 +194,12 @@ run claude plugin disable security-guidance@claude-plugins-official
 run claude plugin install figma@claude-plugins-official
 run claude plugin update figma@claude-plugins-official
 
-# Codex plugin (delegate tasks + code review via the OpenAI Codex CLI)
+# Codex plugin & MCP server
 run claude plugin marketplace add openai/codex-plugin-cc
 run claude plugin install codex@openai-codex
+
+claude mcp remove codex --scope user
+run "claude mcp add codex --scope user -- codex mcp-server"
 
 # Agent-browser
 run CI=1 npm install -g agent-browser
@@ -211,10 +214,6 @@ run "claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --b
 claude mcp remove codegraph --scope user
 run npm install -g @colbymchenry/codegraph
 run "claude mcp add codegraph --scope user -- codegraph serve --mcp"
-
-# Codex MCP server (tool-role-delegation 委譲先 mcp__codex__codex; codex CLI は base setup で導入済)
-claude mcp remove codex --scope user
-run "claude mcp add codex --scope user -- codex mcp-server"
 
 # Cloud Run MCP
 claude mcp remove cloud-run --scope user
@@ -294,9 +293,13 @@ if [ -n "$LOGIN_USER" ]; then
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install figma@claude-plugins-official"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin update figma@claude-plugins-official"'
 
-    # Codex plugin (delegate tasks + code review via the OpenAI Codex CLI)
+    # Codex plugin & MCP server
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin marketplace add openai/codex-plugin-cc"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install codex@openai-codex"'
+
+    sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove codex --scope user"
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add codex --scope user -- codex mcp-server"'
+
 
     # Agent-browser
     run sudo -i -u $LOGIN_USER bash -i -c '"CI=1 npm install -g agent-browser"'
@@ -311,10 +314,6 @@ if [ -n "$LOGIN_USER" ]; then
     sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove codegraph --scope user"
     run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g @colbymchenry/codegraph"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add codegraph --scope user -- codegraph serve --mcp"'
-
-    # Codex MCP server (tool-role-delegation 委譲先; codex CLI は base setup で導入済)
-    sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove codex --scope user"
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add codex --scope user -- codex mcp-server"'
 
     # Cloud Run MCP
     sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove cloud-run --scope user"
