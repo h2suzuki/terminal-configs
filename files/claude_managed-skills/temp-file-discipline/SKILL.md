@@ -10,7 +10,7 @@ when_to_use: TRIGGER when about to write a temporary / scratch / intermediate fi
 
 ## Definitions
 
-- **/tmp** — 再起動で消失する。 しばしば tmpfs (RAM 上の FS) で実装され、 非常に軽量・高速だが **容量が小さい**。 大きな file を置くと RAM を圧迫して満杯になる。
+- **/tmp** — 再起動で消失する。 しばしば tmpfs (RAM 上の FS) で実装される、 **非常に軽量・高速だが容量が希少**なエリア。 ためると**すぐ満杯 (disk full) になり**、 自分や他プロセスの temp 確保まで巻き込んで失敗させる。 ゆえに小さく短命なものだけ置き、 使い終わったら消す。
 - **/var/tmp** — ディスク上にあり再起動でも消えない。 **より大きい一時 file** を置け、 mmap して使うこともできる。
 - **drafts/** — repo 直下、 `.gitignore` 対象。 **session を跨いでしばらく永続させる作業 file** はここに置く (handoff の work file と同じ場所)。
 
@@ -21,7 +21,7 @@ when_to_use: TRIGGER when about to write a temporary / scratch / intermediate fi
 - **使い終わったら即削除が基本**: temp は用が済んだら `rm` する。 SessionEnd の全削除は最後の安全網であって、 session 中に溜め込んで良い言い訳ではない (tmpfs の RAM を食う)。
 - **大きい / mmap / reboot を跨ぐ temp は /var/tmp**: tmpfs の RAM を消費しない。 これも用済みで `rm` する。
 - **session を跨ぐ作業 file は drafts/**: 次 session で再開する中間成果物は drafts/ に置き /tmp には置かない (/tmp は再起動で消えるため永続させられない)。
-- **Docker container 内**: container 内だけで使う temp は container 自身の FS (`/tmp` 等) に置く — container 破棄で一緒に消えるため host を汚さず host 側 cleanup も不要。 一方 host から bind-mount された `/tmp` に書くと実体は host に残るので、 その場合は **host 側の本ルール (scratch dir + 削除) に準拠**する。
+- **Docker container 内**: container 内部だけで使う temp は、 host に bind-mount されていない container ローカルな書き込み層に置く (container 破棄で一緒に消える)。 **注意**: container の `/tmp` は **host の /tmp を bind-mount したものかもしれない**。 その場合 file の実体は host /tmp に残るので、 mount か否かを確認し、 mount なら **host 側の本ルール (scratch dir + 削除) に準拠**する。
 
 ## Output
 
