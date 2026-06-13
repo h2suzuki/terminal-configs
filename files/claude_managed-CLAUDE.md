@@ -29,12 +29,12 @@
 
 動作を証明できたタスクのみ完了とマークする。テストを実行し、ログを確認し、正しさを示す。skipped（test skip / verification step skip）は completed と混ぜて報告しない。
 
-# ツールに役割委譲
+# 役割委譲
 
-codegraph / codex が利用できるなら、次の役割分担を行う。
+CodeGraph や Codex が利用できるなら、次の役割分担を行う。
 
-- 検索は codegraph を Grep / Read より優先する
-- 仕様策定・実装の指示・バグ出しは Claude が専念する
-- 実装は codex (`/codex:rescue`) に委譲する
-- 実装されたコードに対する敵対的／受け入れレビューは Claude が行う
-- 重要変更は codex を独立 cross-model レビュー (`/codex:adversarial-review`) で更にレビューする
+- 検索では Grep / Read より CodeGraph を優先して使う
+- 仕様策定・実装指示・バグ出しは Claude が行う
+- 実装は Codex (`/codex:rescue`) に委譲する
+- Codex により実装されたコードは Claude が敵対的／受け入れレビューを行う
+- 重要変更は Codex を独立 cross-model レビューアー (`/codex:adversarial-review`) として更にレビューする
