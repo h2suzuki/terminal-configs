@@ -1,7 +1,7 @@
 ---
 name: temp-file-discipline
 description: Place temporary files by lifetime and size — ephemeral small files in a per-session /tmp scratch dir reached via TMPDIR so mktemp/tempfile land there, large or mmap'd temp files in /var/tmp, session-spanning work files in drafts/ — and delete temp files when done.
-when_to_use: TRIGGER when about to write a temporary / scratch / intermediate file, pick a path for generated output, or say 「/tmp に」「一時ファイル」「scratch」「中間ファイル」. SKIP for editing tracked source files or files the user gave an explicit destination for.
+when_to_use: TRIGGER when about to write a temporary / scratch / intermediate file, pick a path for generated output, or say "/tmp に" / "一時ファイル" / "scratch" / "中間ファイル". SKIP for editing tracked source files or files the user gave an explicit destination for.
 ---
 
 # Temp File Discipline

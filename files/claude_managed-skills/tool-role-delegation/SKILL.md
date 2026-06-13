@@ -1,7 +1,7 @@
 ---
 name: tool-role-delegation
 description: Route work to the right executor when codegraph/codex are available — search/exploration via codegraph, implementation via codex (/codex:rescue) — while Claude owns spec, implementation direction, bug-finding, and review of the result.
-when_to_use: TRIGGER when about to search / explore code, write or edit non-trivial source, start a feature, or say 「実装する」「コードを書く」「検索」「探す」. SKIP for trivial Q&A, doc-only edits, or when codex / codegraph are unavailable / unauthenticated.
+when_to_use: TRIGGER when about to search / explore code, write or edit non-trivial source, start a feature, or say "実装する" / "コードを書く" / "検索" / "探す". SKIP for trivial Q&A, doc-only edits, or when codex / codegraph are unavailable / unauthenticated.
 ---
 
 # Tool Role Delegation

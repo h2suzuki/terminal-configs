@@ -1,7 +1,7 @@
 ---
 name: auto-mode-denial-recovery
 description: In auto mode (permission mode = auto), denial / blocked is gated by the classifier itself, so adding permissions to settings.json cannot bypass it (the denial message's suggestion to add a settings rule is misleading); the effective recoveries are `! manual execution` / skip / explicit user re-request.
-when_to_use: TRIGGER when auto mode で a tool call is denied / blocked, or about to suggest 「settings.json に permission 追加で迂回」 etc. SKIP for non-auto permission mode or when user explicitly approved a settings.json change.
+when_to_use: TRIGGER when auto mode で a tool call is denied / blocked, or about to suggest "settings.json に permission 追加で迂回" etc. SKIP for non-auto permission mode or when user explicitly approved a settings.json change.
 ---
 
 # Auto-Mode Denial Recovery
