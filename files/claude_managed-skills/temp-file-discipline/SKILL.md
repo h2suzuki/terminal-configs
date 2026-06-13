@@ -18,6 +18,7 @@ when_to_use: TRIGGER when about to write a temporary / scratch / intermediate fi
 
 - **小さく短命な temp は /tmp の per-session scratch dir に集約**: scratch dir は `/tmp/claude-scratch-$CLAUDE_CODE_SESSION_ID/`。 SessionEnd hook (session_cleanup.py) が session 終了時にこの dir を丸ごと削除するので、 取りこぼしが残らない。
 - **scratch dir を TMPDIR にして mktemp に任せる**: `mktemp` / 多くの CLI / Python `tempfile` は `$TMPDIR` を respect する。 temp を作る Bash で `export TMPDIR="/tmp/claude-scratch-$CLAUDE_CODE_SESSION_ID"; mkdir -p "$TMPDIR"` してから `mktemp` を使えば、 直書きパスを散らさず scratch に落ちる。 shell state は Bash 呼び出し間で persist しないので temp を作る呼び出しごとに設定する (または `mktemp -p "/tmp/claude-scratch-$CLAUDE_CODE_SESSION_ID"`)。
+- **hook が routing を check する**: PreToolUse の tmpdir_scratch_gate が、 scratch / `/var/tmp` に振られない `mktemp` を deny し、 bare /tmp への書込リダイレクトを advise する (意図的に外すなら command に `tmp-scratch: allow`)。
 - **使い終わったら即削除が基本**: temp は用が済んだら `rm` する。 SessionEnd の全削除は最後の安全網であって、 session 中に溜め込んで良い言い訳ではない (tmpfs の RAM を食う)。
 - **大きい / mmap / reboot を跨ぐ temp は /var/tmp**: tmpfs の RAM を消費しない。 これも用済みで `rm` する。
 - **session を跨ぐ作業 file は drafts/**: 次 session で再開する中間成果物は drafts/ に置き /tmp には置かない (/tmp は再起動で消えるため永続させられない)。
