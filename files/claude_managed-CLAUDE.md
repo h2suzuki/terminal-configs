@@ -31,9 +31,10 @@
 
 # ツールに役割委譲
 
-codegraph / codex が利用できるなら、以下の通り役割分担する。
+codegraph / codex が利用できるなら、次の役割分担を行う。
 
 - 検索は codegraph を Grep / Read より優先する
-- 非自明な実装は codex へ委譲 (`/codex:rescue`)、Claude は仕様策定・レビュー・バグ出しに専念する。小修正・review fix 適用・codex 未認証時は Claude が直接編集する
-- レビューは Claude が主。重要変更は codex を独立 cross-model レビュー (`/codex:adversarial-review`) で第二意見化する
-- 委譲 / inline の判定詳細は codex-delegation skill
+- 仕様策定・実装の指示・バグ出しは Claude が専念する
+- 実装は codex (`/codex:rescue`) に委譲する
+- 実装されたコードに対する敵対的／受け入れレビューは Claude が行う
+- 重要変更は codex を独立 cross-model レビュー (`/codex:adversarial-review`) で更にレビューする
