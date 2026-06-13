@@ -19,7 +19,7 @@ Goal: codegraph=検索 / codex=実装委譲 / Claude=仕様・レビュー・バ
 Exit Criteria:
 - [x] codex plugin を claude_extensions.sh (root/login-user) へ追加 + user scope へ live install (commit e634f32、`claude plugin list` に codex@openai-codex 確認済)
 - [x] managed CLAUDE.md に役割分担節を追記 (条件付き「拡張導入機のみ」、commit 94f8dbe・/etc/claude-code/CLAUDE.md へ sudo sync 済) — wording は H.S. review 対象
-- [x] 委譲判定 skill codex-delegation を作成 (commit 94f8dbe、available-skills 一覧に登録確認済) — wording は H.S. review 対象
+- [x] 役割委譲 skill tool-role-delegation を作成 (codex-delegation から改名・codegraph 複数ツール反映、available-skills 登録確認済) — wording は H.S. review 対象
 - [ ] PreToolUse gate: source の Edit/Write を「codex 委譲が適切なときだけ」deny (blanket でない)。skill_reminder_gate clone・fail-open・content-embedded opt-out token
 - [ ] gate の unittest (deny 条件 / SKIP 条件 / opt-out)
 - [ ] deploy 同期 (files/→/etc/claude-code/、3 json への hook 配線) + README プラグイン節追記
