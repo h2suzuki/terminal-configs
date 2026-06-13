@@ -6,7 +6,7 @@
 # statusline.sh) and the turn counter (<transcript>.turns plus session-keyed fallback
 # <cache>/claude-turn-counter/<session_id>.turns, written by stop_checks.py's turn marker).
 # It also drops this session's /tmp scratch dir (/tmp/claude-scratch-<session_id>/),
-# the using-tmp skill's convention area for ephemeral files.
+# the temp-file-discipline skill's convention area for ephemeral files.
 #
 # SessionEnd does NOT fire on crash/kill, so abnormally-ended sessions would
 # leak their files forever. To bound these areas we ALSO sweep entries
@@ -50,7 +50,7 @@ def _rmtree(path):
 
 
 def _clean_tmp_scratch(session_id):
-    # using-tmp skill: per-session scratch at /tmp/claude-scratch-<id>.
+    # temp-file-discipline skill: per-session scratch at /tmp/claude-scratch-<id>.
     if session_id:
         _rmtree("/tmp/claude-scratch-" + session_id)
     cutoff = time.time() - CRUFT_TTL
