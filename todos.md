@@ -31,7 +31,7 @@ Exit Criteria:
 
 確定済みファクト (再導出不要): codex は **plugin (openai/codex-plugin-cc) かつ MCP server も兼ねる** — 2026-06-13 本 session で公式確認 (`codex mcp-server` = "Run Codex as an MCP server over stdio"、expose tool=`codex`/`codex-reply`、`codex/event` notify)。 **前 session の「codex は MCP でない」は誤りと判明し本 session で訂正**。 plugin 経路: 委譲=`/codex:rescue`+`codex:codex-rescue` subagent、review=`/codex:review`・`/codex:adversarial-review`、job=`/codex:status|result|cancel`、同梱 skill (codex-cli-runtime / gpt-5-4-prompting) が駆動法提供。 MCP 経路採用理由: `mcp__codex__codex` は hook-matchable (plugin 経路は Bash 経由で opaque)。 Claude Code hook 仕様 (2026-06 claude-code-guide で確認): `ExitPlanMode`/`Agent` は PreToolUse matchable・deny 可、PreToolUse deny の `permissionDecisionReason` は model に feedback され別 tool 誘導可、MCP matcher は `mcp__codex__.*` (dash 保持)。 codegraph は MCP server (`mcp__codegraph__*`)・**hook 無し**、server instructions が「grep/Read より codegraph_explore 優先」を冒頭注入済 (= self-judgment 頼りで発火弱、本 gate で補強)。 **codegraph gate 設計 lock (2026-06-13 H.S. 決定)**: codegraph は OS file-watcher (inotify 等) 継続 incremental index (`.codegraph/codegraph.db`)・"stays fresh as you code" ゆえ freshness gate 不要。 hook 入力 = `tool_input` (Grep: pattern/path/glob/type、Read: file_path) + `transcript_path` (当turn scan で detour 判定)。 判定は構造 signal 主軸 (pattern は補助・意味解析 lossy ゆえ deny 決め手にせず)、 3 段 = 確実 deny / 疑わしき advisory / retry allow。 capability: symbol=`codegraph_search`/`explore`、call-tree=`codegraph_callers`/`callees`/`impact`。
 
-Work file: handoff = `last-session-handoff.md` の「codegraph/codex/Claude 役割分担ポリシー」section
+Work file: なし (本 session で core 完結・handoff section 削除。 残 v2 は本 block の [ ] で追跡)
 
 ## Medium
 
