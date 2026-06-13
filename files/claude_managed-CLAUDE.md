@@ -28,3 +28,12 @@
 ## 完了の意味
 
 動作を証明できたタスクのみ完了とマークする。テストを実行し、ログを確認し、正しさを示す。skipped（test skip / verification step skip）は completed と混ぜて報告しない。
+
+# ツール役割分担 (codegraph / codex 拡張導入機のみ)
+
+codegraph / codex が利用可能なとき、検索・実装・レビューを分担する:
+
+- 検索は codegraph (`codegraph_explore`) を grep / 全体 Read より優先する
+- 非自明な実装は codex へ委譲 (`/codex:rescue`)、Claude は仕様策定・レビュー・バグ出しに専念する。小修正・review fix 適用・codex 未認証時は Claude が直接編集する
+- レビューは Claude が主。重要変更は codex を独立 cross-model レビュー (`/codex:adversarial-review`) で第二意見化する
+- 委譲 / inline の判定詳細は codex-delegation skill
