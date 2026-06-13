@@ -110,8 +110,8 @@
 
 Claude Code に「信頼を高めるための仕組み」と外部ツール連携を入れます。
 
-- **ガードレイル（フック / スキル）**: `CLAUDE.md` のルール（commit 規律・スキル発火・memory routing など）を機械的に強制するフック群を `/etc/claude-code/hooks/`・スキル群を `/etc/claude-code/skills/` に配置し、managed-settings の drop-in（追加設定ファイル）で登録します。あわせてユーザー側フック（commit 著者確認・push 催促検出・memory surface・subagent gate）を `~/.claude/hooks/` に入れます。仕組みの解説は `SKILL-HOOK-CONTRACT.md` を参照してください。
-- **MCP サーバー（scope=user）**: Playwright（ブラウザ操作）, CodeGraph（コード知識グラフ）, Cloud Run, Toolbox（BigQuery）
+- **ガードレイル（フック / スキル）**: `CLAUDE.md` のルール（commit 規律・スキル発火・memory routing など）を機械的に強制するフック群（codegraph 優先誘導・codex 実装委譲の nudge を含む）を `/etc/claude-code/hooks/`・スキル群を `/etc/claude-code/skills/` に配置し、managed-settings の drop-in（追加設定ファイル）で登録します。あわせてユーザー側フック（commit 著者確認・push 催促検出・memory surface・subagent gate）を `~/.claude/hooks/` に入れます。仕組みの解説は `SKILL-HOOK-CONTRACT.md` を参照してください。
+- **MCP サーバー（scope=user）**: Playwright（ブラウザ操作）, CodeGraph（コード知識グラフ）, Cloud Run, Toolbox（BigQuery）, Codex（実装委譲先 `mcp__codex__codex`）
 - **プラグイン**: security-guidance（既定で無効）, figma, codex（OpenAI Codex への委譲・コードレビュー）, vercel（Vercel の MCP はこのプラグイン経由で提供）
 - **CLI**: agent-browser（Vercel Labs）, Vercel CLI
 

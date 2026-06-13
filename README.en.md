@@ -110,8 +110,8 @@ Configures both the login user and root.
 
 Adds Claude Code's "trust-building" machinery plus external tool integrations.
 
-- **Guardrails (hooks / skills)**: hooks that mechanically enforce the `CLAUDE.md` rules (commit discipline, skill firing, memory routing, ...) are deployed to `/etc/claude-code/hooks/` and skills to `/etc/claude-code/skills/`, registered through a managed-settings drop-in (an extra settings file). User-side hooks (commit author check, push-prompting detection, memory surfacing, subagent gate) are installed into `~/.claude/hooks/`. See `SKILL-HOOK-CONTRACT.md` for how it works.
-- **MCP servers (scope=user)**: Playwright (browser), CodeGraph (code knowledge graph), Cloud Run, Toolbox (BigQuery)
+- **Guardrails (hooks / skills)**: hooks that mechanically enforce the `CLAUDE.md` rules (commit discipline, skill firing, memory routing, codegraph-first / codex-delegation nudges, ...) are deployed to `/etc/claude-code/hooks/` and skills to `/etc/claude-code/skills/`, registered through a managed-settings drop-in (an extra settings file). User-side hooks (commit author check, push-prompting detection, memory surfacing, subagent gate) are installed into `~/.claude/hooks/`. See `SKILL-HOOK-CONTRACT.md` for how it works.
+- **MCP servers (scope=user)**: Playwright (browser), CodeGraph (code knowledge graph), Cloud Run, Toolbox (BigQuery), Codex (delegation target `mcp__codex__codex`)
 - **Plugins**: security-guidance (disabled by default), figma, vercel (Vercel's MCP is provided through this plugin)
 - **CLI**: agent-browser (Vercel Labs), Vercel CLI
 
