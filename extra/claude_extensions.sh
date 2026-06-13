@@ -186,6 +186,13 @@ run find ~/.claude/skills/ -maxdepth 1 -xtype l -delete
 run claude plugin marketplace add anthropics/claude-plugins-official
 run claude plugin marketplace update claude-plugins-official
 
+# LSP servers (plugins ship .lsp.json; the language-server binaries must be installed separately)
+run claude plugin install typescript-lsp@claude-plugins-official
+run claude plugin install pyright-lsp@claude-plugins-official
+run claude plugin install gopls-lsp@claude-plugins-official
+run claude plugin install rust-analyzer-lsp@claude-plugins-official
+run claude plugin install clangd-lsp@claude-plugins-official
+
 # Security-guidance plugin (disabled by default)
 run claude plugin install security-guidance@claude-plugins-official
 run claude plugin disable security-guidance@claude-plugins-official
@@ -284,6 +291,13 @@ if [ -n "$LOGIN_USER" ]; then
     # Seed the registry first: never-launched users have no marketplace, so bare `update` fails (re-add is idempotent, exit 0)
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin marketplace add anthropics/claude-plugins-official"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin marketplace update claude-plugins-official"'
+
+    # LSP servers (plugins ship .lsp.json; the language-server binaries must be installed separately)
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install typescript-lsp@claude-plugins-official"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install pyright-lsp@claude-plugins-official"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install gopls-lsp@claude-plugins-official"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install rust-analyzer-lsp@claude-plugins-official"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install clangd-lsp@claude-plugins-official"'
 
     # Security-guidance plugin (disabled by default)
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install security-guidance@claude-plugins-official"'
