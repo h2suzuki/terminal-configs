@@ -8,6 +8,8 @@
 #
 #   Figma plugin        Claude-to-figma plugin (a remote MCP + skills)
 #
+#   Codex plugin        OpenAI codex-plugin-cc (delegate tasks + code review; wraps the codex CLI)
+#
 #   Agent-browser CLI   Vercel Labs CLI + Claude Code skill
 #   Playwright MCP      Microsoft playwright/mcp (stdio; reuses the system Chrome, headless)
 #
@@ -191,6 +193,10 @@ run claude plugin disable security-guidance@claude-plugins-official
 run claude plugin install figma@claude-plugins-official
 run claude plugin update figma@claude-plugins-official
 
+# Codex plugin (delegate tasks + code review via the OpenAI Codex CLI)
+run claude plugin marketplace add openai/codex-plugin-cc
+run claude plugin install codex@openai-codex
+
 # Agent-browser
 run CI=1 npm install -g agent-browser
 run agent-browser install --with-deps
@@ -282,6 +288,10 @@ if [ -n "$LOGIN_USER" ]; then
     # Figma plugin
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install figma@claude-plugins-official"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin update figma@claude-plugins-official"'
+
+    # Codex plugin (delegate tasks + code review via the OpenAI Codex CLI)
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin marketplace add openai/codex-plugin-cc"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install codex@openai-codex"'
 
     # Agent-browser
     run sudo -i -u $LOGIN_USER bash -i -c '"CI=1 npm install -g agent-browser"'
