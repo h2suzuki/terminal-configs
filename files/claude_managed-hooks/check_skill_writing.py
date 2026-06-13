@@ -2,19 +2,25 @@
 """
 Skill-writing convention guard for Claude Code.
 
-PreToolUse hook on Edit/Write/MultiEdit, acting only on a full Write to a
-SKILL.md. Lints the proposed content against the writing-skills conventions
-and ADVISES (allow + additionalContext) on any issue. Only Write carries the
-whole file; Edit/MultiEdit are surgical and skipped. Advisory only — the
-point is to surface convention drift, not to block. Fail-open (exit 0).
+PostToolUse hook on Write/Edit/MultiEdit. After the edit lands, reads the
+resulting SKILL.md from disk (the true post-edit state — no staged/working
+ambiguity) and checks it against the writing-skills + template-skill.md
+conventions. On any violation it DENIES via exit 2 + stderr, which surfaces
+the issues to Claude so the skill is fixed rather than left broken. (At
+PostToolUse the tool already ran, so additionalContext would be passive;
+exit 2 actively prompts Claude.) Clean / opt-out / error -> exit 0.
 
-Checks:
-- frontmatter fenced by --- with a name field
-- name matches the skill's directory
-- description present and ending with '.'
-- when_to_use present with both TRIGGER and SKIP
-- no `## ` section dropped vs the on-disk version (rewrite regression)
+Opt out an intentional deviation with `skill-lint: allow` in the file.
+
+Checks (writing-skills spec, mechanically verifiable subset):
+- frontmatter fenced by --- with a kebab-case name matching the directory
+- description present, English-only, ending with '.'
+- when_to_use present (unless disable-model-invocation) with TRIGGER + SKIP,
+  and quoting Japanese keywords with "..." not corner brackets
+- an H1 title line
 - at least one of Process/Rules/Output/Related when any `## ` header exists
+- those preferred sections in canonical order Process<Rules<Output<Related
+(h2-English is only 推奨 per template, so Japanese headers are not flagged.)
 """
 
 from __future__ import annotations
@@ -24,12 +30,14 @@ import os
 import re
 import sys
 
+OPT_OUT = "skill-lint: allow"
+CJK = re.compile(r"[぀-ヿ㐀-鿿＀-￯]")
 SECTION_RE = re.compile(r"^##\s+(.+?)\s*$", re.M)
-PREFERRED = {"Process", "Rules", "Output", "Related"}
+PREFERRED = ["Process", "Rules", "Output", "Related"]
 
 
 def _frontmatter(text: str) -> str | None:
-    m = re.match(r"---\n(.*?)\n---\n", text or "", re.S)
+    m = re.match(r"---\n(.*?)\n---\n", text, re.S)
     return m.group(1) if m else None
 
 
@@ -38,98 +46,100 @@ def _field(fm: str, key: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _headers(text: str) -> set[str]:
-    return set(SECTION_RE.findall(text or ""))
-
-
-def lint(content: str, dir_name: str | None, current: str | None) -> list[str]:
+def lint(content: str, dir_name: str | None) -> list[str]:
     issues: list[str] = []
     fm = _frontmatter(content)
     if fm is None:
-        issues.append("frontmatter (先頭を `---` で挟む) が見当たりません")
-    else:
-        name = _field(fm, "name")
-        if not name:
-            issues.append("frontmatter に `name:` がありません")
-        elif dir_name and name != dir_name:
-            issues.append(
-                f"`name: {name}` が skill ディレクトリ名 `{dir_name}` と不一致です"
-            )
-        desc = _field(fm, "description")
-        if not desc:
-            issues.append("frontmatter に `description:` がありません")
-        elif not desc.rstrip().endswith("."):
-            issues.append(
-                "`description` は英語 1 文で文末 `.` 推奨 (現状末尾が `.` でない)"
-            )
-        wtu = _field(fm, "when_to_use")
-        if not wtu:
-            issues.append("frontmatter に `when_to_use:` がありません")
-        else:
-            if "TRIGGER" not in wtu:
-                issues.append("`when_to_use` に TRIGGER がありません")
-            if "SKIP" not in wtu:
-                issues.append(
-                    "`when_to_use` に SKIP がありません (TRIGGER + SKIP は pair)"
-                )
-    headers = _headers(content)
-    if headers and not (headers & PREFERRED):
+        return ["frontmatter (先頭を `---` で挟む) が見当たりません"]
+    name = _field(fm, "name")
+    if not name:
+        issues.append("frontmatter に `name:` がありません")
+    elif not re.fullmatch(r"[a-z0-9-]+", name):
+        issues.append(f"`name: {name}` が kebab-case ではありません")
+    elif dir_name and name != dir_name:
         issues.append(
-            "`## ` 節に Process/Rules/Output/Related が一つもありません (writing-skills は優先採用)"
+            f"`name: {name}` が skill ディレクトリ名 `{dir_name}` と不一致です"
         )
-    if current is not None:
-        dropped = sorted(_headers(current) - headers)
-        if dropped:
-            issues.append(f"rewrite で `## ` 節 [{' / '.join(dropped)}] が消えています")
+
+    desc = _field(fm, "description")
+    if not desc:
+        issues.append("frontmatter に `description:` がありません")
+    else:
+        if not desc.rstrip().endswith("."):
+            issues.append(
+                "`description` は英語 1 文で文末 `.` 推奨 (末尾が `.` でない)"
+            )
+        if CJK.search(desc):
+            issues.append("`description` は英語のみ (日本語が混ざっています)")
+
+    no_auto = re.search(r"^disable-model-invocation:\s*true", fm, re.M) is not None
+    wtu = _field(fm, "when_to_use")
+    if not wtu:
+        if not no_auto:
+            issues.append("frontmatter に `when_to_use:` がありません (TRIGGER + SKIP)")
+    else:
+        if "TRIGGER" not in wtu:
+            issues.append("`when_to_use` に TRIGGER がありません")
+        if "SKIP" not in wtu:
+            issues.append("`when_to_use` に SKIP がありません (TRIGGER + SKIP は pair)")
+        if "「" in wtu or "」" in wtu:
+            issues.append(
+                '`when_to_use` の日本語 keyword は `「」` でなく `"..."` で quote'
+            )
+
+    if not re.search(r"^#\s+\S", content, re.M):
+        issues.append("`# ` の H1 タイトルがありません")
+
+    headers = SECTION_RE.findall(content)
+    preferred_seen = [h for h in headers if h in PREFERRED]
+    if headers and not preferred_seen:
+        issues.append("`## ` 節に Process/Rules/Output/Related が一つもありません")
+    order = [PREFERRED.index(h) for h in preferred_seen]
+    if order != sorted(order):
+        seq = " → ".join(preferred_seen)
+        issues.append(
+            f"`## ` 節の順序が Process→Rules→Output→Related に従っていません ({seq})"
+        )
     return issues
 
 
-def _emit(msg: str) -> None:
-    payload = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "additionalContext": msg,
-        }
-    }
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
-
-
-def _run(payload: dict) -> None:
-    if not isinstance(payload, dict) or payload.get("tool_name") != "Write":
-        return
+def _run(payload: dict) -> int:
+    if not isinstance(payload, dict) or payload.get("tool_name") not in (
+        "Write",
+        "Edit",
+        "MultiEdit",
+    ):
+        return 0
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):
-        return
+        return 0
     path = tool_input.get("file_path") or ""
     if not isinstance(path, str) or os.path.basename(path) != "SKILL.md":
-        return
-    content = tool_input.get("content")
-    if not isinstance(content, str):
-        return
-    dir_name = os.path.basename(os.path.dirname(path)) or None
-    current = None
-    if os.path.exists(path):
-        try:
-            with open(path, encoding="utf-8") as fh:
-                current = fh.read()
-        except OSError:
-            current = None
-    issues = lint(content, dir_name, current)
-    if issues:
-        body = "\n".join(f"- {i}" for i in issues)
-        _emit(
-            "SKILL.md の書き方を check しました (writing-skills 規約)。 "
-            "意図的でなければ修正してください:\n" + body
-        )
+        return 0
+    try:
+        with open(path, encoding="utf-8") as fh:
+            content = fh.read()
+    except OSError:
+        return 0
+    if OPT_OUT in content:
+        return 0
+    issues = lint(content, os.path.basename(os.path.dirname(path)) or None)
+    if not issues:
+        return 0
+    body = "\n".join(f"- {i}" for i in issues)
+    sys.stderr.write(
+        "SKILL.md が writing-skills 規約に反しています (hook 自身はファイルを変更しません):\n"
+        f"{body}\n"
+        "上記を修正してから次へ進んでください。 意図的な逸脱なら本文に `skill-lint: allow` を入れてください。\n"
+    )
+    return 2
 
 
 def main() -> int:
     try:
-        _run(json.loads(sys.stdin.read() or "{}"))
+        return _run(json.loads(sys.stdin.read() or "{}"))
     except Exception:
-        pass  # fail-open: a hook bug must never block Claude
-    return 0
+        return 0  # fail-open: a hook bug must never block Claude
 
 
 if __name__ == "__main__":

@@ -11,8 +11,7 @@
           { "type": "command", "command": "/etc/claude-code/hooks/check_dangling_refs.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/memory_routing_gate.py guard" },
           { "type": "command", "command": "/etc/claude-code/hooks/skill_reminder_gate.py gate" },
-          { "type": "command", "command": "/etc/claude-code/hooks/comment_rationale_gate.py" },
-          { "type": "command", "command": "/etc/claude-code/hooks/check_skill_writing.py" }
+          { "type": "command", "command": "/etc/claude-code/hooks/comment_rationale_gate.py" }
         ]
       },
       {
@@ -39,6 +38,10 @@
       {
         "matcher": "^(Read|Write|Edit|MultiEdit)$",
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/read_before_edit.py record" } ]
+      },
+      {
+        "matcher": "^(Write|Edit|MultiEdit)$",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/check_skill_writing.py" } ]
       },
       {
         "matcher": "^Write$",
