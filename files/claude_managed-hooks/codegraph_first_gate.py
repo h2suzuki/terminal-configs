@@ -249,12 +249,13 @@ def _glob_exts(glob: str) -> list[str]:
 
 
 def _is_symbol_pattern(pat: str) -> bool:
-    """anchor / word-boundary を剥がすと裸の識別子か (= symbol 検索)。 def 系 keyword は
-    'type error' 等の英語句を誤検出するため signal にしない (codex adversarial review)。"""
+    """anchor / word-boundary を剥がすと単一の識別子か (= symbol 検索)。 `$store` / `@ivar`
+    / `foo?` / `foo!` / Unicode 識別子も拾う (codex review)。 def 系 keyword 句 ('type
+    error' 等) は誤検出するため signal にしない。 kebab (`my-fn`) は text FP 回避で非対象。"""
     if not isinstance(pat, str):
         return False
     core = re.sub(r"^\^|\$$|\\b", "", pat.strip())
-    return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", core))
+    return bool(re.fullmatch(r"[$@]?[^\W\d][\w$]*[?!]?", core))
 
 
 def _is_call_pattern(pat: str) -> bool:
@@ -524,6 +525,12 @@ class GateTest(unittest.TestCase):
     def test_symbol_and_call_detection(self):
         self.assertTrue(_is_symbol_pattern("parseConfig"))
         self.assertTrue(_is_symbol_pattern(r"\bMyType\b"))
+        self.assertTrue(_is_symbol_pattern("$store"))  # JS
+        self.assertTrue(_is_symbol_pattern("@ivar"))  # Ruby ivar
+        self.assertTrue(_is_symbol_pattern("valid?"))  # Ruby predicate
+        self.assertTrue(_is_symbol_pattern("save!"))  # Ruby bang
+        self.assertTrue(_is_symbol_pattern("名前"))  # Unicode
+        self.assertFalse(_is_symbol_pattern("123abc"))  # 数字始まりは識別子でない
         self.assertFalse(_is_symbol_pattern("^class Foo"))  # 2-token 句は symbol でない
         self.assertFalse(
             _is_symbol_pattern("type error")
