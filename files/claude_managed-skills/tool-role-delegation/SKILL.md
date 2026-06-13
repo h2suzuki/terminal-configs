@@ -8,14 +8,19 @@ when_to_use: TRIGGER when about to search / explore code, write or edit non-triv
 
 codegraph / codex が使える環境での役割分担 (managed CLAUDE.md「ツールに役割委譲」の運用)。 codex の駆動法詳細は plugin 同梱 skill (codex-cli-runtime / codex-result-handling / gpt-5-4-prompting) が持つので、 本 skill は役割の振り分けと往復手順に絞る。
 
+## Process
+
+1. **検索は codegraph を優先**: コード探索は codegraph を Grep / Read より先に使う。
+2. **Claude が仕様・指示を書く**: 何を作るか・どう直すか・受入基準を Claude が明文化する (実装そのものは書かない)。
+3. **実装は codex へ委譲**: `/codex:rescue <spec>` で codex に渡す (長時間は `--background`、 進捗 `/codex:status`、 結果 `/codex:result`)。 spec に達成条件・制約・対象 file・受入基準を載せる。
+4. **Claude がレビュー**: codex が返したコードを敵対的 / 受け入れレビューし、 バグ・仕様逸脱・副作用を検査する。 patch 反映も Claude が行う (実装でなくレビューの一部)。
+5. **重要変更は cross-model 第二レビュー**: auth / data-loss / race / rollback 等の高リスク変更は `/codex:adversarial-review` で codex の独立レビューを追加する。
+
 ## Rules
 
-- **検索・コード探索は codegraph を Grep / Read より優先**: codegraph は知識グラフで用途別に複数ツールを持つ — `codegraph_explore` (主: 自然言語 / symbol 群から関連 source を取得)、 `codegraph_search` (symbol の位置)、 `codegraph_callers` / `codegraph_callees` / `codegraph_impact` (呼出元 / 呼出先 / 変更の波及)、 `codegraph_node` / `codegraph_files` (個別 symbol / file 単位)。 intent に合うツールを選ぶ。
-- **仕様策定・実装の指示・バグ出しは Claude**: 何を作るか・どう直すかの仕様と指示、 バグの発見に Claude が専念する。
-- **実装は codex へ委譲**: コードを書く作業は `/codex:rescue <spec>` で codex に渡す (長時間は `--background`、 進捗 `/codex:status`、 結果 `/codex:result`)。 達成条件・制約・対象 file・受入基準を spec に明文化する。
-- **返り実装のレビューは Claude**: codex が返したコードを Claude が敵対的 / 受け入れレビューし、 バグ・仕様逸脱・副作用を検査する。 レビュー結果の patch 反映も Claude が行う (実装でなくレビューの一部)。
-- **重要変更は cross-model 第二レビュー**: auth / data-loss / race / rollback 等の高リスク変更は `/codex:adversarial-review` で codex の独立レビューを追加する。
-- **codex 未認証 / 利用不可時**: 委譲できないので Claude が直接進める (機能低下時の degrade)。
+- **codegraph のツール選択**: `codegraph_explore` (自然言語 / symbol 群から関連 source)、 `codegraph_search` (symbol の位置)、 `codegraph_callers` / `codegraph_callees` / `codegraph_impact` (呼出元 / 呼出先 / 変更の波及)、 `codegraph_node` / `codegraph_files` (個別 symbol / file)。 intent に合うものを選ぶ。
+- **codex 未認証 / 利用不可時は Claude が直接**: 委譲できないので degrade して Claude が進める。
+- **役割境界を守る**: 実装は codex、 仕様・指示・バグ出し・レビューは Claude。 patch 反映や review 指摘の修正は「レビューの反映」であって Claude の実装ではない。
 
 ## Output
 
