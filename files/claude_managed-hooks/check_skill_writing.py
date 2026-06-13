@@ -80,8 +80,7 @@ def lint(content: str, dir_name: str | None) -> list[str]:
     else:
         if "TRIGGER" not in wtu:
             issues.append("`when_to_use` に TRIGGER がありません")
-        if "SKIP" not in wtu:
-            issues.append("`when_to_use` に SKIP がありません (TRIGGER + SKIP は pair)")
+        # SKIP は skip 条件が実在するときだけ書く。 常時適用 skill では省略可ゆえ非検査
         if "「" in wtu or "」" in wtu:
             issues.append(
                 '`when_to_use` の日本語 keyword は `「」` でなく `"..."` で quote'

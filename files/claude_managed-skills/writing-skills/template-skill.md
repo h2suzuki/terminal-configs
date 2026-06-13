@@ -5,7 +5,7 @@ name: skill-name-in-kebab-case
 # 1 文の英語、 文末 `.`。 何をする skill か。
 # trigger keyword を含まない abstract な役割説明。
 description: One-line English summary of what this skill does.
-# TRIGGER + SKIP の paired clause。 英語、 trigger keyword だけ quoted 日本語 OK。
+# TRIGGER は必須。 SKIP は skip 条件が実在するときのみ。 英語、 trigger keyword だけ quoted 日本語 OK。
 # `。` / `「」` を英文に混ぜない。
 when_to_use: TRIGGER when about to do X / when noticing Y / when "specific phrase" is about to be uttered. SKIP for Z / when condition W holds.
 
@@ -56,7 +56,7 @@ skill 実行後の出力 / 振る舞いの形式 (該当する場合)。
 
 frontmatter:
   - description: 1 文英語、 文末 `.`、 quote `"..."`
-  - when_to_use: TRIGGER + SKIP pair。 英語接続詞のみ。 trigger keyword は quoted 日本語 OK
+  - when_to_use: TRIGGER 必須・SKIP は skip 条件があるときのみ。 英語接続詞のみ。 trigger keyword は quoted 日本語 OK
   - 「等の評価語」 等の Japanese 接続詞を英文中に混ぜない
 
 body:
