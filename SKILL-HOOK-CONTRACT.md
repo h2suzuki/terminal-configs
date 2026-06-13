@@ -234,7 +234,7 @@ Related: `claude_md_lint.py`
 
 **セッション一時ファイルの掃除**
 
-1. SessionEnd で、 他のスクリプトが生成する Session 作業ファイル／状態ファイルを削除: statusline cache, turn counter など
+1. SessionEnd で、 他のスクリプトが生成する Session 作業ファイル／状態ファイルを削除: statusline cache, turn counter, /tmp の per-session scratch dir (`/tmp/claude-scratch-<session_id>`) など
 2. マシン電源断などで SessionEnd が呼ばれず消されなかった作業ファイル／状態ファイル（7日以上古いもの）を見つけ orphan reap
 
 Related: `session_cleanup.py`
@@ -384,6 +384,14 @@ Related: `deny_unsafe_git_reset.py`
 
 Related: `avoid_cd.py`
 
+**一時ファイルの scratch dir 集約**
+
+1. PreToolUse:Bash で、 `tmpdir_scratch_gate` が `mktemp` 呼び出しと `/tmp/...` への書き込みリダイレクトを検出
+2. session scratch (`/tmp/claude-scratch-$CLAUDE_CODE_SESSION_ID`) にも `/var/tmp` にも振られない `mktemp` は exit 2 で却下、 bare /tmp への書込リダイレクトは additional context で助言
+3. tmpfs の希少な /tmp を session 横断で埋める事故を防ぎ、 SessionEnd で自動削除される scratch dir へ誘導 (opt-out は command 内の `tmp-scratch: allow`)
+
+Related: `tmpdir_scratch_gate.py`
+
 **サブエージェント乱発の助言**
 
 1. PreToolUse:Task|Agent で、 `subagent_gate_warn` が prompt・agent 種別・description を機械的に検査
@@ -417,6 +425,14 @@ Related: `memory_routing_gate.py`
 3. 次 commit での block 削除か、 保留作業の checkbox 化かを additional context で促す (完了記録の残置を防ぐ)
 
 Related: `check_todo_completion.py`
+
+**SKILL.md 書き方の規約検査**
+
+1. PostToolUse:Write|Edit|MultiEdit で、 `check_skill_writing` が編集後の SKILL.md をディスクから読み、 writing-skills 規約 (frontmatter fence・kebab name と dir の一致・description 英語末尾 `.`・when_to_use の TRIGGER 必須と `"..."` 引用・H1・preferred 節の存在・Process→Rules→Output→Related の順序) と照合
+2. 違反は exit 2 + stderr で却下し、 編集済みファイルの修正を促す (PostToolUse ゆえ tool は実行済み、 additional context は passive なので exit 2 で能動的に返す)
+3. 別 doc への alignment 等で section を潰す regression や frontmatter 不備を、 commit 前の編集時点で捕捉 (opt-out は本文の `skill-lint: allow`)
+
+Related: `check_skill_writing.py`
 
 #### PostToolUseFailure
 
