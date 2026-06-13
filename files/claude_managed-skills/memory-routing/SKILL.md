@@ -188,7 +188,7 @@ skill が新規導入された環境では、 既存 memory file 全件を一度
 # project memory がある場合は project_id を指定して個別 rebuild
 ```
 
-hybrid 検索の embed model DB は installer (claude_extensions.sh) が deploy する単独 CLI `claude_memory_embed_build` (stdlib-only) で構築する。 未構築でも hook は BM25 単独に fail-open する。
+hybrid 検索の embed model DB は installer (claude_extensions.sh) が deploy する単独 CLI `claude_memory_rag_builder` (stdlib-only) で構築する。 未構築でも hook は BM25 単独に fail-open する。
 
 ## Rules
 

@@ -158,8 +158,8 @@ run claude_user_settings inject - < "$TOP_DIR/files/claude_user-extensions.json"
 
 # Memory-surface hybrid RAG: build the embed model DB with the standalone
 # stdlib-only builder (skips when already built), then refresh the user index
-copy --nobackup claude_memory_embed_build                  /usr/local/bin/claude_memory_embed_build -m 0755
-run claude_memory_embed_build
+copy --nobackup claude_memory_rag_builder                  /usr/local/bin/claude_memory_rag_builder -m 0755
+run claude_memory_rag_builder
 run ~/.claude/hooks/memory_surface.py --rebuild
 
 # Deploy the user skills
