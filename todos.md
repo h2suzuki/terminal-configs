@@ -27,6 +27,8 @@ Exit Criteria:
 
 確定済みファクト (再導出不要): codex は MCP でなく Claude Code plugin (openai/codex-plugin-cc)。委譲=`/codex:rescue`+`codex:codex-rescue` subagent、codex レビュー=`/codex:review`・`/codex:adversarial-review`、job 管理=`/codex:status|result|cancel`。同梱 skill (codex-cli-runtime / codex-result-handling / gpt-5-4-prompting) が codex 駆動法を提供するので自作 skill は「委譲判定」だけ担えば足りる。codegraph は MCP server instructions が「grep/Read より codegraph_explore 優先」を session 冒頭に既に注入済。
 
+Work file: handoff = `last-session-handoff.md` の「codegraph/codex/Claude 役割分担ポリシー」section
+
 ## Medium
 
 ### SKILL-HOOK-CONTRACT.md パターン集
