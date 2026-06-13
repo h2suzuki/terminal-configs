@@ -193,6 +193,13 @@ run claude plugin install gopls-lsp@claude-plugins-official
 run claude plugin install rust-analyzer-lsp@claude-plugins-official
 run claude plugin install clangd-lsp@claude-plugins-official
 
+# LSP server binaries: TS + Python per-user via npm, C/C++ system-wide via apt
+run npm install -g typescript-language-server typescript
+run npm install -g pyright
+run apt install -y --no-install-recommends clangd
+# run go install golang.org/x/tools/gopls@latest
+# run rustup component add rust-analyzer
+
 # Security-guidance plugin (disabled by default)
 run claude plugin install security-guidance@claude-plugins-official
 run claude plugin disable security-guidance@claude-plugins-official
@@ -298,6 +305,12 @@ if [ -n "$LOGIN_USER" ]; then
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install gopls-lsp@claude-plugins-official"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install rust-analyzer-lsp@claude-plugins-official"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install clangd-lsp@claude-plugins-official"'
+
+    # LSP server binaries: TS + Python per-user via npm (clangd is system-wide, see the root section)
+    run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g typescript-language-server typescript"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g pyright"'
+    # run sudo -i -u $LOGIN_USER bash -i -c '"go install golang.org/x/tools/gopls@latest"'
+    # run sudo -i -u $LOGIN_USER bash -i -c '"rustup component add rust-analyzer"'
 
     # Security-guidance plugin (disabled by default)
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install security-guidance@claude-plugins-official"'
