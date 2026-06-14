@@ -34,7 +34,6 @@
 CodeGraph や Codex が利用できるなら、次の役割分担を行う。
 
 - 検索では Grep / Read より CodeGraph を優先して使う
-- 仕様策定・実装指示・バグ出しは Claude が行う
-- 実装は Codex (`/codex:rescue`) に委譲する
-- Codex により実装されたコードは Claude が敵対的／受け入れレビューを行う
-- 重要変更は Codex を独立 cross-model レビューアー (`/codex:adversarial-review`) として更にレビューする
+- 仕様策定・UIデザイン・実装の計画と指示・バグ出しは、Claude が行う
+- 永続するコード・文章の生成は Codex (`/codex:rescue`) に委譲する。ただし、自明な数行の編集・ todos.md 等のハウスキーピング文章の更新は、Claude が行ってもよい
+- Codex が生成したコードや文章は、Claude が敵対的レビュー・受け入れレビューを行う。 重要な変更は Codex を独立 cross-model レビューアー (`/codex:adversarial-review`) として更にレビューする
