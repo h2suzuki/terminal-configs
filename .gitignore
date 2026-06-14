@@ -1,6 +1,6 @@
 .claude/settings.local.json
-tasks/
 __pycache__/
 *.pyc
 drafts/
+.codegraph/
 last-session-handoff.md
