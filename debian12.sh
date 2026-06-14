@@ -283,16 +283,9 @@ run apt install -y google-cloud-cli
 
 
 # Node.js
-[ -s /tmp/nvm_install.sh ] ||
-run curl -o /tmp/nvm_install.sh \
-  -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh
-run bash /tmp/nvm_install.sh
-
-. $HOME/.nvm/nvm.sh
-run nvm install --lts
-run nvm current
-run node -v
-run npm -v
+copy --nobackup nodejs_clean_installer /usr/local/bin/nodejs_clean_installer
+run nodejs_clean_installer
+. $HOME/.nvm/nvm.sh   # installer ran as a child; source so the root-shell npm calls below resolve
 
 
 # Claude Code
@@ -417,9 +410,11 @@ EOF
 
     run echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' '>>' $BASHRC
 
-    run sudo -i -u $LOGIN_USER bash -i -c '"nvm install --lts"'    # nvm is a shell function.
+    run sudo -i -u $LOGIN_USER bash -i -c '"nodejs_clean_installer"'
+
     run sudo -i -u $LOGIN_USER bash -i -c '"npm uninstall -g @anthropic-ai/claude-code || true"'
     run sudo -i -u $LOGIN_USER bash -i -c '"bash /tmp/claude_install.sh"'
+
     run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g @openai/codex"'
 
     # Pre-create user-owned parents — `install -D/-d --owner` only owners the final component.

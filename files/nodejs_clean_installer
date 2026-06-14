@@ -1,0 +1,65 @@
+#!/bin/bash
+
+# Installing Node.js, uninstall older versions than LTS, and clear the download cache
+
+
+if tty -s >/dev/null; then
+    COLOR_CLEAR="\033[0m"
+    COLOR_RED="\033[31m"
+    COLOR_GREEN="\033[32m"
+    COLOR_YELLOW="\033[33m"
+else
+    COLOR_CLEAR=
+    COLOR_RED=
+    COLOR_GREEN=
+    COLOR_YELLOW=
+fi
+
+run()
+{
+    local RETVAL
+
+    echo -e "=> ${COLOR_YELLOW}${@}${COLOR_CLEAR}"
+    eval "${@}"
+    RETVAL=$?
+
+    if [ $RETVAL -eq 0 ]; then
+        echo -e "[ ${COLOR_GREEN}OK${COLOR_CLEAR} ]\n"
+    else
+        echo -e "[ ${COLOR_RED}ERROR($RETVAL)${COLOR_CLEAR} ]\n"
+        exit $RETVAL
+    fi
+}
+
+
+[ -s /tmp/nvm_install.sh ] ||
+run curl -o /tmp/nvm_install.sh \
+  -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh
+run bash /tmp/nvm_install.sh
+
+. $HOME/.nvm/nvm.sh
+
+
+# Switch version to LTS
+run nvm install --lts --default
+run nvm current
+
+# Remove the other versions than the current one
+nvm ls --no-colors |
+  awk '{for(i=1;i<=NF;i++) {if($i ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/ && $i!=CURRENT) print $i}}' CURRENT=$(nvm current) |
+  sort | uniq |
+  while read -r v; do run nvm uninstall $v; done
+
+
+# Check the remaining versions
+run nvm list
+
+# Check the versions of node / npm with this nvm
+run node -v
+run npm -v
+
+# Clear the cache store
+run npm cache clean --force
+rm -rf "$HOME/.npm/_npx"
+
+# END
