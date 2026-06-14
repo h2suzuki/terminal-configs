@@ -44,8 +44,8 @@ run bash /tmp/nvm_install.sh
 run nvm install --lts --default
 run nvm current
 
-# Remove the other versions than the current one
-nvm ls --no-colors |
+# Remove the other installed versions (--no-alias skips alias rows -> no no-op uninstalls)
+nvm ls --no-colors --no-alias |
   awk '{for(i=1;i<=NF;i++) {if($i ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/ && $i!=CURRENT) print $i}}' CURRENT=$(nvm current) |
   sort | uniq |
   while read -r v; do run nvm uninstall $v; done
