@@ -55,14 +55,26 @@ def already_built() -> bool:
     return "dim" in meta and "max_token_len" in meta
 
 
+def _progress(done: int, total, newline: bool = False) -> None:
+    if total:
+        msg = (
+            f"  {done // 1_000_000} / {total // 1_000_000} MB ({100 * done // total}%)"
+        )
+    else:
+        msg = f"  {done // 1_000_000} MB"
+    sys.stderr.write("\r" + msg + ("\n" if newline else ""))
+    sys.stderr.flush()
+
+
 def download(url: str, dst: str) -> None:
     log(f"downloading {os.path.basename(dst)} ...")
     part = dst + ".part"
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r, open(
-            part, "wb"
-        ) as w:
+        with (
+            urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r,
+            open(part, "wb") as w,
+        ):
             total_s = r.headers.get("Content-Length")
             total = int(total_s) if total_s and total_s.isdigit() else None
             done = 0
@@ -73,15 +85,10 @@ def download(url: str, dst: str) -> None:
                     break
                 w.write(chunk)
                 done += len(chunk)
-                if done - last_report >= 25_000_000:
-                    if total:
-                        log(
-                            f"  {done // 1_000_000} / {total // 1_000_000} MB "
-                            f"({100 * done // total}%)"
-                        )
-                    else:
-                        log(f"  {done // 1_000_000} MB")
+                if done - last_report >= 10_000_000:
+                    _progress(done, total)
                     last_report = done
+            _progress(done, total, newline=True)  # finalize at 100%
         os.replace(part, dst)
     except BaseException:
         if os.path.exists(part):
@@ -152,6 +159,7 @@ def build(model_dir: str) -> int:
             os.remove(tmp)
         con = sqlite3.connect(tmp)
         try:
+
             def vocab_rows():
                 for i, (t, s) in enumerate(vocab):
                     if i and i % 100_000 == 0:
