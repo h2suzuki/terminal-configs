@@ -284,7 +284,7 @@ run apt install -y google-cloud-cli
 
 # Node.js
 copy --nobackup nodejs_clean_installer /usr/local/bin/nodejs_clean_installer
-run nodejs_clean_installer
+nodejs_clean_installer
 . $HOME/.nvm/nvm.sh   # installer ran as a child; source so the root-shell npm calls below resolve
 
 
