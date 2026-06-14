@@ -8,11 +8,10 @@
 #
 #   Figma plugin        Claude-to-figma plugin (a remote MCP + skills)
 #
-#   Codex plugin & MCP  OpenAI codex-plugin-cc and MCP setup (codex itself is MCP)
-#
 #   Agent-browser CLI   Vercel Labs CLI + Claude Code skill
 #   Playwright MCP      Microsoft playwright/mcp (stdio; reuses the system Chrome, headless)
 #
+#   Codex plugin & MCP  OpenAI codex-plugin-cc and MCP setup (codex itself is MCP)
 #   Codegraph MCP       Tree-sitter + SQLite MCP (stdio)
 #
 #   Cloud-run MCP       Google Cloud Run MCP (stdio; deploy/logs)
@@ -206,13 +205,6 @@ run claude plugin disable security-guidance@claude-plugins-official
 run claude plugin install figma@claude-plugins-official
 run claude plugin update figma@claude-plugins-official
 
-# Codex plugin & MCP server
-run claude plugin marketplace add openai/codex-plugin-cc
-run claude plugin install codex@openai-codex
-
-claude mcp remove codex --scope user
-run "claude mcp add codex --scope user -- codex mcp-server"
-
 # Agent-browser
 run CI=1 npm install -g agent-browser
 run agent-browser install --with-deps
@@ -221,6 +213,13 @@ run npx -y skills add vercel-labs/agent-browser --skill agent-browser --agent cl
 # Playwright MCP
 claude mcp remove playwright --scope user
 run "claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"
+
+# Codex plugin & MCP server
+run claude plugin marketplace add openai/codex-plugin-cc
+run claude plugin install codex@openai-codex
+
+claude mcp remove codex --scope user
+run "claude mcp add codex --scope user -- codex mcp-server"
 
 # CodeGraph MCP
 claude mcp remove codegraph --scope user
@@ -316,14 +315,6 @@ if [ -n "$LOGIN_USER" ]; then
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install figma@claude-plugins-official"'
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin update figma@claude-plugins-official"'
 
-    # Codex plugin & MCP server
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin marketplace add openai/codex-plugin-cc"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install codex@openai-codex"'
-
-    sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove codex --scope user"
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add codex --scope user -- codex mcp-server"'
-
-
     # Agent-browser
     run sudo -i -u $LOGIN_USER bash -i -c '"CI=1 npm install -g agent-browser"'
     run sudo -i -u $LOGIN_USER bash -i -c '"agent-browser install --with-deps"'
@@ -332,6 +323,13 @@ if [ -n "$LOGIN_USER" ]; then
     # Playwright MCP
     sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove playwright --scope user"
     run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"'
+
+    # Codex plugin & MCP server
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin marketplace add openai/codex-plugin-cc"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install codex@openai-codex"'
+
+    sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove codex --scope user"
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add codex --scope user -- codex mcp-server"'
 
     # CodeGraph MCP
     sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove codegraph --scope user"
