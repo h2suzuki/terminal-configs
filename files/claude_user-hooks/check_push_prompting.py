@@ -41,6 +41,14 @@ PUSH_PROMPT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# AskUserQuestion の terse field (label/header) 専用。 過去形 (push した/しました/済み) は除外し事実報告 FP を防ぐ
+PUSH_ASK_RE = re.compile(
+    r"(プッシュ|push)\s?(する|します|しましょう|しよう|しない|せず|を)"
+    r"|(今すぐ|あとで|後で|先に|すぐに?)\s?(プッシュ|push)"
+    r"|^\s*(プッシュ|push)\s*$",
+    re.IGNORECASE,
+)
+
 
 _TAIL_BUFSIZE = 128 * 1024  # 実測 2545 turn の mean≈110KB / p75≈119KB を 1 read で覆う
 
@@ -128,22 +136,32 @@ def _scan_ask_tool(tool_input: object) -> int:
     for q in questions:
         if not isinstance(q, dict):
             continue
-        texts = [q.get("question", ""), q.get("header", "")]
+        prose_texts = [q.get("question", "")]
+        terse_texts = [q.get("header", "")]
         opts = q.get("options")
         if isinstance(opts, list):
             for o in opts:
                 if isinstance(o, dict):
-                    texts.extend([o.get("label", ""), o.get("description", "")])
-        for t in texts:
+                    terse_texts.append(o.get("label", ""))
+                    prose_texts.append(o.get("description", ""))
+        m = None
+        for t in prose_texts:  # sentences → prose regex only
             m = PUSH_PROMPT_RE.search(str(t))
             if m:
-                sys.stderr.write(
-                    f"push-prompting detected in AskUserQuestion: 「{m.group(0)}」 "
-                    f"(User CLAUDE.md §Commit 自律則 / commit-discipline skill)。 git "
-                    f"push は user 指示を待ち、 こちらから提案 / 確認 / 予定告知しない。 "
-                    f"該当の質問 / 選択肢から push の話題を外して問い直してください。\n"
-                )
-                return 2
+                break
+        if not m:
+            for t in terse_texts:  # labels/header → also imperative regex
+                m = PUSH_PROMPT_RE.search(str(t)) or PUSH_ASK_RE.search(str(t))
+                if m:
+                    break
+        if m:
+            sys.stderr.write(
+                f"push-prompting detected in AskUserQuestion: 「{m.group(0)}」 "
+                f"(User CLAUDE.md §Commit 自律則 / commit-discipline skill)。 git "
+                f"push は user 指示を待ち、 こちらから提案 / 確認 / 予定告知しない。 "
+                f"該当の質問 / 選択肢から push の話題を外して問い直してください。\n"
+            )
+            return 2
     return 0
 
 
