@@ -186,16 +186,18 @@ run claude plugin marketplace add anthropics/claude-plugins-official
 run claude plugin marketplace update claude-plugins-official
 
 # LSP servers
-run claude plugin install typescript-lsp@claude-plugins-official
-run claude plugin install pyright-lsp@claude-plugins-official
-run claude plugin install gopls-lsp@claude-plugins-official
-run claude plugin install rust-analyzer-lsp@claude-plugins-official
-run claude plugin install clangd-lsp@claude-plugins-official
 run npm install -g typescript-language-server typescript
 run npm install -g pyright
 run apt install -y --no-install-recommends clangd
 # run go install golang.org/x/tools/gopls@latest
 # run rustup component add rust-analyzer
+
+# LSP server plugins
+run claude plugin install typescript-lsp@claude-plugins-official
+run claude plugin install pyright-lsp@claude-plugins-official
+run claude plugin install clangd-lsp@claude-plugins-official
+#run claude plugin install gopls-lsp@claude-plugins-official
+#run claude plugin install rust-analyzer-lsp@claude-plugins-official
 
 # Security-guidance plugin (disabled by default)
 run claude plugin install security-guidance@claude-plugins-official
@@ -297,15 +299,17 @@ if [ -n "$LOGIN_USER" ]; then
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin marketplace update claude-plugins-official"'
 
     # LSP servers
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install typescript-lsp@claude-plugins-official"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install pyright-lsp@claude-plugins-official"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install gopls-lsp@claude-plugins-official"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install rust-analyzer-lsp@claude-plugins-official"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install clangd-lsp@claude-plugins-official"'
     run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g typescript-language-server typescript"'
     run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g pyright"'
     # run sudo -i -u $LOGIN_USER bash -i -c '"go install golang.org/x/tools/gopls@latest"'
     # run sudo -i -u $LOGIN_USER bash -i -c '"rustup component add rust-analyzer"'
+
+    # LSP server plugins
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install typescript-lsp@claude-plugins-official"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install pyright-lsp@claude-plugins-official"'
+    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install clangd-lsp@claude-plugins-official"'
+    #run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install gopls-lsp@claude-plugins-official"'
+    #run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install rust-analyzer-lsp@claude-plugins-official"'
 
     # Security-guidance plugin (disabled by default)
     run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install security-guidance@claude-plugins-official"'
