@@ -4,6 +4,10 @@
       {
         "matcher": "Bash",
         "hooks": [ { "type": "command", "command": "~/.claude/hooks/check_commit_author.py h2suzuki@gmail.com" } ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [ { "type": "command", "command": "~/.claude/hooks/check_push_prompting.py" } ]
       }
     ],
     "Stop": [

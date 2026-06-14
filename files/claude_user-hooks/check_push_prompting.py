@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """
-Stop hook (user scope): detect push-prompting in the assistant's
-last turn and block. git push is exclusively user-driven per user
-CLAUDE.md "Commit 自律則" / commit-discipline skill (push silence).
+Push-prompting guard (user scope). git push is exclusively user-driven per
+user CLAUDE.md "Commit 自律則" / commit-discipline skill (push silence).
 
-Stdin: Stop payload JSON with `transcript_path`.
+Two entry points share the one regex:
+- Stop: detect push-prompting in the assistant's last-turn TEXT and block.
+- PreToolUse:AskUserQuestion: the Stop walk inspects text blocks only, so a
+  solicitation phrased as a question/option evades it; scan tool_input here.
+
+Stdin: Stop payload (`transcript_path`) or PreToolUse payload (`tool_name` +
+`tool_input`).
 
 Transcript walk (identical to org-scope stop_checks.py): backwards
 to the most recent human-input user entry (content is str), then
@@ -113,9 +118,40 @@ def _last_assistant_text(entries: list[dict]) -> str:
     return "\n".join(parts)
 
 
+def _scan_ask_tool(tool_input: object) -> int:
+    """PreToolUse:AskUserQuestion — scan question/option text the Stop walk can't see."""
+    if not isinstance(tool_input, dict):
+        return 0
+    questions = tool_input.get("questions")
+    if not isinstance(questions, list):
+        return 0
+    for q in questions:
+        if not isinstance(q, dict):
+            continue
+        texts = [q.get("question", ""), q.get("header", "")]
+        opts = q.get("options")
+        if isinstance(opts, list):
+            for o in opts:
+                if isinstance(o, dict):
+                    texts.extend([o.get("label", ""), o.get("description", "")])
+        for t in texts:
+            m = PUSH_PROMPT_RE.search(str(t))
+            if m:
+                sys.stderr.write(
+                    f"push-prompting detected in AskUserQuestion: 「{m.group(0)}」 "
+                    f"(User CLAUDE.md §Commit 自律則 / commit-discipline skill)。 git "
+                    f"push は user 指示を待ち、 こちらから提案 / 確認 / 予定告知しない。 "
+                    f"該当の質問 / 選択肢から push の話題を外して問い直してください。\n"
+                )
+                return 2
+    return 0
+
+
 def _run(payload: dict) -> int:
     if not isinstance(payload, dict):
         return 0
+    if payload.get("tool_name") == "AskUserQuestion":
+        return _scan_ask_tool(payload.get("tool_input"))
     transcript_path = payload.get("transcript_path")
     if not isinstance(transcript_path, str) or not transcript_path:
         return 0
