@@ -41,8 +41,10 @@ run bash /tmp/nvm_install.sh
 
 
 # Switch version to LTS
-run nvm install --lts --default
+run nvm install --lts
+run nvm alias default '"lts/*"'
 run nvm current
+
 
 # Remove the other installed versions (--no-alias skips alias rows -> no no-op uninstalls)
 nvm ls --no-colors --no-alias |
