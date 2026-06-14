@@ -58,8 +58,4 @@ run nvm list
 run node -v
 run npm -v
 
-# Clear the cache store
-run npm cache clean --force
-rm -rf "$HOME/.npm/_npx"
-
 # END
