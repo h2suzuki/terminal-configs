@@ -328,6 +328,14 @@ Related: `voicevox_claude_alerts`
 
 Related: `skill_reminder_gate.py` `memory_routing_gate.py` `declare_and_proceed_gate.py`
 
+**AskUserQuestion 経由の push 催促の却下**
+
+1. PreToolUse:AskUserQuestion で、 `check_push_prompting` が各 question の散文 field (question / 各 option の description) と terse field (header / 各 option の label) を走査する
+2. 散文 field は提案・確認の regex、 terse field はそれに加え命令形ラベル regex (「今すぐ push する」「あとで push」「プッシュ」等) でも判定し、 命中したら exit 2 で却下して当該 question / 選択肢から push の話題を外すよう促す
+3. Stop の散文走査 (上記「push 催促の却下」) では見えない tool_input 経路を塞ぎ、 散文・選択肢の両面で push silence を担保する
+
+Related: `check_push_prompting.py`
+
 **読まずに編集を防ぐ**
 
 1. PreToolUse で、 `read_before_edit` (check) が編集対象の最新 mtime に一致する同一 agent (session_id + agent_id、 main loop は null) の Read/Write/Edit 記録を要求
