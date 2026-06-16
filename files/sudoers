@@ -14,6 +14,10 @@ Defaults:%sudo env_keep += "PULSE_SERVER"
 # Lets Claude use the Kitty protocol by inheriting it
 Defaults:%sudo env_keep += "WT_SESSION"
 
+# Skip sudo's intermediate pty: it garbles Claude Code's fullscreen TUI
+# (extra pty desyncs the no-flicker renderer; kernel TIOCSTI already disabled)
+Defaults !use_pty
+
 # Allow members of group sudo to execute anything without pass
 %sudo	ALL=(ALL:ALL) NOPASSWD:ALL
 
