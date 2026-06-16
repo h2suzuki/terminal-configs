@@ -273,7 +273,7 @@ if [ -n "$LOGIN_USER" ]; then
     if ! cmp -s ~/.claude/hooks/state/memory_embed_model.sqlite3 $LOGIN_HOME/.claude/hooks/state/memory_embed_model.sqlite3; then
         run install --mode 0644 --owner $LOGIN_USER --group $LOGIN_GROUP ~/.claude/hooks/state/memory_embed_model.sqlite3 $LOGIN_HOME/.claude/hooks/state/memory_embed_model.sqlite3
     fi
-    run sudo -i -u $LOGIN_USER bash -i -c '"~/.claude/hooks/memory_surface.py --rebuild"'
+    run sudo -i -u $LOGIN_USER bash -c '"~/.claude/hooks/memory_surface.py --rebuild"'
 
     # Deploy the user skills (dir absent when no user skills exist)
     pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
@@ -295,66 +295,66 @@ if [ -n "$LOGIN_USER" ]; then
     run find $LOGIN_HOME/.claude/skills/ -maxdepth 1 -xtype l -delete
 
     # Seed the registry first: never-launched users have no marketplace, so bare `update` fails (re-add is idempotent, exit 0)
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin marketplace add anthropics/claude-plugins-official"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin marketplace update claude-plugins-official"'
+    run sudo -i -u $LOGIN_USER bash -c '"claude plugin marketplace add anthropics/claude-plugins-official"'
+    run sudo -i -u $LOGIN_USER bash -c '"claude plugin marketplace update claude-plugins-official"'
 
     # LSP servers
-    run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g typescript-language-server typescript"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g pyright"'
-    # run sudo -i -u $LOGIN_USER bash -i -c '"go install golang.org/x/tools/gopls@latest"'
-    # run sudo -i -u $LOGIN_USER bash -i -c '"rustup component add rust-analyzer"'
+    run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; npm install -g typescript-language-server typescript"'
+    run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; npm install -g pyright"'
+    # run sudo -i -u $LOGIN_USER bash -c '"go install golang.org/x/tools/gopls@latest"'
+    # run sudo -i -u $LOGIN_USER bash -c '"rustup component add rust-analyzer"'
 
     # LSP server plugins
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install typescript-lsp@claude-plugins-official"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install pyright-lsp@claude-plugins-official"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install clangd-lsp@claude-plugins-official"'
-    #run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install gopls-lsp@claude-plugins-official"'
-    #run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install rust-analyzer-lsp@claude-plugins-official"'
+    run sudo -i -u $LOGIN_USER bash -c '"claude plugin install typescript-lsp@claude-plugins-official"'
+    run sudo -i -u $LOGIN_USER bash -c '"claude plugin install pyright-lsp@claude-plugins-official"'
+    run sudo -i -u $LOGIN_USER bash -c '"claude plugin install clangd-lsp@claude-plugins-official"'
+    #run sudo -i -u $LOGIN_USER bash -c '"claude plugin install gopls-lsp@claude-plugins-official"'
+    #run sudo -i -u $LOGIN_USER bash -c '"claude plugin install rust-analyzer-lsp@claude-plugins-official"'
 
     # Security-guidance plugin (disabled by default)
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install security-guidance@claude-plugins-official"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin disable security-guidance@claude-plugins-official"'
+    run sudo -i -u $LOGIN_USER bash -c '"claude plugin install security-guidance@claude-plugins-official"'
+    run sudo -i -u $LOGIN_USER bash -c '"claude plugin disable security-guidance@claude-plugins-official"'
 
     # Figma plugin
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install figma@claude-plugins-official"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin update figma@claude-plugins-official"'
+    run sudo -i -u $LOGIN_USER bash -c '"claude plugin install figma@claude-plugins-official"'
+    run sudo -i -u $LOGIN_USER bash -c '"claude plugin update figma@claude-plugins-official"'
 
     # Agent-browser
-    run sudo -i -u $LOGIN_USER bash -i -c '"CI=1 npm install -g agent-browser"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"agent-browser install --with-deps"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"npx -y skills add vercel-labs/agent-browser --skill agent-browser --agent claude-code --global --yes"'
+    run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; CI=1 npm install -g agent-browser"'
+    run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; agent-browser install --with-deps"'
+    run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; npx -y skills add vercel-labs/agent-browser --skill agent-browser --agent claude-code --global --yes"'
 
     # Playwright MCP
-    sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove playwright --scope user"
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"'
+    sudo -i -u $LOGIN_USER bash -c "claude mcp remove playwright --scope user"
+    run sudo -i -u $LOGIN_USER bash -c '"claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"'
 
     # Codex plugin & MCP server
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin marketplace add openai/codex-plugin-cc"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin install codex@openai-codex"'
+    run sudo -i -u $LOGIN_USER bash -c '"claude plugin marketplace add openai/codex-plugin-cc"'
+    run sudo -i -u $LOGIN_USER bash -c '"claude plugin install codex@openai-codex"'
 
-    sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove codex --scope user"
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add codex --scope user -- codex mcp-server"'
+    sudo -i -u $LOGIN_USER bash -c "claude mcp remove codex --scope user"
+    run sudo -i -u $LOGIN_USER bash -c '"claude mcp add codex --scope user -- codex mcp-server"'
 
     # CodeGraph MCP
-    sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove codegraph --scope user"
-    run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g @colbymchenry/codegraph"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add codegraph --scope user -- codegraph serve --mcp"'
+    sudo -i -u $LOGIN_USER bash -c "claude mcp remove codegraph --scope user"
+    run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; npm install -g @colbymchenry/codegraph"'
+    run sudo -i -u $LOGIN_USER bash -c '"claude mcp add codegraph --scope user -- codegraph serve --mcp"'
 
     # Cloud Run MCP
-    sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove cloud-run --scope user"
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add cloud-run --scope user -- npx -y @google-cloud/cloud-run-mcp"'
+    sudo -i -u $LOGIN_USER bash -c "claude mcp remove cloud-run --scope user"
+    run sudo -i -u $LOGIN_USER bash -c '"claude mcp add cloud-run --scope user -- npx -y @google-cloud/cloud-run-mcp"'
 
     # Toolbox MCP
-    sudo -i -u $LOGIN_USER bash -i -c "claude mcp remove toolbox --scope user"
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp add toolbox --scope user -- toolbox_bigquery_mcp"'
+    sudo -i -u $LOGIN_USER bash -c "claude mcp remove toolbox --scope user"
+    run sudo -i -u $LOGIN_USER bash -c '"claude mcp add toolbox --scope user -- toolbox_bigquery_mcp"'
 
     # Vercel CLI
-    run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g @vercel/vc-native"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"CI=1 npx -y plugins add vercel/vercel-plugin --yes"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin update vercel@claude-plugins-official"'
+    run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; npm install -g @vercel/vc-native"'
+    run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; CI=1 npx -y plugins add vercel/vercel-plugin --yes"'
+    run sudo -i -u $LOGIN_USER bash -c '"claude plugin update vercel@claude-plugins-official"'
 
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude mcp list"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"claude plugin list"'
+    run sudo -i -u $LOGIN_USER bash -c '"claude mcp list"'
+    run sudo -i -u $LOGIN_USER bash -c '"claude plugin list"'
 
 else
     echo -e "${COLOR_RED}No login user found... omitting to install extensions for the login user${COLOR_CLEAR}"
