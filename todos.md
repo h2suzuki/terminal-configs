@@ -24,6 +24,8 @@ Exit Criteria:
 - [ ] session reset → 新 sudo -i（単一 pty）で `/tui fullscreen` にし、行ダブルクリック / workflow 出力で乱れないことを確認（次 session 冒頭で process chain が pts/4→pts/5 の二段でなく単一 pts であることも確認可）
 - [ ] 確認後、live `/root/.claude/settings.json` の `tui` を `fullscreen` に戻す（現在 `/tui default` が永続化済・canonical base は fullscreen のまま）
 
+Work file: `last-session-handoff.md` の「fullscreen TUI 乱れ — !use_pty 検証待ち (2026-06-16)」 section
+
 別件 note（本 Goal 外）: `/etc/sudoers.d/nopasswd` が mode 0644（0440 推奨・visudo -c が warn）。要否は H.S. 判断。
 関連 done: `remoteControlAtStartup: true` を base file 追記 (commit dc2edaa)・live /root 反映済（次回起動で有効、scorer は次回 deploy で反映）。
 
