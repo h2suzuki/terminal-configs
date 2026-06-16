@@ -449,12 +449,12 @@ EOF
 
     run echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' '>>' $BASHRC
 
-    run sudo -i -u $LOGIN_USER bash -i -c '"nodejs_clean_installer"'
+    run sudo -i -u $LOGIN_USER bash -c '"nodejs_clean_installer"'
 
-    run sudo -i -u $LOGIN_USER bash -i -c '"npm uninstall -g @anthropic-ai/claude-code || true"'
-    run sudo -i -u $LOGIN_USER bash -i -c '"bash /tmp/claude_install.sh"'
+    run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; npm uninstall -g @anthropic-ai/claude-code || true"'
+    run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; bash /tmp/claude_install.sh"'
 
-    run sudo -i -u $LOGIN_USER bash -i -c '"npm install -g @openai/codex"'
+    run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; npm install -g @openai/codex"'
 
     # Pre-create user-owned parents — `install -D/-d --owner` only owners the final component.
     run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory $LOGIN_HOME/.claude
