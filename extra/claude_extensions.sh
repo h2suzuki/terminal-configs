@@ -247,7 +247,7 @@ run claude mcp list
 run claude plugin list
 
 
-LOGIN_USER="$(logname)"
+LOGIN_USER="$(logname 2>/dev/null)"
 [ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
 if [ -n "$LOGIN_USER" ]; then
 

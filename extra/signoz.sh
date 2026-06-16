@@ -156,7 +156,7 @@ run sed -i ~/.bashrc \
     -e '/source\ \\/etc\\/claude-code\\/env\\.sh/d'
 run echo "source /etc/claude-code/env.sh" '>>' ~/.bashrc
 
-LOGIN_USER="$(logname)"
+LOGIN_USER="$(logname 2>/dev/null)"
 [ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
 if [ -n "$LOGIN_USER" ]; then
     # Resolve home explicitly: `~$LOGIN_USER` only tilde-expands inside run()'s

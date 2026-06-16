@@ -383,7 +383,7 @@ run echo 'export BROWSER=\"$BROWSER\"' '>>' ~/.bashrc
 #  1. Change the color of the prompt for the login user: green(32m) -> purple(35m)
 #  2. Set EDITOR, VISUAL, and BROWSER environment variables
 #  3. Autoload ~/.nvm/nvm.sh
-LOGIN_USER="$(logname)"
+LOGIN_USER="$(logname 2>/dev/null)"
 [ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
 if [ -n "$LOGIN_USER" ]; then
     LOGIN_GROUP="$(id -gn "$LOGIN_USER")"
