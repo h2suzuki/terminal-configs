@@ -33,7 +33,7 @@ Goal: sudo -i root の fullscreen TUI 画面乱れ（行ダブルクリック / 
 - [x] issue に screenshot 添付済 (H.S. が web で添付、#68742 コメントに img 確認。local `screen-corruption.png` は削除＝GitHub が canonical)。bot の duplicate auto-close は反駁コメントで阻止済 (#31127/#29182/#21690 を個別論駁)
 - [ ] 上流修正の反映待ち (Goal『解消』は上流 fix に blocked)。修正版が出たら fullscreen で 12-agent ネスト再現テストを再走し乱れ無しを確認。
 
-Work file: `last-session-handoff.md` の「fullscreen TUI 乱れ — !use_pty 検証待ち (2026-06-16)」 section
+Work file: `last-session-handoff.md` の「fullscreen TUI 乱れ — !use_pty は効果あり / 残存は上流 renderer (2026-06-16)」 section
 
 別件 note（本 Goal 外）: `/etc/sudoers.d/nopasswd` が mode 0644（0440 推奨・visudo -c が warn）。要否は H.S. 判断。
 関連 done: `remoteControlAtStartup: true` を base file 追記 (commit dc2edaa)・live /root 反映済（次回起動で有効、scorer は次回 deploy で反映）。
