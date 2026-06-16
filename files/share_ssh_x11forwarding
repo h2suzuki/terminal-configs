@@ -12,7 +12,7 @@ command -v jq    >/dev/null || exit 0
 [ -n "$SUDO_USER" ] || exit 0               # The user who invoked sudo
 [ "$LOGNAME" != "$SUDO_USER" ] || exit 0
 
-LOGIN_USER=$(logname)                       # The real user who has logged in
+LOGIN_USER=$(logname 2>/dev/null) || LOGIN_USER=$SUDO_USER   # WSL interop ttys lack utmp; fall back to sudo's SUDO_USER
 [ "$SUDO_USER" = "$LOGIN_USER" ] || exit 0
 
 LOGIN_HOME=$(getent passwd "${LOGIN_USER}" | cut -d : -f 6)
