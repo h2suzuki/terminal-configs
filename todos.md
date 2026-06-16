@@ -30,7 +30,7 @@ Goal: sudo -i root の fullscreen TUI 画面乱れ（行ダブルクリック / 
 
 対処方針: H.S. 選択 = (A) 上流報告。
 - [x] 新規 issue 投稿: https://github.com/anthropics/claude-code/issues/68742 (#21690/#59750/#17025 相互参照。本文は issue 本体が canonical、local draft は drafts/=gitignore で ephemeral)
-- [ ] issue に screenshot 添付 (gh CLI は画像不可 → H.S. が web でドラッグ&ドロップ。添付後 local の `screen-corruption.png` は削除可)
+- [x] issue に screenshot 添付済 (H.S. が web で添付、#68742 コメントに img 確認。local `screen-corruption.png` は削除＝GitHub が canonical)。bot の duplicate auto-close は反駁コメントで阻止済 (#31127/#29182/#21690 を個別論駁)
 - [ ] 上流修正の反映待ち (Goal『解消』は上流 fix に blocked)。修正版が出たら fullscreen で 12-agent ネスト再現テストを再走し乱れ無しを確認。
 
 Work file: `last-session-handoff.md` の「fullscreen TUI 乱れ — !use_pty 検証待ち (2026-06-16)」 section
