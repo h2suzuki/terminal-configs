@@ -24,14 +24,14 @@ Goal: sudo -i root の fullscreen TUI 画面乱れ（行ダブルクリック / 
 - [x] process chain 単一 pts 確認: 旧 session は sudo が pts/0→pts/1 を跨いだが、!use_pty 後の新 sudo -i は bash→sudo→bash→claude が全て pts/4。中間 pty 消滅＝`!use_pty` 実挙動レベルで有効。
 - [x] 軽操作 (行ダブルクリック / 行追加出力) は乱れなし＝pty 起因の崩れは解消。
 - [x] live `tui` は `fullscreen` に復元済 (本 session の /tui fullscreen で永続化。当初 Exit Criteria 2 件目は達成)。
-- [ ] **重負荷で残存**: 3 並列 × 4 段ネスト = 12 agent (haiku) を 2 回実行で fullscreen が乱れた。証拠 `screen-corruption.png`: spinnerVerbs 行多重残留・プロンプト入力行が上被り・statusline が画面中段に描画 (垂直 desync)・最下行 `ns 2` 等 stale cell・ヒント文が data 行に衝突。完了後ほぼ自動復旧 (単一 pts 化で復旧力向上、以前は Ctrl-L 必須)。
+- [x] **重負荷で残存 (特性把握済・上流委譲)**: 3 並列 × 4 段ネスト = 12 agent (haiku) を 2 回実行で fullscreen が乱れた。証拠 `screen-corruption.png`: spinnerVerbs 行多重残留・プロンプト入力行が上被り・statusline が画面中段に描画 (垂直 desync)・最下行 `ns 2` 等 stale cell・ヒント文が data 行に衝突。完了後ほぼ自動復旧 (単一 pts 化で復旧力向上、以前は Ctrl-L 必須)。
   - 切り分け: 単一 pts でも出る ＋ `/tui default` では出ない → **上流 CC fullscreen 差分レンダラの stale-cell バグ** (CC 2.1.178 / WSL+Windows Terminal / TERM=xterm-256color)。当方 config からは消去不可。
   - ネスト表示形式: 深いインデントでなく `(+N)` バッジ + agent 選択リスト展開。
 
-対処方針: H.S. 選択 = (A) 上流報告。
-- [x] 新規 issue 投稿: https://github.com/anthropics/claude-code/issues/68742 (#21690/#59750/#17025 相互参照。本文は issue 本体が canonical、local draft は drafts/=gitignore で ephemeral)
-- [x] issue に screenshot 添付済 (H.S. が web で添付、#68742 コメントに img 確認。local `screen-corruption.png` は削除＝GitHub が canonical)。bot の duplicate auto-close は反駁コメントで阻止済 (#31127/#29182/#21690 を個別論駁)
-- [ ] 上流修正の反映待ち (Goal『解消』は上流 fix に blocked)。修正版が出たら fullscreen で 12-agent ネスト再現テストを再走し乱れ無しを確認。
+対処方針: H.S. 選択 = (A) 上流報告。**2026-06-16 H.S. 決定: 上流 fix は待たずクローズ** (制御外の外部依存を Exit にすると todo を永久に閉じられないため)。我々の達成可能部分は完了、残存の重負荷崩れは上流 #68742 へ委譲。
+- [x] 新規 issue 投稿: https://github.com/anthropics/claude-code/issues/68742 (#21690/#59750/#17025 相互参照)
+- [x] issue に screenshot 添付済 (H.S. が web で添付、#68742 コメントに img 確認)。local `screen-corruption.png` 削除確認済 (2026-06-16: working tree clean・file 不在)。bot の duplicate auto-close は反駁コメント + 👎 で阻止済 (#31127/#29182/#21690 を個別論駁)
+- [x] 上流委譲でクローズ: 残存は上流 renderer 固有で本 repo から消去不可、canonical tracker は GitHub #68742 (state=OPEN・triage label 付与済)。暫定回避は `/tui default` 常用 (H.S. 判断)。`!use_pty` fix は deploy 済 (commit 5199d41) で残存。
 
 Work file: `last-session-handoff.md` の「fullscreen TUI 乱れ — !use_pty は効果あり / 残存は上流 renderer (2026-06-16)」 section
 
@@ -65,7 +65,7 @@ Exit Criteria:
   - SessionEnd: session_cleanup.py (**draft の N/A は誤り**)
   - UserPromptSubmit: check_uncommitted_at_handoff.py(managed) / memory_surface.py(user・過去事例 surfacer ＋ concern/correction inject) / subagent_gate_suggest.py(user)
   - Stop: stop_checks.py(managed) / check_push_prompting.py(user) / voicevox Stop
-  - PreToolUse: read_before_edit.py(check,Read|Edit|MultiEdit) | check_dangling_refs.py+memory_routing_gate.py(guard)+skill_reminder_gate.py(gate)+comment_rationale_gate.py(Edit|Write|MultiEdit) | avoid_cd.py+deny_compound_git_add.py+deny_compound_git_commit.py+check_commit_format.py+deny_unsafe_git_reset.py(Bash) | subagent_gate_warn.py(Task|Agent) | declare_and_proceed_gate.py(AskUserQuestion) | check_commit_author.py(user,Bash)
+  - PreToolUse: read_before_edit.py(check,Read|Edit|MultiEdit) | check_dangling_refs.py+memory_routing_gate.py(guard)+skill_reminder_gate.py(gate)+comment_rationale_gate.py(Edit|Write|MultiEdit) | avoid_cd.py+deny_compound_git_add.py+deny_compound_git_commit.py+check_commit_format.py+deny_unsafe_git_reset.py(Bash) | subagent_gate_warn.py(Task|Agent) | declare_and_proceed_gate.py(AskUserQuestion) | check_push_prompting.py(user,AskUserQuestion) | check_commit_author.py(user,Bash)
   - PostToolUse: read_before_edit.py(record,Read|Write|Edit|MultiEdit) / memory_routing_gate.py(sync,Write) / check_todo_completion.py(Bash)
   - PostToolUseFailure: detect_cwd_pollution.py(Bash)
   - voicevox (`voicevox_claude_alerts <Event>`): Stop / Notification / SubagentStart / SubagentStop / ConfigChange / PreCompact / WorktreeCreate / CwdChanged (本 session 追加)
