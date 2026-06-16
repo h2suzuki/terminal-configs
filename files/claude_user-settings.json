@@ -12,6 +12,7 @@
   "skipAutoPermissionPrompt": true,
   "autoMemoryEnabled": false,
   "inputNeededNotifEnabled": true,
+  "remoteControlAtStartup": true,
   "effortLevel": "xhigh",
   "spinnerVerbs": {
     "mode": "replace",
