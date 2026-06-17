@@ -150,9 +150,13 @@ def _connect() -> sqlite3.Connection | None:
     except sqlite3.Error:
         return None
     # SQLite hardcodes 0644 (umask can't add bits); force group-write BEFORE WAL so
-    # the -wal/-shm sidecars inherit it, letting root + login user share one DB.
+    # -wal/-shm inherit it. O_NOFOLLOW: never chmod a symlink another user swapped in.
     with contextlib.suppress(OSError):
-        os.chmod(DB_PATH, 0o664)
+        fd = os.open(DB_PATH, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            os.fchmod(fd, 0o664)
+        finally:
+            os.close(fd)
     try:
         con.execute("PRAGMA journal_mode = WAL")
         con.execute(
@@ -810,6 +814,12 @@ def _main_rebuild(argv: list[str]) -> int:
             return 1
         try:
             paths = _list_active_entries(memory_dir)
+            if not paths:
+                # Empty source must not wipe the now-shared scope (cross-user data loss).
+                sys.stderr.write(
+                    f"no active entries under {memory_dir}; skip wipe (use --upsert/--delete)\n"
+                )
+                return 0
             # Wipe existing entries for this project_id scope first.
             try:
                 con.execute(
