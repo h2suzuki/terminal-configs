@@ -28,7 +28,8 @@ MODEL_NAME = "minishlab/potion-multilingual-128M"
 BASE_URL = f"https://huggingface.co/{MODEL_NAME}/resolve/main/"
 MODEL_FILES = ("tokenizer.json", "model.safetensors")
 # Shared root+login-user store when deployed; per-user fallback for standalone.
-SHARED_STATE_DIR = "/var/lib/claude-memory"
+APP_DIR = "claude-rag-memory"
+SHARED_STATE_DIR = os.path.join("/var/lib", APP_DIR)
 DB_PATH = (
     os.path.join(SHARED_STATE_DIR, "memory_embed_model.sqlite3")
     if os.path.isdir(SHARED_STATE_DIR)
@@ -125,13 +126,13 @@ def ensure_cached(url: str, dst: str) -> None:
 
 def cache_dir() -> str:
     # One shared copy under /var/cache; per-user ~/.cache fallback when not creatable.
-    shared = os.path.join("/var/cache", PROG)
+    shared = os.path.join("/var/cache", APP_DIR)
     try:
         os.makedirs(shared, exist_ok=True)
         return shared
     except OSError:
         fallback = os.path.join(
-            os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), PROG
+            os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), APP_DIR
         )
         os.makedirs(fallback, exist_ok=True)
         return fallback

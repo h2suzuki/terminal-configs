@@ -51,7 +51,7 @@ HOME = os.path.expanduser("~")
 USER_MEMORY_DIR = os.path.join(HOME, ".claude", "memory")
 # Shared root+login-user store (installer makes it root:login-group 2775 setgid);
 # per-user fallback keeps standalone / non-deployed runs working.
-SHARED_STATE_DIR = "/var/lib/claude-memory"
+SHARED_STATE_DIR = "/var/lib/claude-rag-memory"
 
 
 def _state_path(filename: str) -> str:

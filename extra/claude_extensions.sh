@@ -166,7 +166,7 @@ fi
 
 # Shared memory-RAG store for root + login user (setgid → login-group; hooks set umask 0o002 → group-writable).
 # Model DB is user-independent so build it here; the FTS index is rebuilt from the login user's memory below.
-run install --directory --mode 2775 --owner root --group ${LOGIN_GROUP:-root} /var/lib/claude-memory
+run install --directory --mode 2775 --owner root --group ${LOGIN_GROUP:-root} /var/lib/claude-rag-memory
 copy --nobackup claude_memory_rag_builder                  /usr/local/bin/claude_memory_rag_builder -m 0755
 run claude_memory_rag_builder
 [ -n "$LOGIN_USER" ] || run ~/.claude/hooks/memory_surface.py --rebuild   # no login user: index root's own memory
