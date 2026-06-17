@@ -36,10 +36,6 @@ HTTP_TIMEOUT = 60
 CHUNK = 1 << 20
 PROG = os.path.basename(sys.argv[0]) or "claude_memory_rag_builder"
 UA = PROG
-CACHE_DIR = os.path.join(
-    os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
-    PROG,
-)
 
 
 def already_built() -> bool:
@@ -119,6 +115,20 @@ def ensure_cached(url: str, dst: str) -> None:
             f"{have:,} != {want:,} bytes; re-downloading"
         )
     download(url, dst)
+
+
+def cache_dir() -> str:
+    # One shared copy under /var/cache; per-user ~/.cache fallback when not creatable.
+    shared = os.path.join("/var/cache", PROG)
+    try:
+        os.makedirs(shared, exist_ok=True)
+        return shared
+    except OSError:
+        fallback = os.path.join(
+            os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), PROG
+        )
+        os.makedirs(fallback, exist_ok=True)
+        return fallback
 
 
 def build(model_dir: str) -> int:
@@ -218,14 +228,14 @@ def main() -> int:
         return 0
     if args.model_dir:
         return build(args.model_dir)
-    os.makedirs(CACHE_DIR, exist_ok=True)
+    cdir = cache_dir()
     for name in MODEL_FILES:
         try:
-            ensure_cached(BASE_URL + name, os.path.join(CACHE_DIR, name))
+            ensure_cached(BASE_URL + name, os.path.join(cdir, name))
         except OSError as e:
             sys.stderr.write(f"download failed for {name}: {e}\n")
             return 1
-    return build(CACHE_DIR)
+    return build(cdir)
 
 
 if __name__ == "__main__":
