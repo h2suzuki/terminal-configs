@@ -33,6 +33,8 @@ maintained by /memory-routing via --upsert / --delete.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import math
 import os
@@ -47,7 +49,18 @@ import unittest
 
 HOME = os.path.expanduser("~")
 USER_MEMORY_DIR = os.path.join(HOME, ".claude", "memory")
-DB_PATH = os.path.join(HOME, ".claude", "hooks", "state", "memory_index.sqlite3")
+# Shared root+login-user store (installer makes it root:login-group 2775 setgid);
+# per-user fallback keeps standalone / non-deployed runs working.
+SHARED_STATE_DIR = "/var/lib/claude-memory"
+
+
+def _state_path(filename: str) -> str:
+    if os.path.isdir(SHARED_STATE_DIR):
+        return os.path.join(SHARED_STATE_DIR, filename)
+    return os.path.join(HOME, ".claude", "hooks", "state", filename)
+
+
+DB_PATH = _state_path("memory_index.sqlite3")
 THROTTLE_SECONDS = 900  # 15 min per (file_path, session_id)
 # top-1 を surface する floor (負が深いほど良 match、 ~0 は弱 noise)
 BM25_SURFACE_FLOOR = -2.0
@@ -61,9 +74,7 @@ QUERY_EXCERPT_LEN = 200
 MAX_ENTRY_SIZE = 50_000  # skip absurdly large feedback files
 
 # --- hybrid RAG: dense embeddings (model2vec static vectors in SQLite) ---
-MODEL_DB_PATH = os.path.join(
-    HOME, ".claude", "hooks", "state", "memory_embed_model.sqlite3"
-)
+MODEL_DB_PATH = _state_path("memory_embed_model.sqlite3")
 EMBED_MAX_CHARS = 2000  # prompt cap before normalization (mean-pool dilutes anyway)
 EMBED_MAX_NORM_CHARS = 3000  # cap after punct spacing inflates length
 # h = alpha*min(1,-bm25/DIV) + (1-alpha)*cos。 transcript 評価で BM25 単独比
@@ -117,6 +128,20 @@ _CORRECTION_RES = [
 ]
 
 
+@contextlib.contextmanager
+def _write_lock():
+    # Serialize writers across processes/users (root + login user share one DB).
+    lock = _state_path("memory_index.lock")
+    os.makedirs(os.path.dirname(lock), exist_ok=True)
+    fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o664)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 def _connect() -> sqlite3.Connection | None:
     """Open DB, ensure schema, run idempotent migrations."""
     try:
@@ -124,6 +149,10 @@ def _connect() -> sqlite3.Connection | None:
         con = sqlite3.connect(DB_PATH, timeout=2.0)
     except sqlite3.Error:
         return None
+    # SQLite hardcodes 0644 (umask can't add bits); force group-write BEFORE WAL so
+    # the -wal/-shm sidecars inherit it, letting root + login user share one DB.
+    with contextlib.suppress(OSError):
+        os.chmod(DB_PATH, 0o664)
     try:
         con.execute("PRAGMA journal_mode = WAL")
         con.execute(
@@ -746,13 +775,14 @@ def _main_upsert(argv: list[str]) -> int:
         return 1
     file_path = os.path.abspath(argv[0])
     project_id = argv[1] if len(argv) > 1 else None
-    con = _connect()
-    if con is None:
-        return 1
-    try:
-        return _upsert_entry(con, file_path, project_id)
-    finally:
-        con.close()
+    with _write_lock():
+        con = _connect()
+        if con is None:
+            return 1
+        try:
+            return _upsert_entry(con, file_path, project_id)
+        finally:
+            con.close()
 
 
 def _main_delete(argv: list[str]) -> int:
@@ -761,50 +791,53 @@ def _main_delete(argv: list[str]) -> int:
         return 1
     file_path = os.path.abspath(argv[0])
     project_id = argv[1] if len(argv) > 1 else None
-    con = _connect()
-    if con is None:
-        return 1
-    try:
-        return _delete_entry(con, file_path, project_id)
-    finally:
-        con.close()
+    with _write_lock():
+        con = _connect()
+        if con is None:
+            return 1
+        try:
+            return _delete_entry(con, file_path, project_id)
+        finally:
+            con.close()
 
 
 def _main_rebuild(argv: list[str]) -> int:
     memory_dir = os.path.abspath(argv[0]) if argv else USER_MEMORY_DIR
     project_id = argv[1] if len(argv) > 1 else None
-    con = _connect()
-    if con is None:
-        return 1
-    try:
-        paths = _list_active_entries(memory_dir)
-        # Wipe existing entries for this project_id scope first.
-        try:
-            con.execute(
-                "DELETE FROM entries_fts WHERE coalesce(project_id, '') = "
-                "coalesce(?, '')",
-                (project_id,),
-            )
-            con.execute(
-                "DELETE FROM entries_vec WHERE coalesce(project_id, '') = "
-                "coalesce(?, '')",
-                (project_id,),
-            )
-        except sqlite3.Error:
+    with _write_lock():
+        con = _connect()
+        if con is None:
             return 1
-        errs = 0
-        for fp in paths:
-            if _upsert_entry(con, fp, project_id) != 0:
-                errs += 1
-        sys.stderr.write(
-            f"rebuilt {len(paths) - errs}/{len(paths)} entries from {memory_dir}\n"
-        )
-        return 1 if errs else 0
-    finally:
-        con.close()
+        try:
+            paths = _list_active_entries(memory_dir)
+            # Wipe existing entries for this project_id scope first.
+            try:
+                con.execute(
+                    "DELETE FROM entries_fts WHERE coalesce(project_id, '') = "
+                    "coalesce(?, '')",
+                    (project_id,),
+                )
+                con.execute(
+                    "DELETE FROM entries_vec WHERE coalesce(project_id, '') = "
+                    "coalesce(?, '')",
+                    (project_id,),
+                )
+            except sqlite3.Error:
+                return 1
+            errs = 0
+            for fp in paths:
+                if _upsert_entry(con, fp, project_id) != 0:
+                    errs += 1
+            sys.stderr.write(
+                f"rebuilt {len(paths) - errs}/{len(paths)} entries from {memory_dir}\n"
+            )
+            return 1 if errs else 0
+        finally:
+            con.close()
 
 
 def main() -> int:
+    os.umask(0o002)  # shared DB + WAL sidecars + lock must stay group-writable
     argv = sys.argv[1:]
     if not argv:
         return _main_query()

@@ -155,11 +155,21 @@ copy --nobackup claude_user-hooks/memory_surface.py         ~/.claude/hooks/memo
 copy --nobackup claude_user-hooks/subagent_gate_suggest.py  ~/.claude/hooks/subagent_gate_suggest.py
 run claude_user_settings inject - < "$TOP_DIR/files/claude_user-extensions.json"
 
-# Memory-surface hybrid RAG: build the embed model DB with the standalone
-# stdlib-only builder (skips when already built), then refresh the user index
+# Resolve the login user up-front (shared memory store is group-owned by their primary group).
+LOGIN_USER="$(logname 2>/dev/null)"
+[ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"
+if [ -n "$LOGIN_USER" ]; then
+    LOGIN_GROUP="$(id -gn "$LOGIN_USER")"
+    LOGIN_HOME="$(getent passwd "$LOGIN_USER" | cut -d: -f6)"
+    [ -n "$LOGIN_HOME" ] || LOGIN_HOME="/home/$LOGIN_USER"
+fi
+
+# Shared memory-RAG store for root + login user (setgid → login-group; hooks set umask 0o002 → group-writable).
+# Model DB is user-independent so build it here; the FTS index is rebuilt from the login user's memory below.
+run install --directory --mode 2775 --owner root --group ${LOGIN_GROUP:-root} /var/lib/claude-memory
 copy --nobackup claude_memory_rag_builder                  /usr/local/bin/claude_memory_rag_builder -m 0755
 run claude_memory_rag_builder
-run ~/.claude/hooks/memory_surface.py --rebuild
+[ -n "$LOGIN_USER" ] || run ~/.claude/hooks/memory_surface.py --rebuild   # no login user: index root's own memory
 
 # Deploy the user skills
 pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
@@ -247,13 +257,7 @@ run claude mcp list
 run claude plugin list
 
 
-LOGIN_USER="$(logname 2>/dev/null)"
-[ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
-if [ -n "$LOGIN_USER" ]; then
-
-    LOGIN_GROUP="$(id -gn "$LOGIN_USER")"
-    LOGIN_HOME="$(getent passwd "$LOGIN_USER" | cut -d: -f6)"
-    [ -n "$LOGIN_HOME" ] || LOGIN_HOME="/home/$LOGIN_USER"
+if [ -n "$LOGIN_USER" ]; then          # resolved up-front near the shared-store setup
 
     # Pre-create user-owned parents — `install -D/-d --owner` only owners the final component.
     run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory $LOGIN_HOME/.claude
@@ -268,11 +272,8 @@ if [ -n "$LOGIN_USER" ]; then
     # Feed the fragment on stdin: root opens it here, so the demoted user needs no read access
     run sudo -i -u $LOGIN_USER claude_user_settings inject - < "$TOP_DIR/files/claude_user-extensions.json"
 
-    # Memory-surface hybrid RAG: share the root-built embed model DB, then refresh the user index
+    # Memory-surface hybrid RAG: populate the shared FTS index from the login user's memory
     run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory $LOGIN_HOME/.claude/hooks/state
-    if ! cmp -s ~/.claude/hooks/state/memory_embed_model.sqlite3 $LOGIN_HOME/.claude/hooks/state/memory_embed_model.sqlite3; then
-        run install --mode 0644 --owner $LOGIN_USER --group $LOGIN_GROUP ~/.claude/hooks/state/memory_embed_model.sqlite3 $LOGIN_HOME/.claude/hooks/state/memory_embed_model.sqlite3
-    fi
     run sudo -i -u $LOGIN_USER bash -c '"~/.claude/hooks/memory_surface.py --rebuild"'
 
     # Deploy the user skills (dir absent when no user skills exist)

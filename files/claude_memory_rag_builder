@@ -27,7 +27,13 @@ def log(msg: str) -> None:
 MODEL_NAME = "minishlab/potion-multilingual-128M"
 BASE_URL = f"https://huggingface.co/{MODEL_NAME}/resolve/main/"
 MODEL_FILES = ("tokenizer.json", "model.safetensors")
-DB_PATH = os.path.expanduser("~/.claude/hooks/state/memory_embed_model.sqlite3")
+# Shared root+login-user store when deployed; per-user fallback for standalone.
+SHARED_STATE_DIR = "/var/lib/claude-memory"
+DB_PATH = (
+    os.path.join(SHARED_STATE_DIR, "memory_embed_model.sqlite3")
+    if os.path.isdir(SHARED_STATE_DIR)
+    else os.path.expanduser("~/.claude/hooks/state/memory_embed_model.sqlite3")
+)
 # Both constants are part of the hook's query contract: longer pieces never
 # match real text (bounds Viterbi cost); ids 0/1 = [PAD]/[UNK] are excluded.
 MAX_TOKEN_LEN = 24
@@ -213,6 +219,7 @@ def build(model_dir: str) -> int:
 
 
 def main() -> int:
+    os.umask(0o002)  # keep shared DB + cache files group-writable
     ap = argparse.ArgumentParser(
         description="Build the memory-surface embed model DB (stdlib-only)"
     )
