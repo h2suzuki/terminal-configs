@@ -58,8 +58,9 @@ def _broad_add_reason(stripped: str) -> str | None:
         return None
     after_ddash = False
     has_path = False
-    # Bound to the `git add` line; a later newline starts a separate command.
-    for tok in stripped[m.end() :].split("\n", 1)[0].split():
+    # Join `\`-newline continuations, then bound to the `git add` line.
+    tail = stripped[m.end() :].replace("\\\n", " ")
+    for tok in tail.split("\n", 1)[0].split():
         if not after_ddash and tok == "--":
             after_ddash = True
             continue
