@@ -130,6 +130,7 @@ run sed -i ~/.bashrc \
     -e '/export\ VISUAL=/d' \
     -e '/export\ BROWSER=/d' \
     -e '/export\ PATH=.*\.local.bin:\$PATH/d' \
+    -e '/COLORTERM=truecolor/d' \
     -e '/share_ssh_x11forwarding/d' \
     -e '/NVM_DIR/d'
 run sed -i ~/.bashrc -e ':a' -e "'/^[[:space:]]*$/{\$d;N;ba'" -e '}'
@@ -145,6 +146,7 @@ run echo "alias node-x=\\'NODE_DEBUG=module,fs,net node\\'" '>>' ~/.bashrc
 run echo "alias mdr=markdown-reader" '>>' ~/.bashrc
 run echo 'grip\(\) \{ rg --sort path --smart-case --json -C 2 \"\$@\" \| delta\; \}' '>>' ~/.bashrc
 run echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' '>>' ~/.bashrc
+run echo '[ -n \"\$WT_SESSION\" ] \&\& export COLORTERM=truecolor' '>>' ~/.bashrc
 
 
 copy --nobackup sudoers                 /etc/sudoers.d/terminal-config -m 0440
@@ -415,6 +417,7 @@ if [ -n "$LOGIN_USER" ]; then
             -e '/export\ VISUAL=/d' \
             -e '/export\ BROWSER=/d' \
             -e '/export\ PATH=.*\.local.bin:\$PATH/d' \
+            -e '/COLORTERM=truecolor/d' \
             -e '/NVM_DIR/d'
     run sed -i $BASHRC -e ':a' -e "'/^[[:space:]]*$/{\$d;N;ba'" -e '}'
 
@@ -448,6 +451,7 @@ export NVM_DIR="$HOME/.nvm"
 EOF
 
     run echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' '>>' $BASHRC
+    run echo '[ -n \"\$WT_SESSION\" ] \&\& export COLORTERM=truecolor' '>>' $BASHRC
 
     run sudo -i -u $LOGIN_USER bash -c '"nodejs_clean_installer"'
 
