@@ -8,14 +8,16 @@ tool-role-delegation (実装は codex へ委譲・Claude は仕様/レビュー)
 依存で発火率が低い。 本 hook は委譲判断の自然な 2 つの境界で nudge を inject する。
 deny せず additionalContext のみ (実装を止めない・誘導のみ)。
 
-発火点 (payload の hook_event_name / tool_name で判定):
+発火点 (payload の hook_event_name / tool_name / agent_type で判定):
 
   PreToolUse ExitPlanMode : plan -> 実装の境界。 実装を /codex:rescue へ委譲せよと案内
+  SubagentStop codex-rescue : session-keyed review flag を arm
+  PreToolUse / UserPromptSubmit : review flag が fresh なら敵対的/受入レビュー nudge を deliver-and-clear
 
-ExitPlanMode は plan 退出 1 回 / plan で自然に低頻度ゆえ advise-once は不要。
+SubagentStop の additionalContext は main agent に surface しないため直接 emit しない。
+次の surface-capable event (PreToolUse / UserPromptSubmit) で 1 回だけ配送する。
 
-委譲は plugin 経路 `/codex:rescue` 一本 (raw mcp-server は非登録)。 rescue 完了時の
-review-nudge は todo (SubagentStop / Agent PostToolUse + subagent_type 判定で再導入)。
+委譲は plugin 経路 `/codex:rescue` 一本 (raw mcp-server は非登録)。
 
 emit / fail-open
 ================
@@ -29,8 +31,17 @@ deploy: /etc/claude-code/hooks/ (copy_dir で自動)。 両者を同 session で
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sys
+import tempfile
+import time
 import unittest
+
+HOME = os.path.expanduser("~")
+STATE_DIR = os.path.join(HOME, ".claude", "hooks", "state", "codex_review_pending")
+TTL_SECONDS = 1800
+PRUNE_SECONDS = 24 * 3600
 
 # nudge 文面は意図的に冗長 (委譲先 + 役割境界 + degrade 条件を内面化させる)。 trim 禁止。
 DELEGATE_MSG = (
@@ -43,6 +54,13 @@ DELEGATE_MSG = (
     "敵対的/受入レビューします (auth / data-loss / race 等の高リスクは "
     "/codex:adversarial-review で独立 cross-model 第二レビュー)。 trivial な変更・doc "
     "編集・codex 利用不可時は self-implement で構いません。"
+)
+REVIEW_MSG = (
+    "[codex-review] codex が実装を返しました。 tool-role-delegation step4: コードを"
+    "敵対的/受入レビューし、 バグ・仕様逸脱・副作用を検査してください (patch 反映も"
+    "レビューの一部)。 auth / data-loss / race / rollback 等の高リスク変更は "
+    "`/codex:adversarial-review` で codex の独立 cross-model 第二レビューを追加して"
+    "ください。"
 )
 
 
@@ -61,15 +79,91 @@ def _emit(event: str, context: str) -> None:
     )
 
 
-def cmd(payload: dict) -> None:
+def _sid(payload: dict) -> str:
+    sid = payload.get("session_id")
+    if not isinstance(sid, str) or not sid:
+        sid = "_"
+    return sid
+
+
+def _marker(payload: dict) -> str:
+    return os.path.join(STATE_DIR, _sid(payload), "pending")
+
+
+def _fresh(path: str, now: float) -> bool:
+    try:
+        return now - os.path.getmtime(path) < TTL_SECONDS
+    except OSError:
+        return False
+
+
+def _prune(now: float) -> None:
+    cutoff = now - PRUNE_SECONDS
+    try:
+        sids = os.listdir(STATE_DIR)
+    except OSError:
+        return
+    for sid in sids:
+        d = os.path.join(STATE_DIR, sid)
+        try:
+            for f in os.listdir(d):
+                p = os.path.join(d, f)
+                if os.path.getmtime(p) < cutoff:
+                    os.remove(p)
+            os.rmdir(d)  # only succeeds if now empty
+        except OSError:
+            pass
+
+
+def _arm(payload: dict, now: float) -> None:
+    marker = _marker(payload)
+    try:
+        os.makedirs(os.path.dirname(marker), exist_ok=True)
+        with open(marker, "w", encoding="utf-8") as f:
+            f.write(str(now))
+    except OSError:
+        return
+    _prune(now)
+
+
+def _pop_review(payload: dict, now: float) -> str | None:
+    marker = _marker(payload)
+    try:
+        exists = os.path.exists(marker)
+    except OSError:
+        return None
+    if not exists:
+        return None
+    fresh = _fresh(marker, now)
+    try:
+        os.remove(marker)
+    except OSError:
+        pass
+    return REVIEW_MSG if fresh else None
+
+
+def cmd(payload: object) -> None:
     if not isinstance(payload, dict):
         return
     event = payload.get("hook_event_name")
-    tool = payload.get("tool_name")
-    if not isinstance(tool, str):
+    now = time.time()
+    if event == "SubagentStop":
+        if "codex-rescue" in str(payload.get("agent_type", "")).lower():
+            _arm(payload, now)
         return
-    if event == "PreToolUse" and tool == "ExitPlanMode":
-        _emit("PreToolUse", DELEGATE_MSG)
+    if event == "PreToolUse":
+        messages = []
+        if payload.get("tool_name") == "ExitPlanMode":
+            messages.append(DELEGATE_MSG)
+        review = _pop_review(payload, now)
+        if review:
+            messages.append(review)
+        if messages:
+            _emit("PreToolUse", "\n\n".join(messages))
+    elif event == "UserPromptSubmit":
+        review = _pop_review(payload, now)
+        if review:
+            _emit("UserPromptSubmit", review)
 
 
 def main() -> int:
@@ -87,6 +181,15 @@ def main() -> int:
 class SurfaceTest(unittest.TestCase):
     """emit-vs-comply。 Run: python3 -m unittest codex_delegation_surface"""
 
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.old_state_dir = globals()["STATE_DIR"]
+        globals()["STATE_DIR"] = self.tmp
+
+    def tearDown(self):
+        globals()["STATE_DIR"] = self.old_state_dir
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
     @staticmethod
     def _run(payload):
         import io
@@ -98,12 +201,113 @@ class SurfaceTest(unittest.TestCase):
         out = buf.getvalue().strip()
         return json.loads(out)["hookSpecificOutput"] if out else None
 
-    def test_exitplanmode_delegate_nudge(self):
-        out = self._run({"hook_event_name": "PreToolUse", "tool_name": "ExitPlanMode"})
+    def _marker_path(self, sid="s1"):
+        return os.path.join(self.tmp, sid, "pending")
+
+    def _arm_marker(self, sid="s1"):
+        path = self._marker_path(sid)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(str(time.time()))
+        return path
+
+    def _arm_stale_marker(self, sid="s1"):
+        path = self._arm_marker(sid)
+        stale = time.time() - TTL_SECONDS - 10
+        os.utime(path, (stale, stale))
+        return path
+
+    def _output(self, payload):
+        out = self._run(payload)
+        self.assertIsNotNone(out)
+        assert out is not None
+        return out
+
+    def test_subagentstop_codex_rescue_arms_marker_emits_nothing(self):
+        for at in ("codex:codex-rescue", "codex-rescue", "Codex-Rescue"):
+            sid = at.replace(":", "_")
+            out = self._run(
+                {"hook_event_name": "SubagentStop", "agent_type": at, "session_id": sid}
+            )
+            self.assertIsNone(out)
+            self.assertTrue(os.path.exists(self._marker_path(sid)))
+
+    def test_subagentstop_other_agent_arms_nothing_emits_nothing(self):
+        for at in ("general-purpose", ""):
+            out = self._run(
+                {"hook_event_name": "SubagentStop", "agent_type": at, "session_id": at}
+            )
+            self.assertIsNone(out)
+            self.assertFalse(os.path.exists(self._marker_path(at or "_")))
+
+    def test_pretooluse_any_tool_with_fresh_marker_delivers_and_removes(self):
+        path = self._arm_marker()
+        out = self._output(
+            {"hook_event_name": "PreToolUse", "tool_name": "Edit", "session_id": "s1"}
+        )
+        self.assertEqual(out["hookEventName"], "PreToolUse")
+        self.assertIn("[codex-review]", out["additionalContext"])
+        self.assertFalse(os.path.exists(path))
+
+    def test_pretooluse_second_call_after_delivery_emits_nothing(self):
+        self._arm_marker()
+        first = self._output(
+            {"hook_event_name": "PreToolUse", "tool_name": "Edit", "session_id": "s1"}
+        )
+        second = self._run(
+            {"hook_event_name": "PreToolUse", "tool_name": "Edit", "session_id": "s1"}
+        )
+        self.assertIn("[codex-review]", first["additionalContext"])
+        self.assertIsNone(second)
+
+    def test_userpromptsubmit_with_fresh_marker_delivers_and_removes(self):
+        path = self._arm_marker()
+        out = self._output({"hook_event_name": "UserPromptSubmit", "session_id": "s1"})
+        self.assertEqual(out["hookEventName"], "UserPromptSubmit")
+        self.assertIn("[codex-review]", out["additionalContext"])
+        self.assertFalse(os.path.exists(path))
+
+    def test_pretooluse_stale_marker_removed_not_emitted(self):
+        path = self._arm_stale_marker()
+        out = self._run(
+            {"hook_event_name": "PreToolUse", "tool_name": "Edit", "session_id": "s1"}
+        )
+        self.assertIsNone(out)
+        self.assertFalse(os.path.exists(path))
+
+    def test_userpromptsubmit_stale_marker_removed_not_emitted(self):
+        path = self._arm_stale_marker()
+        out = self._run({"hook_event_name": "UserPromptSubmit", "session_id": "s1"})
+        self.assertIsNone(out)
+        self.assertFalse(os.path.exists(path))
+
+    def test_exitplanmode_delegate_nudge_no_marker_side_effects(self):
+        out = self._output(
+            {"hook_event_name": "PreToolUse", "tool_name": "ExitPlanMode"}
+        )
         self.assertEqual(out["hookEventName"], "PreToolUse")
         self.assertIn("/codex:rescue", out["additionalContext"])
         self.assertIn("--resume", out["additionalContext"])
         self.assertIn("[codex-delegation]", out["additionalContext"])
+        self.assertFalse(os.path.exists(self._marker_path("_")))
+
+    def test_exitplanmode_with_fresh_marker_delivers_both_and_removes(self):
+        path = self._arm_marker()
+        out = self._output(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_name": "ExitPlanMode",
+                "session_id": "s1",
+            }
+        )
+        self.assertEqual(out["hookEventName"], "PreToolUse")
+        self.assertIn("[codex-delegation]", out["additionalContext"])
+        self.assertIn("[codex-review]", out["additionalContext"])
+        self.assertLess(
+            out["additionalContext"].index("[codex-delegation]"),
+            out["additionalContext"].index("[codex-review]"),
+        )
+        self.assertFalse(os.path.exists(path))
 
     def test_no_fire_on_other_tools(self):
         self.assertIsNone(
@@ -125,6 +329,8 @@ class SurfaceTest(unittest.TestCase):
         )
 
     def test_non_dict_and_missing_fields(self):
+        self.assertIsNone(self._run(None))
+        self.assertIsNone(self._run([]))
         self.assertIsNone(self._run({}))
         self.assertIsNone(self._run({"tool_name": "ExitPlanMode"}))  # event 欠落
 
