@@ -8,15 +8,14 @@ tool-role-delegation (実装は codex へ委譲・Claude は仕様/レビュー)
 依存で発火率が低い。 本 hook は委譲判断の自然な 2 つの境界で nudge を inject する。
 deny せず additionalContext のみ (実装を止めない・誘導のみ)。
 
-発火点 (payload の hook_event_name / tool_name / agent_type で判定):
+発火点 (payload の hook_event_name / tool_name で判定):
 
-  PreToolUse   ExitPlanMode                : plan -> 実装の境界。 実装を /codex:rescue へ委譲せよと案内
-  SubagentStop agent_type ~ "codex-rescue" : codex が実装を返した直後。 敵対的/受入レビューせよと案内
+  PreToolUse ExitPlanMode : plan -> 実装の境界。 実装を /codex:rescue へ委譲せよと案内
 
-どちらも自然に低頻度 (plan 退出 1 回 / codex-rescue 完了時のみ) ゆえ advise-once は不要。
+ExitPlanMode は plan 退出 1 回 / plan で自然に低頻度ゆえ advise-once は不要。
 
-委譲は plugin 経路 `/codex:rescue` 一本 (raw mcp-server は非登録)。 review-nudge は
-SubagentStop の additionalContext で main agent に注入 (CLI v2.1.163+ 対応)。
+委譲は plugin 経路 `/codex:rescue` 一本 (raw mcp-server は非登録)。 rescue 完了時の
+review-nudge は todo (SubagentStop / Agent PostToolUse + subagent_type 判定で再導入)。
 
 emit / fail-open
 ================
@@ -45,13 +44,6 @@ DELEGATE_MSG = (
     "/codex:adversarial-review で独立 cross-model 第二レビュー)。 trivial な変更・doc "
     "編集・codex 利用不可時は self-implement で構いません。"
 )
-REVIEW_MSG = (
-    "[codex-review] codex が実装を返しました。 tool-role-delegation step4: コードを"
-    "敵対的/受入レビューし、 バグ・仕様逸脱・副作用を検査してください (patch 反映も"
-    "レビューの一部)。 auth / data-loss / race / rollback 等の高リスク変更は "
-    "`/codex:adversarial-review` で codex の独立 cross-model 第二レビューを追加して"
-    "ください。"
-)
 
 
 def _emit(event: str, context: str) -> None:
@@ -73,10 +65,11 @@ def cmd(payload: dict) -> None:
     if not isinstance(payload, dict):
         return
     event = payload.get("hook_event_name")
-    if event == "PreToolUse" and payload.get("tool_name") == "ExitPlanMode":
+    tool = payload.get("tool_name")
+    if not isinstance(tool, str):
+        return
+    if event == "PreToolUse" and tool == "ExitPlanMode":
         _emit("PreToolUse", DELEGATE_MSG)
-    elif event == "SubagentStop" and "codex-rescue" in str(payload.get("agent_type", "")).lower():
-        _emit("SubagentStop", REVIEW_MSG)
 
 
 def main() -> int:
@@ -111,19 +104,6 @@ class SurfaceTest(unittest.TestCase):
         self.assertIn("/codex:rescue", out["additionalContext"])
         self.assertIn("--resume", out["additionalContext"])
         self.assertIn("[codex-delegation]", out["additionalContext"])
-
-    def test_subagentstop_codex_rescue_review_nudge(self):
-        for at in ("codex:codex-rescue", "codex-rescue", "Codex-Rescue"):
-            out = self._run({"hook_event_name": "SubagentStop", "agent_type": at})
-            self.assertEqual(out["hookEventName"], "SubagentStop")
-            self.assertIn("adversarial-review", out["additionalContext"])
-            self.assertIn("[codex-review]", out["additionalContext"])
-
-    def test_subagentstop_other_agent_no_fire(self):
-        for at in ("general-purpose", "Explore", ""):
-            self.assertIsNone(
-                self._run({"hook_event_name": "SubagentStop", "agent_type": at})
-            )
 
     def test_no_fire_on_other_tools(self):
         self.assertIsNone(
