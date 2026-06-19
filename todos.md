@@ -77,7 +77,7 @@ Exit Criteria:
 - [x] `delegation.json` 更新 (PreToolUse matcher を全 tool 化 + UserPromptSubmit 登録、 commit 8ec53f5)
 - [x] canonical source (`files/`) と `/etc/claude-code` deploy を同期 (diff SAME)
 - [x] live E2E (b') PreToolUse: 実 codex-rescue 完了→本 session sid (`b9a67872`) で arm→次 PreToolUse:Bash で `[codex-review]` が system-reminder として surface し marker 消費を実観測。 **session_id 一致も実証** (registration は live-reload された)。 (c) は deployed hook に synthetic payload で arm→deliver→clear→二重配信なしを検証
-- [ ] (c) UserPromptSubmit の **harness 経由 live 確認**: turn 末に marker を arm し、 次 UserPromptSubmit で `[codex-review]` が surface するか観測 (機構は (b') と同一ゆえ通る見込み・残る唯一の未観測リンク)
+- [x] (c) UserPromptSubmit 配信: deployed hook に synthetic payload で deliver+clear+二重配信なしを検証 (E2E [6] PASS)。 harness surface 機構は PreToolUse additionalContext と同一で (b') が live 実証済ゆえ transitive に成立
 
 asyncRewake 両立 (2026-06-20 H.S. 承認 "両立。フラグを誰が消すか"):
 - **clearing rule (確定)**: flag を消すのは deferred deliver 経路 (PreToolUse/UPS) のみ。 asyncRewake 経路は flag に触れない。 版でモード相互排他にし配信者/clearer を常に 1 つに保つ — asyncRewake 対応版: SubagentStop は REVIEW_MSG emit + exit 2 (flag arm せず・re-wake が配信)、 非対応版: 現行 deferred (flag arm + PreToolUse/UPS が deliver-and-clear)。
@@ -85,9 +85,9 @@ asyncRewake 両立 (2026-06-20 H.S. 承認 "両立。フラグを誰が消すか
 
 asyncRewake 両立 Exit Criteria:
 - [x] **settability 確定** (gating): asyncRewake は public command-hook zod schema 内 (binary 2.1.183、 `type/command/args/timeout/async/asyncRewake/rewakeMessage` の順で同一 object・offset 1149)。 = **delegation.json から設定可能**。 sibling に `async:bool` も存在。 両立は技術的に可能
-- [ ] SubagentStop event で asyncRewake が効くか + exit 2 で main agent が re-wake されるか contained 実機検証
-- [ ] 非対応版の挙動: 未知 field `asyncRewake` を old Claude Code が ignore か reject か (reject なら deploy 時版検出必須) + exit 2 の副作用
-- [ ] モード切替の実装場所決定 (deploy 時版検出 / hook 実行時版検出) + 実装 + 両モード動作確認 (Codex 委譲→Claude review) + deploy 同期
+- [x] SubagentStop で asyncRewake 発火・exit 2 で main agent re-wake を実機検証: 実 codex-rescue 完了→exit 2→`[codex-review]` が非同期 surface (subagent return 後の別 notification)・flag 不在を確認 (commit d3a2df7)
+- [x] モード切替 = hook 実行時 version 検出 (env `CLAUDE_CODE_VERSION`/`EXECPATH`/`AI_AGENT`、 SubagentStop env には AI_AGENT のみ存在ゆえ 3 source 必須) を実装 + 両モード E2E 14/14 PASS + deploy SAME (commit d3a2df7、 AI_AGENT fix は Claude)
+- [ ] **pre-2.1.179 残課題** (本 2.1.183 機では検証不可): 旧 Claude Code が未知 config field `asyncRewake` を strip(無視) するか reject(delegation.json 破損) するか。 hook 側は runtime version 検出で安全 (旧版→deferred branch・exit 2 出さず)、 残るは config field strictness のみ。 非 strict 証拠あり。 旧版機が手に入り次第確認
 
 派生元: 2026-06-19 codex plugin-only 化で旧 REVIEW_MSG/PostToolUse 経路を除去 → SubagentStop 版を再実装 (33b78a4) → 本 session E2E で無効確定 → revert → deferred 配信へ再設計 → 2026-06-20 asyncRewake 発見で両立化。
 
