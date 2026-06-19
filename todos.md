@@ -71,3 +71,5 @@ Exit Criteria:
 - [ ] **live end-to-end 確認**: 実 codex-rescue 完了で [codex-review] nudge が main agent へ注入されるか。 managed-settings の hook 追加は session 起動時 load ゆえ本 session では未発火 (smoke で codex-rescue 到達は確認・nudge 未注入)、 次 session 起動後に確認
 
 派生元: 2026-06-19 本 session で codex を plugin-only 化した際に旧 REVIEW_MSG/PostToolUse 経路を除去 → 同 session で SubagentStop 版を再実装。
+
+Work file: handoff = `last-session-handoff.md` の「codex review-nudge を rescue 完了 trigger で再導入」 section
