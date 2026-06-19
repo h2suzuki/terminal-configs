@@ -1,5 +1,5 @@
 # terminal-configs managed system config for codex CLI -> /etc/codex/config.toml
-# Write-capable non-interactive delegation: codex (MCP + rescue) writes the workspace without approval prompts.
+# Write-capable non-interactive defaults: /codex:rescue network + interactive codex TUI (no approval prompts).
 sandbox_mode = "workspace-write"
 approval_policy = "never"
 
