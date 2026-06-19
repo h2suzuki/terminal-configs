@@ -73,10 +73,11 @@ E2E 確定事実 (session b9a67872、再導出不要):
 
 Exit Criteria:
 - [x] H.S. が代替経路を決定 (2026-06-20: (b')+(c) deferred 配信を採用)
-- [ ] `codex_delegation_surface.py` を deferred 配信へ改修 (SubagentStop=arm flag / PreToolUse 全 tool・UserPromptSubmit=fresh flag で deliver+clear / DELEGATE_MSG 維持) + unittest green。 Codex 委譲 → Claude が敵対的/受入レビュー
-- [ ] `delegation.json` 更新 (codex hook の PreToolUse matcher を全 tool 化 + UserPromptSubmit 登録追加)
-- [ ] canonical source (`files/`) と `/etc/claude-code` deploy を同期 (diff SAME)
-- [ ] live E2E: 実 codex-rescue 完了後の次 PreToolUse で `[codex-review]` が surface するか確認 (今度は surface する経路ゆえ通るはず)
+- [x] `codex_delegation_surface.py` を deferred 配信へ改修 (SubagentStop=arm / PreToolUse 全 tool・UserPromptSubmit=fresh flag で deliver+clear / DELEGATE_MSG 維持)、 12 unittest green、 Codex 委譲→Claude 敵対的/受入レビュー済 (commit 8ec53f5)
+- [x] `delegation.json` 更新 (PreToolUse matcher を全 tool 化 + UserPromptSubmit 登録、 commit 8ec53f5)
+- [x] canonical source (`files/`) と `/etc/claude-code` deploy を同期 (diff SAME)
+- [x] live E2E (b') PreToolUse: 実 codex-rescue 完了→本 session sid (`b9a67872`) で arm→次 PreToolUse:Bash で `[codex-review]` が system-reminder として surface し marker 消費を実観測。 **session_id 一致も実証** (registration は live-reload された)。 (c) は deployed hook に synthetic payload で arm→deliver→clear→二重配信なしを検証
+- [ ] (c) UserPromptSubmit の **harness 経由 live 確認**: turn 末に marker を arm し、 次 UserPromptSubmit で `[codex-review]` が surface するか観測 (機構は (b') と同一ゆえ通る見込み・残る唯一の未観測リンク)
 
 派生元: 2026-06-19 codex plugin-only 化で旧 REVIEW_MSG/PostToolUse 経路を除去 → SubagentStop 版を再実装 (33b78a4) → 本 session E2E で無効確定 → revert → deferred 配信へ再設計。
 
