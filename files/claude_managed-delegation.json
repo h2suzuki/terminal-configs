@@ -9,6 +9,11 @@
         "matcher": "^ExitPlanMode$",
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/codex_delegation_surface.py" } ]
       }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/codex_delegation_surface.py" } ]
+      }
     ]
   }
 }
