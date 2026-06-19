@@ -11,11 +11,14 @@ deny せず additionalContext のみ (実装を止めない・誘導のみ)。
 発火点 (payload の hook_event_name / tool_name / agent_type で判定):
 
   PreToolUse ExitPlanMode : plan -> 実装の境界。 実装を /codex:rescue へ委譲せよと案内
-  SubagentStop codex-rescue : session-keyed review flag を arm
+  SubagentStop codex-rescue : Claude Code >= 2.1.179 は asyncRewake で REVIEW_MSG + exit 2
+  SubagentStop codex-rescue : それ以外は session-keyed review flag を arm
   PreToolUse / UserPromptSubmit : review flag が fresh なら敵対的/受入レビュー nudge を deliver-and-clear
 
-SubagentStop の additionalContext は main agent に surface しないため直接 emit しない。
-次の surface-capable event (PreToolUse / UserPromptSubmit) で 1 回だけ配送する。
+asyncRewake capable では SubagentStop hook が plain text を出し exit 2 で main agent を
+re-wake する。fallback では SubagentStop の additionalContext が main agent に surface しない
+ため、次の surface-capable event (PreToolUse / UserPromptSubmit) で 1 回だけ配送する。
+clearing rule: deferred deliver path だけが flag を clear し、asyncRewake path は arm/clear しない。
 
 委譲は plugin 経路 `/codex:rescue` 一本 (raw mcp-server は非登録)。
 
@@ -32,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -77,6 +81,29 @@ def _emit(event: str, context: str) -> None:
         )
         + "\n"
     )
+
+
+def _cc_version() -> tuple[int, int, int] | None:
+    try:
+        # SubagentStop env lacks CLAUDE_CODE_VERSION/EXECPATH; AI_AGENT (claude-code_2-1-183_harness) carries it.
+        for raw in (
+            os.environ.get("CLAUDE_CODE_VERSION"),
+            os.path.basename(os.environ.get("CLAUDE_CODE_EXECPATH", "")),
+            os.environ.get("AI_AGENT"),
+        ):
+            if not raw:
+                continue
+            m = re.search(r"(\d+)[.\-_](\d+)[.\-_](\d+)", raw)
+            if m:
+                return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        return None
+    except Exception:
+        return None
+
+
+def _async_rewake_active() -> bool:
+    version = _cc_version()
+    return version is not None and version >= (2, 1, 179)
 
 
 def _sid(payload: dict) -> str:
@@ -142,15 +169,18 @@ def _pop_review(payload: dict, now: float) -> str | None:
     return REVIEW_MSG if fresh else None
 
 
-def cmd(payload: object) -> None:
+def cmd(payload: object) -> int:
     if not isinstance(payload, dict):
-        return
+        return 0
     event = payload.get("hook_event_name")
     now = time.time()
     if event == "SubagentStop":
         if "codex-rescue" in str(payload.get("agent_type", "")).lower():
+            if _async_rewake_active():
+                sys.stdout.write(REVIEW_MSG + "\n")
+                return 2
             _arm(payload, now)
-        return
+        return 0
     if event == "PreToolUse":
         messages = []
         if payload.get("tool_name") == "ExitPlanMode":
@@ -164,6 +194,7 @@ def cmd(payload: object) -> None:
         review = _pop_review(payload, now)
         if review:
             _emit("UserPromptSubmit", review)
+    return 0
 
 
 def main() -> int:
@@ -172,7 +203,7 @@ def main() -> int:
     except json.JSONDecodeError:
         return 0
     try:
-        cmd(payload)
+        return cmd(payload)
     except Exception:
         pass  # fail-open
     return 0
@@ -184,10 +215,25 @@ class SurfaceTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.old_state_dir = globals()["STATE_DIR"]
+        self.old_version = os.environ.pop("CLAUDE_CODE_VERSION", None)
+        self.old_execpath = os.environ.pop("CLAUDE_CODE_EXECPATH", None)
+        self.old_ai_agent = os.environ.pop("AI_AGENT", None)
         globals()["STATE_DIR"] = self.tmp
 
     def tearDown(self):
         globals()["STATE_DIR"] = self.old_state_dir
+        if self.old_version is None:
+            os.environ.pop("CLAUDE_CODE_VERSION", None)
+        else:
+            os.environ["CLAUDE_CODE_VERSION"] = self.old_version
+        if self.old_execpath is None:
+            os.environ.pop("CLAUDE_CODE_EXECPATH", None)
+        else:
+            os.environ["CLAUDE_CODE_EXECPATH"] = self.old_execpath
+        if self.old_ai_agent is None:
+            os.environ.pop("AI_AGENT", None)
+        else:
+            os.environ["AI_AGENT"] = self.old_ai_agent
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     @staticmethod
@@ -197,9 +243,10 @@ class SurfaceTest(unittest.TestCase):
 
         buf = io.StringIO()
         with redirect_stdout(buf):
-            cmd(payload)
+            code = cmd(payload)
         out = buf.getvalue().strip()
-        return json.loads(out)["hookSpecificOutput"] if out else None
+        parsed = json.loads(out)["hookSpecificOutput"] if out.startswith("{") else None
+        return (parsed, code, out)
 
     def _marker_path(self, sid="s1"):
         return os.path.join(self.tmp, sid, "pending")
@@ -218,25 +265,36 @@ class SurfaceTest(unittest.TestCase):
         return path
 
     def _output(self, payload):
-        out = self._run(payload)
+        out, code, _ = self._run(payload)
+        self.assertEqual(code, 0)
         self.assertIsNotNone(out)
         assert out is not None
         return out
 
+    def _no_output(self, payload):
+        out, code, text = self._run(payload)
+        self.assertEqual(code, 0)
+        self.assertEqual(text, "")
+        self.assertIsNone(out)
+
     def test_subagentstop_codex_rescue_arms_marker_emits_nothing(self):
         for at in ("codex:codex-rescue", "codex-rescue", "Codex-Rescue"):
             sid = at.replace(":", "_")
-            out = self._run(
+            out, code, text = self._run(
                 {"hook_event_name": "SubagentStop", "agent_type": at, "session_id": sid}
             )
+            self.assertEqual(code, 0)
+            self.assertEqual(text, "")
             self.assertIsNone(out)
             self.assertTrue(os.path.exists(self._marker_path(sid)))
 
     def test_subagentstop_other_agent_arms_nothing_emits_nothing(self):
         for at in ("general-purpose", ""):
-            out = self._run(
+            out, code, text = self._run(
                 {"hook_event_name": "SubagentStop", "agent_type": at, "session_id": at}
             )
+            self.assertEqual(code, 0)
+            self.assertEqual(text, "")
             self.assertIsNone(out)
             self.assertFalse(os.path.exists(self._marker_path(at or "_")))
 
@@ -254,9 +312,11 @@ class SurfaceTest(unittest.TestCase):
         first = self._output(
             {"hook_event_name": "PreToolUse", "tool_name": "Edit", "session_id": "s1"}
         )
-        second = self._run(
+        second, code, text = self._run(
             {"hook_event_name": "PreToolUse", "tool_name": "Edit", "session_id": "s1"}
         )
+        self.assertEqual(code, 0)
+        self.assertEqual(text, "")
         self.assertIn("[codex-review]", first["additionalContext"])
         self.assertIsNone(second)
 
@@ -269,15 +329,21 @@ class SurfaceTest(unittest.TestCase):
 
     def test_pretooluse_stale_marker_removed_not_emitted(self):
         path = self._arm_stale_marker()
-        out = self._run(
+        out, code, text = self._run(
             {"hook_event_name": "PreToolUse", "tool_name": "Edit", "session_id": "s1"}
         )
+        self.assertEqual(code, 0)
+        self.assertEqual(text, "")
         self.assertIsNone(out)
         self.assertFalse(os.path.exists(path))
 
     def test_userpromptsubmit_stale_marker_removed_not_emitted(self):
         path = self._arm_stale_marker()
-        out = self._run({"hook_event_name": "UserPromptSubmit", "session_id": "s1"})
+        out, code, text = self._run(
+            {"hook_event_name": "UserPromptSubmit", "session_id": "s1"}
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(text, "")
         self.assertIsNone(out)
         self.assertFalse(os.path.exists(path))
 
@@ -310,29 +376,94 @@ class SurfaceTest(unittest.TestCase):
         self.assertFalse(os.path.exists(path))
 
     def test_no_fire_on_other_tools(self):
-        self.assertIsNone(
-            self._run({"hook_event_name": "PreToolUse", "tool_name": "Edit"})
-        )
-        self.assertIsNone(
-            self._run(
-                {
-                    "hook_event_name": "PostToolUse",
-                    "tool_name": "mcp__codegraph__codegraph_search",
-                }
-            )
+        self._no_output({"hook_event_name": "PreToolUse", "tool_name": "Edit"})
+        self._no_output(
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_name": "mcp__codegraph__codegraph_search",
+            }
         )
 
     def test_exitplanmode_only_on_pretooluse(self):
         # PostToolUse の ExitPlanMode (理論上) には委譲 nudge を出さない。
-        self.assertIsNone(
-            self._run({"hook_event_name": "PostToolUse", "tool_name": "ExitPlanMode"})
-        )
+        self._no_output({"hook_event_name": "PostToolUse", "tool_name": "ExitPlanMode"})
 
     def test_non_dict_and_missing_fields(self):
-        self.assertIsNone(self._run(None))
-        self.assertIsNone(self._run([]))
-        self.assertIsNone(self._run({}))
-        self.assertIsNone(self._run({"tool_name": "ExitPlanMode"}))  # event 欠落
+        self._no_output(None)
+        self._no_output([])
+        self._no_output({})
+        self._no_output({"tool_name": "ExitPlanMode"})  # event 欠落
+
+    def test_cc_version_parsing(self):
+        os.environ["CLAUDE_CODE_VERSION"] = "2.1.183"
+        self.assertEqual(_cc_version(), (2, 1, 183))
+        os.environ["CLAUDE_CODE_VERSION"] = ""
+        os.environ["CLAUDE_CODE_EXECPATH"] = "/x/versions/2.1.183"
+        self.assertEqual(_cc_version(), (2, 1, 183))
+        os.environ["CLAUDE_CODE_EXECPATH"] = "/x/versions/garbage"
+        self.assertIsNone(_cc_version())
+        os.environ["CLAUDE_CODE_VERSION"] = "garbage"
+        self.assertIsNone(_cc_version())
+        os.environ.pop("CLAUDE_CODE_VERSION", None)
+        os.environ.pop("CLAUDE_CODE_EXECPATH", None)
+        os.environ["AI_AGENT"] = "claude-code_2-1-183_harness"
+        self.assertEqual(_cc_version(), (2, 1, 183))
+
+    def test_async_rewake_active_version_gate(self):
+        for version in ("2.1.179", "2.1.183"):
+            os.environ["CLAUDE_CODE_VERSION"] = version
+            self.assertTrue(_async_rewake_active())
+        for version in ("2.1.178", "2.0.999"):
+            os.environ["CLAUDE_CODE_VERSION"] = version
+            self.assertFalse(_async_rewake_active())
+        os.environ.pop("CLAUDE_CODE_VERSION", None)
+        os.environ.pop("CLAUDE_CODE_EXECPATH", None)
+        self.assertFalse(_async_rewake_active())
+
+    def test_subagentstop_codex_rescue_async_rewake_returns_2_without_marker(self):
+        os.environ["CLAUDE_CODE_VERSION"] = "2.1.183"
+        out, code, text = self._run(
+            {
+                "hook_event_name": "SubagentStop",
+                "agent_type": "codex-rescue",
+                "session_id": "s1",
+            }
+        )
+        self.assertIsNone(out)
+        self.assertEqual(code, 2)
+        self.assertIn("[codex-review]", text)
+        self.assertFalse(text.startswith("{"))
+        self.assertFalse(os.path.exists(self._marker_path()))
+
+    def test_subagentstop_codex_rescue_inactive_arms_marker(self):
+        os.environ["CLAUDE_CODE_VERSION"] = "2.1.178"
+        out, code, text = self._run(
+            {
+                "hook_event_name": "SubagentStop",
+                "agent_type": "codex-rescue",
+                "session_id": "s1",
+            }
+        )
+        self.assertIsNone(out)
+        self.assertEqual(code, 0)
+        self.assertEqual(text, "")
+        self.assertTrue(os.path.exists(self._marker_path()))
+
+    def test_main_fail_open_when_cmd_raises(self):
+        import io
+        from contextlib import redirect_stdout
+        from unittest.mock import patch
+
+        old_stdin = sys.stdin
+        try:
+            sys.stdin = io.StringIO("{}")
+            buf = io.StringIO()
+            with patch(__name__ + ".cmd", side_effect=RuntimeError("boom")):
+                with redirect_stdout(buf):
+                    self.assertEqual(main(), 0)
+            self.assertEqual(buf.getvalue(), "")
+        finally:
+            sys.stdin = old_stdin
 
 
 if __name__ == "__main__":
