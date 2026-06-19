@@ -226,14 +226,13 @@ run npx -y skills add vercel-labs/agent-browser --skill agent-browser --agent cl
 claude mcp remove playwright --scope user
 run "claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"
 
-# Codex plugin & MCP server
+# Codex plugin (raw mcp-server は登録しない: 委譲は /codex:rescue 一本)
 run claude plugin marketplace add openai/codex-plugin-cc
 run claude plugin install codex@openai-codex
 
 claude mcp remove codex --scope user
-run "claude mcp add codex --scope user -- codex mcp-server"
 
-# System-wide codex config: write-capable, non-interactive delegation (both MCP + rescue paths).
+# System-wide codex config: write-capable non-interactive (rescue の network + 対話 TUI に効く)
 copy --nobackup codex_config.toml                          /etc/codex/config.toml -m 0644
 
 # CodeGraph MCP
@@ -332,12 +331,11 @@ if [ -n "$LOGIN_USER" ]; then          # resolved up-front near the shared-store
     sudo -i -u $LOGIN_USER bash -c "claude mcp remove playwright --scope user"
     run sudo -i -u $LOGIN_USER bash -c '"claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"'
 
-    # Codex plugin & MCP server
+    # Codex plugin (raw mcp-server は登録しない: 委譲は /codex:rescue 一本)
     run sudo -i -u $LOGIN_USER bash -c '"claude plugin marketplace add openai/codex-plugin-cc"'
     run sudo -i -u $LOGIN_USER bash -c '"claude plugin install codex@openai-codex"'
 
     sudo -i -u $LOGIN_USER bash -c "claude mcp remove codex --scope user"
-    run sudo -i -u $LOGIN_USER bash -c '"claude mcp add codex --scope user -- codex mcp-server"'
 
     # CodeGraph MCP
     sudo -i -u $LOGIN_USER bash -c "claude mcp remove codegraph --scope user"

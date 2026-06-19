@@ -59,3 +59,14 @@ Exit Criteria:
 Note: doc 本体 (L1〜L4 概観 head + 実装 contract 0〜5 + 除外) 記載・commit 27b498c・SendUserFile 送付済。 目次 = 二つの family → capability-grant → 判定/検出/状態/安全 → 除外、 各項に実フック名の具体例。 **H.S. レビュー待ち** (外出先・後日)。 承認後に Exit flip + block 削除 (body 構成/粒度の直しがあれば反映してから)。 2026-05-31: コード照合 audit (workflow wvsbvz52x、 34 claim 中 30 accurate、 adversarial 確認・誤 flag 1 件棄却) 実施し確定 3 finding を commit eedd808 で反映 — (A) 中核 dichotomy 訂正 (L3 stop_checks の 4 family は exit2 で block、 overview L3 行+段階補足+§0 表)、 (B) §3 synthetic-skip を path 別に (BM25 surfacer `_memory_surface` は非 skip・本 turn live 確認)、 (C) §1/§2 に advisory-allow + content-embedded opt-out token 追記。 **事実精度は audit 済**、 残は H.S. の構成/粒度レビュー。 任意候補: 補足「L3とL4どう違うか」の「指摘する」(現 line 24) も同根で、 H.S. が望めば「介入する」系へ。 follow-up (doc外・コード): `_memory_surface` が synthetic prompt を surface する挙動の許容可否。 2026-06-01〜02: H.S. live レビューで overview を全面改稿 (歴史先行 CLAUDE.md→skill→hook / L1-L4 jargon 撤去 / 一人称除去 / です・ます / 表 A-D 化+俳句 / capability-grant をフロー番号リスト化 / 事実確認) + ファイル名 `_`→`-` リネーム (commit 025a3c6・14cf6d0)。 **レビュー継続中** — 次 session も H.S. の追加指摘を反映。 確立した編集ルールは handoff doc 参照。
 
 Work file: handoff = `last-session-handoff.md` の「SKILL-HOOK-CONTRACT.md パターン集」 section ＋ plan `~/.claude/plans/breezy-bubbling-quiche.md` の「並行 deliverable」節
+
+### codex review-nudge を rescue 完了 trigger で再導入
+
+Goal: codex の plugin-only 化 (raw `mcp__codex__*` 廃止) で `files/claude_managed-hooks/codex_delegation_surface.py` の PostToolUse review-nudge (旧 REVIEW_MSG) が発火しなくなったため、 rescue subagent 完了時に「codex 出力を敵対的/受入レビューせよ」と促す trigger を再導入する。 現状は DELEGATE_MSG (ExitPlanMode 時) に review 指示を畳み込んで暫定代替。
+
+Exit Criteria:
+- [ ] harness payload schema を実機確認: SubagentStop か PostToolUse(Agent/Task) で subagent_type=`codex:codex-rescue` を判定できるか
+- [ ] 判定可なら hook に review-nudge branch + delegation.json matcher を追加し、 codex-rescue 完了時のみ発火 (FP なし) を unittest + 実機で検証
+- [ ] canonical source (`files/`) と `/etc/claude-code` deploy を同期
+
+派生元: 2026-06-19 本 session で codex を plugin-only 化 (raw MCP 登録削除) した際に旧 REVIEW_MSG/PostToolUse 経路を除去。

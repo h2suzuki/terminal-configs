@@ -111,8 +111,8 @@ Configures both the login user and root.
 Adds Claude Code's "trust-building" machinery plus external tool integrations.
 
 - **Guardrails (hooks / skills)**: hooks that mechanically enforce the `CLAUDE.md` rules (commit discipline, skill firing, memory routing, codegraph-first / codex-delegation nudges, ...) are deployed to `/etc/claude-code/hooks/` and skills to `/etc/claude-code/skills/`, registered through a managed-settings drop-in (an extra settings file). User-side hooks (commit author check, push-prompting detection, memory surfacing, subagent gate) are installed into `~/.claude/hooks/`. See `SKILL-HOOK-CONTRACT.md` for how it works.
-- **MCP servers (scope=user)**: Playwright (browser), CodeGraph (code knowledge graph), Cloud Run, Toolbox (BigQuery), Codex (delegation target `mcp__codex__codex`)
-- **Plugins**: security-guidance (disabled by default), figma, vercel (Vercel's MCP is provided through this plugin)
+- **MCP servers (scope=user)**: Playwright (browser), CodeGraph (code knowledge graph), Cloud Run, Toolbox (BigQuery)
+- **Plugins**: security-guidance (disabled by default), figma, codex (delegation to OpenAI Codex / code review), vercel (Vercel's MCP is provided through this plugin)
 - **CLI**: agent-browser (Vercel Labs), Vercel CLI
 
 After installing, complete the authentication / initial setup below (only the MCP servers this script registers; `claude mcp list` also shows MCP servers configured elsewhere).
@@ -126,6 +126,8 @@ After installing, complete the authentication / initial setup below (only the MC
 | vercel | OAuth2 via `/mcp` in the Claude Code console |
 
 After authenticating, check the connections with `/mcp` and `/doctor`.
+
+The codex plugin is authenticated with `!codex login`, verified with `/codex:setup`, and applied to the current session with `/reload-plugins`.
 
 
 ### B. Voice notifications (`extra/voicevox.sh`)
