@@ -233,6 +233,9 @@ run claude plugin install codex@openai-codex
 claude mcp remove codex --scope user
 run "claude mcp add codex --scope user -- codex mcp-server"
 
+# System-wide codex config: write-capable, non-interactive delegation (both MCP + rescue paths).
+copy --nobackup codex_config.toml                          /etc/codex/config.toml -m 0644
+
 # CodeGraph MCP
 claude mcp remove codegraph --scope user
 run npm install -g @colbymchenry/codegraph
