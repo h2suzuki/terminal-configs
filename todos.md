@@ -39,6 +39,8 @@ Exit Criteria:
 
 未検証 (実機 relaunch で初確認): DISABLE が動的 glyph を完全停止するか / terminalSequence が UserPromptSubmit·Stop でも honor されるか / hook input に session_name·title が実在するか (無ければ cwd basename で表示)。 静的に確認済は terminalSequence allowlist・DISABLE env・process.title は静的 "claude"。
 
+Work file: last-session-handoff.md
+
 ### SKILL-HOOK-CONTRACT.md パターン集
 
 Goal: repo 直下 `SKILL-HOOK-CONTRACT.md` を 4 部構成で完成 — (A) event 別 hook 利用カタログ (H.S. の番号フロー形式) / (B) Skills フォーマット規約 / (C) 応用編 = CLAUDE.md→skill/hook 化の概要 (Big Picture) / (D) 実装 contract (技術者向け再利用規約)。 一貫性担保が目的 (2026-05-30 起案・A/B 記入は 2026-06-07 前 session で H.S. が依頼したが court バグでセッション腐敗→リセット、 本 session で再開。 「今 session の新指示」ではない)。
