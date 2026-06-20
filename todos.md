@@ -22,6 +22,23 @@ Exit Criteria:
 
 ## Medium
 
+### ターミナルタブの状態別アイコン (実験中・repo 未 commit)
+
+Goal: Claude Code のタブアイコン (待受=✳ / 実行=・ の hardcode) を状態別カスタムに置換。 hook の `terminalSequence` (OSC 0/1/2 許可・binary 2.1.183 で allowlist 確認) で発行し、 CC 純正 title は `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1` (env・gate 実在確認) で停止。 H.S. 指示で「まず repo 非 commit の実験」→承認後 back-port。
+
+実験構成 (gitignore 内・deploy-target 非汚染):
+- hook 実体: `~/.claude/title-icon-hook.py` (live・非 repo)。 先頭 `ICON` dict 1 行で差替可。 現状 ⚡生成中 / 💤暇 / ❓質問 (シンプル路線・H.S. 確定待ち)。
+- 配線: `.claude/settings.local.json` (gitignore) の hooks に UserPromptSubmit / Stop / Notification 登録 (既存 permissions は非破壊で merge 済)。
+- DISABLE env: 起動時インライン `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1 claude --continue` で付与 (settings env が CC 自身に効くか不確実ゆえ inline が確実)。
+
+Exit Criteria:
+- [ ] H.S. が実機 relaunch で表示確認: 3 状態でアイコン切替わるか / DISABLE で純正 glyph 消えるか / ちらつき有無 / session 名併置の可否
+- [ ] アイコン絵柄を H.S. が確定
+- [ ] **承認後 back-port** (CLAUDE.md 必須): canonical 版を Codex 生成+敵対レビュー → script を `files/` へ + `ubuntu2404-wsl.sh`/`debian12.sh` に copy 行 / DISABLE を `files/claude_env.sh` / hooks 配線を該当 source json へ反映 → commit
+- [ ] back-port 後に実験用暫定配線 (settings.local.json の hooks block・live script) を整理
+
+未検証 (実機 relaunch で初確認): DISABLE が動的 glyph を完全停止するか / terminalSequence が UserPromptSubmit·Stop でも honor されるか / hook input に session_name·title が実在するか (無ければ cwd basename で表示)。 静的に確認済は terminalSequence allowlist・DISABLE env・process.title は静的 "claude"。
+
 ### SKILL-HOOK-CONTRACT.md パターン集
 
 Goal: repo 直下 `SKILL-HOOK-CONTRACT.md` を 4 部構成で完成 — (A) event 別 hook 利用カタログ (H.S. の番号フロー形式) / (B) Skills フォーマット規約 / (C) 応用編 = CLAUDE.md→skill/hook 化の概要 (Big Picture) / (D) 実装 contract (技術者向け再利用規約)。 一貫性担保が目的 (2026-05-30 起案・A/B 記入は 2026-06-07 前 session で H.S. が依頼したが court バグでセッション腐敗→リセット、 本 session で再開。 「今 session の新指示」ではない)。
