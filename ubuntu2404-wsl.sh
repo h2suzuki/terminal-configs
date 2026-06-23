@@ -160,9 +160,10 @@ copy --nobackup share_ssh_x11forwarding ~/.share_ssh_x11forwarding
 run apt update
 run apt remove -y vim
 run apt install -y --no-install-recommends \
-neovim git git-lfs tree ripgrep shellcheck
+neovim git git-lfs tree ripgrep shellcheck htop
 
 copy --nobackup sysinit.vim /etc/xdg/nvim/sysinit.vim   # Neovim system-wide init file
+copy --nobackup htoprc /etc/htoprc -m 0644              # htop system-wide default config
 
 run git lfs install --skip-repo
 
