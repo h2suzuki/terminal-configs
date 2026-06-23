@@ -147,15 +147,18 @@ CUR="VVOX_LOCK contended → flock -w drops utterance, no pileup"
 echo "=== $CUR ==="
 LOCK_FILE="/tmp/$PROG_NAME.voicevox.lock"
 ( umask 0; : > "$LOCK_FILE" ) 2>/dev/null
-flock -x "$LOCK_FILE" sleep 3 &
+READY="$SB/holder-ready"; rm -f "$READY"
+( exec 9>"$LOCK_FILE"; flock -x 9; : > "$READY"; sleep 3 ) &
 HOLDER=$!
+for _ in $(seq 1 50); do [ -e "$READY" ] && break; sleep 0.1; done   # fire only after the holder owns the lock (no race)
 reset_run
 printf '%s' '{"hook_event_name":"SubagentStart","session_id":"s7","agent_type":"general-purpose"}' \
   | VVOX_LOCK_WAIT=1 bash "$SCRIPT" SubagentStart >/dev/null 2>&1
 sleep 4   # > holder's 3s hold: an infinite flock wait would acquire+play by now; -w 1 drops at 1s
 dump
-if log_has "sid=s7" && [ "$(vvox_count)" -eq 0 ]; then ok "$CUR"
-else bad "$CUR (vvox=$(vvox_count); utterance should have been dropped)"; fi
+s7line=$(grep -F "sid=s7" "$SPOKEN_LOG" 2>/dev/null)
+if [ "$(vvox_count)" -eq 0 ] && grep -q "audio=rc" <<<"$s7line"; then ok "$CUR"
+else bad "$CUR (vvox=$(vvox_count); dropped utterance must log audio=rc, got: $s7line)"; fi
 wait "$HOLDER" 2>/dev/null
 
 # CASE 8: a SIGTERM-deaf voicevox_paplay (mimics the wedged-WSLg pa_simple_write
