@@ -127,13 +127,17 @@ export LC_ALL=C.UTF-8
 # is an implementation detail (audio routing) wired into each
 # voicevox_paplay call site so it cannot be accidentally removed.
 export VVOX_OPTS="--speed 1.2"
-# Hard caps on subprocess durations (seconds).
-export VVOX_TIMEOUT=30
+# Hard caps on subprocess durations (seconds); timeout adds -k 5 to SIGKILL a SIGTERM-deaf voicevox_paplay.
+export VVOX_TIMEOUT="${VVOX_TIMEOUT:-30}"
+# Bounded flock wait (< VVOX_TIMEOUT) so a stuck holder drops stale utterances instead of piling detached waiters.
+export VVOX_LOCK_WAIT="${VVOX_LOCK_WAIT:-10}"
 # 60s chosen empirically: claude -p with --effort low on claude-haiku-4-5
 # regressed to 18-64s after Claude Code 2.1.140 (was 21s on 2.1.139).
 # 60s catches most successful calls while keeping the fallback path latency
 # bounded. Timeouts are visible in spoken.log as `haiku=TIMEOUT`.
-export HAIKU_TIMEOUT=60
+export HAIKU_TIMEOUT="${HAIKU_TIMEOUT:-60}"
+# >= HAIKU_TIMEOUT so a queued summary waits out the in-flight claude -p instead of dropping.
+export HAIKU_LOCK_WAIT="${HAIKU_LOCK_WAIT:-70}"
 # Haiku model used for Stop / SubagentStop summarization and CLI `say`
 # katakana conversion.
 export HAIKU_MODEL="claude-haiku-4-5"
@@ -275,7 +279,7 @@ haiku_katakanize_sync() {
   # cost. Long input + low effort still produces correct summaries —
   # measured ~14 s for a ~1.1 KB SubagentStop message.
   CLAUDE_NOTIFY_NESTED=1 \
-    flock "$HAIKU_LOCK" timeout "$HAIKU_TIMEOUT" claude \
+    flock -w "$HAIKU_LOCK_WAIT" "$HAIKU_LOCK" timeout -k 5 "$HAIKU_TIMEOUT" claude \
     --model "$HAIKU_MODEL" \
     --effort low \
     --setting-sources "" \
@@ -476,7 +480,7 @@ speak_cached() {
     log=$4
     sid=$5
     printf "%s %-14s sid=%s %-13s %-11s %s\n" "$(date -Iseconds)" "$event" "$sid" "haiku=SKIPPED" "dur=N/A" "$text" >> "$log"
-    flock "$vvox_lock" timeout "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS --cache "$text"
+    flock -w "$VVOX_LOCK_WAIT" "$vvox_lock" timeout -k 5 "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS --cache "$text"
   ' _ "$text" "$VVOX_LOCK" "$EVENT" "$SPOKEN_LOG" "$SESSION_ID" </dev/null >/dev/null 2>&1
 }
 
@@ -489,7 +493,7 @@ speak_text() {
     log=$4
     sid=$5
     printf "%s %-14s sid=%s %-13s %-11s %s\n" "$(date -Iseconds)" "$event" "$sid" "haiku=SKIPPED" "dur=N/A" "$text" >> "$log"
-    flock "$vvox_lock" timeout "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS "$text"
+    flock -w "$VVOX_LOCK_WAIT" "$vvox_lock" timeout -k 5 "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS "$text"
   ' _ "$text" "$VVOX_LOCK" "$EVENT" "$SPOKEN_LOG" "$SESSION_ID" </dev/null >/dev/null 2>&1
 }
 
@@ -530,7 +534,7 @@ speak_summary() {
     # a multi-byte sequence mid-codepoint.
     summary=${summary:0:40}
     printf "%s %-14s sid=%s %-13s %-11s %s\n" "$(date -Iseconds)" "$event" "$sid" "haiku=$status" "dur=${dur_ms}ms" "$summary" >> "$log"
-    flock "$vvox_lock" timeout "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS "$summary"
+    flock -w "$VVOX_LOCK_WAIT" "$vvox_lock" timeout -k 5 "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS "$summary"
   ' _ "$prompt" "$fallback" "$VVOX_LOCK" "$EVENT" "$SPOKEN_LOG" "$HAIKU_TIMEOUT" "$SESSION_ID" </dev/null >/dev/null 2>&1
 }
 
@@ -562,7 +566,7 @@ $cwd")
     fi
     reading=${reading:0:200}
     printf "%s %-14s sid=%s %-13s %-11s %s\n" "$(date -Iseconds)" "CwdChanged" "$sid" "haiku=$status" "dur=N/A" "$reading" >> "$log"
-    flock "$vvox_lock" timeout "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS --cache "$reading"
+    flock -w "$VVOX_LOCK_WAIT" "$vvox_lock" timeout -k 5 "$VVOX_TIMEOUT" voicevox_paplay --loopback $VVOX_OPTS --cache "$reading"
   ' _ "$cwd" "$VVOX_LOCK" "$SPOKEN_LOG" "$SESSION_ID" "${EVENT_PHRASES[CwdChanged]}" "$STATE_DIR/cwd-readings" </dev/null >/dev/null 2>&1
 }
 
