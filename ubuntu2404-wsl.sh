@@ -354,6 +354,13 @@ run "rm -f ~/.claude/hooks/*.py"
 run apt install -y --no-install-recommends \
 bubblewrap socat poppler-utils
 
+# Ubuntu 24.04+ AppArmor blocks unprivileged userns; grant bwrap that cap for the Sandbox (skip where unrestricted)
+USERNS_FLAG=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+if [ -r "$USERNS_FLAG" ] && [ "$(< "$USERNS_FLAG")" = "1" ]; then
+copy --nobackup claude_apparmor-bwrap                       /etc/apparmor.d/bwrap -m 0644
+run systemctl reload apparmor
+fi
+
 
 # Antigravity CLI (https://antigravity.google/)
 [ -s /tmp/antigravity_cli_install.sh ] ||
