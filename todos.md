@@ -3,6 +3,7 @@
 CAVEAT: Court bug
 Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が失敗するバグが頻発。
 一度発生するとセッションが汚染され、まともに動作しなくなるため、直ちにセッションリセットするしかない。
+緩和するには、英語で思考・発話する。
 （セッションレジュームすると新しいセッションにも伝染する）
 
 参考 https://github.com/anthropics/claude-code/issues/64108
