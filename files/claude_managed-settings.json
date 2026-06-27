@@ -13,7 +13,7 @@
       "claude agents *"
     ],
     "filesystem": {
-      "allowWrite": ["~/.claude/plugins/data"],
+      "allowWrite": ["~/.claude/plugins/data", "/var/lib/claude-rag-memory"],
       "denyRead": ["/run/docker.sock"]
     },
     "network": {
