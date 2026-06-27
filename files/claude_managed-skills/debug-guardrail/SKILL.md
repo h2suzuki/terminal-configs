@@ -28,7 +28,7 @@ fix を lock / 合意 / 提案する直前に、 提案 fix と元 bug が **代
 
 1. **新しい式 / 述語を 1 文で verbalize**
 2. **旧 (バグ) の式と並べて diff**: 入力集合 ・停止条件 ・参照するデータ源 が違うことを明示
-3. **Governing source の実 read を grep 確認**: 「この cache / optimization が governing」 と言うなら、 新コードの該当行で実際にその cache / source を read しているか grep で確認。 別名で再計算は不可
+3. **Governing source の実 read を CodeGraph 確認**: 「この cache / optimization が governing」 と言うなら、 新コードの該当行で実際にその cache / source を read しているか CodeGraph で確認。 別名で再計算は不可
 
 ### Why this gate
 

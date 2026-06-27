@@ -42,7 +42,7 @@ Combined Stop hook for org-managed Claude Code:
 
   deferral (warning-only, exit 0):
     「後で対処」「別タスクに切り出」等 は、 同 turn 内に TaskCreate/TaskUpdate/
-    TodoWrite または todos.md への Write/Edit が無ければ warn。
+    TodoWrite が無ければ warn。
 
   claim-without-evidence (warning-only, exit 0):
     「不明」「該当なし」「未確認」 系は、 同 turn 内に EVIDENCE_TOOLS が無ければ warn
@@ -336,9 +336,6 @@ PERSISTENCE_PATH_RE = re.compile(
     re.IGNORECASE,
 )
 
-# todos.md path (deferral pairing)
-TODOS_PATH_RE = re.compile(r"todos\.md$")
-
 # Evidence tools (claim-without-evidence pairing)
 EVIDENCE_TOOLS = {"Read", "Grep", "Glob", "WebSearch", "WebFetch"}
 
@@ -619,13 +616,12 @@ def _check(
     # deferral (warning-only)
     m = DEFERRAL_RE.search(text)
     if m:
-        todos_via_path = any(TODOS_PATH_RE.search(p) for p in tool_paths)
         todos_via_tool = bool(tool_names & TASK_TOOLS)
-        if not (todos_via_path or todos_via_tool):
+        if not todos_via_tool:
             warnings.append(
                 f"deferral detected: 「{m.group(0)}」 と発話したが当ターンで "
-                f"TaskCreate / TaskUpdate / TodoWrite の呼び出しまたは todos.md "
-                f"への Write/Edit が記録されていません (System §計画と遂行)。"
+                f"TaskCreate / TaskUpdate / TodoWrite の呼び出しが記録されていません "
+                f"(System §計画と遂行)。"
             )
 
     # claim-without-evidence (warning-only)

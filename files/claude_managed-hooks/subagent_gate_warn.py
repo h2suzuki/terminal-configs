@@ -117,7 +117,7 @@ def _run(payload: dict) -> int:
         f"可能性があります。 subagent-gate skill の 4 条件 "
         f"(a) parallelizable / (b) large output / (c) 3+ query 探索 / "
         f"(d) specialized agent のいずれが該当するか verbalize してから "
-        f"proceed してください。 該当しなければ直接実行 (Read / Grep / Bash) "
+        f"proceed してください。 該当しなければ直接実行 (CodeGraph / Read / Grep / Bash) "
         f"の方が cheap です。\n"
     )
     return 0

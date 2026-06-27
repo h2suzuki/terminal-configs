@@ -23,7 +23,7 @@ Grep:
   code signal あり ＆ pattern が symbol/call ＆ suspected      -> ADVISORY
       suspected = glob/path だけが code を示し type 明示なし
 
-Read (v1 は advisory のみ。 H.S. の deny 基準「確実な symbol/call-tree 検索」に Read は
+Read (v1 は advisory のみ。 deny 基準「確実な symbol/call-tree 検索」に Read は
 非該当ゆえ。 cold-vs-targeted を効かせた Read-deny は v2 候補):
   code file (CODE_EXTENSIONS) ＆ 除外 dir 外                   -> ADVISORY (codegraph_explore)
   非 code / 除外 dir                                            -> ALLOW

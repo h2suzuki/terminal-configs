@@ -45,7 +45,7 @@ verify cost が決定的に large な場合のみ明示量化して例外的に 
 
 ## Why
 
-verify cost を回避することは 「楽な選択」 の正当化であり、 「優れた選択」 の rationale ではない。 verify は 「やればいい」 だけのことで、 better mechanism を選ばない言い訳にならない。 2026-05-27 checking-style の bg progress watchdog 設計時、 Approach A (`--settings` hook inject) を 「bg session 側 hook の fire rate が turn 粒度か実機 verify と公式 spec 確認が要る」 を理由の 1 つに却下したのを user 指摘で訂正、 actual cost (component 数 / lifecycle 管理点) で再 framing。
+verify cost を回避することは 「楽な選択」 の正当化であり、 「優れた選択」 の rationale ではない。 verify は 「やればいい」 だけのことで、 better mechanism を選ばない言い訳にならない。 2026-05-27 checking-style の bg progress watchdog 設計時、 Approach A (`--settings` hook inject) を 「bg session 側 hook の fire rate が turn 粒度か実機 verify と公式 spec 確認が要る」 を理由の 1 つに却下したのを 指摘で訂正、 actual cost (component 数 / lifecycle 管理点) で再 framing。
 
 ## Related
 
