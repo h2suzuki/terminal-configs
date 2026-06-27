@@ -2,6 +2,33 @@
   "sandbox": {
     "enabled": true,
     "failIfUnavailable": true,
-    "allowUnsandboxedCommands": false
+    "allowUnsandboxedCommands": false,
+    "credentials": {
+      "files": [
+        { "path": "~/.aws", "mode": "deny" },
+        { "path": "~/.ssh", "mode": "deny" },
+        { "path": "~/.config/gh/hosts.yml", "mode": "deny" },
+        { "path": "~/.git-credentials", "mode": "deny" },
+        { "path": "~/.netrc", "mode": "deny" },
+        { "path": "~/.pypirc", "mode": "deny" },
+        { "path": "~/.config/pip", "mode": "deny" },
+        { "path": "~/.claude/.credentials.json", "mode": "deny" },
+        { "path": "~/.codex/auth.json", "mode": "deny" },
+        { "path": "~/.agent-browser", "mode": "deny" }
+      ],
+      "envVars": [
+        { "name": "AWS_ACCESS_KEY_ID", "mode": "deny" },
+        { "name": "AWS_SECRET_ACCESS_KEY", "mode": "deny" },
+        { "name": "AWS_SESSION_TOKEN", "mode": "deny" },
+        { "name": "GITHUB_TOKEN", "mode": "deny" },
+        { "name": "GH_TOKEN", "mode": "deny" },
+        { "name": "ANTHROPIC_API_KEY", "mode": "deny" },
+        { "name": "CLAUDE_CODE_OAUTH_TOKEN", "mode": "deny" },
+        { "name": "OPENAI_API_KEY", "mode": "deny" },
+        { "name": "CODEX_API_KEY", "mode": "deny" },
+        { "name": "TWINE_PASSWORD", "mode": "deny" },
+        { "name": "PYPI_TOKEN", "mode": "deny" }
+      ]
+    }
   }
 }
