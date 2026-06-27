@@ -1,5 +1,7 @@
 {
   "sandbox": {
-    "enabled": true
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false
   }
 }
