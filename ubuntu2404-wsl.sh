@@ -108,6 +108,12 @@ command -v curl >/dev/null || {
     run apt install -y --no-install-recommends curl
 }
 
+# gpg is needed below for apt keyring dearmor; minimal images may lack it
+command -v gpg >/dev/null || {
+    run apt update
+    run apt install -y --no-install-recommends gpg
+}
+
 
 [ -e ~/.bashrc ] &&
 run sed -i ~/.bashrc \
