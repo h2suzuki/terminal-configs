@@ -12,6 +12,9 @@
       "claude --bg *",
       "claude agents *"
     ],
+    "filesystem": {
+      "allowWrite": ["~/.claude/plugins/data"]
+    },
     "credentials": {
       "files": [
         { "path": "~/.aws", "mode": "deny" },
