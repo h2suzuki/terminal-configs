@@ -9,7 +9,8 @@
       "docker *",
       "codex *",
       "agent-browser *",
-      "claude --bg *"
+      "claude --bg *",
+      "claude agents *"
     ],
     "credentials": {
       "files": [
