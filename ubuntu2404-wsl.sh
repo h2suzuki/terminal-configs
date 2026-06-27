@@ -354,6 +354,9 @@ run "rm -f ~/.claude/hooks/*.py"
 run apt install -y --no-install-recommends \
 bubblewrap socat poppler-utils
 
+# Sandbox seccomp helper: enables Unix-domain-socket blocking in the Bash sandbox
+run npm install -g @anthropic-ai/sandbox-runtime
+
 # Ubuntu 24.04+ AppArmor blocks unprivileged userns; grant bwrap that cap for the Sandbox (skip where unrestricted)
 USERNS_FLAG=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
 if [ -r "$USERNS_FLAG" ] && [ "$(< "$USERNS_FLAG")" = "1" ]; then
@@ -465,6 +468,7 @@ EOF
 
     run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; npm uninstall -g @anthropic-ai/claude-code || true"'
     run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; bash /tmp/claude_install.sh"'
+    run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; npm install -g @anthropic-ai/sandbox-runtime"'
 
     run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; npm install -g @openai/codex"'
 

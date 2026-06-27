@@ -322,6 +322,9 @@ run "rm -f ~/.claude/hooks/*.py"
 run apt install -y --no-install-recommends \
 bubblewrap socat poppler-utils
 
+# Sandbox seccomp helper: enables Unix-domain-socket blocking in the Bash sandbox
+run npm install -g @anthropic-ai/sandbox-runtime
+
 
 # Antigravity CLI (https://antigravity.google/)
 [ -s /tmp/antigravity_cli_install.sh ] ||
@@ -419,6 +422,7 @@ EOF
 
     run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; npm uninstall -g @anthropic-ai/claude-code || true"'
     run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; bash /tmp/claude_install.sh"'
+    run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; npm install -g @anthropic-ai/sandbox-runtime"'
 
     run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; npm install -g @openai/codex"'
 
