@@ -13,7 +13,11 @@
       "claude agents *"
     ],
     "filesystem": {
-      "allowWrite": ["~/.claude/plugins/data"]
+      "allowWrite": ["~/.claude/plugins/data"],
+      "denyRead": ["/run/docker.sock"]
+    },
+    "network": {
+      "allowAllUnixSockets": true
     },
     "credentials": {
       "files": [
