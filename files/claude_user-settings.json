@@ -205,5 +205,9 @@
       "Zesting… / レモンの皮削り",
       "Zigzagging… / ジグザグしてます"
     ]
+  },
+  "attribution": {
+    "commit": "",
+    "sessionUrl": false
   }
 }
