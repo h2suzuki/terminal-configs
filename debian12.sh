@@ -144,10 +144,10 @@ run echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' '>>' ~/.bashrc
 run echo '[ -n \"\$WT_SESSION\" ] \&\& export COLORTERM=truecolor' '>>' ~/.bashrc
 
 
-copy sudoers                    /etc/sudoers.d/terminal-config -m 0440
-copy gitconfig                  /etc/gitconfig
-copy inputrc                    ~/.inputrc
-copy share_ssh_x11forwarding    ~/.share_ssh_x11forwarding
+copy --nobackup sudoers                 /etc/sudoers.d/terminal-config -m 0440
+copy --nobackup gitconfig               /etc/gitconfig
+copy --nobackup inputrc                 ~/.inputrc
+copy --nobackup share_ssh_x11forwarding ~/.share_ssh_x11forwarding
 
 
 
