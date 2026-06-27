@@ -23,7 +23,7 @@ Combined Stop hook for org-managed Claude Code:
     複雑/大変/抜本的/リスクが高い は流文 false-positive が広く除外。
 
   known-possible-denial (enforcement, exit 2):
-    既知で実行可能と判明済みの操作 (KNOWN_POSSIBLE: 部分 stage / rebase autosquash 等) を
+    既知で実行可能と判明済みの操作 (KNOWN_POSSIBLE: rebase autosquash 等) を
     「できない/不可/無理」 と同一行で断定したら block。 verify させ直すのでなく、 可能と
     分かっている既知 method を実行させる (verify-before-claim の不可断定側)。 pairing 無し
     (op が既知可能ゆえ証拠の有無に関わらず否定が誤り)。 strip_fences 適用・不可能/不可避
@@ -39,6 +39,10 @@ Combined Stop hook for org-managed Claude Code:
     当 turn かつ直近 5 分以内に declare-and-proceed skill の invoke が無ければ block。 検出 regex は
     declare_and_proceed_gate.py の CONFIRM/ROUTING の prose 版 copy。 skill invoke が SKIP
     escape hatch (genuine user-taste/design/priority/不可逆 op pre-approval)。
+
+  intent-without-task (enforcement, exit 2):
+    作業遂行宣言 (「やります」「実施します」「修正します」等) を、同 turn 内に TaskCreate/TaskUpdate/TodoWrite が無ければ block。
+    全作業項目を Task で追跡する org rule (CLAUDE.md §計画と遂行) の機械 proxy。speech-act 動詞 (確認/説明/報告/共有/提案) は除外し FP 抑制。deferral (warn) の deny 版。
 
   deferral (warning-only, exit 0):
     「後で対処」「別タスクに切り出」等 は、 同 turn 内に TaskCreate/TaskUpdate/
@@ -87,7 +91,7 @@ Exit:
      retry was demoted to a pass (advise-once). warnings may be emitted on stderr
   2: an enforcement block family triggered (meta-announce-silence / hollow-claims /
      recognize-own-work / evaluative-terms / known-possible-denial / order-question-to-user /
-     confirm-routing-to-user), on the turn's first Stop (stop_hook_active false)
+     confirm-routing-to-user / intent-without-task), on the turn's first Stop (stop_hook_active false)
 
 The advise-once gate lives in _run (shared), so it INTENTIONALLY demotes every
 block family — not just evaluative — to one-block-per-turn. All of them
@@ -246,6 +250,30 @@ DEFERRAL_RE = re.compile(
     r"後回し|TODO として|次回(に)?(対応|やる)"
 )
 
+# --- Pattern: intent-without-task (block if no TaskCreate/TaskUpdate/TodoWrite this turn) ---
+# 作業遂行宣言動詞のみ — speech-act 動詞 (確認/説明/報告/共有/提案/回答) は含まない。
+INTENT_DECLARE_PATTERNS: list[str] = [
+    r"やります",
+    r"実施します",
+    r"対応します",
+    r"着手します",
+    r"進めます",
+    r"修正します",
+    r"削除します",
+    r"追加します",
+    r"実装します",
+    r"作成します",
+    r"変更します",
+    r"反映します",
+    r"統合します",
+    r"置換します",
+    r"コミットします",
+    r"commit\s?します",
+    r"デプロイします",
+    r"deploy\s?します",
+]
+INTENT_DECLARE_RE = re.compile("|".join(INTENT_DECLARE_PATTERNS), re.IGNORECASE)
+
 # --- Pattern: claim-without-evidence (warning, no block) ---
 CLAIM_RE = re.compile(r"不明|該当なし|存在しません|未確認|わかりません|分かりません")
 
@@ -309,12 +337,6 @@ HONEST_WRONG_RE = re.compile(
 # 既知で可能と判明済みの操作を「できない/不可」と断定したら却下を促す。 op-keyword と
 # 不可語が同一行で共起した時のみ block (verify し直させず既知 method を実行させる)。
 KNOWN_POSSIBLE: list[tuple[re.Pattern[str], str]] = [
-    (
-        re.compile(
-            r"部分(コミット|ステージ|stage)|partial[ _-]*stag|git add -p", re.IGNORECASE
-        ),
-        "`git apply --cached` で hunk 単位の部分 stage が可能 (feedback_partial_stage_foreign_changes)",
-    ),
     (
         re.compile(
             r"autosquash|rebase\s+-i|fixup.*squash|squash.*fixup", re.IGNORECASE
@@ -612,6 +634,16 @@ def _check(
                 f"priority / 不可逆 op の pre-approval なら質問のまま再出力 (skill invoke 後は本 gate を "
                 f"通過) してください。"
             )
+
+    # intent-without-task (block if work-execution declaration without task tool)
+    m = INTENT_DECLARE_RE.search(stripped)
+    if m and not (tool_names & TASK_TOOLS):
+        blocking.append(
+            f"intent-without-task: 作業遂行宣言「{m.group(0)}」を検出しましたが、このターンに"
+            f" TaskCreate/TaskUpdate/TodoWrite が記録されていません。"
+            f" System §計画と遂行: 全作業項目を大小に関わらず Task で計画・追跡。"
+            f" TaskCreate で作業を登録 (または既存タスクを TaskUpdate) してから再出力してください。"
+        )
 
     # deferral (warning-only)
     m = DEFERRAL_RE.search(text)
@@ -1092,13 +1124,46 @@ class EnforcementFamilyTest(unittest.TestCase):
         far = "既存のパターンを採用した。" + ("あ" * 70) + "別件で誤りがあった"
         self.assertFalse(any("honest-attribution" in x for x in self._warn(far)))
 
+    # --- intent-without-task ---
+    def test_intent_declare_alone_blocks(self):
+        code, _w, blk = self._c("修正します")
+        self.assertEqual(code, 2)
+        self.assertTrue(any("intent-without-task" in b for b in blk))
+
+    def test_intent_declare_passes_with_task_create(self):
+        blk = self._blk("修正します", tools=["TaskCreate"])
+        self.assertFalse(any("intent-without-task" in b for b in blk))
+
+    def test_intent_declare_passes_with_task_update(self):
+        blk = self._blk("修正します", tools=["TaskUpdate"])
+        self.assertFalse(any("intent-without-task" in b for b in blk))
+
+    def test_speech_act_kakunin_excluded(self):
+        blk = self._blk("確認します")
+        self.assertFalse(any("intent-without-task" in b for b in blk))
+
+    def test_speech_act_setsumei_excluded(self):
+        blk = self._blk("説明します")
+        self.assertFalse(any("intent-without-task" in b for b in blk))
+
+    def test_intent_fenced_not_fired(self):
+        # strip_fences removes the declaration; bare prose is clean so no block.
+        text = "検討結果:\n```\nやります\n```\n以上です。"
+        blk = self._blk(text)
+        self.assertFalse(any("intent-without-task" in b for b in blk))
+
+    def test_intent_independent_of_other_families(self):
+        # intent-without-task fires on its own; other families are not required.
+        blk = self._blk("実装します")
+        self.assertTrue(any("intent-without-task" in b for b in blk))
+
     def test_existing_block_families_still_fire(self):
         # regression: pre-existing block families unaffected by the new declare_active param.
         self.assertEqual(self._c("省略しません")[0], 2)
         self.assertEqual(self._c("学習しました")[0], 2)
         self.assertEqual(self._c("想定外でした")[0], 2)
         self.assertTrue(
-            any("known-possible" in b for b in self._blk("部分コミットはできない"))
+            any("known-possible" in b for b in self._blk("autosquash はできない"))
         )
 
 
