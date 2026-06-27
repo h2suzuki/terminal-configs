@@ -3,9 +3,17 @@
     "enabled": true,
     "failIfUnavailable": true,
     "allowUnsandboxedCommands": false,
+    "excludedCommands": [
+      "git *",
+      "gh *",
+      "docker *",
+      "codex *",
+      "agent-browser *"
+    ],
     "credentials": {
       "files": [
         { "path": "~/.aws", "mode": "deny" },
+        { "path": "~/.config/gcloud", "mode": "deny" },
         { "path": "~/.ssh", "mode": "deny" },
         { "path": "~/.config/gh/hosts.yml", "mode": "deny" },
         { "path": "~/.git-credentials", "mode": "deny" },
@@ -20,6 +28,8 @@
         { "name": "AWS_ACCESS_KEY_ID", "mode": "deny" },
         { "name": "AWS_SECRET_ACCESS_KEY", "mode": "deny" },
         { "name": "AWS_SESSION_TOKEN", "mode": "deny" },
+        { "name": "GOOGLE_APPLICATION_CREDENTIALS", "mode": "deny" },
+        { "name": "CLOUDSDK_AUTH_ACCESS_TOKEN", "mode": "deny" },
         { "name": "GITHUB_TOKEN", "mode": "deny" },
         { "name": "GH_TOKEN", "mode": "deny" },
         { "name": "ANTHROPIC_API_KEY", "mode": "deny" },
