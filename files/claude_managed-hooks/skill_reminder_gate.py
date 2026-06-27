@@ -56,6 +56,14 @@ skill-active 窓 (現 turn かつ直近 SKILL_WINDOW_SECONDS=5 分以内) の根
 (5 分以上前は drop)。5 分は長い作業中の再 invoke friction 抑制と、無関係に古い
 invoke が通るリスク回避の折衷。現 turn のみ読むため cross-turn の recency は無い。
 
+運用症状 (再調査不要)
+=====================
+長い turn で skill invoke 後に診断 Bash/Read 等を挟むと invoke が窓から脱落し、
+Edit が「<missing> を invoke せよ」で連続 deny する (required の抜けが skill 別に
+rotate して見える)。sandbox 阻害ではない — hook は非 sandbox 実行で transcript/
+state I/O は正常 (read_before_edit の WAL state 書込も成功)。回復: required skill を
+fresh に invoke して即 Edit (間に Bash/Read を挟まない)。
+
 turn boundary 判定 (load-bearing — 変更時は false-allow/deny を再発させる)
 =========================================================================
 直近の human-input user entry を boundary とする。boundary 判定:
