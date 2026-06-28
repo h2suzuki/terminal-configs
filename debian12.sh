@@ -216,7 +216,30 @@ run apt install -y google-cloud-cli
 
 
 
-# For Claude Code
+# Claude Code
+if [ ! -s /etc/apt/keyrings/claude-code.gpg ]; then
+    [ -s /tmp/claude-code.gpg ] ||
+    run curl -o /tmp/claude-code.asc \
+      -fsSL https://downloads.claude.ai/keys/claude-code.asc
+
+    run gpg --yes --dearmor -o /tmp/claude-code.gpg /tmp/claude-code.asc
+    [ -d /etc/apt/keyrings ] ||
+    run install --mode 0755 --directory /etc/apt/keyrings/
+    run install --mode 0644 /tmp/claude-code.gpg /etc/apt/keyrings/
+fi
+
+if [ ! -s /etc/apt/sources.list.d/claude-code.list ]; then
+    cat > /etc/apt/sources.list.d/claude-code.list <<EOF
+deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/claude-code.gpg] \
+https://downloads.claude.ai/claude-code/apt/latest latest main
+EOF
+    run apt update
+fi
+
+run apt install -y --no-install-recommends \
+claude-code \
+bubblewrap socat poppler-utils      # Sandbox: bubblewrap/socat, PDF reading: poppler-utilsl
+
 rm -rf /etc/claude-code/
 copy claude_statusline.sh                        /etc/claude-code/statusline.sh
 copy claude_managed-CLAUDE.md                    /etc/claude-code/CLAUDE.md
@@ -224,11 +247,6 @@ copy claude_managed-settings.json                /etc/claude-code/managed-settin
 copy claude_user-CLAUDE.md                       /etc/claude-code/skel/CLAUDE.md
 copy claude_user-settings.json                   /etc/claude-code/skel/settings.json
 
-run apt install -y --no-install-recommends \
-bubblewrap socat poppler-utils      # Sandbox: bubblewrap/socat, PDF reading: poppler-utilsl
-
-# Sandbox seccomp helper: enables Unix-domain-socket blocking in the Bash sandbox
-run npm install -g @anthropic-ai/sandbox-runtime
 
 # AppArmor blocks unprivileged userns; grant bwrap that cap for the Sandbox
 USERNS_FLAG=/proc/sys/kernel/apparmor_restrict_unprivileged_userns

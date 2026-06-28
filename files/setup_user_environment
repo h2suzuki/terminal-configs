@@ -46,7 +46,7 @@ run()
 }
 
 
-# uv/claude install into $HOME/.local/bin below; put it on PATH so later invocations resolve
+# UV installs into $HOME/.local/bin below; put it on PATH so later invocations resolve
 case ":$PATH:" in
     *":$HOME/.local/bin:"*) ;;
     *) export PATH="$HOME/.local/bin:$PATH" ;;
@@ -117,19 +117,15 @@ nodejs_clean_installer
 
 # Claude Code
 npm uninstall -g @anthropic-ai/claude-code || true  # Old one
-
-[ -s /tmp/claude_install.sh ] ||
-run curl -o /tmp/claude_install.sh \
-  -fsSL https://claude.ai/install.sh
-chmod u-s,o+r /tmp/claude_install.sh 2>/dev/null || true
-run bash /tmp/claude_install.sh
+rm -rf ~/.local/bin/claude
+rm -rf ~/.local/share/claude
 
 run install --mode 0755 --directory ~/.claude
 
-run uv tool install --force claude-monitor
+install /etc/claude-code/skel/CLAUDE.md         ~/.claude/CLAUDE.md
+install /etc/claude-code/skel/settings.json     ~/.claude/settings.json
 
-install /etc/claude-code/skel/user-CLAUDE.md        ~/.claude/CLAUDE.md
-install /etc/claude-code/skel/user-settings.json    ~/.claude/settings.json
+run uv tool install --force claude-monitor
 
 
 # Stop terminal bell
