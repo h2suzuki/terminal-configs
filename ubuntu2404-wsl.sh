@@ -93,6 +93,33 @@ copy()
 }
 
 
+copy_dir()
+{
+    DNAME=files/${1%/}
+    DST=${2%/}
+    shift 2
+
+    # Pick up --owner from "$@" so we can chown -R after cp (cp -r ignores --owner).
+    OWNER=
+    prev=
+    for a in "$@"; do
+        [ "$prev" = "--owner" ] && { OWNER=$a; break; }
+        case "$a" in --owner=*) OWNER=${a#--owner=}; break;; esac
+        prev=$a
+    done
+
+    [ -d "$DST" ] || { rm -rf "$DST"; run install --directory "$@" "$DST"; }
+    rm -rf "$DST"/*
+    for child in "$TOP_DIR/$DNAME"/*; do
+        [ -e "$child" ] || continue   # empty source dir: glob stays literal
+        [ "${child##*/}" = __pycache__ ] && continue
+        run cp -r "$child" "$DST/"
+    done
+    [ -n "$OWNER" ] && run chown -R "$OWNER:" "$DST"
+}
+
+
+
 
 # Install basic utilities
 run apt update
@@ -264,20 +291,31 @@ run apt install -y --no-install-recommends \
 claude-code \
 bubblewrap socat poppler-utils      # Sandbox: bubblewrap/socat, PDF reading: poppler-utilsl
 
-rm -rf /etc/claude-code/
-copy claude_statusline.sh                        /etc/claude-code/statusline.sh
-copy claude_managed-CLAUDE.md                    /etc/claude-code/CLAUDE.md
-copy claude_managed-settings.json                /etc/claude-code/managed-settings.json
-copy claude_user-CLAUDE.md                       /etc/claude-code/skel/CLAUDE.md
-copy claude_user-settings.json                   /etc/claude-code/skel/settings.json
-
-
 # AppArmor blocks unprivileged userns; grant bwrap that cap for the Sandbox
 USERNS_FLAG=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
 if [ -r "$USERNS_FLAG" ] && [ "$(< "$USERNS_FLAG")" = "1" ]; then
     copy claude_apparmor-bwrap                  /etc/apparmor.d/bwrap -m 0644
     run systemctl reload apparmor
 fi
+
+
+rm -rf /etc/claude-code/
+copy claude_statusline.sh                       /etc/claude-code/statusline.sh
+copy claude_managed-CLAUDE.md                   /etc/claude-code/CLAUDE.md
+copy claude_managed-settings.json               /etc/claude-code/managed-settings.json
+
+copy_dir claude_managed-skills/                 /etc/claude-code/skills/
+copy_dir claude_managed-hooks/                  /etc/claude-code/hooks/
+copy claude_managed-extensions.json             /etc/claude-code/managed-settings.d/extensions.json
+
+# Per-user template
+copy claude_user-CLAUDE.md                      /etc/claude-code/skel/CLAUDE.md
+copy claude_user-settings.json                  /etc/claude-code/skel/settings.json
+
+copy_dir claude_user-skills                     /etc/claude-code/skel/skills/
+copy_dir claude_user-hooks                      /etc/claude-code/skel/hooks/
+copy claude_user-extensions.json                /etc/claude-code/skel/extensions.json   # To be injected by claude_user_settings
+
 
 
 # Antigravity CLI
