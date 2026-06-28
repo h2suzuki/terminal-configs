@@ -154,14 +154,6 @@ copy --nobackup claude_user-hooks/memory_surface.py         ~/.claude/hooks/memo
 copy --nobackup claude_user-hooks/subagent_gate_suggest.py  ~/.claude/hooks/subagent_gate_suggest.py
 run claude_user_settings inject - < "$TOP_DIR/files/claude_user-extensions.json"
 
-# Resolve the login user up-front (shared memory store is group-owned by their primary group).
-LOGIN_USER="$(logname 2>/dev/null)"
-[ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"
-if [ -n "$LOGIN_USER" ]; then
-    LOGIN_GROUP="$(id -gn "$LOGIN_USER")"
-    LOGIN_HOME="$(getent passwd "$LOGIN_USER" | cut -d: -f6)"
-    [ -n "$LOGIN_HOME" ] || LOGIN_HOME="/home/$LOGIN_USER"
-fi
 
 # Shared memory-RAG store for root + login user (setgid → login-group; hooks set umask 0o002 → group-writable).
 # Model DB is user-independent so build it here; the FTS index is rebuilt from the login user's memory below.
@@ -257,6 +249,15 @@ run claude plugin update vercel@claude-plugins-official
 run claude mcp list
 run claude plugin list
 
+
+# Resolve the login user up-front (shared memory store is group-owned by their primary group).
+LOGIN_USER="$(logname 2>/dev/null)"
+[ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"
+if [ -n "$LOGIN_USER" ]; then
+    LOGIN_GROUP="$(id -gn "$LOGIN_USER")"
+    LOGIN_HOME="$(getent passwd "$LOGIN_USER" | cut -d: -f6)"
+    [ -n "$LOGIN_HOME" ] || LOGIN_HOME="/home/$LOGIN_USER"
+fi
 
 if [ -n "$LOGIN_USER" ]; then          # resolved up-front near the shared-store setup
 
