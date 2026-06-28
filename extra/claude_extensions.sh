@@ -152,7 +152,7 @@ run claude_user_settings inject - < "/etc/claude-code/skel/extensions.json"
 run install --directory --mode 2775 --owner root --group ${LOGIN_GROUP:-root} /var/lib/claude-rag-memory
 copy claude_memory_rag_builder                  /usr/local/bin/claude_memory_rag_builder -m 0755
 run claude_memory_rag_builder
-[ -n "$LOGIN_USER" ] || run ~/.claude/hooks/memory_surface.py --rebuild   # no login user: index root's own memory
+
 
 # Deploy the user skills
 pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
@@ -177,6 +177,7 @@ run find ~/.claude/skills/ -maxdepth 1 -xtype l -delete
 # Seed the registry first: never-launched users have no marketplace, so bare `update` fails (re-add is idempotent, exit 0)
 run claude plugin marketplace add anthropics/claude-plugins-official
 run claude plugin marketplace update claude-plugins-official
+
 
 # LSP servers
 run npm install -g typescript-language-server typescript
