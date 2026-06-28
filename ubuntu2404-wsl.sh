@@ -311,15 +311,17 @@ run install -m 0755 /tmp/markdown-reader-${MDR_VER}-x86_64-unknown-linux-gnu/mar
 
 
 
+# Per-user settings
+copy nodejs_clean_installer         /usr/local/bin/nodejs_clean_installer
+copy setup_user_environment         /usr/local/bin/setup_user_environment
+copy claude_user_settings           /usr/local/bin/claude_user_settings
+
+
 echo -e "${COLOR_GREEN}"
 echo "----------------------------------------------------------------------------------------------------------------"
 echo "        Setup the user environment: root"
 echo "----------------------------------------------------------------------------------------------------------------"
 echo -e "${COLOR_CLEAR}"
-
-copy nodejs_clean_installer         /usr/local/bin/nodejs_clean_installer
-copy setup_user_environment         /usr/local/bin/setup_user_environment
-copy share_ssh_x11forwarding        ~/.share_ssh_x11forwarding
 
 nodejs_clean_installer
 
@@ -331,6 +333,7 @@ run sed -i ~/.bashrc \
 
 setup_user_environment
 
+copy share_ssh_x11forwarding        ~/.share_ssh_x11forwarding
 run echo "~/.share_ssh_x11forwarding" '>>' ~/.bashrc
 
 
