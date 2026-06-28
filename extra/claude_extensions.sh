@@ -1,23 +1,6 @@
 #!/bin/bash
 
 # Installs Claude Code extensions as an opt-in step after the base setup.
-#
-#   Skills/hooks        Guardrail skills + hooks into /etc/claude-code/ and ~/.claude/
-#
-#   Security plugin     Anthropic official plugin for a security gate
-#
-#   Figma plugin        Claude-to-figma plugin (a remote MCP + skills)
-#
-#   Agent-browser CLI   Vercel Labs CLI + Claude Code skill
-#   Playwright MCP      Microsoft playwright/mcp (stdio; reuses the system Chrome, headless)
-#
-#   Codex plugin & MCP  OpenAI codex-plugin-cc and MCP setup (codex itself is MCP)
-#   Codegraph MCP       Tree-sitter + SQLite MCP (stdio)
-#
-#   Cloud-run MCP       Google Cloud Run MCP (stdio; deploy/logs)
-#   Toolbox MCP         Google database access MCP (stdio; BigQuery prebuilt)
-#   Vercel CLI          Vercel CLI + Vercel MCP (remote http) + Vercel plugin (skills/commands)
-
 
 [ "$EUID" = 0 ] || {
     echo "Please run as root"
