@@ -2,10 +2,8 @@
 
 # This script sets up a Debian 12 environment
 
-command -v grep >/dev/null || {
-    echo "Cannot find grep"
-    exit 1
-}
+command -v grep     >/dev/null || { echo "Cannot find grep";        exit 1; }
+
 grep -Fqs "Debian GNU/Linux 12 " /etc/issue || {
     echo "This environment does not look like Debian 12"
     exit 1
@@ -15,11 +13,9 @@ grep -Fqs "Debian GNU/Linux 12 " /etc/issue || {
     exit 1
 }
 
-
-
-command -v tty       >/dev/null || { echo "Cannot find tty";         exit 1; }
-command -v readlink  >/dev/null || { echo "Cannot find readlink";    exit 1; }
-command -v cmp       >/dev/null || { echo "Cannot find cmp";         exit 1; }
+command -v tty      >/dev/null || { echo "Cannot find tty";         exit 1; }
+command -v readlink >/dev/null || { echo "Cannot find readlink";    exit 1; }
+command -v cmp      >/dev/null || { echo "Cannot find cmp";         exit 1; }
 
 
 TOP_DIR=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
@@ -36,6 +32,7 @@ else
     COLOR_GREEN=
     COLOR_YELLOW=
 fi
+
 
 run()
 {
@@ -56,8 +53,8 @@ run()
 
 copy()
 {
-    BACKUP=1
-    [ "$1" = "--nobackup" ] && { BACKUP=0; shift; }
+    BACKUP=0
+    [ "$1" = "--backup" ] && { BACKUP=1; shift; }
 
     FNAME="files/$1"
     DST="$2"
@@ -91,110 +88,43 @@ copy()
 }
 
 
-# uv/claude install into $HOME/.local/bin below; put it on PATH so later invocations resolve
-case ":$PATH:" in
-    *":$HOME/.local/bin:"*) ;;
-    *) export PATH="$HOME/.local/bin:$PATH" ;;
-esac
 
-
-# curl is needed below; minimal images lack it and apt lists, so update first
-command -v curl >/dev/null || {
-    run apt update
-    run apt install -y --no-install-recommends curl
-}
-
-# gpg is needed below for apt keyring dearmor; minimal images may lack it
-command -v gpg >/dev/null || {
-    run apt update
-    run apt install -y --no-install-recommends gpg
-}
-
-
-[ -e ~/.bashrc ] &&
-run sed -i ~/.bashrc \
-    -e '/export\ LS_OPTIONS/s/^\ *#*\ *//' \
-    -e 's/xterm-color[^\)]*/xterm-color\|\*-256color/' \
-    -e '/eval\ \"\`dircolor/s/^\ *#*\ *//' \
-    -e "/Terminal\ Config/d" \
-    -e '/alias\ ls=/s/^\ *#*\ *//' \
-    -e '/^alias\ ls=/s/ls\ \$LS_OPTIONS/ls\ --group-directories-first\ \$LS_OPTIONS/' \
-    -e '/alias\ tree=/d' \
-    -e '/alias\ pushd=/d' \
-    -e '/alias\ popd=/d' \
-    -e '/alias\ dirs=/d' \
-    -e '/alias\ diffy=/d' \
-    -e '/alias\ rg=/d' \
-    -e '/alias\ node-x=/d' \
-    -e '/alias\ mdr=/d' \
-    -e '/grip\(\)\ /d' \
-    -e '/export\ EDITOR=/d' \
-    -e '/export\ VISUAL=/d' \
-    -e '/export\ PATH=.*\.local.bin:\$PATH/d' \
-    -e '/COLORTERM=truecolor/d' \
-    -e '/share_ssh_x11forwarding/d' \
-    -e '/NVM_DIR/d'
-run sed -i ~/.bashrc -e ':a' -e "'/^[[:space:]]*$/{\$d;N;ba'" -e '}'
-
-run echo -e '\\n\\n# ---- Terminal Config ----' '>>' ~/.bashrc
-run echo "alias tree=\\'tree --dirsfirst --noreport -I __pycache__\\'" '>>' ~/.bashrc
-run echo "alias pushd=\\'pushd \\>/dev/null\\'" '>>' ~/.bashrc
-run echo "alias popd=\\'popd \\>/dev/null\\'" '>>' ~/.bashrc
-run echo "alias dirs=\\'dirs -v\\'" '>>' ~/.bashrc
-run echo "alias diffy=\\'git diff --no-index\\'" '>>' ~/.bashrc
-run echo "alias rg=\\'rg --sort path --smart-case\\'" '>>' ~/.bashrc
-run echo "alias node-x=\\'NODE_DEBUG=module,fs,net node\\'" '>>' ~/.bashrc
-run echo "alias mdr=markdown-reader" '>>' ~/.bashrc
-run echo 'grip\(\) \{ rg --sort path --smart-case --json -C 2 \"\$@\" \| delta\; \}' '>>' ~/.bashrc
-run echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' '>>' ~/.bashrc
-run echo '[ -n \"\$WT_SESSION\" ] \&\& export COLORTERM=truecolor' '>>' ~/.bashrc
-
-
-copy --nobackup sudoers                 /etc/sudoers.d/terminal-config -m 0440
-copy --nobackup gitconfig               /etc/gitconfig
-copy --nobackup inputrc                 ~/.inputrc
-copy --nobackup share_ssh_x11forwarding ~/.share_ssh_x11forwarding
-
-
-
-# Neovim, Git / Git-LFS, tree, ripgrep, shellcheck
+# Install basic utilities
 run apt update
-run apt remove -y vim
+
+run apt -y full-upgrade
+
 run apt install -y --no-install-recommends \
-neovim git git-lfs tree ripgrep shellcheck htop
-
-copy --nobackup sysinit.vim /etc/xdg/nvim/sysinit.vim   # Neovim system-wide init file
-copy --nobackup htoprc /etc/htoprc -m 0644              # htop system-wide default config
-
-run git lfs install --skip-repo
-
-
-# img2sixel
-run apt install -y --no-install-recommends \
-libsixel-bin
-
-
-# markdown-reader (markdown-tui-explorer)   ref. https://github.com/leboiko/markdown-reader/releases
-MDR_VER=1.34.70
-[ -s /tmp/markdown-reader.tar.gz ] ||
-run curl -o /tmp/markdown-reader.tar.gz \
-  -fsSL https://github.com/leboiko/markdown-reader/releases/download/v${MDR_VER}/markdown-reader-x86_64-unknown-linux-gnu.tar.gz
-run tar -xzf /tmp/markdown-reader.tar.gz -C /tmp
-run install -m 0755 /tmp/markdown-reader-${MDR_VER}-x86_64-unknown-linux-gnu/markdown-reader /usr/local/bin/markdown-reader
-
-
-# X window forwarding and some small programs for testing
-run apt install -y --no-install-recommends \
+curl gpg \
+neovim git git-lfs tree ripgrep shellcheck htop \
+libsixel-bin \
 xauth jq x11-apps mesa-utils vulkan-tools wayland-utils \
-vdpau-driver-all va-driver-all
+openssh-server openssh-client
+
+run apt remove -y vim
+
+run apt -y auto-remove
+
+copy sudoers                        /etc/sudoers.d/terminal-config -m 0440
+copy gitconfig                      /etc/gitconfig
+copy sysinit.vim                    /etc/xdg/nvim/sysinit.vim               # Neovim system-wide init file
+copy htoprc                         /etc/htoprc -m 0644                     # htop system-wide default config
+copy inputrc                        /etc/skel/.inputrc
 
 
-# Forward PulseAudio streams through the SSH tunnel
-#   Pulse Client ---tcp---> localhost:24713 ---ssh---> 24713:SSH client
+# SSH keepalive so idle sessions survive the WSL2/Hyper-V NAT idle timeout
+copy ssh_keepalive_wtsess.conf      /etc/ssh/ssh_config.d/10-keepalive_wtsess.conf  -m 0644
+copy sshd_keepalive_wtsess.conf     /etc/ssh/sshd_config.d/10-keepalive_wtsess.conf -m 0644
+
+run systemctl restart ssh.service
+
+
+# Forward PulseAudio streams through the SSH tunnel; Pulse Client --tcp--> localhost:24713 --ssh--> 24713:SSH client
 copy pulseaudio-forwarding.sh   /etc/profile.d/pulseaudio-forwarding.sh -m 0644
 
 
-# UV python package manager
+
+# Python package manager: uv
 [ -s /tmp/uv_install.sh ] ||
 run curl -o /tmp/uv_install.sh \
   -fsSL https://astral.sh/uv/install.sh
@@ -205,7 +135,8 @@ export UV_NO_PROGRESS=true
 run bash /tmp/uv_install.sh
 run uv self update
 
-# Install Python linter / formatter: ruff (system-wide, standalone installer)
+
+# Python linter / formatter: ruff
 [ -s /tmp/ruff_install.sh ] ||
 run curl -o /tmp/ruff_install.sh \
   -fsSL https://astral.sh/ruff/install.sh
@@ -215,7 +146,8 @@ export RUFF_INSTALL_DIR=/usr/local/bin
 export RUFF_NO_MODIFY_PATH=1
 run bash /tmp/ruff_install.sh
 
-# Install Python type checker: ty (system-wide, standalone installer)
+
+# Python type checker: ty
 [ -s /tmp/ty_install.sh ] ||
 run curl -o /tmp/ty_install.sh \
   -fsSL https://astral.sh/ty/install.sh
@@ -224,24 +156,6 @@ chmod u-s,o+r /tmp/ty_install.sh
 export TY_INSTALL_DIR=/usr/local/bin
 export TY_NO_MODIFY_PATH=1
 run bash /tmp/ty_install.sh
-
-
-# git-delta   ref. https://github.com/dandavison/delta/releases
-[ -s /tmp/git-delta.deb ] ||
-run curl -o /tmp/git-delta.deb \
-  -fsSL https://github.com/dandavison/delta/releases/download/0.18.2/git-delta_0.18.2_amd64.deb
-run apt install -y /tmp/git-delta.deb
-
-
-# OpenSSH
-run apt install -y --no-install-recommends \
-openssh-server openssh-client
-
-# SSH keepalive so idle sessions survive the WSL2/Hyper-V NAT idle timeout
-copy ssh_keepalive_wtsess.conf  /etc/ssh/ssh_config.d/10-keepalive_wtsess.conf  -m 0644
-copy sshd_keepalive_wtsess.conf /etc/ssh/sshd_config.d/10-keepalive_wtsess.conf -m 0644
-
-run systemctl restart ssh.service
 
 
 # Chrome
@@ -257,82 +171,74 @@ run fc-cache -fv
 
 
 # GitHub CLI
-[ -s /tmp/githubcli.gpg ] ||
-run curl -o /tmp/githubcli.gpg \
-  -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg
-[ -d /etc/apt/keyrings ] ||
-run install --mode 0755 --directory /etc/apt/keyrings/
-run install --mode 0644 /tmp/githubcli.gpg /etc/apt/keyrings/
+if [ ! -s /etc/apt/keyrings/githubcli.gpg ]; then
+    [ -s /tmp/githubcli.gpg ] ||
+    run curl -o /tmp/githubcli.gpg \
+      -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg
 
-cat > /etc/apt/sources.list.d/githubcli.list <<EOF
+    [ -d /etc/apt/keyrings ] ||
+    run install --mode 0755 --directory /etc/apt/keyrings/
+    run install --mode 0644 /tmp/githubcli.gpg /etc/apt/keyrings/
+fi
+
+if [ ! -s /etc/apt/sources.list.d/githubcli.list ]; then
+    cat > /etc/apt/sources.list.d/githubcli.list <<EOF
 deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli.gpg] \
 https://cli.github.com/packages stable main
 EOF
+    run apt update
+fi
 
-run apt update
 run apt install -y gh
 
 
 # Google Cloud CLI
-[ -s /tmp/cloud.google.apt-key.gpg ] ||
-run curl -o /tmp/cloud.google.apt-key.gpg \
-  -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg
-run gpg --yes --dearmor -o /tmp/cloud.google.gpg /tmp/cloud.google.apt-key.gpg
-[ -d /etc/apt/keyrings ] ||
-run install --mode 0755 --directory /etc/apt/keyrings/
-run install --mode 0644 /tmp/cloud.google.gpg /etc/apt/keyrings/
+if [ ! -s /etc/apt/keyrings/cloud.google.gpg ]; then
+    [ -s /tmp/cloud.google.apt-key.gpg ] ||
+    run curl -o /tmp/cloud.google.apt-key.gpg \
+      -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg
 
-cat > /etc/apt/sources.list.d/google-cloud-sdk.list <<EOF
+    run gpg --yes --dearmor -o /tmp/cloud.google.gpg /tmp/cloud.google.apt-key.gpg
+    [ -d /etc/apt/keyrings ] ||
+    run install --mode 0755 --directory /etc/apt/keyrings/
+    run install --mode 0644 /tmp/cloud.google.gpg /etc/apt/keyrings/
+fi
+
+if [ ! -s /etc/apt/sources.list.d/google-cloud-sdk.list ]; then
+    cat > /etc/apt/sources.list.d/google-cloud-sdk.list <<EOF
 deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/cloud.google.gpg] \
 https://packages.cloud.google.com/apt cloud-sdk main
 EOF
+    run apt update
+fi
 
-run apt update
 run apt install -y google-cloud-cli
 
 
-# Node.js
-copy --nobackup nodejs_clean_installer /usr/local/bin/nodejs_clean_installer
-nodejs_clean_installer
-. $HOME/.nvm/nvm.sh   # installer ran as a child; source so the root-shell npm calls below resolve
 
-
-# Claude Code
-npm uninstall -g @anthropic-ai/claude-code || true  # Old one
-
-[ -s /tmp/claude_install.sh ] ||
-run curl -o /tmp/claude_install.sh \
-  -fsSL https://claude.ai/install.sh
-chmod u-s,o+r /tmp/claude_install.sh
-run bash /tmp/claude_install.sh
-
-run uv tool install --force claude-monitor #--system --break-system-packages pasimple
-
-
-# Construct /etc/claude-code/ from scratch
+# For Claude Code
 rm -rf /etc/claude-code/
-copy --nobackup claude_statusline.sh                        /etc/claude-code/statusline.sh
-copy --nobackup claude_managed-CLAUDE.md                    /etc/claude-code/CLAUDE.md
-copy --nobackup claude_managed-settings.json                /etc/claude-code/managed-settings.json
+copy claude_statusline.sh                        /etc/claude-code/statusline.sh
+copy claude_managed-CLAUDE.md                    /etc/claude-code/CLAUDE.md
+copy claude_managed-settings.json                /etc/claude-code/managed-settings.json
+copy claude_user-CLAUDE.md                       /etc/claude-code/skel/CLAUDE.md
+copy claude_user-settings.json                   /etc/claude-code/skel/settings.json
 
-# Populate ~/.claude/ (try to preserve the existing contents)
-[ -e ~/.claude/CLAUDE.md ] ||
-copy --nobackup claude_user-CLAUDE.md                       ~/.claude/CLAUDE.md
-copy --nobackup claude_user-settings.json                   ~/.claude/settings.json
-
-# Reset above orphaned the extras: ~/.claude/skills symlinks now dangle, hooks/*.py are stale
-run "[ -d ~/.claude/skills ] && find ~/.claude/skills/ -maxdepth 1 -xtype l -delete || true"
-run "rm -f ~/.claude/hooks/*.py"
-
-# Tools used by Claude Code (bubblewrap/socat: Sandbox, poppler-utils: PDF reading)
 run apt install -y --no-install-recommends \
-bubblewrap socat poppler-utils
+bubblewrap socat poppler-utils      # Sandbox: bubblewrap/socat, PDF reading: poppler-utilsl
 
 # Sandbox seccomp helper: enables Unix-domain-socket blocking in the Bash sandbox
 run npm install -g @anthropic-ai/sandbox-runtime
 
+# AppArmor blocks unprivileged userns; grant bwrap that cap for the Sandbox
+USERNS_FLAG=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+if [ -r "$USERNS_FLAG" ] && [ "$(< "$USERNS_FLAG")" = "1" ]; then
+    copy claude_apparmor-bwrap                  /etc/apparmor.d/bwrap -m 0644
+    run systemctl reload apparmor
+fi
 
-# Antigravity CLI (https://antigravity.google/)
+
+# Antigravity CLI
 [ -s /tmp/antigravity_cli_install.sh ] ||
 run curl -o /tmp/antigravity_cli_install.sh \
   -fsSL https://antigravity.google/cli/install.sh
@@ -344,113 +250,61 @@ rm -f "/usr/local/bin/agy"
 run bash /tmp/antigravity_cli_install.sh --dir /usr/local/bin
 
 
-# Codex CLI (https://github.com/openai/codex, needs Node.js 18+)
-run npm install -g @openai/codex
 
-
-# The current user settings
-EDITOR="/usr/bin/nvim"
-run echo '' '>>' ~/.bashrc
-run echo 'export EDITOR=\"$EDITOR\"' '>>' ~/.bashrc
-run echo 'export VISUAL=\"$EDITOR\"' '>>' ~/.bashrc
+# git-delta   ref. https://github.com/dandavison/delta/releases
+[ -s /tmp/git-delta.deb ] ||
+run curl -o /tmp/git-delta.deb \
+  -fsSL https://github.com/dandavison/delta/releases/download/0.18.2/git-delta_0.18.2_amd64.deb
+run apt install -y /tmp/git-delta.deb
 
 
 
-# Login user settings
-#  1. Change the color of the prompt for the login user: green(32m) -> purple(35m)
-#  2. Set EDITOR and VISUAL environment variables
-#  3. Autoload ~/.nvm/nvm.sh
-LOGIN_USER="$(logname 2>/dev/null)"
-[ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
-if [ -n "$LOGIN_USER" ]; then
-    LOGIN_GROUP="$(id -gn "$LOGIN_USER")"
-    LOGIN_HOME="$(getent passwd "$LOGIN_USER" | cut -d: -f6)"
-    [ -n "$LOGIN_HOME" ] || LOGIN_HOME="/home/$LOGIN_USER"
-    BASHRC="$LOGIN_HOME/.bashrc"
+# markdown-reader (markdown-tui-explorer)   ref. https://github.com/leboiko/markdown-reader/releases
+MDR_VER=1.34.70
+[ -s /tmp/markdown-reader.tar.gz ] ||
+run curl -o /tmp/markdown-reader.tar.gz \
+  -fsSL https://github.com/leboiko/markdown-reader/releases/download/v${MDR_VER}/markdown-reader-x86_64-unknown-linux-gnu.tar.gz
+run tar -xzf /tmp/markdown-reader.tar.gz -C /tmp
+run install -m 0755 /tmp/markdown-reader-${MDR_VER}-x86_64-unknown-linux-gnu/markdown-reader /usr/local/bin/markdown-reader
 
-    # files/sudoers grants NOPASSWD to a %group; make sure the login user is in it
-    SUDO_GROUP="$(sed -n '/NOPASSWD:/s/^%\([^[:space:]]*\).*/\1/p' "$TOP_DIR/files/sudoers")"
-    [ -n "$SUDO_GROUP" ] && run usermod -aG "$SUDO_GROUP" "$LOGIN_USER"
 
-    # Suppress the terminal bell for the login user as well
-    copy inputrc $LOGIN_HOME/.inputrc --owner $LOGIN_USER --group $LOGIN_GROUP
 
-    run [ -s $BASHRC ]
-    run sed -i $BASHRC \
-            -e '/^\ *PS1=/s/32m/35m/' \
-            -e "/Terminal\ Config/d" \
-            -e '/alias\ tree=/d' \
-            -e '/alias\ pushd=/d' \
-            -e '/alias\ popd=/d' \
-            -e '/alias\ dirs=/d' \
-            -e '/alias\ diffy=/d' \
-            -e '/alias\ rg=/d' \
-            -e '/alias\ node-x=/d' \
-            -e '/alias\ mdr=/d' \
-            -e '/grip\(\)\ /d' \
-            -e '/export\ EDITOR=/d' \
-            -e '/export\ VISUAL=/d' \
-            -e '/export\ PATH=.*\.local.bin:\$PATH/d' \
-            -e '/COLORTERM=truecolor/d' \
-            -e '/NVM_DIR/d'
-    run sed -i $BASHRC -e ':a' -e "'/^[[:space:]]*$/{\$d;N;ba'" -e '}'
+echo -e "${COLOR_GREEN}"
+echo "----------------------------------------------------------------------------------------------------------------"
+echo "        Setup the user environment: root"
+echo "----------------------------------------------------------------------------------------------------------------"
+echo -e "${COLOR_CLEAR}"
 
-    # Handy aliases
-    run echo -e '\\n\\n# ---- Terminal Config ----' '>>' $BASHRC
-    run echo "alias tree=\\'tree --dirsfirst --noreport -I __pycache__\\'" '>>' $BASHRC
-    run echo "alias pushd=\\'pushd \\>/dev/null\\'" '>>' $BASHRC
-    run echo "alias popd=\\'popd \\>/dev/null\\'" '>>' $BASHRC
-    run echo "alias dirs=\\'dirs -v\\'" '>>' $BASHRC
-    run echo "alias diffy=\\'git diff --no-index\\'" '>>' $BASHRC
-    run echo "alias rg=\\'rg --sort path --smart-case\\'" '>>' $BASHRC
-    run echo "alias node-x=\\'NODE_DEBUG=module,fs,net node\\'" '>>' $BASHRC
-    run echo "alias mdr=markdown-reader" '>>' $BASHRC
-    run echo 'grip\(\) \{ rg --sort path --smart-case --json -C 2 \"\$@\" \| delta\; \}' '>>' $BASHRC
+copy nodejs_clean_installer         /usr/local/bin/nodejs_clean_installer
+copy setup_user_environment         /usr/local/bin/setup_user_environment
+copy share_ssh_x11forwarding        ~/.share_ssh_x11forwarding
 
-    # Set the default editor as neovim
-    run echo 'export EDITOR=\"$EDITOR\"' '>>' $BASHRC
-    run echo 'export VISUAL=\"$EDITOR\"' '>>' $BASHRC
+nodejs_clean_installer
 
-    run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory $LOGIN_HOME/.nvm
-    run install --mode 0644 --owner $LOGIN_USER --group $LOGIN_GROUP "$HOME/.nvm/nvm.sh" $LOGIN_HOME/.nvm/nvm.sh
+run sed -i ~/.bashrc \
+    -e '/export\ LS_OPTIONS/s/^\ *#*\ *//' \
+    -e 's/xterm-color[^\)]*/xterm-color\|\*-256color/' \
+    -e '/eval\ \"\`dircolor/s/^\ *#*\ *//' \
+    -e '/share_ssh_x11forwarding/d'
 
-    # Append auto-loading of nvm.sh
-    run cat ">>" $BASHRC <<"EOF"
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
-EOF
-
-    run echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' '>>' $BASHRC
-    run echo '[ -n \"\$WT_SESSION\" ] \&\& export COLORTERM=truecolor' '>>' $BASHRC
-
-    run sudo -i -u $LOGIN_USER bash -c '"nodejs_clean_installer"'
-
-    run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; npm uninstall -g @anthropic-ai/claude-code || true"'
-    run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; bash /tmp/claude_install.sh"'
-    run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; npm install -g @anthropic-ai/sandbox-runtime"'
-
-    run sudo -i -u $LOGIN_USER bash -c '". \$HOME/.nvm/nvm.sh; npm install -g @openai/codex"'
-
-    # Pre-create user-owned parents — `install -D/-d --owner` only owners the final component.
-    run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory $LOGIN_HOME/.claude
-
-    # Populate $LOGIN_HOME/.claude/ (try to preserve the existing contents)
-    [ -e $LOGIN_HOME/.claude/CLAUDE.md ] ||
-    copy --nobackup claude_user-CLAUDE.md                       $LOGIN_HOME/.claude/CLAUDE.md --owner $LOGIN_USER --group $LOGIN_GROUP
-    copy --nobackup claude_user-settings.json                   $LOGIN_HOME/.claude/settings.json --owner $LOGIN_USER --group $LOGIN_GROUP
-
-    # Same stale-extras cleanup for the login user
-    run "[ -d $LOGIN_HOME/.claude/skills ] && find $LOGIN_HOME/.claude/skills/ -maxdepth 1 -xtype l -delete || true"
-    run "rm -f $LOGIN_HOME/.claude/hooks/*.py"
-
-else
-    echo -e "${COLOR_RED}No login user found... omitting to tweak ~/.bashrc${COLOR_CLEAR}"
-    echo -e "${COLOR_RED}No login user found... omitting to include ~/.nvm/nvm.sh${COLOR_CLEAR}"
-    echo ""
-fi
+setup_user_environment
 
 run echo "~/.share_ssh_x11forwarding" '>>' ~/.bashrc
 
+
+
+LOGIN_USER="$(logname 2>/dev/null)"
+[ -n "$LOGIN_USER" ] || LOGIN_USER="$SUDO_USER"     # Alternative way to find the name
+
+if [ -n "$LOGIN_USER" ]; then
+    echo -e "${COLOR_GREEN}"
+    echo "----------------------------------------------------------------------------------------------------------------"
+    echo "        Setup the user environment: ${LOGIN_USER}"
+    echo "----------------------------------------------------------------------------------------------------------------"
+    echo -e "${COLOR_CLEAR}"
+
+    sudo -i -u $LOGIN_USER nodejs_clean_installer
+    sudo -i -u $LOGIN_USER setup_user_environment
+fi
 
 # END
