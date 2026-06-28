@@ -155,6 +155,7 @@ for skill_dir in /etc/claude-code/skills/*; do
     rm -rf ~/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
     run ln -sfn "$skill_dir" ~/.claude/skills/
 done
+
 # Prune dangling symlinks (skills renamed/removed since a prior run)
 run find ~/.claude/skills/ -maxdepth 1 -xtype l -delete
 
@@ -162,7 +163,6 @@ run find ~/.claude/skills/ -maxdepth 1 -xtype l -delete
 # Seed the registry first: never-launched users have no marketplace, so bare `update` fails (re-add is idempotent, exit 0)
 run claude plugin marketplace add anthropics/claude-plugins-official
 run claude plugin marketplace update claude-plugins-official
-
 
 # LSP servers
 run npm install -g typescript-language-server typescript
@@ -193,30 +193,28 @@ run npx -y skills add vercel-labs/agent-browser --skill agent-browser --agent cl
 
 # Playwright MCP
 claude mcp remove playwright --scope user
-run "claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated"
+run claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated
 
-# Codex plugin (raw mcp-server は登録しない: 委譲は /codex:rescue 一本)
+# Codex plugin
 run claude plugin marketplace add openai/codex-plugin-cc
 run claude plugin install codex@openai-codex
 
-claude mcp remove codex --scope user
-
-# System-wide codex config: write-capable non-interactive (rescue の network + 対話 TUI に効く)
-copy codex_config.toml                          /etc/codex/config.toml -m 0644
+claude mcp remove codex --scope user    # Codex MCP is supersedded by Codex plugin
+copy codex_config.toml  /etc/codex/config.toml -m 0644  # System-wide codex config: write-capable non-interactive
 
 # CodeGraph MCP
 claude mcp remove codegraph --scope user
 run npm install -g @colbymchenry/codegraph
-run "claude mcp add codegraph --scope user -- codegraph serve --mcp"
+run claude mcp add codegraph --scope user -- codegraph serve --mcp
 
 # Cloud Run MCP
 claude mcp remove cloud-run --scope user
-run "claude mcp add cloud-run --scope user -- npx -y @google-cloud/cloud-run-mcp"
+run claude mcp add cloud-run --scope user -- npx -y @google-cloud/cloud-run-mcp
 
 # Toolbox MCP (launcher derives BIGQUERY_PROJECT, required at startup, from gcloud)
-copy toolbox_bigquery_mcp                       /usr/local/bin/toolbox_bigquery_mcp -m 0755
+copy toolbox_bigquery_mcp   /usr/local/bin/toolbox_bigquery_mcp -m 0755
 claude mcp remove toolbox --scope user
-run "claude mcp add toolbox --scope user -- toolbox_bigquery_mcp"
+run claude mcp add toolbox --scope user -- toolbox_bigquery_mcp
 
 # Vercel CLI + plugin (MCP comes from the plugin)
 run npm install -g @vercel/vc-native
