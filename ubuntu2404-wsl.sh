@@ -279,7 +279,7 @@ run systemctl restart ssh.service
 [ -s /tmp/google-chrome.deb ] ||
 run curl -o /tmp/google-chrome.deb \
   -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-run apt install -y --fix-missing /tmp/google-chrome.deb
+run apt install -y /tmp/google-chrome.deb
 run apt install -y upower 'fonts-ipafont*' 'fonts-ipaexfont*' 'fonts-noto-color-emoji'
 
 run systemctl enable upower
