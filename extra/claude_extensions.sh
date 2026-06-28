@@ -133,9 +133,8 @@ copy_dir()
 }
 
 
-. $HOME/.nvm/nvm.sh
-export PATH="$HOME/.local/bin:$PATH"
 
+. $HOME/.nvm/nvm.sh
 
 # Deploy the managed hooks and skills
 copy_dir        claude_managed-hooks/                       /etc/claude-code/hooks/
