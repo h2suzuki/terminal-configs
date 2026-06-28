@@ -72,8 +72,8 @@ run()
 
 copy()
 {
-    BACKUP=1
-    [ "$1" = "--nobackup" ] && { BACKUP=0; shift; }
+    BACKUP=0
+    [ "$1" = "--backup" ] && { BACKUP=1; shift; }
 
     FNAME="files/$1"
     DST="$2"
@@ -167,7 +167,7 @@ fi
 # Shared memory-RAG store for root + login user (setgid → login-group; hooks set umask 0o002 → group-writable).
 # Model DB is user-independent so build it here; the FTS index is rebuilt from the login user's memory below.
 run install --directory --mode 2775 --owner root --group ${LOGIN_GROUP:-root} /var/lib/claude-rag-memory
-copy --nobackup claude_memory_rag_builder                  /usr/local/bin/claude_memory_rag_builder -m 0755
+copy claude_memory_rag_builder                  /usr/local/bin/claude_memory_rag_builder -m 0755
 run claude_memory_rag_builder
 [ -n "$LOGIN_USER" ] || run ~/.claude/hooks/memory_surface.py --rebuild   # no login user: index root's own memory
 
@@ -233,7 +233,7 @@ run claude plugin install codex@openai-codex
 claude mcp remove codex --scope user
 
 # System-wide codex config: write-capable non-interactive (rescue の network + 対話 TUI に効く)
-copy --nobackup codex_config.toml                          /etc/codex/config.toml -m 0644
+copy codex_config.toml                          /etc/codex/config.toml -m 0644
 
 # CodeGraph MCP
 claude mcp remove codegraph --scope user
@@ -245,7 +245,7 @@ claude mcp remove cloud-run --scope user
 run "claude mcp add cloud-run --scope user -- npx -y @google-cloud/cloud-run-mcp"
 
 # Toolbox MCP (launcher derives BIGQUERY_PROJECT, required at startup, from gcloud)
-copy --nobackup toolbox_bigquery_mcp                       /usr/local/bin/toolbox_bigquery_mcp -m 0755
+copy toolbox_bigquery_mcp                       /usr/local/bin/toolbox_bigquery_mcp -m 0755
 claude mcp remove toolbox --scope user
 run "claude mcp add toolbox --scope user -- toolbox_bigquery_mcp"
 
@@ -267,10 +267,10 @@ if [ -n "$LOGIN_USER" ]; then          # resolved up-front near the shared-store
     run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory $LOGIN_HOME/.claude/skills
 
     # Deploy $LOGIN_HOME/.claude/ hooks
-    copy --nobackup claude_user-hooks/check_commit_author.py    $LOGIN_HOME/.claude/hooks/check_commit_author.py  --owner $LOGIN_USER --group $LOGIN_GROUP
-    copy --nobackup claude_user-hooks/check_push_prompting.py   $LOGIN_HOME/.claude/hooks/check_push_prompting.py --owner $LOGIN_USER --group $LOGIN_GROUP
-    copy --nobackup claude_user-hooks/memory_surface.py         $LOGIN_HOME/.claude/hooks/memory_surface.py       --owner $LOGIN_USER --group $LOGIN_GROUP
-    copy --nobackup claude_user-hooks/subagent_gate_suggest.py  $LOGIN_HOME/.claude/hooks/subagent_gate_suggest.py --owner $LOGIN_USER --group $LOGIN_GROUP
+    copy claude_user-hooks/check_commit_author.py    $LOGIN_HOME/.claude/hooks/check_commit_author.py  --owner $LOGIN_USER --group $LOGIN_GROUP
+    copy claude_user-hooks/check_push_prompting.py   $LOGIN_HOME/.claude/hooks/check_push_prompting.py --owner $LOGIN_USER --group $LOGIN_GROUP
+    copy claude_user-hooks/memory_surface.py         $LOGIN_HOME/.claude/hooks/memory_surface.py       --owner $LOGIN_USER --group $LOGIN_GROUP
+    copy claude_user-hooks/subagent_gate_suggest.py  $LOGIN_HOME/.claude/hooks/subagent_gate_suggest.py --owner $LOGIN_USER --group $LOGIN_GROUP
     # Feed the fragment on stdin: root opens it here, so the demoted user needs no read access
     run sudo -i -u $LOGIN_USER claude_user_settings inject - < "$TOP_DIR/files/claude_user-extensions.json"
 
