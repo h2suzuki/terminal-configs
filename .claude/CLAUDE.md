@@ -8,14 +8,6 @@
 
 **Why:** repo を放置すると、次に repo から再 deploy した時点で改造が静かに消える regression を抱える。 過去にこのパターンを実際に起こし、ユーザーから明示的に禁止指示が出ている。
 
-## 作業の開始
-
-今後の作業予定および履歴は repo 直下の `todos.md` に記録をとる。session 開始時に Read して、次の着手項目を決める。
-
-## 作業の終了
-
-セッション終了 trigger (「handoff して」「セッションリセット」「終わります」等) 時、 `/handoff` skill が利用可能なら invoke する。
-
 ## ルール違反 = 即 countermeasure
 
 ルール違反は rule 不発火 signal。 同 turn 内で原因特定 + trigger 拡張 / keyword 追加 / 新 entry 等の対策を即実装する。 ただし CLAUDE.md への追加にはユーザーの許可が必要。 このファイルの編集は最後の手段と心得る。
