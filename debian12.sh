@@ -180,7 +180,7 @@ MDR_VER=1.34.70
 run curl -o /tmp/markdown-reader.tar.gz \
   -fsSL https://github.com/leboiko/markdown-reader/releases/download/v${MDR_VER}/markdown-reader-x86_64-unknown-linux-gnu.tar.gz
 run tar -xzf /tmp/markdown-reader.tar.gz -C /tmp
-run install -m 0755 /tmp/markdown-reader-${MDR_VER}-x86_64-unknown-linux-gnu/markdown-reader /usr/bin/markdown-reader
+run install -m 0755 /tmp/markdown-reader-${MDR_VER}-x86_64-unknown-linux-gnu/markdown-reader /usr/local/bin/markdown-reader
 
 
 # X window forwarding and some small programs for testing
@@ -200,7 +200,7 @@ run curl -o /tmp/uv_install.sh \
   -fsSL https://astral.sh/uv/install.sh
 chmod u-s,o+r /tmp/uv_install.sh
 
-export UV_INSTALL_DIR=/usr/bin
+export UV_INSTALL_DIR=/usr/local/bin
 export UV_NO_PROGRESS=true
 run bash /tmp/uv_install.sh
 run uv self update
