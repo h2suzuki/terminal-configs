@@ -1,0 +1,149 @@
+#!/bin/bash
+
+
+# This script sets up the environment of a login shell
+
+
+command -v grep         >/dev/null || { echo "Cannot find grep";        exit 1; }
+command -v tty          >/dev/null || { echo "Cannot find tty";         exit 1; }
+command -v readlink     >/dev/null || { echo "Cannot find readlink";    exit 1; }
+command -v cmp          >/dev/null || { echo "Cannot find cmp";         exit 1; }
+command -v curl         >/dev/null || { echo "Cannot find curl";        exit 1; }
+command -v git          >/dev/null || { echo "Cannot find git";         exit 1; }
+command -v gpg          >/dev/null || { echo "Cannot find gpg";         exit 1; }
+
+
+TOP_DIR=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
+
+
+if tty -s >/dev/null; then
+    COLOR_CLEAR="\033[0m"
+    COLOR_RED="\033[31m"
+    COLOR_GREEN="\033[32m"
+    COLOR_YELLOW="\033[33m"
+else
+    COLOR_CLEAR=
+    COLOR_RED=
+    COLOR_GREEN=
+    COLOR_YELLOW=
+fi
+
+
+run()
+{
+    local RETVAL
+
+    echo -e "=> ${COLOR_YELLOW}${@}${COLOR_CLEAR}"
+    eval "${@}"
+    RETVAL=$?
+
+    if [ $RETVAL -eq 0 ]; then
+        echo -e "[ ${COLOR_GREEN}OK${COLOR_CLEAR} ]\n"
+    else
+        echo -e "[ ${COLOR_RED}ERROR($RETVAL)${COLOR_CLEAR} ]\n"
+        exit $RETVAL
+    fi
+}
+
+
+# uv/claude install into $HOME/.local/bin below; put it on PATH so later invocations resolve
+case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) export PATH="$HOME/.local/bin:$PATH" ;;
+esac
+
+
+[ -e ~/.bashrc ] &&
+run sed -i ~/.bashrc \
+    -e '/^\ *PS1=/s/32m/35m/' \
+    -e "/Terminal\ Config/d" \
+    -e '/alias\ tree=/d' \
+    -e '/alias\ pushd=/d' \
+    -e '/alias\ popd=/d' \
+    -e '/alias\ dirs=/d' \
+    -e '/alias\ diffy=/d' \
+    -e '/alias\ rg=/d' \
+    -e '/alias\ node-x=/d' \
+    -e '/alias\ mdr=/d' \
+    -e '/alias\ ls=/s/^\ *#*\ *//' \
+    -e '/^alias\ ls=/s/ls\ \$LS_OPTIONS/ls\ --group-directories-first\ \$LS_OPTIONS/' \
+    -e '/grip\(\)\ /d' \
+    -e '/export\ EDITOR=/d' \
+    -e '/export\ VISUAL=/d' \
+    -e '/export\ BROWSER=/d' \
+    -e '/export\ PATH=.*\.local.bin:\$PATH/d' \
+    -e '/COLORTERM=truecolor/d' \
+    -e '/NVM_DIR/d'
+
+run sed -i ~/.bashrc -e ':a' -e "'/^[[:space:]]*$/{\$d;N;ba'" -e '}'
+
+run echo -e '\\n\\n# ---- Terminal Config ----' '>>' ~/.bashrc
+run echo "alias tree=\\'tree --dirsfirst --noreport -I __pycache__\\'" '>>' ~/.bashrc
+run echo "alias pushd=\\'pushd \\>/dev/null\\'" '>>' ~/.bashrc
+run echo "alias popd=\\'popd \\>/dev/null\\'" '>>' ~/.bashrc
+run echo "alias dirs=\\'dirs -v\\'" '>>' ~/.bashrc
+run echo "alias diffy=\\'git diff --no-index\\'" '>>' ~/.bashrc
+run echo "alias rg=\\'rg --sort path --smart-case\\'" '>>' ~/.bashrc
+run echo "alias node-x=\\'NODE_DEBUG=module,fs,net node\\'" '>>' ~/.bashrc
+run echo "alias mdr=markdown-reader" '>>' ~/.bashrc
+run echo 'grip\(\) \{ rg --sort path --smart-case --json -C 2 \"\$@\" \| delta\; \}' '>>' ~/.bashrc
+run echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' '>>' ~/.bashrc
+run echo '[ -n \"\$WT_SESSION\" ] \&\& export COLORTERM=truecolor' '>>' ~/.bashrc
+
+EDITOR="/usr/bin/nvim"
+run echo 'export EDITOR=\"$EDITOR\"'    '>>' ~/.bashrc
+run echo 'export VISUAL=\"$EDITOR\"'    '>>' ~/.bashrc
+
+BROWSER="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe start"
+run echo 'export BROWSER=\"$BROWSER\"'  '>>' ~/.bashrc
+
+
+run cat ">>" ~/.bashrc <<"EOF"
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+EOF
+
+
+run git lfs install --skip-repo
+
+
+# Node.js
+nodejs_clean_installer
+. $HOME/.nvm/nvm.sh   # installer ran as a child; source so the root-shell npm calls below resolve
+
+
+# Claude Code
+npm uninstall -g @anthropic-ai/claude-code || true  # Old one
+
+[ -s /tmp/claude_install.sh ] ||
+run curl -o /tmp/claude_install.sh \
+  -fsSL https://claude.ai/install.sh
+chmod u-s,o+r /tmp/claude_install.sh 2>/dev/null || true
+run bash /tmp/claude_install.sh
+
+run install --mode 0755 --directory ~/.claude
+
+run uv tool install --force claude-monitor
+
+install /etc/claude-code/skel/user-CLAUDE.md        ~/.claude/CLAUDE.md
+install /etc/claude-code/skel/user-settings.json    ~/.claude/settings.json
+
+
+# Stop terminal bell
+install /etc/skel/.inputrc                          ~/.inputrc
+
+
+# Reset above orphaned the extras: ~/.claude/skills symlinks now dangle, hooks/*.py are stale
+run "[ -d ~/.claude/skills ] && find ~/.claude/skills/ -maxdepth 1 -xtype l -delete || true"
+run "rm -f ~/.claude/hooks/*.py"
+
+
+# Sandbox seccomp helper: enables Unix-domain-socket blocking in the Bash sandbox
+run npm install -g @anthropic-ai/sandbox-runtime
+
+# Codex CLI (https://github.com/openai/codex, needs Node.js 18+)
+run npm install -g @openai/codex
+
+
+# END
