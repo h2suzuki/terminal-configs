@@ -94,8 +94,10 @@ EDITOR="/usr/bin/nvim"
 run echo 'export EDITOR=\"$EDITOR\"'    '>>' ~/.bashrc
 run echo 'export VISUAL=\"$EDITOR\"'    '>>' ~/.bashrc
 
-BROWSER="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe start"
-run echo 'export BROWSER=\"$BROWSER\"'  '>>' ~/.bashrc
+BROWSER="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+if [ -f "$BROWSER" ]; then
+    run echo 'export BROWSER=\"$BROWSER start\"'  '>>' ~/.bashrc
+fi
 
 
 run cat ">>" ~/.bashrc <<"EOF"
