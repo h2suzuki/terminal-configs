@@ -32,6 +32,13 @@
       {
         "matcher": "^AskUserQuestion$",
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/declare_and_proceed_gate.py" } ]
+      },
+      {
+        "matcher": "^(Grep|Read)$",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/codegraph_first_gate.py" } ]
+      },
+      {
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/codex_delegation_surface.py" } ]
       }
     ],
     "PostToolUse": [
@@ -58,6 +65,9 @@
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/detect_cwd_pollution.py" } ]
       }
     ],
+    "SubagentStop": [
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/codex_delegation_surface.py", "asyncRewake": true } ] }
+    ],
     "SessionStart": [
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/claude_md_lint.py", "timeout": 120 } ] },
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/feature_findings_build.py", "timeout": 30 } ] },
@@ -65,7 +75,8 @@
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/reap_orphan_helpers.py" } ] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/check_uncommitted_at_handoff.py" } ] }
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/check_uncommitted_at_handoff.py" } ] },
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/codex_delegation_surface.py" } ] }
     ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/stop_checks.py" } ] }
