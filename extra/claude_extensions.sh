@@ -131,15 +131,6 @@ run claude_user_settings inject - < "/etc/claude-code/skel/extensions.json"
 
 run install --directory ~/.claude/skills/
 
-
-# Shared memory-RAG store for root + login user (setgid → login-group; hooks set umask 0o002 → group-writable).
-# Model DB is user-independent so build it here; the FTS index is rebuilt from the login user's memory below.
-run install --directory --mode 2775 --owner root --group ${LOGIN_GROUP:-root} /var/lib/claude-rag-memory
-copy claude_memory_rag_builder                  /usr/local/bin/claude_memory_rag_builder -m 0755
-run claude_memory_rag_builder
-
-
-# Deploy the user skills
 pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
 for skill_dir in */; do
     [ -d "$skill_dir" ] || continue
@@ -158,6 +149,18 @@ done
 
 # Prune dangling symlinks (skills renamed/removed since a prior run)
 run find ~/.claude/skills/ -maxdepth 1 -xtype l -delete
+
+
+# Shared memory-RAG store; FIXME for LOGIN_GROUP
+copy claude_memory_rag_builder                  /usr/local/bin/claude_memory_rag_builder -m 0755
+
+run install --mode 2775 --owner root --group ${LOGIN_GROUP:-root} --directory /var/lib/claude-rag-memory
+run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory ~/.claude/hooks/state
+
+run claude_memory_rag_builder
+
+run ~/.claude/hooks/memory_surface.py --rebuild
+
 
 
 # Seed the registry first: never-launched users have no marketplace, so bare `update` fails (re-add is idempotent, exit 0)
