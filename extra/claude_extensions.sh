@@ -137,14 +137,14 @@ copy_dir()
 . $HOME/.nvm/nvm.sh
 
 
-
-
 # Deploy the user hooks
-copy --nobackup claude_user-hooks/check_commit_author.py    ~/.claude/hooks/check_commit_author.py
-copy --nobackup claude_user-hooks/check_push_prompting.py   ~/.claude/hooks/check_push_prompting.py
-copy --nobackup claude_user-hooks/memory_surface.py         ~/.claude/hooks/memory_surface.py
-copy --nobackup claude_user-hooks/subagent_gate_suggest.py  ~/.claude/hooks/subagent_gate_suggest.py
-run claude_user_settings inject - < "$TOP_DIR/files/claude_user-extensions.json"
+copy claude_user-hooks/check_commit_author.py    ~/.claude/hooks/check_commit_author.py
+copy claude_user-hooks/check_push_prompting.py   ~/.claude/hooks/check_push_prompting.py
+copy claude_user-hooks/memory_surface.py         ~/.claude/hooks/memory_surface.py
+copy claude_user-hooks/subagent_gate_suggest.py  ~/.claude/hooks/subagent_gate_suggest.py
+
+run claude_user_settings inject - < "/etc/claude-code/skel/extensions.json"
+
 
 
 # Shared memory-RAG store for root + login user (setgid → login-group; hooks set umask 0o002 → group-writable).
