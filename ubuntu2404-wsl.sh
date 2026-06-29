@@ -317,6 +317,10 @@ copy_dir claude_user-hooks                      /etc/claude-code/skel/hooks/
 copy claude_user-extensions.json                /etc/claude-code/skel/extensions.json   # To be injected by claude_user_settings
 
 
+#  Codex configs; setup_user_environment installs CLI
+rm -rf /etc/codex/
+copy codex_config.toml                          /etc/codex/config.toml
+
 
 # Antigravity CLI
 [ -s /tmp/antigravity_cli_install.sh ] ||
@@ -353,6 +357,8 @@ run install -m 0755 /tmp/markdown-reader-${MDR_VER}-x86_64-unknown-linux-gnu/mar
 copy nodejs_clean_installer         /usr/local/bin/nodejs_clean_installer
 copy setup_user_environment         /usr/local/bin/setup_user_environment
 copy claude_user_settings           /usr/local/bin/claude_user_settings
+copy claude_memory_rag_builder      /usr/local/bin/claude_memory_rag_builder
+copy toolbox_bigquery_mcp           /usr/local/bin/toolbox_bigquery_mcp
 
 
 echo -e "${COLOR_GREEN}"

@@ -151,9 +151,6 @@ done
 run find ~/.claude/skills/ -maxdepth 1 -xtype l -delete
 
 
-# Shared memory-RAG store; FIXME for LOGIN_GROUP
-copy claude_memory_rag_builder                  /usr/local/bin/claude_memory_rag_builder -m 0755
-
 run install --mode 2775 --owner root --group ${LOGIN_GROUP:-root} --directory /var/lib/claude-rag-memory
 run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory ~/.claude/hooks/state
 
@@ -203,7 +200,6 @@ run claude plugin marketplace add openai/codex-plugin-cc
 run claude plugin install codex@openai-codex
 
 claude mcp remove codex --scope user    # Codex MCP is supersedded by Codex plugin
-copy codex_config.toml  /etc/codex/config.toml -m 0644  # System-wide codex config: write-capable non-interactive
 
 # CodeGraph MCP
 claude mcp remove codegraph --scope user
@@ -215,7 +211,6 @@ claude mcp remove cloud-run --scope user
 run claude mcp add cloud-run --scope user -- npx -y @google-cloud/cloud-run-mcp
 
 # Toolbox MCP (launcher derives BIGQUERY_PROJECT, required at startup, from gcloud)
-copy toolbox_bigquery_mcp   /usr/local/bin/toolbox_bigquery_mcp -m 0755
 claude mcp remove toolbox --scope user
 run claude mcp add toolbox --scope user -- toolbox_bigquery_mcp
 
