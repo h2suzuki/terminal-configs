@@ -95,7 +95,7 @@ residual (閉じない・既知)
   未発火。latent)。
 
 canonical source: files/claude_managed-hooks/skill_reminder_gate.py
-deploy: /etc/claude-code/hooks/ (copy_dir で自動)。両者を同 session で同内容に保つ。
+deploy: /etc/claude-code/hooks/  両者を同 session で同内容に保つ。
 """
 
 from __future__ import annotations

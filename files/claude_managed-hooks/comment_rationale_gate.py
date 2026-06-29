@@ -11,8 +11,7 @@ commit message.
 Narrow-recall/high-precision: false positive cost = 1 retry; a slip lets a
 rationale comment land in code and rot vs. evolving callers / tools.
 
-deploy: /etc/claude-code/hooks/ (copy_dir で自動)。 canonical source は
-files/claude_managed-hooks/。 両者を同 session で同内容に保つ。
+deploy: /etc/claude-code/hooks/  両者を同 session で同内容に保つ。
 """
 
 from __future__ import annotations

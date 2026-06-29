@@ -16,8 +16,7 @@ Twin of skill_reminder_gate.py (turn-scan, 5-min window, JSON deny, fail-open),
 scoped to one tool/skill. Narrow-recall/high-precision: a false-positive costs
 one skill invoke + re-ask, a slip lets a decidable question reach the user ungated.
 
-deploy: /etc/claude-code/hooks/ (copy_dir で自動)。canonical source は
-files/claude_managed-hooks/。両者を同 session で同内容に保つ。
+deploy: /etc/claude-code/hooks/  session で同内容に保つ。
 """
 
 from __future__ import annotations

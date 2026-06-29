@@ -34,7 +34,7 @@ Modes:
                    fetches both live; with either, only that source (offline tests).
 
 canonical source: files/claude_managed-hooks/feature_findings_build.py
-deploy: /etc/claude-code/hooks/ (copy_dir で自動)。両者を同 session で同内容に保つ。
+deploy: /etc/claude-code/hooks/  両者を同 session で同内容に保つ。
 """
 
 from __future__ import annotations

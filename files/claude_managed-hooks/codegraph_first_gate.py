@@ -42,7 +42,7 @@ DENY は permissionDecision: deny、 ADVISORY は additionalContext (tool は走
 読めなければ retry 追跡を諦め gate は通常 emit (single deny は loop しない)。
 
 canonical source: files/claude_managed-hooks/codegraph_first_gate.py
-deploy: /etc/claude-code/hooks/ (copy_dir で自動)。 両者を同 session で同内容に保つ。
+deploy: /etc/claude-code/hooks/  両者を同 session で同内容に保つ。
 """
 
 from __future__ import annotations

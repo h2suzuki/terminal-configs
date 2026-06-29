@@ -60,7 +60,7 @@ hook bug が誤って tool を block しないため (deny は exit code でな�
 PostToolUse ゆえそもそも block 不能。
 
 canonical source: files/claude_managed-hooks/memory_routing_gate.py
-deploy: /etc/claude-code/hooks/ (copy_dir で自動)。両者を同 session で同内容に保つ。
+deploy: /etc/claude-code/hooks/  両者を同 session で同内容に保つ。
 """
 
 from __future__ import annotations
