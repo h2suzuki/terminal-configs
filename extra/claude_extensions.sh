@@ -81,9 +81,6 @@ copy_dir()
 
 
 
-. $HOME/.nvm/nvm.sh
-
-
 # Deploy the user hooks
 run install --directory ~/.claude/hooks/
 run install /etc/claude-code/skel/hooks/check_commit_author.py      ~/.claude/hooks/check_commit_author.py
@@ -122,6 +119,9 @@ run claude_memory_rag_builder
 
 run ~/.claude/hooks/memory_surface.py --rebuild
 
+
+
+. $HOME/.nvm/nvm.sh
 
 
 # Seed the registry first: never-launched users have no marketplace, so bare `update` fails (re-add is idempotent, exit 0)
