@@ -53,42 +53,6 @@ run()
 }
 
 
-copy()
-{
-    BACKUP=0
-    [ "$1" = "--backup" ] && { BACKUP=1; shift; }
-
-    FNAME="files/$1"
-    DST="$2"
-    shift 2
-
-    # When the caller did not pass -m, default the mode by extension:
-    #   *.md / *.json / *.jsonl  -> 0644 (read-only data)
-    #   else                     -> 0755 (matches install's own default;
-    #                                     scripts / configs)
-    # Security-sensitive targets (sudoers, secrets) must pass -m explicitly.
-    case " $* " in
-        *" -m "*) ;;
-        *)
-            case "$FNAME" in
-                *.md|*.json|*.jsonl) set -- -m 0644 "$@" ;;
-                *)                   set -- -m 0755 "$@" ;;
-            esac
-            ;;
-    esac
-
-    if [ -e "$DST" ]; then
-        if cmp -s "$TOP_DIR/$FNAME" "$DST"; then
-            echo -e "=> ${COLOR_YELLOW}$FNAME is already copied${COLOR_CLEAR}\n"
-        else
-            [ $BACKUP -eq 0 -o -e "$DST.org" ] || run install $@ "$DST" "$DST.org"
-            run install "$@" "$TOP_DIR/$FNAME" "$DST"
-        fi
-    else
-        run install -D "$@" "$TOP_DIR/$FNAME" "$DST"
-    fi
-}
-
 
 copy_dir()
 {
@@ -122,10 +86,10 @@ copy_dir()
 
 # Deploy the user hooks
 run install --directory ~/.claude/hooks/
-copy claude_user-hooks/check_commit_author.py    ~/.claude/hooks/check_commit_author.py
-copy claude_user-hooks/check_push_prompting.py   ~/.claude/hooks/check_push_prompting.py
-copy claude_user-hooks/memory_surface.py         ~/.claude/hooks/memory_surface.py
-copy claude_user-hooks/subagent_gate_suggest.py  ~/.claude/hooks/subagent_gate_suggest.py
+run install /etc/claude-code/skel/hooks/check_commit_author.py      ~/.claude/hooks/check_commit_author.py
+run install /etc/claude-code/skel/hooks/check_push_prompting.py     ~/.claude/hooks/check_push_prompting.py
+run install /etc/claude-code/skel/hooks/memory_surface.py           ~/.claude/hooks/memory_surface.py
+run install /etc/claude-code/skel/hooks/subagent_gate_suggest.py    ~/.claude/hooks/subagent_gate_suggest.py
 
 run claude_user_settings inject - < "/etc/claude-code/skel/extensions.json"
 
