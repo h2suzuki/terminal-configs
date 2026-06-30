@@ -23,6 +23,10 @@ Modes:
   `<memory_dir>/MEMORY.md` (initial population / disaster recovery). Defaults
   to user memory.
 
+Besides the CLI modes, `surface_for_text()` is importable so other hooks (e.g. the
+Stop hook) run the same hybrid retrieval against an arbitrary text source, not just
+the prompt.
+
 The embed model DB (vocab token -> fp16 vector) is built once by the
 standalone stdlib-only builder CLI that the installer deploys to
 /usr/local/bin; every mode here is stdlib-only too.
@@ -564,8 +568,68 @@ def _turn_marker(payload: dict) -> str | None:
     return " ".join(out)
 
 
+def _surface_core(
+    con: sqlite3.Connection,
+    query_text: str,
+    session_id: str,
+    project_id: str,
+    now: float,
+    max_emit: int,
+) -> list[tuple[str, str, float]]:
+    """Hybrid-retrieve → floor-gate → throttle-dedup → record up to max_emit picks; shared by _memory_surface (UPS) and surface_for_text (Stop). Recording an inject row is what makes the per-(file,session) throttle suppress a repeat — incl. an entry already surfaced this turn at UPS — within THROTTLE_SECONDS."""
+    query = _build_query(query_text)
+    if query is None:
+        return []
+    try:
+        rows = con.execute(
+            f"SELECT file_path, reminder, bm25(entries_fts, 0, 0, 0, 1.0, {BM25_BODY_WEIGHT}, 0) "
+            "FROM entries_fts WHERE entries_fts MATCH ? "
+            "AND (project_id IS NULL OR project_id = ?) "
+            f"ORDER BY bm25(entries_fts, 0, 0, 0, 1.0, {BM25_BODY_WEIGHT}, 0) "
+            f"LIMIT {BM25_CANDIDATES}",
+            (query, project_id),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    picks = _hybrid_picks(con, query_text, project_id, rows)
+    if picks is None:
+        # legacy BM25-only floors (embed model DB 不在 / embed 失敗)
+        picks = []
+        for rank, (file_path, reminder, score) in enumerate(rows[:2]):
+            floor = BM25_SURFACE_FLOOR if rank == 0 else BM25_STRONG_FLOOR
+            if score is None or score > floor:
+                continue
+            picks.append((file_path, reminder, score))
+    out: list[tuple[str, str, float]] = []
+    for file_path, reminder, score in picks:
+        if len(out) >= max_emit:
+            break
+        if _throttle_check(con, file_path, session_id, now):
+            continue
+        _record_inject(con, file_path, project_id, session_id, now, score, query_text)
+        out.append((file_path, reminder, score))
+    return out
+
+
+def surface_for_text(
+    query_text: str, session_id: str, project_id: str, max_emit: int = 1
+) -> list[tuple[str, str, float]]:
+    """Importable retrieval for non-UPS callers (e.g. the Stop hook): up to max_emit throttle-deduped (file_path, reminder, score) picks, [] when the DB is unavailable so the caller fails open."""
+    if not query_text or not query_text.strip():
+        return []
+    con = _connect()
+    if con is None:
+        return []
+    try:
+        return _surface_core(
+            con, query_text, session_id, project_id, time.time(), max_emit
+        )
+    finally:
+        con.close()
+
+
 def _memory_surface(payload: dict) -> str | None:
-    # Top-1 FTS5 BM25 match (global + current project), session-throttled.
+    # UserPromptSubmit: top hybrid match(es) for the prompt, session-throttled.
     prompt = payload.get("prompt") or ""
     if not isinstance(prompt, str) or not prompt.strip():
         return None
@@ -583,42 +647,14 @@ def _memory_surface(payload: dict) -> str | None:
     if con is None:
         return None
     try:
-        query = _build_query(prompt)
-        if query is None:
-            return None
-        try:
-            rows = con.execute(
-                f"SELECT file_path, reminder, bm25(entries_fts, 0, 0, 0, 1.0, {BM25_BODY_WEIGHT}, 0) "
-                "FROM entries_fts WHERE entries_fts MATCH ? "
-                "AND (project_id IS NULL OR project_id = ?) "
-                f"ORDER BY bm25(entries_fts, 0, 0, 0, 1.0, {BM25_BODY_WEIGHT}, 0) "
-                f"LIMIT {BM25_CANDIDATES}",
-                (query, project_id),
-            ).fetchall()
-        except sqlite3.Error:
-            return None
-        picks = _hybrid_picks(con, prompt, project_id, rows)
-        if picks is None:
-            # legacy BM25-only floors (embed model DB 不在 / embed 失敗)
-            picks = []
-            for rank, (file_path, reminder, score) in enumerate(rows[:2]):
-                floor = BM25_SURFACE_FLOOR if rank == 0 else BM25_STRONG_FLOOR
-                if score is None or score > floor:
-                    continue
-                picks.append((file_path, reminder, score))
-        now = time.time()
-        blocks = []
-        for file_path, reminder, score in picks:
-            if _throttle_check(con, file_path, session_id, now):
-                continue
-            _record_inject(con, file_path, project_id, session_id, now, score, prompt)
-            display = reminder or "(reminder 未設定)"
-            blocks.append(
-                f"<memory-surface>\n{display} 詳細: {file_path}\n</memory-surface>"
-            )
-        return "\n".join(blocks) if blocks else None
+        picks = _surface_core(con, prompt, session_id, project_id, time.time(), 2)
     finally:
         con.close()
+    blocks = [
+        f"<memory-surface>\n{reminder or '(reminder 未設定)'} 詳細: {file_path}\n</memory-surface>"
+        for file_path, reminder, _score in picks
+    ]
+    return "\n".join(blocks) if blocks else None
 
 
 def _hybrid_picks(
@@ -980,6 +1016,58 @@ class HybridEncoderTest(unittest.TestCase):
             mcon.close()
         assert a and b and c
         self.assertGreater(_cosine(a, b), _cosine(a, c) + 0.15)
+
+
+class SurfaceCoreTest(unittest.TestCase):
+    """_surface_core / surface_for_text throttle + max_emit. Run: python3 -m unittest memory_surface"""
+
+    @staticmethod
+    def _tmp_db():
+        import tempfile
+
+        return os.path.join(tempfile.mkdtemp(), "idx.sqlite3")
+
+    def test_dedup_and_max_emit(self):
+        from unittest import mock
+
+        db = self._tmp_db()
+        picks = [("/m/a.md", "lesson A", -6.0), ("/m/b.md", "lesson B", -4.0)]
+        mod = sys.modules[__name__]
+        with (
+            mock.patch.object(mod, "DB_PATH", db),
+            mock.patch.object(mod, "_hybrid_picks", lambda *a: list(picks)),
+        ):
+            con = _connect()
+            assert con is not None
+            try:
+                now = 1_000_000.0
+                first = _surface_core(con, "deploy repo 放置", "s1", "proj", now, 2)
+                self.assertEqual([p[0] for p in first], ["/m/a.md", "/m/b.md"])
+                # same session within THROTTLE_SECONDS -> both deduped
+                self.assertEqual(
+                    _surface_core(con, "deploy repo 放置", "s1", "proj", now + 60, 2),
+                    [],
+                )
+                # max_emit caps; a fresh session is not throttled
+                self.assertEqual(
+                    len(_surface_core(con, "deploy repo 放置", "s2", "proj", now, 1)), 1
+                )
+            finally:
+                con.close()
+
+    def test_surface_for_text_blank_and_wrapper(self):
+        from unittest import mock
+
+        db = self._tmp_db()
+        picks = [("/m/a.md", "lesson A", -6.0)]
+        mod = sys.modules[__name__]
+        with (
+            mock.patch.object(mod, "DB_PATH", db),
+            mock.patch.object(mod, "_hybrid_picks", lambda *a: list(picks)),
+        ):
+            self.assertEqual(surface_for_text("", "s", "proj"), [])
+            out = surface_for_text("deploy repo 放置", "s", "proj", 1)
+            self.assertEqual([p[0] for p in out], ["/m/a.md"])
 
 
 if __name__ == "__main__":

@@ -77,6 +77,14 @@ Combined Stop hook for org-managed Claude Code:
     (counter は turn 毎 1 bump)。 この once-per-turn 不変条件は memory_surface.py も同
     .turns を読むので cross-hook で load-bearing。 完全 fail-open。
 
+  memory-surface (bonus, regex-pass path, exit 0):
+    enforcement が pass し block しない turn の first Stop でのみ、 当 turn の assistant 出力 (text)
+    を query に memory_surface.surface_for_text を呼び、 最良 1 件を hookSpecificOutput.additionalContext
+    で model に inject + systemMessage で user 表示 (Stop の additionalContext は v2.1.163+ で turn を
+    継続させ feedback を返す channel)。 turn 毎最大 1 回 — stop_hook_active で継続 Stop を gate し、
+    surface_for_text の throttle が UPS surface と同一 entry の重複を抑止。 import / DB 不在は fail-open で
+    surfacing 無効。 surfacing した Stop では counter を bump せず、 clean 終了 (継続後の retry) 側で 1 回 bump。
+
 Stop hook input: JSON via stdin with session_id, transcript_path,
 hook_event_name = "Stop".
 
@@ -113,6 +121,15 @@ import re
 import sys
 import time
 import unittest
+
+# Reuse memory_surface's retrieval engine at Stop via a guarded cross-tree import
+# (managed→user layering, repo-deployed together; absent/broken hook → surfacing off).
+sys.path.append(os.path.expanduser("~/.claude/hooks"))
+try:
+    # ty can't resolve this runtime sys.path import; guarded + fail-open below.
+    import memory_surface as _memory_surface_mod  # ty: ignore[unresolved-import]
+except Exception:
+    _memory_surface_mod = None
 
 # --- Pattern: meta-announce-silence (block on hit, no pairing) ---
 # 不実施宣言系 — rule 遵守を発話で能動的に話題化する pattern。
@@ -709,16 +726,16 @@ def _check(
     return exit_code, warnings, blocking
 
 
-def _run(payload: dict) -> tuple[int, float | None]:
-    # Returns (exit_code, prompt_epoch) — prompt_epoch feeds the marker gap.
+def _run(payload: dict) -> tuple[int, float | None, str]:
+    # Returns (exit_code, prompt_epoch, text); text feeds Stop memory surfacing.
     if not isinstance(payload, dict):
-        return 0, None
+        return 0, None, ""
     transcript_path = payload.get("transcript_path")
     if not isinstance(transcript_path, str) or not transcript_path:
-        return 0, None
+        return 0, None, ""
     entries = _load_tail(transcript_path)
     if not entries:
-        return 0, None
+        return 0, None, ""
     text, tool_names, tool_paths, has_git_verify, prompt_epoch = _current_turn(entries)
     # Claude Code が Stop hook を invoke する時点で最新 assistant text はまだ transcript に
     # flush されていない (v2.1.47+ で payload に last_assistant_message が提供されたのはこの
@@ -727,7 +744,7 @@ def _run(payload: dict) -> tuple[int, float | None]:
     if isinstance(last_msg, str) and last_msg:
         text = (text + "\n" + last_msg) if text else last_msg
     if not text:
-        return 0, prompt_epoch
+        return 0, prompt_epoch, ""
     declare_active = _declare_proceed_active(entries, time.time())
     exit_code, warnings, blocking = _check(
         text, tool_names, tool_paths, has_git_verify, declare_active
@@ -738,10 +755,38 @@ def _run(payload: dict) -> tuple[int, float | None]:
             sys.stderr.write("advise-once (block demoted to pass): " + line + "\n")
         for line in warnings:
             sys.stderr.write(line + "\n")
-        return 0, prompt_epoch
+        return 0, prompt_epoch, text
     for line in warnings + blocking:
         sys.stderr.write(line + "\n")
-    return exit_code, prompt_epoch
+    return exit_code, prompt_epoch, text
+
+
+def _memory_surface_at_stop(payload: dict, text: str) -> str | None:
+    """Regex-pass path: a Stop additionalContext reason surfacing the top memory entry for the turn's output `text`, else None; fires at most once/turn (stop_hook_active-gated + throttle-deduped) and is fully fail-open."""
+    if _memory_surface_mod is None or payload.get("stop_hook_active"):
+        return None
+    if not text or not text.strip():
+        return None
+    session_id = payload.get("session_id") or ""
+    cwd = payload.get("cwd")
+    if not isinstance(cwd, str) or not cwd:
+        cwd = os.getcwd()
+    project_id = _memory_surface_mod._encoded_project_id(cwd)
+    try:
+        picks = _memory_surface_mod.surface_for_text(text, session_id, project_id, 1)
+    except Exception:
+        return None
+    if not picks:
+        return None
+    file_path, reminder, _score = picks[0]
+    display = reminder or "(reminder 未設定)"
+    return (
+        "<memory-surface>\n"
+        f"今ターンの出力に関連する過去の教訓: {display} 詳細: {file_path}\n"
+        "完了前に今の応答がこの教訓に抵触しないか確認し、 抵触するなら修正してから完了して "
+        "ください (抵触しなければそのまま完了して構いません)。\n"
+        "</memory-surface>"
+    )
 
 
 # --- Turn marker (bonus, exit 0 only) ---
@@ -849,21 +894,38 @@ def main() -> int:
     except Exception:
         return 0
     try:
-        exit_code, prompt_epoch = _run(payload)
+        exit_code, prompt_epoch, text = _run(payload)
     except Exception:
-        exit_code, prompt_epoch = (
-            0,
-            None,
-        )  # fail-open: an enforcement glitch never blocks the turn
-    # Bonus: at a genuine turn end (enforcement passed, exit 0) show the
-    # per-turn marker. Never on a block (exit 2) — the turn is continuing.
-    # Fully isolated: a marker error must not change the enforcement result.
-    if exit_code == 0:
-        try:
-            _emit_turn_marker(payload, prompt_epoch)
-        except Exception:
-            pass
-    return exit_code
+        # fail-open: an enforcement glitch never blocks the turn.
+        exit_code, prompt_epoch, text = 0, None, ""
+    if exit_code != 0:
+        return exit_code  # regex enforcement blocked — unchanged path, no marker/memory
+    # regex passed: surface one memory entry for the assistant's own output (if any) and
+    # inject it via Stop additionalContext, which keeps the turn going (v2.1.163+).
+    try:
+        reason = _memory_surface_at_stop(payload, text)
+    except Exception:
+        reason = None
+    if reason:
+        print(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "Stop",
+                        "additionalContext": reason,
+                    },
+                    "systemMessage": reason,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    # No memory surfacing → genuine turn end: the turn's single counter bump + marker.
+    try:
+        _emit_turn_marker(payload, prompt_epoch)
+    except Exception:
+        pass
+    return 0
 
 
 class TurnMarkerTest(unittest.TestCase):
@@ -987,7 +1049,7 @@ class TurnMarkerTest(unittest.TestCase):
         with redirect_stderr(io.StringIO()):
             blk = self._transcript([self._user(), self._asst("省略しません")])
             self.assertEqual(
-                _run({"transcript_path": blk, "stop_hook_active": False}),
+                _run({"transcript_path": blk, "stop_hook_active": False})[:2],
                 (2, _parse_ts(self.TS)),
             )
             self.assertEqual(
@@ -1000,8 +1062,8 @@ class TurnMarkerTest(unittest.TestCase):
                 _run({"transcript_path": clean, "stop_hook_active": False})[0], 0
             )
         # _run tolerates non-dict input via its isinstance guard; verify it.
-        self.assertEqual(_run("nope"), (0, None))  # ty: ignore[invalid-argument-type]
-        self.assertEqual(_run({}), (0, None))
+        self.assertEqual(_run("nope"), (0, None, ""))  # ty: ignore[invalid-argument-type]
+        self.assertEqual(_run({}), (0, None, ""))
 
 
 class EnforcementFamilyTest(unittest.TestCase):
@@ -1165,6 +1227,153 @@ class EnforcementFamilyTest(unittest.TestCase):
         self.assertTrue(
             any("known-possible" in b for b in self._blk("autosquash はできない"))
         )
+
+
+class StopMemorySurfaceTest(unittest.TestCase):
+    """RAG memory surface on the regex-pass Stop path. Run: python3 -m unittest stop_checks"""
+
+    M = sys.modules[__name__]
+
+    @staticmethod
+    def _fake_mod(picks):
+        from unittest import mock
+
+        m = mock.Mock()
+        m._encoded_project_id = lambda c: c.replace("/", "-")
+        m.surface_for_text = lambda *a, **k: list(picks)
+        return m
+
+    def test_none_when_module_absent(self):
+        from unittest import mock
+
+        with mock.patch.object(self.M, "_memory_surface_mod", None):
+            self.assertIsNone(
+                _memory_surface_at_stop({"stop_hook_active": False}, "output text")
+            )
+
+    def test_none_when_stop_hook_active(self):
+        from unittest import mock
+
+        mod = self._fake_mod([("/m/x.md", "lesson X", 0.6)])
+        with mock.patch.object(self.M, "_memory_surface_mod", mod):
+            self.assertIsNone(
+                _memory_surface_at_stop(
+                    {"stop_hook_active": True, "cwd": "/p"}, "output text"
+                )
+            )
+
+    def test_none_when_text_blank(self):
+        from unittest import mock
+
+        mod = self._fake_mod([("/m/x.md", "lesson X", 0.6)])
+        with mock.patch.object(self.M, "_memory_surface_mod", mod):
+            self.assertIsNone(
+                _memory_surface_at_stop({"stop_hook_active": False, "cwd": "/p"}, "  ")
+            )
+
+    def test_reason_built_from_top_pick(self):
+        from unittest import mock
+
+        mod = self._fake_mod([("/m/x.md", "lesson X", 0.6)])
+        with mock.patch.object(self.M, "_memory_surface_mod", mod):
+            r = _memory_surface_at_stop(
+                {"stop_hook_active": False, "cwd": "/p", "session_id": "s"}, "output"
+            )
+        assert r is not None
+        self.assertIn("lesson X", r)
+        self.assertIn("/m/x.md", r)
+        self.assertIn("memory-surface", r)
+
+    def test_none_when_no_picks(self):
+        from unittest import mock
+
+        mod = self._fake_mod([])
+        with mock.patch.object(self.M, "_memory_surface_mod", mod):
+            self.assertIsNone(
+                _memory_surface_at_stop({"stop_hook_active": False, "cwd": "/p"}, "out")
+            )
+
+    def _main_out(self, run_ret, reason):
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        marker = mock.Mock()
+        with (
+            mock.patch.object(self.M, "_run", lambda p: run_ret),
+            mock.patch.object(self.M, "_memory_surface_at_stop", lambda p, t: reason),
+            mock.patch.object(self.M, "_emit_turn_marker", marker),
+            mock.patch.object(sys, "stdin", io.StringIO("{}")),
+        ):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                code = main()
+        return code, marker, buf.getvalue().strip()
+
+    def test_main_regex_block_skips_memory_and_marker(self):
+        import io
+        from unittest import mock
+
+        with (
+            mock.patch.object(self.M, "_run", lambda p: (2, None, "txt")),
+            mock.patch.object(self.M, "_memory_surface_at_stop") as ms,
+            mock.patch.object(self.M, "_emit_turn_marker") as mk,
+            mock.patch.object(sys, "stdin", io.StringIO("{}")),
+        ):
+            self.assertEqual(main(), 2)
+            ms.assert_not_called()
+            mk.assert_not_called()
+
+    def test_main_regex_pass_with_memory_injects_additionalcontext(self):
+        code, marker, out = self._main_out((0, 1.0, "txt"), "REASON-TEXT")
+        self.assertEqual(code, 0)
+        payload = json.loads(out)
+        self.assertEqual(payload["hookSpecificOutput"]["hookEventName"], "Stop")
+        self.assertEqual(
+            payload["hookSpecificOutput"]["additionalContext"], "REASON-TEXT"
+        )
+        self.assertEqual(payload["systemMessage"], "REASON-TEXT")
+        marker.assert_not_called()
+
+    def test_main_regex_pass_no_memory_emits_marker(self):
+        code, marker, out = self._main_out((0, 1.0, "txt"), None)
+        self.assertEqual(code, 0)
+        marker.assert_called_once()
+        self.assertEqual(out, "")
+
+    def test_end_to_end_through_real_surface_for_text(self):
+        # Real cross-module chain: load the repo-source memory_surface (not the deployed
+        # copy), seed a temp DB, stub only retrieval scoring, verify a reason is built.
+        import importlib.util
+        import tempfile
+        from unittest import mock
+
+        ms_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..",
+            "claude_user-hooks",
+            "memory_surface.py",
+        )
+        if not os.path.exists(ms_path):
+            self.skipTest("repo-source memory_surface.py not found")
+        spec = importlib.util.spec_from_file_location("memory_surface_src", ms_path)
+        assert spec is not None and spec.loader is not None
+        ms = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ms)
+        db = os.path.join(tempfile.mkdtemp(), "idx.sqlite3")
+        pick = [("/mem/feedback_x.md", "deploy 先だけ編集して repo を放置しない", -5.0)]
+        with (
+            mock.patch.object(ms, "DB_PATH", db),
+            mock.patch.object(ms, "_hybrid_picks", lambda *a: list(pick)),
+            mock.patch.object(self.M, "_memory_surface_mod", ms),
+        ):
+            r = _memory_surface_at_stop(
+                {"stop_hook_active": False, "cwd": "/proj", "session_id": "sess"},
+                "deploy したので repo も更新する",
+            )
+        assert r is not None
+        self.assertIn("repo を放置しない", r)
+        self.assertIn("/mem/feedback_x.md", r)
 
 
 if __name__ == "__main__":
