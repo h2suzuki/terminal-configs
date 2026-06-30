@@ -2,7 +2,11 @@
 
 # This script sets up a Debian 12 environment
 
+
 command -v grep     >/dev/null || { echo "Cannot find grep";        exit 1; }
+command -v tty      >/dev/null || { echo "Cannot find tty";         exit 1; }
+command -v cmp      >/dev/null || { echo "Cannot find cmp";         exit 1; }
+command -v stat     >/dev/null || { echo "Cannot find stat";        exit 1; }
 
 grep -Fqs "Debian GNU/Linux 12 " /etc/issue || {
     echo "This environment does not look like Debian 12"
@@ -12,13 +16,6 @@ grep -Fqs "Debian GNU/Linux 12 " /etc/issue || {
     echo "Please run as root"
     exit 1
 }
-
-command -v tty      >/dev/null || { echo "Cannot find tty";         exit 1; }
-command -v readlink >/dev/null || { echo "Cannot find readlink";    exit 1; }
-command -v cmp      >/dev/null || { echo "Cannot find cmp";         exit 1; }
-
-
-TOP_DIR=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
 
 
 if tty -s >/dev/null; then
@@ -32,7 +29,6 @@ else
     COLOR_GREEN=
     COLOR_YELLOW=
 fi
-
 
 run()
 {
@@ -51,41 +47,65 @@ run()
 }
 
 
+TOP_DIR=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
+
 copy()
 {
-    BACKUP=0
-    [ "$1" = "--backup" ] && { BACKUP=1; shift; }
-
     FNAME="files/$1"
     DST="$2"
     shift 2
 
-    # When the caller did not pass -m, default the mode by extension:
-    #   *.md / *.json / *.jsonl  -> 0644 (read-only data)
-    #   else                     -> 0755 (matches install's own default;
-    #                                     scripts / configs)
-    # Security-sensitive targets (sudoers, secrets) must pass -m explicitly.
+    MODE_SET=0
     case " $* " in
-        *" -m "*) ;;
-        *)
-            case "$FNAME" in
-                *.md|*.json|*.jsonl) set -- -m 0644 "$@" ;;
-                *)                   set -- -m 0755 "$@" ;;
-            esac
-            ;;
+        *" -m "*) MODE_SET=1 ;;
     esac
 
-    if [ -e "$DST" ]; then
-        if cmp -s "$TOP_DIR/$FNAME" "$DST"; then
-            echo -e "=> ${COLOR_YELLOW}$FNAME is already copied${COLOR_CLEAR}\n"
+    # Sanity check
+    [ -e "$TOP_DIR/$FNAME" ] || { echo "Does not exist: $FNAME"; exit 1; }
+
+    if ! cmp -s "$TOP_DIR/$FNAME" "$DST" 2>/dev/null; then
+        # $DST is either missing or different
+        if [ $MODE_SET -eq 0 ]; then
+            # The default mode by install command is 0755; set the mode of the original file as better choice
+            run install -D "$@" "$TOP_DIR/$FNAME" "$DST" '&&' chmod --reference "$TOP_DIR/$FNAME" "$DST"
         else
-            [ $BACKUP -eq 0 -o -e "$DST.org" ] || run install $@ "$DST" "$DST.org"
-            run install "$@" "$TOP_DIR/$FNAME" "$DST"
+            run install -D "$@" "$TOP_DIR/$FNAME" "$DST"
+        fi
+        return
+    fi
+
+    if [ $MODE_SET -eq 0 ]; then
+        if [ $(stat -c %a "$TOP_DIR/$FNAME" 2>/dev/null) = $(stat -c %a "$DST" 2>/dev/null) ]; then
+            echo -e "=> ${COLOR_YELLOW}$FNAME is already installed${COLOR_CLEAR}\n"
+        else
+            run chmod --reference "$TOP_DIR/$FNAME" "$DST"
         fi
     else
+        # Let install command to reset the owner/group and the mode
         run install -D "$@" "$TOP_DIR/$FNAME" "$DST"
     fi
 }
+
+
+copy_dir()
+{
+    DNAME=files/${1%%/}
+    DST=${2%%/}
+    shift 2
+
+    # Sanity check
+    [ -e "$TOP_DIR/$DNAME" ] || { echo "Does not exist: $DNAME"; exit 1; }
+
+    # Clean up
+    rm -rf "$DST"
+    run install --directory "$@" "$DST"
+    for child in "$TOP_DIR/$DNAME"/*; do
+        [ -e "$child" ] || continue   # empty source dir: glob stays literal
+        [ "${child##*/}" = __pycache__ ] && continue
+        run cp -r --preserve=mode "$child" "$DST/"
+    done
+}
+
 
 
 
@@ -107,20 +127,20 @@ run apt -y auto-remove
 
 copy sudoers                        /etc/sudoers.d/terminal-config -m 0440
 copy gitconfig                      /etc/gitconfig
-copy sysinit.vim                    /etc/xdg/nvim/sysinit.vim               # Neovim system-wide init file
-copy htoprc                         /etc/htoprc -m 0644                     # htop system-wide default config
+copy sysinit.vim                    /etc/xdg/nvim/sysinit.vim
+copy htoprc                         /etc/htoprc
 copy inputrc                        /etc/skel/.inputrc
 
 
 # SSH keepalive so idle sessions survive the WSL2/Hyper-V NAT idle timeout
-copy ssh_keepalive_wtsess.conf      /etc/ssh/ssh_config.d/10-keepalive_wtsess.conf  -m 0644
-copy sshd_keepalive_wtsess.conf     /etc/ssh/sshd_config.d/10-keepalive_wtsess.conf -m 0644
+copy ssh_keepalive_wtsess.conf      /etc/ssh/ssh_config.d/10-keepalive_wtsess.conf
+copy sshd_keepalive_wtsess.conf     /etc/ssh/sshd_config.d/10-keepalive_wtsess.conf
 
 run systemctl restart ssh.service
 
 
 # Forward PulseAudio streams through the SSH tunnel; Pulse Client --tcp--> localhost:24713 --ssh--> 24713:SSH client
-copy pulseaudio-forwarding.sh   /etc/profile.d/pulseaudio-forwarding.sh -m 0644
+copy pulseaudio-forwarding.sh   /etc/profile.d/pulseaudio-forwarding.sh
 
 
 
@@ -238,22 +258,38 @@ fi
 
 run apt install -y --no-install-recommends \
 claude-code \
-bubblewrap socat poppler-utils      # Sandbox: bubblewrap/socat, PDF reading: poppler-utilsl
-
-rm -rf /etc/claude-code/
-copy claude_statusline.sh                        /etc/claude-code/statusline.sh
-copy claude_managed-CLAUDE.md                    /etc/claude-code/CLAUDE.md
-copy claude_managed-settings.json                /etc/claude-code/managed-settings.json
-copy claude_user-CLAUDE.md                       /etc/claude-code/skel/CLAUDE.md
-copy claude_user-settings.json                   /etc/claude-code/skel/settings.json
+bubblewrap socat poppler-utils clangd   # Sandbox: bubblewrap/socat, PDF reading: poppler-utilsl, LSP: clangd
 
 
-# AppArmor blocks unprivileged userns; grant bwrap that cap for the Sandbox
 USERNS_FLAG=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
 if [ -r "$USERNS_FLAG" ] && [ "$(< "$USERNS_FLAG")" = "1" ]; then
-    copy claude_apparmor-bwrap                  /etc/apparmor.d/bwrap -m 0644
+    # AppArmor blocks unprivileged userns; grant bwrap that cap for the Sandbox
+    copy claude_apparmor-bwrap /etc/apparmor.d/bwrap
     run systemctl reload apparmor
 fi
+
+
+rm -rf /etc/claude-code/
+copy claude_statusline.sh                       /etc/claude-code/statusline.sh
+copy claude_managed-CLAUDE.md                   /etc/claude-code/CLAUDE.md
+copy claude_managed-settings.json               /etc/claude-code/managed-settings.json
+
+copy_dir claude_managed-skills/                 /etc/claude-code/skills/
+copy_dir claude_managed-hooks/                  /etc/claude-code/hooks/
+copy claude_managed-extensions.json             /etc/claude-code/managed-settings.d/extensions.json
+
+# Per-user template
+copy claude_user-CLAUDE.md                      /etc/claude-code/skel/CLAUDE.md
+copy claude_user-settings.json                  /etc/claude-code/skel/settings.json
+
+copy_dir claude_user-skills                     /etc/claude-code/skel/skills/
+copy_dir claude_user-hooks                      /etc/claude-code/skel/hooks/
+copy claude_user-extensions.json                /etc/claude-code/skel/extensions.json   # To be injected by claude_user_settings
+
+
+#  Codex configs; setup_user_environment installs CLI
+rm -rf /etc/codex/
+copy codex_config.toml                          /etc/codex/config.toml
 
 
 # Antigravity CLI
@@ -287,15 +323,24 @@ run install -m 0755 /tmp/markdown-reader-${MDR_VER}-x86_64-unknown-linux-gnu/mar
 
 
 
+# Per-user settings
+copy nodejs_clean_installer         /usr/local/bin/nodejs_clean_installer
+copy setup_user_environment         /usr/local/bin/setup_user_environment
+copy install_claude_extensions      /usr/local/bin/install_claude_extensions
+copy claude_user_settings           /usr/local/bin/claude_user_settings
+copy claude_memory_rag_builder      /usr/local/bin/claude_memory_rag_builder
+copy toolbox_bigquery_mcp           /usr/local/bin/toolbox_bigquery_mcp
+
+# Initialize our RAG memory
+run claude_memory_rag_builder /var/lib/claude-rag-memory
+
+
+
 echo -e "${COLOR_GREEN}"
 echo "----------------------------------------------------------------------------------------------------------------"
 echo "        Setup the user environment: root"
 echo "----------------------------------------------------------------------------------------------------------------"
 echo -e "${COLOR_CLEAR}"
-
-copy nodejs_clean_installer         /usr/local/bin/nodejs_clean_installer
-copy setup_user_environment         /usr/local/bin/setup_user_environment
-copy share_ssh_x11forwarding        ~/.share_ssh_x11forwarding
 
 nodejs_clean_installer
 
@@ -307,6 +352,7 @@ run sed -i ~/.bashrc \
 
 setup_user_environment
 
+copy share_ssh_x11forwarding        ~/.share_ssh_x11forwarding
 run echo "~/.share_ssh_x11forwarding" '>>' ~/.bashrc
 
 
