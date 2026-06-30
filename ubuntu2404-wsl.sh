@@ -281,7 +281,8 @@ fi
 
 run apt install -y --no-install-recommends \
 claude-code \
-bubblewrap socat poppler-utils      # Sandbox: bubblewrap/socat, PDF reading: poppler-utilsl
+bubblewrap socat poppler-utils clangd   # Sandbox: bubblewrap/socat, PDF reading: poppler-utilsl, LSP: clangd
+
 
 # AppArmor blocks unprivileged userns; grant bwrap that cap for the Sandbox
 USERNS_FLAG=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
