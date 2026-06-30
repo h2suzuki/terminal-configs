@@ -21,6 +21,7 @@ grep -Fqs "Ubuntu 24.04" /etc/lsb-release || {
 command -v tty      >/dev/null || { echo "Cannot find tty";         exit 1; }
 command -v readlink >/dev/null || { echo "Cannot find readlink";    exit 1; }
 command -v cmp      >/dev/null || { echo "Cannot find cmp";         exit 1; }
+command -v stat     >/dev/null || { echo "Cannot find stat";        exit 1; }
 
 
 TOP_DIR=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
@@ -58,36 +59,37 @@ run()
 
 copy()
 {
-    BACKUP=0
-    [ "$1" = "--backup" ] && { BACKUP=1; shift; }
-
     FNAME="files/$1"
     DST="$2"
     shift 2
 
-    # When the caller did not pass -m, default the mode by extension:
-    #   *.md / *.json / *.jsonl  -> 0644 (read-only data)
-    #   else                     -> 0755 (matches install's own default;
-    #                                     scripts / configs)
-    # Security-sensitive targets (sudoers, secrets) must pass -m explicitly.
+    MODE_SET=0
     case " $* " in
-        *" -m "*) ;;
-        *)
-            case "$FNAME" in
-                *.md|*.json|*.jsonl) set -- -m 0644 "$@" ;;
-                *)                   set -- -m 0755 "$@" ;;
-            esac
-            ;;
+        *" -m "*) MODE_SET=1 ;;
     esac
 
-    if [ -e "$DST" ]; then
-        if cmp -s "$TOP_DIR/$FNAME" "$DST"; then
-            echo -e "=> ${COLOR_YELLOW}$FNAME is already copied${COLOR_CLEAR}\n"
+    # Sanity check
+    [ -e "$TOP_DIR/$FNAME" ] || { echo "Does not exist: $FNAME"; exit 1; }
+
+    if ! cmp -s "$TOP_DIR/$FNAME" "$DST" 2>/dev/null; then
+        # $DST is either missing or different
+        if [ $MODE_SET -eq 0 ]; then
+            # The default mode by install command is 0755; set the mode of the original file as better choice
+            run install -D "$@" "$TOP_DIR/$FNAME" "$DST" '&&' chmod --reference "$TOP_DIR/$FNAME" "$DST"
         else
-            [ $BACKUP -eq 0 -o -e "$DST.org" ] || run install $@ "$DST" "$DST.org"
-            run install "$@" "$TOP_DIR/$FNAME" "$DST"
+            run install -D "$@" "$TOP_DIR/$FNAME" "$DST"
+        fi
+        return
+    fi
+
+    if [ $MODE_SET -eq 0 ]; then
+        if [ $(stat -c %a "$TOP_DIR/$FNAME" 2>/dev/null) = $(stat -c %a "$DST" 2>/dev/null) ]; then
+            echo -e "=> ${COLOR_YELLOW}$FNAME is already installed${COLOR_CLEAR}\n"
+        else
+            run chmod --reference "$TOP_DIR/$FNAME" "$DST"
         fi
     else
+        # Let install command to reset the owner/group and the mode
         run install -D "$@" "$TOP_DIR/$FNAME" "$DST"
     fi
 }
@@ -95,27 +97,21 @@ copy()
 
 copy_dir()
 {
-    DNAME=files/${1%/}
-    DST=${2%/}
+    DNAME=files/${1%%/}
+    DST=${2%%/}
     shift 2
 
-    # Pick up --owner from "$@" so we can chown -R after cp (cp -r ignores --owner).
-    OWNER=
-    prev=
-    for a in "$@"; do
-        [ "$prev" = "--owner" ] && { OWNER=$a; break; }
-        case "$a" in --owner=*) OWNER=${a#--owner=}; break;; esac
-        prev=$a
-    done
+    # Sanity check
+    [ -e "$TOP_DIR/$DNAME" ] || { echo "Does not exist: $DNAME"; exit 1; }
 
-    [ -d "$DST" ] || { rm -rf "$DST"; run install --directory "$@" "$DST"; }
-    rm -rf "$DST"/*
+    # Clean up
+    rm -rf "$DST"
+    run install --directory "$@" "$DST"
     for child in "$TOP_DIR/$DNAME"/*; do
         [ -e "$child" ] || continue   # empty source dir: glob stays literal
         [ "${child##*/}" = __pycache__ ] && continue
-        run cp -r "$child" "$DST/"
+        run cp -rp "$child" "$DST/"
     done
-    [ -n "$OWNER" ] && run chown -R "$OWNER:" "$DST"
 }
 
 
@@ -141,14 +137,14 @@ run apt -y auto-remove
 
 copy sudoers                        /etc/sudoers.d/terminal-config -m 0440
 copy gitconfig                      /etc/gitconfig
-copy sysinit.vim                    /etc/xdg/nvim/sysinit.vim               # Neovim system-wide init file
-copy htoprc                         /etc/htoprc -m 0644                     # htop system-wide default config
+copy sysinit.vim                    /etc/xdg/nvim/sysinit.vim
+copy htoprc                         /etc/htoprc
 copy inputrc                        /etc/skel/.inputrc
 
 
 # SSH keepalive so idle sessions survive the WSL2/Hyper-V NAT idle timeout
-copy ssh_keepalive_wtsess.conf      /etc/ssh/ssh_config.d/10-keepalive_wtsess.conf  -m 0644
-copy sshd_keepalive_wtsess.conf     /etc/ssh/sshd_config.d/10-keepalive_wtsess.conf -m 0644
+copy ssh_keepalive_wtsess.conf      /etc/ssh/ssh_config.d/10-keepalive_wtsess.conf
+copy sshd_keepalive_wtsess.conf     /etc/ssh/sshd_config.d/10-keepalive_wtsess.conf
 
 run systemctl restart ssh.service
 
@@ -294,7 +290,7 @@ bubblewrap socat poppler-utils      # Sandbox: bubblewrap/socat, PDF reading: po
 # AppArmor blocks unprivileged userns; grant bwrap that cap for the Sandbox
 USERNS_FLAG=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
 if [ -r "$USERNS_FLAG" ] && [ "$(< "$USERNS_FLAG")" = "1" ]; then
-    copy claude_apparmor-bwrap                  /etc/apparmor.d/bwrap -m 0644
+    copy claude_apparmor-bwrap                  /etc/apparmor.d/bwrap
     run systemctl reload apparmor
 fi
 
