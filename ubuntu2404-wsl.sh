@@ -4,6 +4,9 @@
 
 
 command -v grep     >/dev/null || { echo "Cannot find grep";        exit 1; }
+command -v tty      >/dev/null || { echo "Cannot find tty";         exit 1; }
+command -v cmp      >/dev/null || { echo "Cannot find cmp";         exit 1; }
+command -v stat     >/dev/null || { echo "Cannot find stat";        exit 1; }
 
 grep -Fqs WSL /proc/version || {
     echo "This environment does not look like WSL"
@@ -18,14 +21,6 @@ grep -Fqs "Ubuntu 24.04" /etc/lsb-release || {
     exit 1
 }
 
-command -v tty      >/dev/null || { echo "Cannot find tty";         exit 1; }
-command -v readlink >/dev/null || { echo "Cannot find readlink";    exit 1; }
-command -v cmp      >/dev/null || { echo "Cannot find cmp";         exit 1; }
-command -v stat     >/dev/null || { echo "Cannot find stat";        exit 1; }
-
-
-TOP_DIR=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
-
 
 if tty -s >/dev/null; then
     COLOR_CLEAR="\033[0m"
@@ -38,7 +33,6 @@ else
     COLOR_GREEN=
     COLOR_YELLOW=
 fi
-
 
 run()
 {
@@ -56,6 +50,8 @@ run()
     fi
 }
 
+
+TOP_DIR=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
 
 copy()
 {
