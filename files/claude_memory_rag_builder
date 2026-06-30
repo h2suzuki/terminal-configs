@@ -30,11 +30,15 @@ MODEL_FILES = ("tokenizer.json", "model.safetensors")
 # Shared root+login-user store when deployed; per-user fallback for standalone.
 APP_DIR = "claude-rag-memory"
 SHARED_STATE_DIR = os.path.join("/var/lib", APP_DIR)
-DB_PATH = (
-    os.path.join(SHARED_STATE_DIR, "memory_embed_model.sqlite3")
-    if os.path.isdir(SHARED_STATE_DIR)
-    else os.path.expanduser("~/.claude/hooks/state/memory_embed_model.sqlite3")
-)
+DB_FILENAME = "memory_embed_model.sqlite3"
+
+
+def default_db_dir() -> str:
+    if os.path.isdir(SHARED_STATE_DIR):
+        return SHARED_STATE_DIR
+    return os.path.expanduser("~/.claude/hooks/state")
+
+
 # Both constants are part of the hook's query contract: longer pieces never
 # match real text (bounds Viterbi cost); ids 0/1 = [PAD]/[UNK] are excluded.
 MAX_TOKEN_LEN = 24
@@ -45,12 +49,12 @@ PROG = os.path.basename(sys.argv[0]) or "claude_memory_rag_builder"
 UA = PROG
 
 
-def already_built() -> bool:
+def already_built(db_path: str) -> bool:
     """True iff a schema-valid model DB exists (meta has dim + max_token_len)."""
-    if not os.path.exists(DB_PATH):
+    if not os.path.exists(db_path):
         return False
     try:
-        con = sqlite3.connect("file:%s?mode=ro" % DB_PATH, uri=True, timeout=2.0)
+        con = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True, timeout=2.0)
         meta = dict(con.execute("SELECT key, value FROM meta"))
         con.close()
     except sqlite3.Error:
@@ -138,7 +142,7 @@ def cache_dir() -> str:
         return fallback
 
 
-def build(model_dir: str) -> int:
+def build(model_dir: str, db_path: str) -> int:
     log("parsing tokenizer.json")
     with open(os.path.join(model_dir, "tokenizer.json"), encoding="utf-8") as f:
         tok = json.load(f)
@@ -170,8 +174,8 @@ def build(model_dir: str) -> int:
             return 1
         pack_row = struct.Struct("<%de" % dim).pack
 
-        tmp = DB_PATH + ".tmp"
-        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        tmp = db_path + ".tmp"
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
         if os.path.exists(tmp):
             os.remove(tmp)
         con = sqlite3.connect(tmp)
@@ -211,10 +215,10 @@ def build(model_dir: str) -> int:
             con.close()
             floats.release()  # mmap refuses to close while views are exported
             mm.close()
-    os.replace(tmp, DB_PATH)
+    os.replace(tmp, db_path)
     log(
-        f"built {DB_PATH}: {n} tokens, dim={dim}, "
-        f"{os.path.getsize(DB_PATH) // 1_000_000} MB"
+        f"built {db_path}: {n} tokens, dim={dim}, "
+        f"{os.path.getsize(db_path) // 1_000_000} MB"
     )
     return 0
 
@@ -225,17 +229,35 @@ def main() -> int:
         description="Build the memory-surface embed model DB (stdlib-only)"
     )
     ap.add_argument(
-        "model_dir", nargs="?", help="local dir with the model files (skips download)"
+        "db_dir",
+        nargs="?",
+        help="directory to create and write the DB into "
+        "(default: /var/lib/claude-rag-memory or ~/.claude/hooks/state)",
+    )
+    ap.add_argument(
+        "-m", "--model-dir", help="local dir with the model files (skips download)"
     )
     ap.add_argument(
         "-f", "--force", action="store_true", help="rebuild even if the DB exists"
     )
     args = ap.parse_args()
-    if not args.force and already_built():
-        log(f"{DB_PATH} already built; use --force to rebuild")
+    db_dir = args.db_dir or default_db_dir()
+    try:
+        os.makedirs(db_dir, exist_ok=True)
+    except OSError as e:
+        sys.stderr.write(f"cannot create db dir {db_dir}: {e}\n")
+        return 1
+    # 777 so login-user hooks can also write memory_index.sqlite3 in the shared dir.
+    try:
+        os.chmod(db_dir, 0o777)
+    except OSError as e:
+        log(f"warning: could not chmod {db_dir} to 777: {e}")
+    db_path = os.path.join(db_dir, DB_FILENAME)
+    if not args.force and already_built(db_path):
+        log(f"{db_path} already built; use --force to rebuild")
         return 0
     if args.model_dir:
-        return build(args.model_dir)
+        return build(args.model_dir, db_path)
     cdir = cache_dir()
     for name in MODEL_FILES:
         try:
@@ -243,7 +265,7 @@ def main() -> int:
         except OSError as e:
             sys.stderr.write(f"download failed for {name}: {e}\n")
             return 1
-    return build(cdir)
+    return build(cdir, db_path)
 
 
 if __name__ == "__main__":
