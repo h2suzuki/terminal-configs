@@ -106,17 +106,10 @@ Configures both the login user and root.
 
 ### 8. Claude Code extensions
 
-Adds Claude Code's "trust-building" machinery plus external tool integrations. This splits into a system-wide deployment and a per-user installation (the base setup runs `install_claude_extensions` via `setup_user_environment`).
-
-**Deployed and activated system-wide**
-
-- **Guardrails (hooks / skills)**: hooks that mechanically enforce the `CLAUDE.md` rules (commit discipline, skill firing, memory routing, codegraph-first / codex-delegation nudges, ...) are deployed to `/etc/claude-code/hooks/` and skills to `/etc/claude-code/skills/`, registered through a managed-settings drop-in (an extra settings file). See `SKILL-HOOK-CONTRACT.md` for how it works.
-- **RAG memory store**: initializes the backing store at `/var/lib/claude-rag-memory` for the mechanism that surfaces past feedback.
-
-**Installed per user (`install_claude_extensions`)**
+Adds Claude Code's "trust-building" machinery plus external tool integrations.
 
 - **User-side hooks**: commit author check, push-prompting detection, memory surfacing, and subagent gate are installed into `~/.claude/hooks/`, and a per-user RAG memory index is built.
-- **LSP**: language servers (clangd via APT in the base setup; typescript-language-server / pyright via npm) and their plugins (clangd-lsp / typescript-lsp / pyright-lsp). gopls / rust-analyzer are prepared but disabled.
+- **LSP**: language servers (clangd via APT in the base setup; typescript-language-server / pyright via npm) and their plugins (clangd-lsp / typescript-lsp / pyright-lsp).
 - **MCP servers (scope=user)**: Playwright (browser), CodeGraph (code knowledge graph), Cloud Run, Toolbox (BigQuery)
 - **Plugins**: security-guidance (disabled by default), figma, codex (delegation to OpenAI Codex / code review), vercel (Vercel's MCP is provided through this plugin)
 - **CLI**: agent-browser (Vercel Labs), Vercel CLI
