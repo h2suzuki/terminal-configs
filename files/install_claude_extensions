@@ -52,6 +52,7 @@ run()
 pushd /etc/claude-code/skel/hooks/ >/dev/null
 
 run install --directory ~/.claude/hooks/
+run find ~/.claude/hooks/ -maxdepth 1 -type f -delete '||' true
 run install check_commit_author.py    ~/.claude/hooks/check_commit_author.py
 run install check_push_prompting.py   ~/.claude/hooks/check_push_prompting.py
 run install memory_surface.py         ~/.claude/hooks/memory_surface.py
@@ -65,6 +66,7 @@ popd >/dev/null
 pushd /etc/claude-code/skel/skills/ >/dev/null
 
 run install --directory ~/.claude/skills/
+run find ~/.claude/skills/ -maxdepth 1 -xtype l -delete '||' true
 for skill_dir in *; do
     [ -n "$skill_dir" ] || continue
     [ -d "$skill_dir" ] || continue
@@ -84,9 +86,6 @@ for skill_dir in *; do
     rm -rf ~/.claude/skills/"${skill_dir}"
     run ln -sfn "/etc/claude-code/skills/$skill_dir" ~/.claude/skills/
 done
-
-# Prune dangling symlinks (skills renamed/removed since a prior run)
-run find ~/.claude/skills/ -maxdepth 1 -xtype l -delete
 
 popd >/dev/null
 
