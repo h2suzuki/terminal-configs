@@ -27,16 +27,8 @@ def log(msg: str) -> None:
 MODEL_NAME = "minishlab/potion-multilingual-128M"
 BASE_URL = f"https://huggingface.co/{MODEL_NAME}/resolve/main/"
 MODEL_FILES = ("tokenizer.json", "model.safetensors")
-# Shared root+login-user store when deployed; per-user fallback for standalone.
-APP_DIR = "claude-rag-memory"
-SHARED_STATE_DIR = os.path.join("/var/lib", APP_DIR)
+APP_DIR = "claude-rag-memory"  # subdir name under the download cache root
 DB_FILENAME = "memory_embed_model.sqlite3"
-
-
-def default_db_dir() -> str:
-    if os.path.isdir(SHARED_STATE_DIR):
-        return SHARED_STATE_DIR
-    return os.path.expanduser("~/.claude/hooks/state")
 
 
 # Both constants are part of the hook's query contract: longer pieces never
@@ -228,12 +220,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description="Build the memory-surface embed model DB (stdlib-only)"
     )
-    ap.add_argument(
-        "db_dir",
-        nargs="?",
-        help="directory to create and write the DB into "
-        "(default: /var/lib/claude-rag-memory or ~/.claude/hooks/state)",
-    )
+    ap.add_argument("db_dir", help="directory to create and write the DB into")
     ap.add_argument(
         "-m", "--model-dir", help="local dir with the model files (skips download)"
     )
@@ -241,7 +228,7 @@ def main() -> int:
         "-f", "--force", action="store_true", help="rebuild even if the DB exists"
     )
     args = ap.parse_args()
-    db_dir = args.db_dir or default_db_dir()
+    db_dir = args.db_dir
     try:
         os.makedirs(db_dir, exist_ok=True)
     except OSError as e:
