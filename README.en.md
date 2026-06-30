@@ -21,7 +21,6 @@ or
 
 After the base setup, run the scripts under `extra/` as root as needed.
 
-    # ./extra/claude_extensions.sh   # Claude Code guardrails, MCP servers, plugins
     # ./extra/voicevox.sh            # Voice notifications via VoiceVox
     # ./extra/signoz.sh              # Claude Code telemetry via SigNoz
 
@@ -72,7 +71,7 @@ Configures both the login user and root.
 
 ### 5. Core tool installation
 
-- neovim, tree, shellcheck
+- neovim, tree, shellcheck, htop
 - git, git-lfs, GitHub CLI (gh)
 - ripgrep, git-delta (delta), markdown-reader (mdr)
 - openssh-server/client
@@ -83,7 +82,7 @@ Configures both the login user and root.
 - Chrome (with Japanese fonts)
 - Google Cloud CLI (gcloud)
 - Claude Code (+ claude-monitor)
-- Claude Code support tools: bubblewrap, socat (Sandbox), poppler-utils (PDF reading)
+- Claude Code support tools: bubblewrap, socat, sandbox-runtime (Sandbox), poppler-utils (PDF reading)
 - Antigravity CLI (agy)
 - Codex CLI
 
@@ -94,6 +93,7 @@ Configures both the login user and root.
 - Status line: project / model / context usage / rate limit / current time
 - System-wide (org) rules: `/etc/claude-code/CLAUDE.md`
 - User settings: `~/.claude/CLAUDE.md` / `~/.claude/settings.json` (auto permission mode, default effort, ...)
+- Sandbox policy (`/etc/claude-code/managed-settings.json`): enables the Bash sandbox, limits writable paths, and denies reads of credential files and token environment variables
 
 
 ### 7. WSL2 tweaks [WSL2 only]
@@ -104,18 +104,24 @@ Configures both the login user and root.
 - Pin the hostname
 
 
-## What the Optional Add-ons Do
+### 8. Claude Code extensions
 
-### A. Claude Code extensions (`extra/claude_extensions.sh`)
+Adds Claude Code's "trust-building" machinery plus external tool integrations. This splits into a system-wide deployment and a per-user installation (the base setup runs `install_claude_extensions` via `setup_user_environment`).
 
-Adds Claude Code's "trust-building" machinery plus external tool integrations.
+**Deployed and activated system-wide**
 
-- **Guardrails (hooks / skills)**: hooks that mechanically enforce the `CLAUDE.md` rules (commit discipline, skill firing, memory routing, codegraph-first / codex-delegation nudges, ...) are deployed to `/etc/claude-code/hooks/` and skills to `/etc/claude-code/skills/`, registered through a managed-settings drop-in (an extra settings file). User-side hooks (commit author check, push-prompting detection, memory surfacing, subagent gate) are installed into `~/.claude/hooks/`. See `SKILL-HOOK-CONTRACT.md` for how it works.
+- **Guardrails (hooks / skills)**: hooks that mechanically enforce the `CLAUDE.md` rules (commit discipline, skill firing, memory routing, codegraph-first / codex-delegation nudges, ...) are deployed to `/etc/claude-code/hooks/` and skills to `/etc/claude-code/skills/`, registered through a managed-settings drop-in (an extra settings file). See `SKILL-HOOK-CONTRACT.md` for how it works.
+- **RAG memory store**: initializes the backing store at `/var/lib/claude-rag-memory` for the mechanism that surfaces past feedback.
+
+**Installed per user (`install_claude_extensions`)**
+
+- **User-side hooks**: commit author check, push-prompting detection, memory surfacing, and subagent gate are installed into `~/.claude/hooks/`, and a per-user RAG memory index is built.
+- **LSP**: language servers (clangd via APT in the base setup; typescript-language-server / pyright via npm) and their plugins (clangd-lsp / typescript-lsp / pyright-lsp). gopls / rust-analyzer are prepared but disabled.
 - **MCP servers (scope=user)**: Playwright (browser), CodeGraph (code knowledge graph), Cloud Run, Toolbox (BigQuery)
 - **Plugins**: security-guidance (disabled by default), figma, codex (delegation to OpenAI Codex / code review), vercel (Vercel's MCP is provided through this plugin)
 - **CLI**: agent-browser (Vercel Labs), Vercel CLI
 
-After installing, complete the authentication / initial setup below (only the MCP servers this script registers; `claude mcp list` also shows MCP servers configured elsewhere).
+After setup, complete the authentication / initial setup below (only the MCP servers registered here; `claude mcp list` also shows MCP servers configured elsewhere).
 
 | MCP | Authentication / initial setup |
 |---|---|
@@ -130,7 +136,9 @@ After authenticating, check the connections with `/mcp` and `/doctor`.
 The codex plugin is authenticated with `!codex login`, verified with `/codex:setup`, and applied to the current session with `/reload-plugins`.
 
 
-### B. Voice notifications (`extra/voicevox.sh`)
+## What the Optional Add-ons Do
+
+### A. Voice notifications (`extra/voicevox.sh`)
 
 Installs VoiceVox Core and `voicevox_claude_alerts`, which speaks Claude Code events
 through VoiceVox — idle warnings, subagent completion reports, questions from Claude Code,
@@ -170,7 +178,7 @@ You can also set the variable in `~/.claude/settings.json`:
 The logs grow unbounded; delete them when no longer needed.
 
 
-### C. SigNoz telemetry (`extra/signoz.sh`)
+### B. SigNoz telemetry (`extra/signoz.sh`)
 
 Installs Docker, brings up SigNoz (an observability stack) via docker compose, and builds a
 dashboard to visualize Claude Code's OTEL (OpenTelemetry) telemetry.

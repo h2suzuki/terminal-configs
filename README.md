@@ -71,7 +71,7 @@
 
 ### 5. 基本的なツールのインストール
 
-- neovim, tree, shellcheck
+- neovim, tree, shellcheck, htop
 - git, git-lfs, GitHub CLI（gh）
 - ripgrep, git-delta（delta）, markdown-reader（mdr）
 - openssh-server/client
@@ -82,7 +82,7 @@
 - Chrome（日本語フォント込み）
 - Google Cloud CLI（gcloud）
 - Claude Code（+ claude-monitor）
-- Claude Code の補助ツール: bubblewrap, socat（Sandbox）, poppler-utils（PDF 読み取り）
+- Claude Code の補助ツール: bubblewrap, socat, sandbox-runtime（Sandbox）, poppler-utils（PDF 読み取り）
 - Antigravity CLI（agy）
 - Codex CLI
 
@@ -93,6 +93,7 @@
 - Status Line: プロジェクト名 / モデル名 / Context 消費 / レートリミット / 現在時刻
 - 憲法（org ルール） `/etc/claude-code/CLAUDE.md`
 - ユーザー設定 `~/.claude/CLAUDE.md` / `~/.claude/settings.json`（auto 権限モード, effort 既定値など）
+- Sandbox ポリシー（`/etc/claude-code/managed-settings.json`）: Bash サンドボックス有効化、書き込み許可パスの限定、認証情報ファイル・トークン環境変数の読み取り拒否
 
 
 ### 7. WSL2 調整 [WSL2のみ]
@@ -105,14 +106,22 @@
 
 ### 8. Claude Code 拡張
 
-Claude Code に「信頼を高めるための仕組み」と外部ツール連携を入れます。
+Claude Code に「信頼を高めるための仕組み」と外部ツール連携を入れます。システム全体への配置と、各ユーザーへの導入（基本セットアップが `setup_user_environment` 経由で `install_claude_extensions` を実行）に分かれます。
 
-- **ガードレイル（フック / スキル）**: `CLAUDE.md` のルール（commit 規律・スキル発火・memory routing など）を機械的に強制するフック群（codegraph 優先誘導・codex 実装委譲の nudge を含む）を `/etc/claude-code/hooks/`・スキル群を `/etc/claude-code/skills/` に配置し、managed-settings の drop-in（追加設定ファイル）で登録します。あわせてユーザー側フック（commit 著者確認・push 催促検出・memory surface・subagent gate）を `~/.claude/hooks/` に入れます。仕組みの解説は `SKILL-HOOK-CONTRACT.md` を参照してください。
+**システム全体に配置・有効化**
+
+- **ガードレイル（フック / スキル）**: `CLAUDE.md` のルール（commit 規律・スキル発火・memory routing など）を機械的に強制するフック群（codegraph 優先誘導・codex 実装委譲の nudge を含む）を `/etc/claude-code/hooks/`・スキル群を `/etc/claude-code/skills/` に配置し、managed-settings の drop-in（追加設定ファイル）で登録します。仕組みの解説は `SKILL-HOOK-CONTRACT.md` を参照してください。
+- **RAG memory ストア**: 過去のフィードバックを surface する仕組みの土台を `/var/lib/claude-rag-memory` に初期化します。
+
+**各ユーザーに導入（`install_claude_extensions`）**
+
+- **ユーザー側フック**: commit 著者確認・push 催促検出・memory surface・subagent gate を `~/.claude/hooks/` に配置し、ユーザーごとの RAG memory インデックスを構築します。
+- **LSP**: 言語サーバー（clangd は基本セットアップで APT 導入、typescript-language-server / pyright を npm 導入）と対応プラグイン（clangd-lsp / typescript-lsp / pyright-lsp）。gopls / rust-analyzer は無効化済みで未導入です。
 - **MCP サーバー（scope=user）**: Playwright（ブラウザ操作）, CodeGraph（コード知識グラフ）, Cloud Run, Toolbox（BigQuery）
 - **プラグイン**: security-guidance（既定で無効）, figma, codex（OpenAI Codex への委譲・コードレビュー）, vercel（Vercel の MCP はこのプラグイン経由で提供）
 - **CLI**: agent-browser（Vercel Labs）, Vercel CLI
 
-インストール後、以下の認証 / 初期設定を済ませてください（本スクリプトが登録する MCP のみの一覧です。`claude mcp list` には他の手段で設定した MCP も表示されます）。
+セットアップ後、以下の認証 / 初期設定を済ませてください（ここで登録される MCP のみの一覧です。`claude mcp list` には他の手段で設定した MCP も表示されます）。
 
 | MCP | 認証 / 初期設定コマンド |
 |---|---|
