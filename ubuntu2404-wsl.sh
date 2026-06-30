@@ -284,10 +284,10 @@ claude-code \
 bubblewrap socat poppler-utils clangd   # Sandbox: bubblewrap/socat, PDF reading: poppler-utilsl, LSP: clangd
 
 
-# AppArmor blocks unprivileged userns; grant bwrap that cap for the Sandbox
 USERNS_FLAG=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
 if [ -r "$USERNS_FLAG" ] && [ "$(< "$USERNS_FLAG")" = "1" ]; then
-    copy claude_apparmor-bwrap                  /etc/apparmor.d/bwrap
+    # AppArmor blocks unprivileged userns; grant bwrap that cap for the Sandbox
+    copy claude_apparmor-bwrap /etc/apparmor.d/bwrap
     run systemctl reload apparmor
 fi
 
