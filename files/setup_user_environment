@@ -1,19 +1,11 @@
 #!/bin/bash
 
-
 # This script sets up the environment of a login shell
 
 
-command -v grep         >/dev/null || { echo "Cannot find grep";        exit 1; }
-command -v tty          >/dev/null || { echo "Cannot find tty";         exit 1; }
-command -v readlink     >/dev/null || { echo "Cannot find readlink";    exit 1; }
-command -v cmp          >/dev/null || { echo "Cannot find cmp";         exit 1; }
-command -v curl         >/dev/null || { echo "Cannot find curl";        exit 1; }
-command -v git          >/dev/null || { echo "Cannot find git";         exit 1; }
-command -v gpg          >/dev/null || { echo "Cannot find gpg";         exit 1; }
-
-
-TOP_DIR=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
+command -v tty      >/dev/null || { echo "Cannot find tty";         exit 1; }
+command -v sed      >/dev/null || { echo "Cannot find sed";         exit 1; }
+command -v git      >/dev/null || { echo "Cannot find git";         exit 1; }
 
 
 if tty -s >/dev/null; then
@@ -46,6 +38,12 @@ run()
 }
 
 
+
+# Make sure the copy source exists
+[ -d /etc/claude-code/skel/ ]           || { echo "/etc/claude-code/skel/ not found";           exit 1; }
+
+
+
 # UV installs into $HOME/.local/bin below; put it on PATH so later invocations resolve
 case ":$PATH:" in
     *":$HOME/.local/bin:"*) ;;
@@ -53,6 +51,8 @@ case ":$PATH:" in
 esac
 
 
+
+# Tweak ~/.bashrc
 [ -e ~/.bashrc ] &&
 run sed -i ~/.bashrc \
     -e '/^\ *PS1=/s/32m/35m/' \
@@ -99,7 +99,6 @@ if [ -f "$BROWSER" ]; then
     run echo 'export BROWSER=\"$BROWSER start\"'  '>>' ~/.bashrc
 fi
 
-
 run cat ">>" ~/.bashrc <<"EOF"
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
@@ -107,6 +106,7 @@ export NVM_DIR="$HOME/.nvm"
 EOF
 
 
+# Enable git lfs
 run git lfs install --skip-repo
 
 
@@ -117,25 +117,19 @@ nodejs_clean_installer
 
 # Claude Code
 npm uninstall -g @anthropic-ai/claude-code || true  # Old one
-rm -rf ~/.local/bin/claude
-rm -rf ~/.local/share/claude
+rm -rf ~/.local/bin/claude ~/.local/share/claude
 
 run install --mode 0755 --directory ~/.claude
-
 install /etc/claude-code/skel/CLAUDE.md         ~/.claude/CLAUDE.md
 install /etc/claude-code/skel/settings.json     ~/.claude/settings.json
 
 run uv tool install --force claude-monitor
 
+install_claude_extensions
+
 
 # Stop terminal bell
-install /etc/skel/.inputrc                          ~/.inputrc
-
-
-# Reset above orphaned the extras: ~/.claude/skills symlinks now dangle, hooks/*.py are stale
-run "[ -d ~/.claude/skills ] && find ~/.claude/skills/ -maxdepth 1 -xtype l -delete || true"
-run "rm -f ~/.claude/hooks/*.py"
-
+install /etc/skel/.inputrc  ~/.inputrc
 
 # Sandbox seccomp helper: enables Unix-domain-socket blocking in the Bash sandbox
 run npm install -g @anthropic-ai/sandbox-runtime
