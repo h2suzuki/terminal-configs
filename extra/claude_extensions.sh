@@ -2,26 +2,9 @@
 
 # Installs Claude Code extensions as an opt-in step after the base setup.
 
-[ "$EUID" = 0 ] || {
-    echo "Please run as root"
-    exit 1
-}
-
-
-# Put $HOME/.local/bin on PATH (claude often lives there) so the checks below resolve
-case ":$PATH:" in
-    *":$HOME/.local/bin:"*) ;;
-    *) export PATH="$HOME/.local/bin:$PATH" ;;
-esac
-
 
 command -v tty      >/dev/null || { echo "Cannot find tty";         exit 1; }
-command -v readlink >/dev/null || { echo "Cannot find readlink";    exit 1; }
-command -v cmp      >/dev/null || { echo "Cannot find cmp";         exit 1; }
 command -v claude   >/dev/null || { echo "Cannot find claude";      exit 1; }
-
-
-TOP_DIR=$(dirname "$(dirname "$(realpath "${BASH_SOURCE[0]}")")")
 
 
 if tty -s >/dev/null; then
@@ -35,6 +18,7 @@ else
     COLOR_GREEN=
     COLOR_YELLOW=
 fi
+
 
 run()
 {
@@ -54,69 +38,61 @@ run()
 
 
 
-copy_dir()
-{
-    DNAME=files/${1%/}
-    DST=${2%/}
-    shift 2
-
-    # Pick up --owner from "$@" so we can chown -R after cp (cp -r ignores --owner).
-    OWNER=
-    prev=
-    for a in "$@"; do
-        [ "$prev" = "--owner" ] && { OWNER=$a; break; }
-        case "$a" in --owner=*) OWNER=${a#--owner=}; break;; esac
-        prev=$a
-    done
-
-    [ -d "$DST" ] || { rm -rf "$DST"; run install --directory "$@" "$DST"; }
-    rm -rf "$DST"/*
-    for child in "$TOP_DIR/$DNAME"/*; do
-        [ -e "$child" ] || continue   # empty source dir: glob stays literal
-        [ "${child##*/}" = __pycache__ ] && continue
-        run cp -r "$child" "$DST/"
-    done
-    [ -n "$OWNER" ] && run chown -R "$OWNER:" "$DST"
-}
+# Make sure the copy source exists
+[ -d /etc/claude-code/ ]                || { echo "/etc/claude-code/ not found";                exit 1; }
+[ -d /etc/claude-code/hooks/ ]          || { echo "/etc/claude-code/hooks/ not found";          exit 1; }
+[ -d /etc/claude-code/skills/ ]         || { echo "/etc/claude-code/skills/ not found";         exit 1; }
+[ -d /etc/claude-code/skel/ ]           || { echo "/etc/claude-code/skel/ not found";           exit 1; }
+[ -d /etc/claude-code/skel/skills/ ]    || { echo "/etc/claude-code/skel/skills/ not found";    exit 1; }
+[ -d /etc/claude-code/skel/hooks/ ]     || { echo "/etc/claude-code/skel/hooks/ not found";     exit 1; }
 
 
 
-# Deploy the user hooks
+# Deploy the user hooks from /etc/claude-code/skel/
+pushd /etc/claude-code/skel/hooks/ >/dev/null
+
 run install --directory ~/.claude/hooks/
-run install /etc/claude-code/skel/hooks/check_commit_author.py      ~/.claude/hooks/check_commit_author.py
-run install /etc/claude-code/skel/hooks/check_push_prompting.py     ~/.claude/hooks/check_push_prompting.py
-run install /etc/claude-code/skel/hooks/memory_surface.py           ~/.claude/hooks/memory_surface.py
-run install /etc/claude-code/skel/hooks/subagent_gate_suggest.py    ~/.claude/hooks/subagent_gate_suggest.py
+run install check_commit_author.py    ~/.claude/hooks/check_commit_author.py
+run install check_push_prompting.py   ~/.claude/hooks/check_push_prompting.py
+run install memory_surface.py         ~/.claude/hooks/memory_surface.py
+run install subagent_gate_suggest.py  ~/.claude/hooks/subagent_gate_suggest.py
+run "claude_user_settings inject - < ../extensions.json"
 
-run claude_user_settings inject - < "/etc/claude-code/skel/extensions.json"
+popd >/dev/null
+
+
+# Deploy the user skills from /etc/claude-code/skel/
+pushd /etc/claude-code/skel/skills/ >/dev/null
 
 run install --directory ~/.claude/skills/
-
-pushd "$TOP_DIR"/files/claude_user-skills >/dev/null
-for skill_dir in */; do
+for skill_dir in *; do
+    [ -n "$skill_dir" ] || continue
     [ -d "$skill_dir" ] || continue
-    copy_dir "claude_user-skills/$skill_dir" ~/.claude/skills/$skill_dir
+    rm -rf ~/.claude/skills/"$skill_dir"
+    run cp -r --preserve=mode "$skill_dir" ~/.claude/skills/
 done
+
 popd >/dev/null
 
 
 # Symlink the managed skills
-run install --directory ~/.claude/skills/
-for skill_dir in /etc/claude-code/skills/*; do
+pushd /etc/claude-code/skills/ >/dev/null
+
+for skill_dir in *; do
+    [ -n "$skill_dir" ] || continue
     [ -d "$skill_dir" ] || continue
-    rm -rf ~/.claude/skills/"${skill_dir#/etc/claude-code/skills/}"
-    run ln -sfn "$skill_dir" ~/.claude/skills/
+    rm -rf ~/.claude/skills/"${skill_dir}"
+    run ln -sfn "/etc/claude-code/skills/$skill_dir" ~/.claude/skills/
 done
 
 # Prune dangling symlinks (skills renamed/removed since a prior run)
 run find ~/.claude/skills/ -maxdepth 1 -xtype l -delete
 
+popd >/dev/null
 
-run install --mode 2775 --owner root --group ${LOGIN_GROUP:-root} --directory /var/lib/claude-rag-memory
-run install --mode 0755 --owner $LOGIN_USER --group $LOGIN_GROUP --directory ~/.claude/hooks/state
 
-run claude_memory_rag_builder
-
+# Initialize the RAG memory for this user
+run install --mode 0755 --directory ~/.claude/hooks/state
 run ~/.claude/hooks/memory_surface.py --rebuild
 
 
@@ -131,14 +107,13 @@ run claude plugin marketplace update claude-plugins-official
 # LSP servers
 run npm install -g typescript-language-server typescript
 run npm install -g pyright
-run apt install -y --no-install-recommends clangd
 # run go install golang.org/x/tools/gopls@latest
 # run rustup component add rust-analyzer
 
 # LSP server plugins
+run claude plugin install clangd-lsp@claude-plugins-official        # clangd is installed by APT
 run claude plugin install typescript-lsp@claude-plugins-official
 run claude plugin install pyright-lsp@claude-plugins-official
-run claude plugin install clangd-lsp@claude-plugins-official
 #run claude plugin install gopls-lsp@claude-plugins-official
 #run claude plugin install rust-analyzer-lsp@claude-plugins-official
 
