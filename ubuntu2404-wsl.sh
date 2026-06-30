@@ -352,6 +352,10 @@ copy claude_user_settings           /usr/local/bin/claude_user_settings
 copy claude_memory_rag_builder      /usr/local/bin/claude_memory_rag_builder
 copy toolbox_bigquery_mcp           /usr/local/bin/toolbox_bigquery_mcp
 
+# Initialize our RAG memory
+run claude_memory_rag_builder /var/lib/claude-rag-memory
+
+
 
 echo -e "${COLOR_GREEN}"
 echo "----------------------------------------------------------------------------------------------------------------"
