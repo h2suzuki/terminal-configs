@@ -110,7 +110,7 @@ copy_dir()
     for child in "$TOP_DIR/$DNAME"/*; do
         [ -e "$child" ] || continue   # empty source dir: glob stays literal
         [ "${child##*/}" = __pycache__ ] && continue
-        run cp -rp "$child" "$DST/"
+        run cp -r --preserve=mode "$child" "$DST/"
     done
 }
 
