@@ -81,7 +81,8 @@ Combined Stop hook for org-managed Claude Code:
     enforcement が pass し block しない turn の first Stop でのみ、 当 turn の assistant 出力 (text)
     を query に memory_surface.surface_for_text を呼び、 最良 1 件を hookSpecificOutput.additionalContext
     で model に inject + systemMessage で user 表示 (Stop の additionalContext は v2.1.163+ で turn を
-    継続させ feedback を返す channel)。 turn 毎最大 1 回 — stop_hook_active で継続 Stop を gate し、
+    継続させ feedback を返す channel)。 turn 毎最大 1 回 — stop_hook_active gate に加え .turns count を
+    key にした turn-latch (継続で stop_hook_active が立たない場合の belt) で継続 Stop を抑え、
     surface_for_text の throttle が UPS surface と同一 entry の重複を抑止。 import / DB 不在は fail-open で
     surfacing 無効。 surfacing した Stop では counter を bump せず、 clean 終了 (継続後の retry) 側で 1 回 bump。
 
@@ -761,11 +762,52 @@ def _run(payload: dict) -> tuple[int, float | None, str]:
     return exit_code, prompt_epoch, text
 
 
+def _stop_latch_key(payload: dict) -> tuple[str, str] | None:
+    """(turn key, latch-file path) or None; turn key = the .turns count, which bumps only at a clean turn end so it stays constant across a turn's Stops (incl. continuations)."""
+    try:
+        path = _counter_path(payload)  # session-id fallback may makedirs -> OSError
+        if not path:
+            return None
+        with open(path, encoding="utf-8") as f:
+            return f.read().split()[0], path + ".surf"
+    except (OSError, IndexError):
+        return None
+
+
+def _stop_latched(payload: dict) -> bool:
+    """True if a Stop memory surface already fired this turn (counter-keyed, independent of stop_hook_active)."""
+    k = _stop_latch_key(payload)
+    if k is None:
+        return False
+    key, lpath = k
+    try:
+        with open(lpath, encoding="utf-8") as f:
+            return f.read().strip() == key
+    except OSError:
+        return False
+
+
+def _stop_latch_set(payload: dict) -> None:
+    k = _stop_latch_key(payload)
+    if k is None:
+        return
+    key, lpath = k
+    try:
+        with open(lpath, "w", encoding="utf-8") as f:
+            f.write(key)
+    except OSError:
+        pass
+
+
 def _memory_surface_at_stop(payload: dict, text: str) -> str | None:
-    """Regex-pass path: a Stop additionalContext reason surfacing the top memory entry for the turn's output `text`, else None; fires at most once/turn (stop_hook_active-gated + throttle-deduped) and is fully fail-open."""
+    """Regex-pass path: a Stop additionalContext reason surfacing the top memory entry for the turn's output `text`, else None; fires at most once/turn (stop_hook_active gate + counter latch + throttle) and is fully fail-open."""
     if _memory_surface_mod is None or payload.get("stop_hook_active"):
         return None
     if not text or not text.strip():
+        return None
+    # Turn-scoped latch: guarantee max-once even if the runtime does not set
+    # stop_hook_active on the additionalContext continuation (belt to that gate).
+    if _stop_latched(payload):
         return None
     session_id = payload.get("session_id") or ""
     cwd = payload.get("cwd")
@@ -778,6 +820,7 @@ def _memory_surface_at_stop(payload: dict, text: str) -> str | None:
         return None
     if not picks:
         return None
+    _stop_latch_set(payload)
     file_path, reminder, _score = picks[0]
     display = reminder or "(reminder 未設定)"
     return (
@@ -1374,6 +1417,34 @@ class StopMemorySurfaceTest(unittest.TestCase):
         assert r is not None
         self.assertIn("repo を放置しない", r)
         self.assertIn("/mem/feedback_x.md", r)
+
+    def test_stop_latch_prevents_repeat_when_active_false(self):
+        import tempfile
+        from unittest import mock
+
+        d = tempfile.mkdtemp()
+        tp = os.path.join(d, "t.jsonl")
+        open(tp, "w").close()
+        with open(tp[:-6] + ".turns", "w", encoding="utf-8") as f:
+            f.write(
+                "5 1000\n"
+            )  # current-turn count "5", stable across the turn's Stops
+        mod = self._fake_mod([("/m/x.md", "lesson X", 0.6)])
+        payload = {
+            "stop_hook_active": False,
+            "cwd": "/p",
+            "session_id": "s",
+            "transcript_path": tp,
+        }
+        with mock.patch.object(self.M, "_memory_surface_mod", mod):
+            first = _memory_surface_at_stop(payload, "output")
+            second = _memory_surface_at_stop(payload, "output")
+            with open(tp[:-6] + ".turns", "w", encoding="utf-8") as f:
+                f.write("6 2000\n")  # next turn -> latch key differs -> allowed again
+            third = _memory_surface_at_stop(payload, "output")
+        assert first is not None
+        self.assertIsNone(second)  # same turn -> latched
+        assert third is not None  # new turn -> surfaces again
 
 
 if __name__ == "__main__":
