@@ -8,6 +8,7 @@
       "gh *",
       "docker *",
       "codex *",
+      "node *codex-companion.mjs*",
       "agent-browser *",
       "claude --bg *",
       "claude agents *"
