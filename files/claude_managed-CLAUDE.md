@@ -31,4 +31,5 @@ CodeGraph や Codex が利用できるなら、次の役割分担を行う。
 - Code 検索では Grep / Read より CodeGraph を優先して使う
 - 仕様策定・UIデザイン・実装の計画と指示・バグ出しは、Claude が行う
 - 永続するコード・文章の生成は Codex (`/codex:rescue`) に委譲する。ただし、自明な数行の編集・ todos.md 等のハウスキーピング文章の更新は、Claude が行ってもよい
+- codex 委譲の完了は wrapper の return/timeout でなく作業ツリーの書き込み静穏 (5 分) で判定する。codex 本体は切断後も走り続けるため、静穏前のレビュー・コミット・「未実装」判定をしない
 - Codex が生成したコードや文章は Claude が敵対的レビュー・受け入れレビューを行う。 重要な変更は Codex を独立 cross-model レビューアー (`/codex:adversarial-review`) として更にレビューする
