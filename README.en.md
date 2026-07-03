@@ -26,6 +26,14 @@ After the base setup, run the scripts under `extra/` as root as needed.
 
 Each one is re-runnable and upgrades in place (the VoiceVox Core itself is skipped if already installed).
 
+### Adding a new user
+
+When you add a user to an already set-up machine, there is no need to re-run the scripts above. Log in as the new user and run:
+
+    $ /usr/local/bin/setup_user_environment
+
+This sets up the per-user portion of the base setup (Bash and Git configuration, Node.js, Claude Code with its extensions, the Codex CLI, and so on) for that user.
+
 
 ## What the Base Setup Does
 
