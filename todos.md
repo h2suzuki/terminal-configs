@@ -35,8 +35,8 @@ Exit Criteria:
 - [x] H.S. が実機 relaunch で確認 (2026-07-03): アイコン切替・タイトル要約 OK。 /rename 不追従を発見→修正 (nameSource は rename で消える実挙動に追従)。 stop-feedback 続行中の wait 貼り付きも修正
 - [x] アイコン絵柄を H.S. が確定 (2026-07-03): 無印・💬・❓・⚠️ (「いったんこれで」)
 - [x] **承認後 back-port** (2026-07-03 commit 4efa99e): `files/claude_user-hooks/title_icon.py` + user-extensions 8 event 配線 + DISABLE env は claude_user-settings.json へ (claude_env.sh は signoz opt-in 専用と実測判明のため配置先変更)。 Codex 生成は「live 実証済みコードの verbatim 昇格」のため省略、 レビューは事後 /code-review で代替可
-- [ ] H.S. が他端末で pull + deploy し表示確認
-- [ ] 全端末反映後に実験用暫定配線 (settings.local.json の hooks block + env・live script `~/.claude/title-icon-hook.py`) を整理
+- [ ] H.S. が各端末 (本機含む) で pull + deploy し表示確認
+- [ ] 暫定配線の整理 — settings.local.json の hooks + env は撤去済 (2026-07-03)。 残り = 旧 live script `~/.claude/title-icon-hook.py` と state 残骸の削除 (sandbox read-only ゆえ H.S. 手動)
 
 Work file: last-session-handoff.md
 
