@@ -47,6 +47,15 @@ Exit Criteria:
 
 Work file: last-session-handoff.md
 
+### memory surface の閾値をモデル別に変えられるか調査
+
+Goal: Opus セッション向け調整の memory surface (UserPromptSubmit `memory_surface.py` / Stop `stop_checks.py` の RAG surface) が Fable 5 では過剰という H.S. の体感に対し、走行モデルを hook 側から検出してモデル別に閾値・頻度を変える実装の可否と方針を確定する。
+
+Exit Criteria:
+- [ ] hook から走行モデルを検出する手段の有無を実測で確定 (hook stdin payload / env / `~/.claude/sessions/<pid>.json` / transcript 等。 2026-07-03 時点の既知: PreToolUse/PostToolUse stdin に model field は無い)
+- [ ] 対象 hook の surface 閾値・頻度パラメータの所在を特定 (`files/claude_user-hooks/memory_surface.py` / `files/claude_managed-hooks/stop_checks.py`)
+- [ ] 可否の結論とモデル別チューニング方針 (やらない選択肢含む) を H.S. と合意
+
 ### SKILL-HOOK-CONTRACT.md パターン集
 
 Goal: repo 直下 `SKILL-HOOK-CONTRACT.md` を 4 部構成で完成 — (A) event 別 hook 利用カタログ (H.S. の番号フロー形式) / (B) Skills フォーマット規約 / (C) 応用編 = CLAUDE.md→skill/hook 化の概要 (Big Picture) / (D) 実装 contract (技術者向け再利用規約)。 一貫性担保が目的 (2026-05-30 起案・A/B 記入は 2026-06-07 前 session で H.S. が依頼したが court バグでセッション腐敗→リセット、 本 session で再開。 「今 session の新指示」ではない)。
