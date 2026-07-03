@@ -11,6 +11,10 @@ BELL = {"ask", "perm"}  # 突入時に BEL を鳴らす状態 (Windows Terminal 
 STATE_DIR = Path.home() / ".claude" / "title-icon-state"
 SESS_DIR = Path.home() / ".claude" / "sessions"
 SUMMARY_LEN = 24
+SYNTHETIC = (
+    "<task-notification>",
+    "This session is being continued",
+)  # 合成再入は summary 化しない
 
 
 def parent_pid(pid):
@@ -100,8 +104,9 @@ def main():
     if ev == "SessionStart":
         new = "wait"
     elif ev == "UserPromptSubmit":
-        if data.get("prompt"):
-            st["summary"] = summarize(data["prompt"])
+        prompt = data.get("prompt") or ""
+        if prompt and not prompt.lstrip().startswith(SYNTHETIC):
+            st["summary"] = summarize(prompt)
         new = "run"
     elif ev == "Stop":
         new = "wait"
