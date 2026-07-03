@@ -4,9 +4,10 @@ codex delegation surface for org-managed Claude Code.
 
 Purpose
 =======
-tool-role-delegation (実装は codex へ委譲・Claude は仕様/レビュー) は self-judgment
-依存で発火率が低い。 本 hook は委譲判断の自然な 2 つの境界で nudge を inject する。
-deny せず additionalContext のみ (実装を止めない・誘導のみ)。
+tool-role-delegation (routing: 実装は codex へ委譲) と codex-delegation (委譲後の
+lifecycle 規律) は self-judgment 依存で発火率が低い。 本 hook は委譲判断の自然な 2 つの
+境界で両 skill を surface する nudge を inject する。 deny せず additionalContext のみ
+(実装を止めない・誘導のみ)。
 
 発火点 (payload の hook_event_name / tool_name / agent_type で判定):
 
@@ -56,15 +57,19 @@ DELEGATE_MSG = (
     "`/codex:rescue --resume`、 仕切り直しは --fresh、 model / 負荷調整は --model spark / "
     "--effort。 Claude は仕様明文化・レビュー・バグ出しを担い、 codex が返したコードを"
     "敵対的/受入レビューします (auth / data-loss / race 等の高リスクは "
-    "/codex:adversarial-review で独立 cross-model 第二レビュー)。 trivial な変更・doc "
+    "/codex:adversarial-review で独立 cross-model 第二レビュー)。 発注書の書き方・"
+    "走行監視・完了判定 (ツリー静穏 + companion status)・fix round の lifecycle 規律は "
+    "`codex-delegation` skill を invoke。 trivial な変更・doc "
     "編集・codex 利用不可時は self-implement で構いません。"
 )
 REVIEW_MSG = (
-    "[codex-review] codex が実装を返しました。 tool-role-delegation step4: コードを"
+    "[codex-review] codex-rescue が停止しました (SubagentStop は codex 本体の完了を"
+    "保証しません — ツリー静穏 + companion status running[] 空を先に確認し moving-target "
+    "レビューを回避)。 tool-role-delegation step4: コードを"
     "敵対的/受入レビューし、 バグ・仕様逸脱・副作用を検査してください (patch 反映も"
     "レビューの一部)。 auth / data-loss / race / rollback 等の高リスク変更は "
     "`/codex:adversarial-review` で codex の独立 cross-model 第二レビューを追加して"
-    "ください。"
+    "ください。 完了判定〜受入レビュー〜fix round の規律は `codex-delegation` skill を invoke。"
 )
 
 
@@ -305,6 +310,8 @@ class SurfaceTest(unittest.TestCase):
         )
         self.assertEqual(out["hookEventName"], "PreToolUse")
         self.assertIn("[codex-review]", out["additionalContext"])
+        self.assertIn("companion status", out["additionalContext"])
+        self.assertIn("`codex-delegation` skill", out["additionalContext"])
         self.assertFalse(os.path.exists(path))
 
     def test_pretooluse_second_call_after_delivery_emits_nothing(self):
@@ -355,6 +362,7 @@ class SurfaceTest(unittest.TestCase):
         self.assertIn("/codex:rescue", out["additionalContext"])
         self.assertIn("--resume", out["additionalContext"])
         self.assertIn("[codex-delegation]", out["additionalContext"])
+        self.assertIn("`codex-delegation` skill", out["additionalContext"])
         self.assertFalse(os.path.exists(self._marker_path("_")))
 
     def test_exitplanmode_with_fresh_marker_delivers_both_and_removes(self):
