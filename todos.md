@@ -28,7 +28,7 @@ Exit Criteria:
 Goal: タブを見ただけで質問中・プロンプト待ちのセッションを即発見できる状態別アイコンを実現。 v1 (Opus 4.8) は「ビジュアル微妙 + タイトル文字列が壊れる」で H.S. 却下 → v2 (Fable 5・2026-07-03) で全面再設計済。 H.S. 指示で「まず repo 非 commit の実験」→承認後 back-port。
 
 v2 設計 (2026-07-03 全 15 case スモーク PASS・実機確認待ち):
-- 状態遷移時のみ title 更新 (v1 のスピナー全廃)。 実行中=無印 / 🟢 プロンプト待ち / 🟡 質問中 (AskUserQuestion) / 🔴 承認待ち (PermissionRequest→PermissionDenied/PostToolUse で復帰)。 🟡🔴 突入時 BEL 付き (WT タブ点滅用)
+- 状態遷移時のみ title 更新 (v1 のスピナー全廃)。 実行中=無印 / ✅ プロンプト待ち / ❓ 質問中 (AskUserQuestion) / 🔑 承認待ち (PermissionRequest→PermissionDenied/PostToolUse で復帰)。 ❓🔑 突入時 BEL 付き (WT タブ点滅用)
 - subagent の tool イベント (`agent_id` 付き) は無視 — v1 のタイトル荒れの主因
 - タイトル文字列: /rename 名 (`sessions/<pid>.json` の nameSource=user/auto) > 直近プロンプト先頭 24 字 > derived 名 > cwd basename。 hook 親系譜 2 hop で claude 本体 pid を解決し毎回 fresh 参照 (v1 の stale cache 廃止)
 - 2.1.199 実測: allowlist = OSC 0/1/2/9/99/777 + BEL (9;4 タスクバー進捗も可・複数タブ競合ゆえ今回見送り)。 hook stdin に session 名 field は無い (docs + 実測)
@@ -41,7 +41,7 @@ v2 設計 (2026-07-03 全 15 case スモーク PASS・実機確認待ち):
 
 Exit Criteria:
 - [ ] H.S. が実機 relaunch で確認: 4 状態のアイコン切替 / /rename 追従 / プロンプト要約タイトル / BEL 点滅 / ちらつき有無
-- [ ] アイコン絵柄を H.S. が確定 (現行: 無印・🟢・🟡・🔴)
+- [ ] アイコン絵柄を H.S. が確定 (現行: 無印・✅・❓・🔑 = H.S. 指定の意味重視セット・実機で見た目確認待ち)
 - [ ] **承認後 back-port** (CLAUDE.md 必須): canonical 版を Codex 生成+敵対レビュー → script を `files/` へ + `ubuntu2404-wsl.sh`/`debian12.sh` に copy 行 / DISABLE を `files/claude_env.sh` / hooks 配線を該当 source json へ反映 → commit
 - [ ] back-port 後に実験用暫定配線 (settings.local.json の hooks block・live script) を整理
 
