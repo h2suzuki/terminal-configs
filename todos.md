@@ -23,22 +23,27 @@ Exit Criteria:
 
 ## Medium
 
-### ターミナルタブの状態別アイコン (実験中・repo 未 commit)
+### ターミナルタブの状態別アイコン (v2 実験中・repo 未 commit)
 
-Goal: Claude Code のタブアイコン (待受=✳ / 実行=・ の hardcode) を状態別カスタムに置換。 hook の `terminalSequence` (OSC 0/1/2 許可・binary 2.1.183 で allowlist 確認) で発行し、 CC 純正 title は `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1` (env・gate 実在確認) で停止。 H.S. 指示で「まず repo 非 commit の実験」→承認後 back-port。
+Goal: タブを見ただけで質問中・プロンプト待ちのセッションを即発見できる状態別アイコンを実現。 v1 (Opus 4.8) は「ビジュアル微妙 + タイトル文字列が壊れる」で H.S. 却下 → v2 (Fable 5・2026-07-03) で全面再設計済。 H.S. 指示で「まず repo 非 commit の実験」→承認後 back-port。
+
+v2 設計 (2026-07-03 全 15 case スモーク PASS・実機確認待ち):
+- 状態遷移時のみ title 更新 (v1 のスピナー全廃)。 実行中=無印 / 🟢 プロンプト待ち / 🟡 質問中 (AskUserQuestion) / 🔴 承認待ち (PermissionRequest→PermissionDenied/PostToolUse で復帰)。 🟡🔴 突入時 BEL 付き (WT タブ点滅用)
+- subagent の tool イベント (`agent_id` 付き) は無視 — v1 のタイトル荒れの主因
+- タイトル文字列: /rename 名 (`sessions/<pid>.json` の nameSource=user/auto) > 直近プロンプト先頭 24 字 > derived 名 > cwd basename。 hook 親系譜 2 hop で claude 本体 pid を解決し毎回 fresh 参照 (v1 の stale cache 廃止)
+- 2.1.199 実測: allowlist = OSC 0/1/2/9/99/777 + BEL (9;4 タスクバー進捗も可・複数タブ競合ゆえ今回見送り)。 hook stdin に session 名 field は無い (docs + 実測)
 
 実験構成 (gitignore 内・deploy-target 非汚染):
-- hook 実体: `~/.claude/title-icon-hook.py` (live・非 repo)。 先頭 `ICON` dict 1 行で差替可。 現状 ⚡生成中 / 💤暇 / ❓質問 (シンプル路線・H.S. 確定待ち)。
-- 配線: `.claude/settings.local.json` (gitignore) の hooks に UserPromptSubmit / Stop / Notification 登録 (既存 permissions は非破壊で merge 済)。
-- DISABLE env: 起動時インライン `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1 claude --continue` で付与 (settings env が CC 自身に効くか不確実ゆえ inline が確実)。
+- hook 実体: `~/.claude/title-icon-hook.py` (live・非 repo)。 先頭 `ICON`/`BELL` 行で差替可
+- 配線: `.claude/settings.local.json` の hooks 8 event (PreToolUse/PostToolUse/UserPromptSubmit/Stop/PermissionRequest/PermissionDenied/SessionStart/SessionEnd)。 v1 の Notification・bell 二重配線は撤去済
+- DISABLE env: settings.local.json の env に `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1` 設定済
+- smoke test: session scratchpad の smoke_title_hook.sh (ephemeral・15 case)
 
 Exit Criteria:
-- [ ] H.S. が実機 relaunch で表示確認: 3 状態でアイコン切替わるか / DISABLE で純正 glyph 消えるか / ちらつき有無 / session 名併置の可否
-- [ ] アイコン絵柄を H.S. が確定
+- [ ] H.S. が実機 relaunch で確認: 4 状態のアイコン切替 / /rename 追従 / プロンプト要約タイトル / BEL 点滅 / ちらつき有無
+- [ ] アイコン絵柄を H.S. が確定 (現行: 無印・🟢・🟡・🔴)
 - [ ] **承認後 back-port** (CLAUDE.md 必須): canonical 版を Codex 生成+敵対レビュー → script を `files/` へ + `ubuntu2404-wsl.sh`/`debian12.sh` に copy 行 / DISABLE を `files/claude_env.sh` / hooks 配線を該当 source json へ反映 → commit
 - [ ] back-port 後に実験用暫定配線 (settings.local.json の hooks block・live script) を整理
-
-未検証 (実機 relaunch で初確認): DISABLE が動的 glyph を完全停止するか / terminalSequence が UserPromptSubmit·Stop でも honor されるか / hook input に session_name·title が実在するか (無ければ cwd basename で表示)。 静的に確認済は terminalSequence allowlist・DISABLE env・process.title は静的 "claude"。
 
 Work file: last-session-handoff.md
 
