@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""状態別ターミナルタブアイコン (遷移時のみ更新・/rename 追従)."""
+"""状態別ターミナルタブアイコン (遷移時のみ更新・/rename 追従・終了時に元タイトル復元)."""
 
 import json
 import os
@@ -15,6 +15,8 @@ SYNTHETIC = (
     "<task-notification>",
     "This session is being continued",
 )  # 合成再入は summary 化しない
+SAVE_TITLE = "\x1b[22;2t"  # 初回 start で元タイトルを端末スタックへ退避
+REST_TITLE = "\x1b[23;2t"  # 終了時にスタックから元タイトルを pop 復元
 
 
 def parent_pid(pid):
@@ -78,8 +80,8 @@ def load_state(path):
         return {"state": "", "summary": ""}
 
 
-def emit(icon, title, bell):
-    seq = f"\x1b]0;{icon + ' ' if icon else ''}{title}\x07"
+def emit(icon, title, bell, prefix=""):
+    seq = prefix + f"\x1b]0;{icon + ' ' if icon else ''}{title}\x07"
     if bell:
         seq += "\x07"
     print(json.dumps({"terminalSequence": seq}))
@@ -96,8 +98,12 @@ def main():
     st = load_state(state_file)
 
     if ev == "SessionEnd":
-        emit("", resolve_title(sid, st["summary"], data.get("cwd")), False)
-        state_file.unlink(missing_ok=True)
+        if data.get("reason") != "clear":  # clear は同一 process 継続ゆえ復元しない
+            print(json.dumps({"terminalSequence": REST_TITLE}))
+            try:
+                state_file.unlink(missing_ok=True)
+            except OSError:
+                pass
         return
 
     new = None
@@ -131,7 +137,10 @@ def main():
         state_file.write_text(json.dumps(st))
     except OSError:
         pass
-    emit(ICON[new], resolve_title(sid, st["summary"], data.get("cwd")), bell)
+    push = ""
+    if ev == "SessionStart" and data.get("source") in ("startup", "resume"):
+        push = SAVE_TITLE  # 初回 start のみ元タイトルを退避
+    emit(ICON[new], resolve_title(sid, st["summary"], data.get("cwd")), bell, push)
 
 
 main()
