@@ -57,6 +57,7 @@ run install check_commit_author.py    ~/.claude/hooks/check_commit_author.py
 run install check_push_prompting.py   ~/.claude/hooks/check_push_prompting.py
 run install memory_surface.py         ~/.claude/hooks/memory_surface.py
 run install subagent_gate_suggest.py  ~/.claude/hooks/subagent_gate_suggest.py
+run install title_icon.py             ~/.claude/hooks/title_icon.py
 run "claude_user_settings inject - < ../extensions.json"
 
 popd >/dev/null
