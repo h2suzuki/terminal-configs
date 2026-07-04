@@ -46,6 +46,7 @@ else
     COLOR_YELLOW=
 fi
 
+
 run()
 {
     local RETVAL
