@@ -85,11 +85,11 @@ EMBED_MAX_NORM_CHARS = 3000  # cap after punct spacing inflates length
 # recall 同等以上・surface 数 6 割減・MRR 0.75→0.91 を確認した動作点
 HYBRID_ALPHA = 0.5
 BM25_NORM_DIV = 10.0
-HYBRID_FLOOR = 0.40
-HYBRID_STRONG_FLOOR = 0.50
+HYBRID_FLOOR = 0.45
+HYBRID_STRONG_FLOOR = 0.55
 # hybrid 全滅時の救済: lexical 無 match でも cos がこれ以上なら top-1 を surface
 # (評価で recall +6pt / precision 不変)
-DENSE_RESCUE_FLOOR = 0.55
+DENSE_RESCUE_FLOOR = 0.60
 BM25_CANDIDATES = 10
 _UNK_ID = 1
 _VITERBI_UNK_SCORE = -20.0  # below any real token score; spm uses min_score - 10
@@ -986,16 +986,16 @@ class HybridEncoderTest(unittest.TestCase):
 
     def test_select_picks_floor_gate_and_second(self):
         self.assertEqual(
-            _select_picks({"a": 0.55, "b": 0.52, "c": 0.1}, {}),
-            [("a", 0.55), ("b", 0.52)],
+            _select_picks({"a": 0.60, "b": 0.56, "c": 0.1}, {}),
+            [("a", 0.60), ("b", 0.56)],
         )
-        # rank1 は strong floor (0.50) 未満なので落ちる
-        self.assertEqual(_select_picks({"a": 0.45, "b": 0.46}, {}), [("b", 0.46)])
+        # rank1 は strong floor (0.55) 未満なので落ちる
+        self.assertEqual(_select_picks({"a": 0.50, "b": 0.51}, {}), [("b", 0.51)])
 
     def test_select_picks_dense_rescue_when_below_floor(self):
         scored = {"a": 0.30, "b": 0.20}
-        self.assertEqual(_select_picks(scored, {"a": 0.62, "b": 0.40}), [("a", 0.62)])
-        self.assertEqual(_select_picks(scored, {"a": 0.50}), [])
+        self.assertEqual(_select_picks(scored, {"a": 0.65, "b": 0.40}), [("a", 0.65)])
+        self.assertEqual(_select_picks(scored, {"a": 0.55}), [])
 
     def test_model_open_none_when_db_missing(self):
         from unittest import mock
