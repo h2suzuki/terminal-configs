@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""状態別ターミナルタブアイコン (遷移時のみ更新・/rename 追従・終了時に元タイトル復元)."""
+"""状態別ターミナルタブアイコン (遷移時のみ更新・/rename 追従・終了時に既定タイトルへ復元)."""
 
+import getpass
 import json
 import os
+import platform
 import sys
 from pathlib import Path
 
 ICON = {"run": "", "wait": "💬", "ask": "❓", "perm": "⚠️"}  # この行で差替可
 BELL = {"ask", "perm"}  # 突入時に BEL を鳴らす状態 (Windows Terminal のタブ点滅用)
+BG_RUN_TYPES = {"workflow", "subagent"}  # 稼働中とみなす background_tasks の type
 STATE_DIR = Path.home() / ".claude" / "title-icon-state"
 SESS_DIR = Path.home() / ".claude" / "sessions"
 SUMMARY_LEN = 24
@@ -15,8 +18,6 @@ SYNTHETIC = (
     "<task-notification>",
     "This session is being continued",
 )  # 合成再入は summary 化しない
-SAVE_TITLE = "\x1b[22;2t"  # 初回 start で元タイトルを端末スタックへ退避
-REST_TITLE = "\x1b[23;2t"  # 終了時にスタックから元タイトルを pop 復元
 
 
 def parent_pid(pid):
@@ -80,8 +81,22 @@ def load_state(path):
         return {"state": "", "summary": ""}
 
 
-def emit(icon, title, bell, prefix=""):
-    seq = prefix + f"\x1b]0;{icon + ' ' if icon else ''}{title}\x07"
+def default_title(cwd):
+    """Ubuntu 既定 PS1 相当の `user@host: cwd` タイトル (WT の title stack 未実装対策)。"""
+    try:
+        user = getpass.getuser()
+    except (OSError, KeyError):
+        user = os.environ.get("USER", "")
+    home = str(Path.home())
+    if cwd and (cwd == home or cwd.startswith(home + os.sep)):
+        cwd_short = "~" + cwd[len(home) :]
+    else:
+        cwd_short = cwd or ""
+    return f"{user}@{platform.node()}: {cwd_short}"
+
+
+def emit(icon, title, bell):
+    seq = f"\x1b]0;{icon + ' ' if icon else ''}{title}\x07"
     if bell:
         seq += "\x07"
     print(json.dumps({"terminalSequence": seq}))
@@ -99,7 +114,9 @@ def main():
 
     if ev == "SessionEnd":
         if data.get("reason") != "clear":  # clear は同一 process 継続ゆえ復元しない
-            print(json.dumps({"terminalSequence": REST_TITLE}))
+            title = default_title(data.get("cwd"))
+            seq = f"\x1b]0;{title}\x07"
+            print(json.dumps({"terminalSequence": seq}))
             try:
                 state_file.unlink(missing_ok=True)
             except OSError:
@@ -115,7 +132,12 @@ def main():
             st["summary"] = summarize(prompt)
         new = "run"
     elif ev == "Stop":
-        new = "wait"
+        tasks = data.get("background_tasks")
+        tasks = tasks if isinstance(tasks, list) else []
+        running = any(
+            isinstance(t, dict) and t.get("type") in BG_RUN_TYPES for t in tasks
+        )
+        new = "run" if running else "wait"
     elif ev == "PermissionRequest":
         new = "perm"
     elif ev == "PermissionDenied":
@@ -137,10 +159,7 @@ def main():
         state_file.write_text(json.dumps(st))
     except OSError:
         pass
-    push = ""
-    if ev == "SessionStart" and data.get("source") in ("startup", "resume"):
-        push = SAVE_TITLE  # 初回 start のみ元タイトルを退避
-    emit(ICON[new], resolve_title(sid, st["summary"], data.get("cwd")), bell, push)
+    emit(ICON[new], resolve_title(sid, st["summary"], data.get("cwd")), bell)
 
 
 main()
