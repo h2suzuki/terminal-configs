@@ -19,7 +19,7 @@ Goal: commit e1bd3fc (Stop 時 background_tasks 判定 + SessionEnd 明示タイ
 
 Exit Criteria:
 - [x] H.S. が `install -m 755 files/claude_user-hooks/title_icon.py ~/.claude/hooks/title_icon.py` を実行し checksum 一致 (2026-07-10 cmp+mode 755 確認)
-- [ ] workflow / background agent 実行中に Stop してもタブが 💬 にならないことを観測
+- [x] workflow / background agent 実行中に Stop してもタブが 💬 にならないことを観測 (2026-07-10 H.S. が background agent 走行中の Stop で 💬 非表示を確認)
 - [ ] セッション終了時にタイトルが `user@host: ~/path` へ戻ることを観測 (戻らなければ SessionEnd の terminalSequence 配送自体が無いと切り分け、代替設計へ)
 - [ ] 検証完了後 drafts/title_icon_fix_spec.md を削除
 
