@@ -20,12 +20,21 @@ Goal: commit e1bd3fc (Stop 時 background_tasks 判定 + SessionEnd 明示タイ
 Exit Criteria:
 - [x] H.S. が `install -m 755 files/claude_user-hooks/title_icon.py ~/.claude/hooks/title_icon.py` を実行し checksum 一致 (2026-07-10 cmp+mode 755 確認)
 - [x] workflow / background agent 実行中に Stop してもタブが 💬 にならないことを観測 (2026-07-10 H.S. が background agent 走行中の Stop で 💬 非表示を確認)
-- [ ] セッション終了時にタイトルが `user@host: ~/path` へ戻ることを観測 (戻らなければ SessionEnd の terminalSequence 配送自体が無いと切り分け、代替設計へ)
-- [ ] 検証完了後 drafts/title_icon_fix_spec.md を削除
+- [x] セッション終了時にタイトルが `user@host: ~/path` へ戻ることを観測 (2026-07-10 H.S. が `h2suzuki@ubuntu2404-wsl: ~/terminal-configs` への復元を確認)
+- [x] 検証完了後 drafts/title_icon_fix_spec.md を削除 (2026-07-10 rm 済み・ls で不在確認)
 
 Work file: drafts/title_icon_fix_spec.md (仕様書、gitignored)
 
 ## Medium
+
+### セッション開始直後の title 未反映 + shell prompt の title 未更新 (要相談)
+
+Goal: (1) claude 起動/resume 直後は SessionStart hook の terminalSequence が反映されず初回プロンプトまで前タイトルが残る事象、(2) `~/.bashrc` に Ubuntu 既定の PS1 title ブロックがあるのに実 shell で cd してもタブタイトルが更新されない事象 (2026-07-10 H.S. 観測)、の 2 点を切り分けて対応方針を決める。
+
+Exit Criteria:
+- [ ] (2) の原因確定 (実 shell で `echo $TERM` / `echo "$PS1" | cat -v` を確認。 PS1 に `\e]0;` が残っているか)
+- [ ] (1) が CLI 側の適用タイミング問題かを切り分け (SessionStart で state file は書かれるが端末が変わらない、の再現確認)
+- [ ] 対応方針を H.S. と合意 (許容 / hook 側工夫 / 上流 issue / shell 設定修正)
 
 ### skill_reminder_gate.py が subagent の Edit/Write を deny し続ける
 
