@@ -1,31 +1,5 @@
 #!/usr/bin/env python3
-"""Backtest CLI for memory_surface.py keyword/entry changes (memory-surface-improvement-plan.md §B/§D).
-
-Subcommands (v1 scope — no judge/compare):
-
-  dataset --out RUNDIR [--since ISO] [--labels judgments.json] [--hook PATH]
-    Reads inject_log from a scratch copy of the live DB, reconstructs each
-    event's full query text from the session transcript (prefix-verified
-    against the stored 200-char excerpt), optionally joins relevance/
-    influence/note labels by id -> events.jsonl.
-
-  rescore --run RUNDIR --candidate-memory DIR[,DIR...] [--baseline-db PATH] [--hook PATH]
-    baseline = scratch copy of the live DB; candidate = baseline + every
-    *.md under the given dirs upserted -> rescored.jsonl (fired/score under
-    both indices per event).
-
-  misses --run RUNDIR --judgments judgments.json [--hook PATH]
-    For each judgments.json miss (approx_time + catalog_file), scans all
-    project transcripts within a time window, rescoring candidate turn text
-    against the candidate index -> misses.jsonl.
-
-  report --run RUNDIR
-    Aggregates §B-3 metrics (killed r0/r1/r2, new fires, reconstructed vs
-    excerpt-only score-delta stratification) -> report.md + report.json.
-
-Never writes to the live DB (/var/lib/claude-rag-memory/memory_index.sqlite3):
-every scratch DB path is asserted != LIVE_DB_PATH before open/copy.
-"""
+"""Backtest CLI for memory_surface.py keyword/entry changes (spec: drafts/memory-surface-improvement-plan.md §B/§D)."""
 
 from __future__ import annotations
 
@@ -34,7 +8,6 @@ import glob
 import importlib.util
 import json
 import os
-import shutil
 import sqlite3
 import sys
 import time
@@ -45,6 +18,8 @@ from datetime import date, datetime, timezone
 HOME = os.path.expanduser("~")
 LIVE_DB_PATH = "/var/lib/claude-rag-memory/memory_index.sqlite3"
 RUN_ROOT = "/var/lib/claude-rag-memory/analyzer"
+# All scratch/output writes must land under these roots (tests patch this).
+ALLOWED_OUTPUT_ROOTS: tuple[str, ...] = (RUN_ROOT,)
 DEFAULT_HOOK_PATH = os.path.join(HOME, ".claude", "hooks", "memory_surface.py")
 PROJECTS_DIR = os.path.join(HOME, ".claude", "projects")
 QUERY_EXCERPT_LEN = 200
@@ -55,20 +30,20 @@ KILLED_R2_MAX_PER_ENTRY = 1
 
 
 def _iso_to_epoch(s: str | None) -> float | None:
-    if not s:
+    """ISO8601 -> epoch; naive (timezone-less) inputs are rejected as None."""
+    if not s or not isinstance(s, str):
         return None
     try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
     except ValueError:
         return None
+    if dt.tzinfo is None:
+        return None
+    return dt.timestamp()
 
 
 def _utc_now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-
-def _new_run_dir() -> str:
-    return os.path.join(RUN_ROOT, time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()))
 
 
 def _load_hook_module(path: str) -> types.ModuleType:
@@ -80,24 +55,88 @@ def _load_hook_module(path: str) -> types.ModuleType:
     return mod
 
 
+# --- output path safety (live DB write-zero guarantee) ---
+
+
+def _under_allowed_root(path: str) -> bool:
+    rp = os.path.realpath(path)
+    for root in ALLOWED_OUTPUT_ROOTS:
+        rr = os.path.realpath(root)
+        if rp == rr or rp.startswith(rr + os.sep):
+            return True
+    return False
+
+
 def _assert_scratch_path(path: str) -> None:
-    if os.path.abspath(path) == os.path.abspath(LIVE_DB_PATH):
+    """Reject live-DB aliases (realpath / symlink / hardlink) and paths outside allowed roots."""
+    rp = os.path.realpath(path)
+    if rp == os.path.realpath(LIVE_DB_PATH):
         raise RuntimeError("refusing to touch live DB: " + path)
+    if os.path.islink(path):
+        raise RuntimeError("refusing symlinked output path: " + path)
+    if (
+        os.path.exists(rp)
+        and os.path.exists(LIVE_DB_PATH)
+        and os.path.samefile(rp, LIVE_DB_PATH)
+    ):
+        raise RuntimeError("refusing hardlink alias of live DB: " + path)
+    if not _under_allowed_root(path):
+        raise RuntimeError(
+            "output outside allowed roots %s: %s" % (ALLOWED_OUTPUT_ROOTS, path)
+        )
 
 
-def _copy_baseline_db(dst: str) -> str:
-    """Scratch copy of the live DB (read-only source), never a live-path write."""
+def _create_run_dir(out: str | None) -> str:
+    """Exclusive new run dir under an allowed root; auto-named with a random suffix when out is None."""
+    if out is not None:
+        if os.path.islink(out) or not _under_allowed_root(out):
+            raise RuntimeError("run dir outside allowed roots or symlinked: " + out)
+        os.makedirs(out, exist_ok=False)
+        return out
+    for _ in range(8):
+        name = "%s-%s" % (
+            time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()),
+            os.urandom(3).hex(),
+        )
+        path = os.path.join(RUN_ROOT, name)
+        try:
+            os.makedirs(path, exist_ok=False)
+        except FileExistsError:
+            continue
+        return path
+    raise RuntimeError("run dir collision under " + RUN_ROOT)
+
+
+def _existing_run_dir(path: str) -> str:
+    if os.path.islink(path) or not os.path.isdir(path) or not _under_allowed_root(path):
+        raise RuntimeError(
+            "run dir missing, symlinked, or outside allowed roots: " + path
+        )
+    return path
+
+
+def _clone_db(src: str, dst: str) -> None:
+    """WAL-consistent clone via the sqlite backup API (read-only source); fails loudly, no silent copy fallback."""
     _assert_scratch_path(dst)
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    if os.path.exists(LIVE_DB_PATH):
-        shutil.copyfile(LIVE_DB_PATH, dst)
-    else:
+    if not os.path.exists(src):
         sqlite3.connect(dst).close()
-    return dst
+        return
+    try:
+        scon = sqlite3.connect("file:%s?mode=ro" % src, uri=True, timeout=5.0)
+        try:
+            dcon = sqlite3.connect(dst)
+            try:
+                scon.backup(dcon)
+            finally:
+                dcon.close()
+        finally:
+            scon.close()
+    except sqlite3.Error as e:
+        raise RuntimeError("ro backup of %s failed: %s" % (src, e)) from e
 
 
 def _open_scratch_con(hook_mod: types.ModuleType, path: str) -> sqlite3.Connection:
-    """Open path via the hook's own _connect() (schema/migrations parity), asserting scratch-only."""
+    """Open path via the hook's own _connect() (schema parity), scratch-asserted, DB_PATH restored."""
     _assert_scratch_path(path)
     prev = hook_mod.DB_PATH
     hook_mod.DB_PATH = path  # ty: ignore[unresolved-attribute]
@@ -120,10 +159,26 @@ def _read_jsonl(path: str) -> list[dict]:
     return out
 
 
+def _open_out(path: str):
+    """Symlink-refusing output writer (O_NOFOLLOW) for run-dir artifacts."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+    return os.fdopen(fd, "w", encoding="utf-8")
+
+
 def _write_jsonl(path: str, rows: list[dict]) -> None:
-    with open(path, "w", encoding="utf-8") as f:
+    with _open_out(path) as f:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _write_json(path: str, obj: dict) -> None:
+    with _open_out(path) as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+
+
+def _write_text(path: str, text: str) -> None:
+    with _open_out(path) as f:
+        f.write(text)
 
 
 # --- transcript / query reconstruction (§B-1) ---
@@ -133,8 +188,10 @@ def _transcript_path(project_id: str, session_id: str) -> str:
     return os.path.join(PROJECTS_DIR, project_id, session_id + ".jsonl")
 
 
-def _load_transcript(path: str) -> list[dict] | None:
+def _load_transcript(path: str) -> tuple[list[dict] | None, bool]:
+    """(entries, corrupt) — corrupt marks silently dropped undecodable lines (boundary risk)."""
     entries: list[dict] = []
+    corrupt = False
     try:
         with open(path, encoding="utf-8") as f:
             for line in f:
@@ -144,10 +201,10 @@ def _load_transcript(path: str) -> list[dict] | None:
                 try:
                     entries.append(json.loads(line))
                 except json.JSONDecodeError:
-                    continue
+                    corrupt = True
     except OSError:
-        return None
-    return entries
+        return None, False
+    return entries, corrupt
 
 
 def _is_prompt(obj: dict) -> bool:
@@ -159,34 +216,30 @@ def _is_prompt(obj: dict) -> bool:
     )
 
 
-def _assistant_text(obj: dict) -> str:
-    msg = obj.get("message", {})
-    content = msg.get("content") if isinstance(msg, dict) else None
-    if not isinstance(content, list):
-        return ""
-    parts = [
-        str(b.get("text", ""))
-        for b in content
-        if isinstance(b, dict) and b.get("type") == "text"
-    ]
-    return "\n".join(p for p in parts if p)
+def _stop_text(entries: list[dict], start: int, end: int) -> str:
+    """Exact replica of stop_checks._current_turn text join (empty text blocks kept)."""
+    parts: list[str] = []
+    for obj in entries[start:end]:
+        if obj.get("type") != "assistant":
+            continue
+        msg = obj.get("message", {})
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text", "")))
+    return "\n".join(parts)
 
 
 def _turn_candidates(entries: list[dict]) -> list[tuple[str, str, int]]:
-    """(source, text, boundary_index) for every UPS prompt and Stop current-turn text; mirrors
-    stop_checks.py _current_turn's boundary (most-recent-prompt-only) applied at every boundary."""
+    """(source, text, boundary_index) per prompt boundary; Stop `last_assistant_message` concat is payload-only and NOT reproducible here."""
     boundaries = [i for i, e in enumerate(entries) if _is_prompt(e)]
     out: list[tuple[str, str, int]] = []
     for bi, idx in enumerate(boundaries):
-        prompt = entries[idx]["message"]["content"]
-        out.append(("UPS", prompt, idx))
+        out.append(("UPS", entries[idx]["message"]["content"], idx))
         end = boundaries[bi + 1] if bi + 1 < len(boundaries) else len(entries)
-        parts = [
-            _assistant_text(o)
-            for o in entries[idx + 1 : end]
-            if o.get("type") == "assistant"
-        ]
-        stop_text = "\n".join(p for p in parts if p)
+        stop_text = _stop_text(entries, idx + 1, end)
         if stop_text:
             out.append(("Stop", stop_text, idx))
     return out
@@ -194,21 +247,29 @@ def _turn_candidates(entries: list[dict]) -> list[tuple[str, str, int]]:
 
 def _reconstruct(
     candidates: list[tuple[str, str, int]], excerpt: str
-) -> tuple[str | None, str | None]:
-    """(source, full_text) whose [:200] prefix-matches excerpt, else (None, None)."""
-    for source, text, _idx in candidates:
-        if text[:QUERY_EXCERPT_LEN] == excerpt:
-            return source, text
-    return None, None
+) -> tuple[str | None, str | None, int, bool]:
+    """(source, text, n_matches, ambiguous): unique full-text prefix match reconstructs; 0 or >1 distinct texts do not."""
+    matches = [(s, t) for s, t, _i in candidates if t[:QUERY_EXCERPT_LEN] == excerpt]
+    texts = {t for _s, t in matches}
+    # Design decision: multiple prefix matches with the SAME full text are one unique reconstruction.
+    if len(texts) == 1:
+        sources = {s for s, _t in matches}
+        source = next(iter(sources)) if len(sources) == 1 else None
+        return source, next(iter(texts)), len(matches), False
+    return None, None, len(matches), len(texts) > 1
 
 
 # --- dataset ---
 
 
 def cmd_dataset(args: argparse.Namespace) -> int:
-    run_dir = args.out or _new_run_dir()
-    os.makedirs(run_dir, exist_ok=True)
-    snapshot = _copy_baseline_db(os.path.join(run_dir, "live_snapshot.sqlite3"))
+    since_epoch = _iso_to_epoch(args.since)
+    if args.since and since_epoch is None:
+        sys.stderr.write("dataset: --since must be ISO8601 with timezone (e.g. ...Z)\n")
+        return 2
+    run_dir = _create_run_dir(args.out)
+    snapshot = os.path.join(run_dir, "live_snapshot.sqlite3")
+    _clone_db(LIVE_DB_PATH, snapshot)
     con = sqlite3.connect(snapshot)
     try:
         rows = con.execute(
@@ -217,7 +278,6 @@ def cmd_dataset(args: argparse.Namespace) -> int:
         ).fetchall()
     finally:
         con.close()
-    since_epoch = _iso_to_epoch(args.since) if args.since else None
     labels: dict[int, dict] = {}
     if args.labels:
         with open(args.labels, encoding="utf-8") as f:
@@ -225,22 +285,31 @@ def cmd_dataset(args: argparse.Namespace) -> int:
         for ev in raw.get("events", []):
             labels[ev["id"]] = ev
     events = []
-    n_recon = 0
+    n_recon = n_ambig = 0
     for rid, file_path, project_id, session_id, ts, score, excerpt in rows:
         if since_epoch is not None and (ts is None or ts < since_epoch):
             continue
         label = labels.get(rid, {})
-        entries = None
+        entries, corrupt = (None, False)
         if project_id and session_id:
-            entries = _load_transcript(_transcript_path(project_id, session_id))
-        source, query, reconstructed = None, excerpt, False
+            entries, corrupt = _load_transcript(
+                _transcript_path(project_id, session_id)
+            )
+        source, query, reconstructed, n_matches, ambiguous = (
+            None,
+            excerpt,
+            False,
+            0,
+            False,
+        )
         if entries:
-            cands = _turn_candidates(entries)
-            source, full = _reconstruct(cands, excerpt or "")
+            source, full, n_matches, ambiguous = _reconstruct(
+                _turn_candidates(entries), excerpt or ""
+            )
             if full is not None:
                 query, reconstructed = full, True
-        if reconstructed:
-            n_recon += 1
+        n_recon += reconstructed
+        n_ambig += ambiguous
         events.append(
             {
                 "id": rid,
@@ -252,6 +321,9 @@ def cmd_dataset(args: argparse.Namespace) -> int:
                 "query_excerpt": excerpt,
                 "query": query,
                 "reconstructed": reconstructed,
+                "ambiguous": ambiguous,
+                "n_prefix_matches": n_matches,
+                "transcript_corrupt": corrupt,
                 "source": source or label.get("source"),
                 "relevance": label.get("relevance"),
                 "influence": label.get("influence"),
@@ -265,13 +337,14 @@ def cmd_dataset(args: argparse.Namespace) -> int:
         "hook_path": args.hook or DEFAULT_HOOK_PATH,
         "n_events": len(events),
         "n_reconstructed": n_recon,
+        "n_ambiguous": n_ambig,
         "created": _utc_now_iso(),
     }
-    with open(os.path.join(run_dir, "manifest.json"), "w", encoding="utf-8") as f:
-        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    _write_json(os.path.join(run_dir, "manifest.json"), manifest)
     rate = (n_recon / len(events)) if events else 0.0
     sys.stderr.write(
-        f"dataset: {len(events)} events, reconstructed {n_recon} ({rate:.1%}) -> {run_dir}\n"
+        f"dataset: {len(events)} events, reconstructed {n_recon} ({rate:.1%}), "
+        f"ambiguous {n_ambig} -> {run_dir}\n"
     )
     return 0
 
@@ -279,29 +352,75 @@ def cmd_dataset(args: argparse.Namespace) -> int:
 # --- rescore ---
 
 
+def _parse_specs(s: str | None) -> list[tuple[str, str | None]]:
+    """'item[=project_id],...' -> [(item, project_id | None)]."""
+    out: list[tuple[str, str | None]] = []
+    for tok in (s or "").split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        item, _, pid = tok.partition("=")
+        out.append((item, pid or None))
+    return out
+
+
+def _apply_candidate_changes(
+    hook: types.ModuleType, con: sqlite3.Connection, args: argparse.Namespace
+) -> tuple[int, int]:
+    """Apply upsert/delete specs; any failure raises (no silent partial candidate corpus)."""
+    n_upserts = n_deletes = 0
+    for d, pid in _parse_specs(args.candidate_memory):
+        mds = sorted(glob.glob(os.path.join(d, "*.md")))
+        if not mds:
+            raise RuntimeError("candidate-memory dir has no *.md: " + d)
+        for md in mds:
+            if hook._upsert_entry(con, os.path.abspath(md), pid) != 0:
+                raise RuntimeError("upsert failed: %s (project_id=%s)" % (md, pid))
+            n_upserts += 1
+    for path, pid in _parse_specs(args.candidate_delete):
+        abs_path = os.path.abspath(path)
+        row = con.execute(
+            "SELECT 1 FROM entries_fts WHERE file_path = ? "
+            "AND coalesce(project_id, '') = coalesce(?, '')",
+            (abs_path, pid),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(
+                "delete target not indexed in this scope: %s (project_id=%s)"
+                % (abs_path, pid)
+            )
+        if hook._delete_entry(con, abs_path, pid) != 0:
+            raise RuntimeError("delete failed: %s (project_id=%s)" % (abs_path, pid))
+        n_deletes += 1
+    return n_upserts, n_deletes
+
+
+def _entry_count(path: str) -> int:
+    con = sqlite3.connect("file:%s?mode=ro" % path, uri=True)
+    try:
+        return con.execute("SELECT count(*) FROM entries_fts").fetchone()[0]
+    finally:
+        con.close()
+
+
 def cmd_rescore(args: argparse.Namespace) -> int:
-    run_dir = args.run
+    run_dir = _existing_run_dir(args.run)
     with open(os.path.join(run_dir, "manifest.json"), encoding="utf-8") as f:
         manifest = json.load(f)
     hook_path = args.hook or manifest.get("hook_path") or DEFAULT_HOOK_PATH
     hook = _load_hook_module(hook_path)
     baseline_src = args.baseline_db or manifest["live_snapshot"]
-    _assert_scratch_path(baseline_src)
     baseline_work = os.path.join(run_dir, "baseline_work.sqlite3")
     candidate_work = os.path.join(run_dir, "candidate.sqlite3")
-    _assert_scratch_path(baseline_work)
-    _assert_scratch_path(candidate_work)
-    shutil.copyfile(baseline_src, baseline_work)
-    shutil.copyfile(baseline_src, candidate_work)
+    _clone_db(baseline_src, baseline_work)
+    _clone_db(baseline_src, candidate_work)
 
-    dirs = [d.strip() for d in args.candidate_memory.split(",") if d.strip()]
-    n_upserts = 0
     con_cand = _open_scratch_con(hook, candidate_work)
     try:
-        for d in dirs:
-            for md in sorted(glob.glob(os.path.join(d, "*.md"))):
-                if hook._upsert_entry(con_cand, os.path.abspath(md), None) == 0:
-                    n_upserts += 1
+        n_upserts, n_deletes = _apply_candidate_changes(hook, con_cand, args)
+    except RuntimeError as e:
+        sys.stderr.write("rescore: %s\n" % e)
+        return 1
     finally:
         con_cand.close()
 
@@ -309,6 +428,7 @@ def cmd_rescore(args: argparse.Namespace) -> int:
     con_base = _open_scratch_con(hook, baseline_work)
     con_cand = _open_scratch_con(hook, candidate_work)
     out = []
+    n_new = 0
     try:
         for ev in events:
             query = ev["query"]
@@ -318,8 +438,9 @@ def cmd_rescore(args: argparse.Namespace) -> int:
             picks_base = hook._surface_core(con_base, query, sid, project_id, now, 2)
             picks_cand = hook._surface_core(con_cand, query, sid, project_id, now, 2)
             fp = ev["file_path"]
-            fired_base = any(p[0] == fp for p in picks_base)
-            fired_cand = any(p[0] == fp for p in picks_cand)
+            base_paths = [p[0] for p in picks_base]
+            cand_paths = [p[0] for p in picks_cand]
+            n_new += sum(1 for p in cand_paths if p not in base_paths)
             out.append(
                 {
                     "id": ev["id"],
@@ -328,22 +449,36 @@ def cmd_rescore(args: argparse.Namespace) -> int:
                     "influence": ev.get("influence"),
                     "reconstructed": ev.get("reconstructed"),
                     "source": ev.get("source"),
-                    "fired_base": fired_base,
-                    "fired_cand": fired_cand,
+                    "fired_base": fp in base_paths,
+                    "fired_cand": fp in cand_paths,
                     "score_base": next((p[2] for p in picks_base if p[0] == fp), None),
                     "score_cand": next((p[2] for p in picks_cand if p[0] == fp), None),
-                    "picks_cand": [p[0] for p in picks_cand],
+                    "picks_base": base_paths,
+                    "picks_cand": cand_paths,
+                    "new_entries": [p for p in cand_paths if p not in base_paths],
+                    "lost_entries": [p for p in base_paths if p not in cand_paths],
                 }
             )
     finally:
         con_base.close()
         con_cand.close()
     _write_jsonl(os.path.join(run_dir, "rescored.jsonl"), out)
+    meta = {
+        "baseline_entries": _entry_count(baseline_work),
+        "candidate_entries": _entry_count(candidate_work),
+        "n_upserts": n_upserts,
+        "n_deletes": n_deletes,
+        "created": _utc_now_iso(),
+    }
+    _write_json(os.path.join(run_dir, "rescore_meta.json"), meta)
     n_fired_base = sum(1 for r in out if r["fired_base"])
+    n_killed = sum(1 for r in out if r["fired_base"] and not r["fired_cand"])
     rate = n_fired_base / len(out) if out else 0.0
     sys.stderr.write(
-        f"rescore: {len(out)} events, {n_upserts} candidate upserts, "
-        f"baseline refire {n_fired_base}/{len(out)} ({rate:.1%})\n"
+        f"rescore: {len(out)} events, corpus {meta['baseline_entries']}->"
+        f"{meta['candidate_entries']} ({n_upserts} upserts, {n_deletes} deletes), "
+        f"baseline refire {n_fired_base}/{len(out)} ({rate:.1%}), "
+        f"killed {n_killed}, new pick entries {n_new}\n"
     )
     return 0
 
@@ -352,6 +487,7 @@ def cmd_rescore(args: argparse.Namespace) -> int:
 
 
 def _parse_approx_range(s: str | None) -> tuple[float | None, float | None]:
+    """'ISO - ISO|HH:MM:SSZ' -> (start, end) epochs; time-only end inherits start date, +1d if it crosses midnight."""
     if not s:
         return None, None
     parts = [p.strip() for p in s.split(" - ")]
@@ -360,7 +496,10 @@ def _parse_approx_range(s: str | None) -> tuple[float | None, float | None]:
         end_str = parts[1]
         if start is not None and "T" not in end_str:
             end_str = parts[0].split("T")[0] + "T" + end_str
-        return start, _iso_to_epoch(end_str)
+        end = _iso_to_epoch(end_str)
+        if start is not None and end is not None and end < start:
+            end += 86400.0
+        return start, end
     ep = _iso_to_epoch(parts[0])
     return ep, ep
 
@@ -400,7 +539,7 @@ def _entry_epoch_near(entries: list[dict], idx: int) -> float | None:
 
 
 def cmd_misses(args: argparse.Namespace) -> int:
-    run_dir = args.run
+    run_dir = _existing_run_dir(args.run)
     with open(os.path.join(run_dir, "manifest.json"), encoding="utf-8") as f:
         manifest = json.load(f)
     hook_path = args.hook or manifest.get("hook_path") or DEFAULT_HOOK_PATH
@@ -413,48 +552,69 @@ def cmd_misses(args: argparse.Namespace) -> int:
         judgments = json.load(f)
     con = _open_scratch_con(hook, candidate_work)
     out = []
+    n_multi = 0
     try:
         for i, m in enumerate(judgments.get("misses", [])):
             catalog_file = m.get("catalog_file")
             start_ep, end_ep = _parse_approx_range(m.get("approx_time"))
-            fired, score, trigger, matched_session = False, None, None, None
+            hits: list[dict] = []
+            hit_sessions: set[str] = set()
+            first_trigger = None
+            seq = 0
             if start_ep is not None:
                 lo = start_ep - MISS_WINDOW_SECONDS
                 hi = (end_ep or start_ep) + MISS_WINDOW_SECONDS
                 for tpath, project_id, session_id in _scan_transcripts(lo, hi):
-                    entries = _load_transcript(tpath)
+                    entries, _corrupt = _load_transcript(tpath)
                     if not entries:
                         continue
                     for _source, text, idx in _turn_candidates(entries):
                         ts_ep = _entry_epoch_near(entries, idx)
                         if ts_ep is None or not (lo <= ts_ep <= hi):
                             continue
+                        seq += 1
+                        # Unique session_id per candidate turn: no throttle carry-over between turns.
                         picks = hook._surface_core(
-                            con, text, f"bt-miss-{i}", project_id, ts_ep, 2
+                            con, text, f"bt-miss-{i}-{seq}", project_id, ts_ep, 2
                         )
-                        if trigger is None:
-                            trigger, matched_session = text[:400], session_id
+                        if first_trigger is None:
+                            first_trigger = {"session": session_id, "text": text[:400]}
                         hit = next((p for p in picks if p[0] == catalog_file), None)
-                        if hit is not None and not fired:
-                            fired, score = True, hit[2]
-                            trigger, matched_session = text[:400], session_id
+                        if hit is not None:
+                            hit_sessions.add(session_id)
+                            hits.append(
+                                {
+                                    "session": session_id,
+                                    "ts": ts_ep,
+                                    "score": hit[2],
+                                    "trigger_excerpt": text[:400],
+                                }
+                            )
+            if len(hit_sessions) > 1:
+                n_multi += 1
             out.append(
                 {
                     "index": i,
                     "catalog_file": catalog_file,
                     "approx_time": m.get("approx_time"),
                     "why": m.get("why"),
-                    "matched_session": matched_session,
-                    "trigger_excerpt": trigger,
-                    "fired_cand": fired,
-                    "score_cand": score,
+                    "n_candidate_turns": seq,
+                    "first_trigger": first_trigger,
+                    "hits": hits,
+                    "n_hit_sessions": len(hit_sessions),
+                    "fired_cand": bool(hits),
+                    "low_confidence": len(hit_sessions) > 1,
+                    "score_cand": hits[0]["score"] if hits else None,
                 }
             )
     finally:
         con.close()
     _write_jsonl(os.path.join(run_dir, "misses.jsonl"), out)
     n_recovered = sum(1 for r in out if r["fired_cand"])
-    sys.stderr.write(f"misses: {len(out)} miss events, recovered {n_recovered}\n")
+    sys.stderr.write(
+        f"misses: {len(out)} miss events, recovered {n_recovered} "
+        f"(multi-session ambiguous: {n_multi})\n"
+    )
     return 0
 
 
@@ -465,67 +625,135 @@ def _avg(xs: list[float]) -> float | None:
     return sum(xs) / len(xs) if xs else None
 
 
-def _build_report(run_dir: str) -> dict:
+def _entry_matches(fp: str, gate_names: set[str]) -> bool:
+    return fp in gate_names or os.path.basename(fp) in gate_names
+
+
+def _build_strata(rescored: list[dict]) -> list[dict]:
+    """Per (entry, relevance, reconstructed) stratum over baseline-fired events (§B-3-iii)."""
+    strata: dict[tuple, dict] = {}
+    for r in rescored:
+        if not r["fired_base"]:
+            continue
+        key = (r["file_path"], r.get("relevance"), bool(r.get("reconstructed")))
+        d = strata.setdefault(
+            key, {"n": 0, "killed": 0, "retained": 0, "n_cand_dropped": 0, "deltas": []}
+        )
+        d["n"] += 1
+        if r["fired_cand"]:
+            d["retained"] += 1
+        else:
+            d["killed"] += 1
+        sb, sc = r.get("score_base"), r.get("score_cand")
+        if sc is None:
+            d["n_cand_dropped"] += 1  # fell below floor / out of top-2 in candidate
+        elif sb is not None:
+            d["deltas"].append(sc - sb)
+    out = []
+    for (fp, rel, recon), d in sorted(
+        strata.items(), key=lambda kv: (kv[0][0], str(kv[0][1]))
+    ):
+        out.append(
+            {
+                "entry": fp,
+                "relevance": rel,
+                "reconstructed": recon,
+                "n": d["n"],
+                "killed": d["killed"],
+                "retained": d["retained"],
+                "n_cand_dropped": d["n_cand_dropped"],
+                "score_delta_avg": _avg(d["deltas"]),
+            }
+        )
+    return out
+
+
+def _build_report(run_dir: str, gate_entries: list[str] | None) -> dict:
     events = _read_jsonl(os.path.join(run_dir, "events.jsonl"))
     rescored_path = os.path.join(run_dir, "rescored.jsonl")
     rescored = _read_jsonl(rescored_path) if os.path.exists(rescored_path) else []
     misses_path = os.path.join(run_dir, "misses.jsonl")
     misses = _read_jsonl(misses_path) if os.path.exists(misses_path) else []
+    meta_path = os.path.join(run_dir, "rescore_meta.json")
+    meta = (
+        json.load(open(meta_path, encoding="utf-8"))
+        if os.path.exists(meta_path)
+        else {}
+    )
 
     n_total = len(events)
     n_recon = sum(1 for e in events if e.get("reconstructed"))
-    recon_rate = n_recon / n_total if n_total else 0.0
-
     measurable = [r for r in rescored if r["fired_base"]]
-    baseline_refire_rate = len(measurable) / len(rescored) if rescored else 0.0
 
     per_entry: dict[str, dict] = {}
     for r in measurable:
         d = per_entry.setdefault(
             r["file_path"],
-            {"killed_r0": 0, "killed_r1": 0, "killed_r2": 0, "retained": 0},
+            {
+                "killed_r0": 0,
+                "killed_r1": 0,
+                "killed_r2": 0,
+                "killed_unlabeled": 0,
+                "retained": 0,
+            },
         )
         if r["fired_cand"]:
             d["retained"] += 1
         else:
             key = {0: "killed_r0", 1: "killed_r1", 2: "killed_r2"}.get(
-                r.get("relevance")
+                r.get("relevance"), "killed_unlabeled"
             )
-            if key:
-                d[key] += 1
+            d[key] += 1
 
-    total_killed_r0 = sum(d["killed_r0"] for d in per_entry.values())
-    max_killed_r2 = max((d["killed_r2"] for d in per_entry.values()), default=0)
+    gate = None
+    if gate_entries:
+        names = set(gate_entries)
+        gated = {fp: d for fp, d in per_entry.items() if _entry_matches(fp, names)}
+        killed_r0 = sum(d["killed_r0"] for d in gated.values())
+        max_r2 = max((d["killed_r2"] for d in gated.values()), default=0)
+        gate = {
+            "entries": sorted(gated),
+            "killed_r0": killed_r0,
+            "max_killed_r2": max_r2,
+            "pass": killed_r0 >= KILLED_R0_TARGET and max_r2 <= KILLED_R2_MAX_PER_ENTRY,
+        }
 
-    new_fires = [r for r in rescored if r["fired_cand"] and not r["fired_base"]]
-    unlabeled_new = [r for r in new_fires if r.get("relevance") is None]
-
-    recon_by_id = {e["id"]: e.get("reconstructed") for e in events}
-    strata: dict[str, list[float]] = {"reconstructed": [], "excerpt_only": []}
+    new_fires_by_entry: dict[str, list[int]] = {}
     for r in rescored:
-        key = "reconstructed" if recon_by_id.get(r["id"]) else "excerpt_only"
-        sb, sc = r.get("score_base"), r.get("score_cand")
-        if sb is not None and sc is not None:
-            strata[key].append(sc - sb)
+        for fp in r.get("new_entries", []):
+            new_fires_by_entry.setdefault(fp, []).append(r["id"])
+    unlabeled_new = [
+        r for r in rescored if r.get("new_entries") and r.get("relevance") is None
+    ]
+    n_pick_changes = sum(
+        1 for r in rescored if r.get("picks_base") != r.get("picks_cand")
+    )
 
     return {
         "run_dir": run_dir,
+        "rescore_meta": meta,
         "n_events": n_total,
         "n_reconstructed": n_recon,
-        "reconstruction_rate": recon_rate,
+        "reconstruction_rate": n_recon / n_total if n_total else 0.0,
+        "n_ambiguous": sum(1 for e in events if e.get("ambiguous")),
+        "n_transcript_corrupt": sum(1 for e in events if e.get("transcript_corrupt")),
         "n_rescored": len(rescored),
         "n_baseline_fired": len(measurable),
-        "baseline_refire_rate": baseline_refire_rate,
+        "baseline_refire_rate": len(measurable) / len(rescored) if rescored else 0.0,
         "n_excluded": len(rescored) - len(measurable),
         "per_entry": per_entry,
-        "total_killed_r0": total_killed_r0,
-        "max_killed_r2": max_killed_r2,
-        "gate_pass": total_killed_r0 >= KILLED_R0_TARGET
-        and max_killed_r2 <= KILLED_R2_MAX_PER_ENTRY,
-        "n_new_fires": len(new_fires),
+        "killed_all": {
+            "r0": sum(d["killed_r0"] for d in per_entry.values()),
+            "r1": sum(d["killed_r1"] for d in per_entry.values()),
+            "r2": sum(d["killed_r2"] for d in per_entry.values()),
+            "unlabeled": sum(d["killed_unlabeled"] for d in per_entry.values()),
+        },
+        "gate": gate,
+        "new_fires_by_entry": new_fires_by_entry,
+        "n_new_fire_pairs": sum(len(v) for v in new_fires_by_entry.values()),
         "n_unlabeled_new_fires": len(unlabeled_new),
-        "score_delta_avg_reconstructed": _avg(strata["reconstructed"]),
-        "score_delta_avg_excerpt_only": _avg(strata["excerpt_only"]),
+        "n_pick_changes": n_pick_changes,
+        "strata": _build_strata(rescored),
         "n_misses": len(misses),
         "n_misses_recovered": sum(1 for m in misses if m.get("fired_cand")),
         "_unlabeled_new_rows": unlabeled_new,
@@ -536,82 +764,173 @@ def _render_report_md(r: dict) -> str:
     lines = [
         "# memory-surface analyzer report",
         "",
-        f"- reconstruction rate: {r['n_reconstructed']}/{r['n_events']} ({r['reconstruction_rate']:.1%})",
+        f"- reconstruction rate: {r['n_reconstructed']}/{r['n_events']} ({r['reconstruction_rate']:.1%})"
+        f" (ambiguous: {r['n_ambiguous']}, corrupt transcripts: {r['n_transcript_corrupt']})",
         f"- baseline refire rate: {r['n_baseline_fired']}/{r['n_rescored']} ({r['baseline_refire_rate']:.1%})",
         f"- excluded (baseline never fired): {r['n_excluded']}",
-        f"- killed r0 total: {r['total_killed_r0']} (target >= {KILLED_R0_TARGET}/{KILLED_R0_DENOM})",
-        f"- max killed r2 per entry: {r['max_killed_r2']} (target <= {KILLED_R2_MAX_PER_ENTRY})",
-        f"- gate_pass: {r['gate_pass']}",
-        f"- new fires (candidate-only): {r['n_new_fires']} (unlabeled: {r['n_unlabeled_new_fires']})",
-        f"- score delta avg (reconstructed queries): {r['score_delta_avg_reconstructed']}",
-        f"- score delta avg (excerpt-only queries): {r['score_delta_avg_excerpt_only']}",
+        f"- killed (all entries): r0={r['killed_all']['r0']} r1={r['killed_all']['r1']}"
+        f" r2={r['killed_all']['r2']} unlabeled={r['killed_all']['unlabeled']}",
+        f"- pick-set changes: {r['n_pick_changes']}, new fire pairs: {r['n_new_fire_pairs']}"
+        f" (unlabeled events: {r['n_unlabeled_new_fires']})",
         f"- misses recovered: {r['n_misses_recovered']}/{r['n_misses']}",
+    ]
+    gate = r.get("gate")
+    if gate:
+        lines += [
+            "",
+            "## gate (target entries only)",
+            "",
+            f"- entries: {', '.join(os.path.basename(e) for e in gate['entries'])}",
+            f"- killed_r0: {gate['killed_r0']} (target >= {KILLED_R0_TARGET}/{KILLED_R0_DENOM})",
+            f"- max killed_r2: {gate['max_killed_r2']} (target <= {KILLED_R2_MAX_PER_ENTRY})",
+            f"- pass: {gate['pass']}",
+        ]
+    else:
+        lines += [
+            "",
+            "(gate not evaluated — pass --gate-entries with the modified entries)",
+        ]
+    lines += [
         "",
-        "## per-entry killed breakdown",
+        "## per-entry killed breakdown (baseline-fired events)",
         "",
-        "| entry | killed_r0 | killed_r1 | killed_r2 | retained |",
-        "|---|---|---|---|---|",
+        "| entry | killed_r0 | killed_r1 | killed_r2 | killed_unlabeled | retained |",
+        "|---|---|---|---|---|---|",
     ]
     for fp, d in sorted(r["per_entry"].items()):
         lines.append(
-            f"| {fp} | {d['killed_r0']} | {d['killed_r1']} | {d['killed_r2']} | {d['retained']} |"
+            f"| {fp} | {d['killed_r0']} | {d['killed_r1']} | {d['killed_r2']}"
+            f" | {d['killed_unlabeled']} | {d['retained']} |"
         )
-    lines.append("")
+    if r["new_fires_by_entry"]:
+        lines += ["", "## new fires (entries entering picks only in candidate)", ""]
+        for fp, ids in sorted(r["new_fires_by_entry"].items()):
+            lines.append(
+                f"- {fp}: {len(ids)} events (ids: {', '.join(map(str, ids[:20]))})"
+            )
+    lines += [
+        "",
+        "## strata (entry × relevance × reconstructed, baseline-fired)",
+        "",
+        "| entry | rel | recon | n | killed | retained | cand_dropped | score_delta_avg |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for s in r["strata"]:
+        delta = (
+            "n/a" if s["score_delta_avg"] is None else f"{s['score_delta_avg']:+.4f}"
+        )
+        lines.append(
+            f"| {os.path.basename(s['entry'])} | {s['relevance']} | {s['reconstructed']}"
+            f" | {s['n']} | {s['killed']} | {s['retained']} | {s['n_cand_dropped']} | {delta} |"
+        )
+    lines += [
+        "",
+        "## caveats",
+        "",
+        "- excerpt-only stratum (reconstructed=False) supports direction only, not absolute scores (§B-3-iii).",
+        "- Stop queries cannot replicate the payload-only `last_assistant_message` concat of stop_checks._run.",
+        "- cand_dropped = score_cand is None: entry fell below floor or out of top-2 in candidate.",
+        "- multiple prefix matches sharing one identical full text count as a unique reconstruction; only distinct texts are ambiguous.",
+        "- miss recoveries with n_hit_sessions > 1 are flagged low_confidence (possible cross-session misattribution).",
+        "",
+    ]
     return "\n".join(lines)
 
 
 def cmd_report(args: argparse.Namespace) -> int:
-    run_dir = args.run
-    report = _build_report(run_dir)
+    run_dir = _existing_run_dir(args.run)
+    gate_entries = [
+        g.strip() for g in (args.gate_entries or "").split(",") if g.strip()
+    ]
+    report = _build_report(run_dir, gate_entries or None)
     unlabeled = report.pop("_unlabeled_new_rows")
-    with open(os.path.join(run_dir, "report.json"), "w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False, indent=2)
-    with open(os.path.join(run_dir, "report.md"), "w", encoding="utf-8") as f:
-        f.write(_render_report_md(report))
+    _write_json(os.path.join(run_dir, "report.json"), report)
+    _write_text(os.path.join(run_dir, "report.md"), _render_report_md(report))
     if unlabeled:
         _write_jsonl(os.path.join(run_dir, "unlabeled.jsonl"), unlabeled)
+    gate = report.get("gate")
+    gate_str = (
+        f"gate killed_r0={gate['killed_r0']} max_killed_r2={gate['max_killed_r2']} pass={gate['pass']}"
+        if gate
+        else "gate not evaluated"
+    )
     sys.stderr.write(
         f"report: reconstruction {report['reconstruction_rate']:.1%}, "
         f"baseline refire {report['baseline_refire_rate']:.1%}, "
-        f"killed_r0={report['total_killed_r0']} max_killed_r2={report['max_killed_r2']} "
-        f"gate_pass={report['gate_pass']}\n"
+        f"pick_changes={report['n_pick_changes']} new_fire_pairs={report['n_new_fire_pairs']}, "
+        f"{gate_str}\n"
     )
     return 0
 
 
+_EPILOG = """two-stage control/treatment recipe (shared-corpus gate, §B-3):
+  1st run (control corpus): dataset --out RUN1; rescore --run RUN1
+       --candidate-memory <dirs of entries BOTH sides must share, e.g. un-indexed project entries>
+     -> RUN1/candidate.sqlite3 is the shared control corpus.
+  2nd run (treatment): dataset --out RUN2; rescore --run RUN2
+       --baseline-db RUN1/candidate.sqlite3 --candidate-memory <dir with ONLY keyword edits>
+     -> report --run RUN2 --gate-entries <the 5 modified entries>: gate reflects keyword
+        changes alone; corpus additions are identical on both sides.
+  Sanity: rescore with no --candidate-memory/--candidate-delete is a control run and
+  must show killed 0 / new pick entries 0."""
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(prog="claude_memory_surface_analyzer")
+    ap = argparse.ArgumentParser(
+        prog="claude_memory_surface_analyzer",
+        epilog=_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p_ds = sub.add_parser("dataset")
-    p_ds.add_argument("--out")
-    p_ds.add_argument("--since")
-    p_ds.add_argument("--labels")
-    p_ds.add_argument("--hook")
+    p_ds = sub.add_parser(
+        "dataset", help="inject_log -> prefix-verified events.jsonl (§B-1)"
+    )
+    p_ds.add_argument("--out", help="new run dir under %s (must not exist)" % RUN_ROOT)
+    p_ds.add_argument(
+        "--since", help="ISO8601 with timezone; keep events at/after this"
+    )
+    p_ds.add_argument(
+        "--labels", help="judgments.json to join relevance/influence/note by id"
+    )
+    p_ds.add_argument("--hook", help="memory_surface.py path (default: deployed hook)")
     p_ds.set_defaults(func=cmd_dataset)
 
-    p_rs = sub.add_parser("rescore")
+    p_rs = sub.add_parser("rescore", help="baseline vs candidate rescoring (§B-2)")
     p_rs.add_argument("--run", required=True)
-    p_rs.add_argument("--candidate-memory", required=True)
-    p_rs.add_argument("--baseline-db")
+    p_rs.add_argument(
+        "--candidate-memory",
+        help="DIR[=PROJECT_ID],... entry dirs to upsert (omit for control run)",
+    )
+    p_rs.add_argument(
+        "--candidate-delete", help="PATH[=PROJECT_ID],... entries to delete"
+    )
+    p_rs.add_argument(
+        "--baseline-db", help="baseline DB (default: run's live snapshot)"
+    )
     p_rs.add_argument("--hook")
     p_rs.set_defaults(func=cmd_rescore)
 
-    p_ms = sub.add_parser("misses")
+    p_ms = sub.add_parser(
+        "misses", help="rescore judged misses in time windows (§B-3-ii)"
+    )
     p_ms.add_argument("--run", required=True)
     p_ms.add_argument("--judgments", required=True)
     p_ms.add_argument("--hook")
     p_ms.set_defaults(func=cmd_misses)
 
-    p_rp = sub.add_parser("report")
+    p_rp = sub.add_parser("report", help="aggregate §B-3 metrics -> report.md/json")
     p_rp.add_argument("--run", required=True)
+    p_rp.add_argument(
+        "--gate-entries", help="basenames/paths of modified entries for gate calc"
+    )
     p_rp.set_defaults(func=cmd_report)
 
     args = ap.parse_args()
     return args.func(args)
 
 
-# --- unittest ---
+# --- unittest (run: python3 -c "import importlib.machinery as m, unittest, sys; ..." — no .py suffix) ---
 
 _REPO_HOOK_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "claude_user-hooks", "memory_surface.py"
@@ -642,31 +961,156 @@ class QueryReconstructionTest(unittest.TestCase):
         self.assertIn(("UPS", "second prompt", 2), cands)
         self.assertIn(("Stop", "reply two\nmore", 2), cands)
 
-    def test_reconstruct_prefix_match_self_verifies(self):
+    def test_stop_text_keeps_empty_blocks_like_stop_checks(self):
+        entries = [
+            {"type": "user", "message": {"content": "q"}},
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "a"},
+                        {"type": "text", "text": ""},
+                        {"type": "text", "text": "b"},
+                    ]
+                },
+            },
+        ]
+        self.assertIn(("Stop", "a\n\nb", 0), _turn_candidates(entries))
+
+    def test_reconstruct_unique_match(self):
         cands = [("UPS", "hello world " * 30, 0)]
         excerpt = cands[0][1][:QUERY_EXCERPT_LEN]
-        source, text = _reconstruct(cands, excerpt)
-        self.assertEqual(source, "UPS")
-        self.assertEqual(text, cands[0][1])
+        source, text, n, ambiguous = _reconstruct(cands, excerpt)
+        self.assertEqual((source, text, n, ambiguous), ("UPS", cands[0][1], 1, False))
+
+    def test_reconstruct_duplicate_identical_text_is_unambiguous(self):
+        cands = [("UPS", "same short prompt", 0), ("UPS", "same short prompt", 2)]
+        source, text, n, ambiguous = _reconstruct(cands, "same short prompt")
+        self.assertEqual(
+            (source, text, n, ambiguous), ("UPS", "same short prompt", 2, False)
+        )
+
+    def test_reconstruct_distinct_texts_same_prefix_is_ambiguous(self):
+        base = "x" * QUERY_EXCERPT_LEN
+        cands = [("Stop", base + " tail-A", 0), ("Stop", base + " tail-B", 2)]
+        source, text, n, ambiguous = _reconstruct(cands, base)
+        self.assertEqual((source, text, ambiguous), (None, None, True))
+        self.assertEqual(n, 2)
 
     def test_reconstruct_no_match(self):
-        cands = [("UPS", "abc", 0)]
-        self.assertEqual(_reconstruct(cands, "xyz"), (None, None))
+        self.assertEqual(
+            _reconstruct([("UPS", "abc", 0)], "xyz"), (None, None, 0, False)
+        )
+
+    def test_load_transcript_flags_corrupt_lines(self):
+        import tempfile
+
+        p = os.path.join(tempfile.mkdtemp(), "t.jsonl")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write('{"type": "user", "message": {"content": "ok"}}\n')
+            f.write("{broken json\n")
+        entries, corrupt = _load_transcript(p)
+        assert entries is not None
+        self.assertEqual(len(entries), 1)
+        self.assertTrue(corrupt)
 
 
-class ScratchSafetyTest(unittest.TestCase):
-    def test_assert_scratch_path_rejects_live(self):
+class PathSafetyTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from unittest import mock
+
+        self.tmp = tempfile.mkdtemp()
+        self.fake_live = os.path.join(self.tmp, "live", "memory_index.sqlite3")
+        os.makedirs(os.path.dirname(self.fake_live))
+        sqlite3.connect(self.fake_live).close()
+        self.root = os.path.join(self.tmp, "analyzer")
+        os.makedirs(self.root)
+        mod = sys.modules[__name__]
+        for name, val in (
+            ("LIVE_DB_PATH", self.fake_live),
+            ("ALLOWED_OUTPUT_ROOTS", (self.root,)),
+        ):
+            patcher = mock.patch.object(mod, name, val)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_rejects_live_path_and_outside_root(self):
         with self.assertRaises(RuntimeError):
-            _assert_scratch_path(LIVE_DB_PATH)
-
-    def test_assert_scratch_path_allows_scratch(self):
-        _assert_scratch_path(
-            "/var/lib/claude-rag-memory/analyzer/x/db.sqlite3"
-        )  # no raise
-
-    def test_copy_baseline_db_never_targets_live(self):
+            _assert_scratch_path(self.fake_live)
         with self.assertRaises(RuntimeError):
-            _copy_baseline_db(LIVE_DB_PATH)
+            _assert_scratch_path(os.path.join(self.tmp, "elsewhere.sqlite3"))
+
+    def test_rejects_symlink_alias_of_live(self):
+        link = os.path.join(self.root, "alias.sqlite3")
+        os.symlink(self.fake_live, link)
+        with self.assertRaises(RuntimeError):
+            _assert_scratch_path(link)
+
+    def test_rejects_hardlink_alias_of_live(self):
+        hard = os.path.join(self.root, "hard.sqlite3")
+        os.link(self.fake_live, hard)
+        with self.assertRaises(RuntimeError):
+            _assert_scratch_path(hard)
+
+    def test_allows_fresh_path_under_root(self):
+        _assert_scratch_path(os.path.join(self.root, "run1", "db.sqlite3"))
+
+    def test_run_dir_is_exclusive(self):
+        out = os.path.join(self.root, "runX")
+        self.assertEqual(_create_run_dir(out), out)
+        with self.assertRaises(FileExistsError):
+            _create_run_dir(out)
+
+    def test_existing_run_dir_rejects_symlink(self):
+        real = os.path.join(self.root, "runReal")
+        os.makedirs(real)
+        link = os.path.join(self.root, "runLink")
+        os.symlink(real, link)
+        with self.assertRaises(RuntimeError):
+            _existing_run_dir(link)
+        self.assertEqual(_existing_run_dir(real), real)
+
+    def test_open_out_refuses_symlink_target(self):
+        target = os.path.join(self.root, "target.json")
+        open(target, "w").close()
+        link = os.path.join(self.root, "alias.json")
+        os.symlink(target, link)
+        with self.assertRaises(OSError):
+            _write_jsonl(link, [{"a": 1}])
+
+    def test_clone_db_fails_loudly_on_bad_source(self):
+        bad = os.path.join(self.root, "garbage.sqlite3")
+        with open(bad, "wb") as f:
+            f.write(b"this is not a sqlite database at all" * 10)
+        with self.assertRaises(RuntimeError):
+            _clone_db(bad, os.path.join(self.root, "out.sqlite3"))
+
+    def test_clone_db_leaves_live_unchanged_and_includes_wal(self):
+        import hashlib
+
+        wcon = sqlite3.connect(self.fake_live)
+        wcon.execute("PRAGMA journal_mode = WAL")
+        wcon.execute("CREATE TABLE t (v TEXT)")
+        wcon.execute("INSERT INTO t VALUES ('in-wal')")
+        wcon.commit()  # committed but not checkpointed while wcon stays open
+        st_before = os.stat(self.fake_live)
+        digest_before = hashlib.sha256(open(self.fake_live, "rb").read()).hexdigest()
+        dst = os.path.join(self.root, "clone.sqlite3")
+        _clone_db(self.fake_live, dst)
+        rcon = sqlite3.connect(dst)
+        self.assertEqual(rcon.execute("SELECT v FROM t").fetchone()[0], "in-wal")
+        rcon.close()
+        # Invariance checked while wcon is open: its own close-checkpoint is out of scope.
+        st_after = os.stat(self.fake_live)
+        self.assertEqual(
+            (st_before.st_ino, st_before.st_size, st_before.st_mtime_ns),
+            (st_after.st_ino, st_after.st_size, st_after.st_mtime_ns),
+        )
+        self.assertEqual(
+            digest_before, hashlib.sha256(open(self.fake_live, "rb").read()).hexdigest()
+        )
+        wcon.close()
 
 
 class ApproxRangeTest(unittest.TestCase):
@@ -675,34 +1119,177 @@ class ApproxRangeTest(unittest.TestCase):
         self.assertEqual(start, _iso_to_epoch("2026-07-02T19:44:28Z"))
         self.assertEqual(end, _iso_to_epoch("2026-07-02T19:46:35Z"))
 
-    def test_single_timestamp(self):
+    def test_day_crossing_end_adds_a_day(self):
+        start, end = _parse_approx_range("2026-07-02T23:59:00Z - 00:01:00Z")
+        assert start is not None and end is not None
+        self.assertEqual(end - start, 120.0)
+
+    def test_naive_timestamp_rejected(self):
+        self.assertIsNone(_iso_to_epoch("2026-07-02T19:44:28"))
+        self.assertEqual(_parse_approx_range("2026-07-02T19:44:28"), (None, None))
+
+    def test_single_timestamp_and_none(self):
         start, end = _parse_approx_range("2026-07-02T19:44:28Z")
         self.assertEqual(start, end)
-
-    def test_none(self):
         self.assertEqual(_parse_approx_range(None), (None, None))
+
+
+class ReportAggregationTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from unittest import mock
+
+        self.tmp = tempfile.mkdtemp()
+        self.run_dir = os.path.join(self.tmp, "run")
+        os.makedirs(self.run_dir)
+        patcher = mock.patch.object(
+            sys.modules[__name__], "ALLOWED_OUTPUT_ROOTS", (self.tmp,)
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        _write_jsonl(
+            os.path.join(self.run_dir, "events.jsonl"),
+            [
+                {
+                    "id": 1,
+                    "reconstructed": True,
+                    "ambiguous": False,
+                    "transcript_corrupt": False,
+                },
+                {
+                    "id": 2,
+                    "reconstructed": True,
+                    "ambiguous": False,
+                    "transcript_corrupt": False,
+                },
+                {
+                    "id": 3,
+                    "reconstructed": False,
+                    "ambiguous": True,
+                    "transcript_corrupt": False,
+                },
+            ],
+        )
+        _write_jsonl(
+            os.path.join(self.run_dir, "rescored.jsonl"),
+            [
+                # target entry: r0 kill (counts toward gate)
+                {
+                    "id": 1,
+                    "file_path": "/m/target.md",
+                    "relevance": 0,
+                    "reconstructed": True,
+                    "fired_base": True,
+                    "fired_cand": False,
+                    "score_base": 0.6,
+                    "score_cand": None,
+                    "picks_base": ["/m/target.md"],
+                    "picks_cand": ["/m/other.md"],
+                    "new_entries": ["/m/other.md"],
+                    "lost_entries": ["/m/target.md"],
+                },
+                # non-target entry: r2 kill (must NOT count toward gate)
+                {
+                    "id": 2,
+                    "file_path": "/m/unrelated.md",
+                    "relevance": 2,
+                    "reconstructed": True,
+                    "fired_base": True,
+                    "fired_cand": False,
+                    "score_base": 0.7,
+                    "score_cand": None,
+                    "picks_base": ["/m/unrelated.md"],
+                    "picks_cand": [],
+                    "new_entries": [],
+                    "lost_entries": ["/m/unrelated.md"],
+                },
+                {
+                    "id": 3,
+                    "file_path": "/m/target.md",
+                    "relevance": 2,
+                    "reconstructed": False,
+                    "fired_base": True,
+                    "fired_cand": True,
+                    "score_base": 0.62,
+                    "score_cand": 0.61,
+                    "picks_base": ["/m/target.md"],
+                    "picks_cand": ["/m/target.md"],
+                    "new_entries": [],
+                    "lost_entries": [],
+                },
+            ],
+        )
+
+    def test_gate_counts_only_target_entries(self):
+        r = _build_report(self.run_dir, ["target.md"])
+        gate = r["gate"]
+        assert gate is not None
+        self.assertEqual(gate["entries"], ["/m/target.md"])
+        self.assertEqual(gate["killed_r0"], 1)
+        self.assertEqual(gate["max_killed_r2"], 0)  # unrelated.md's r2 kill excluded
+        self.assertEqual(r["killed_all"], {"r0": 1, "r1": 0, "r2": 1, "unlabeled": 0})
+
+    def test_gate_absent_without_gate_entries(self):
+        self.assertIsNone(_build_report(self.run_dir, None)["gate"])
+
+    def test_new_fires_and_pick_changes(self):
+        r = _build_report(self.run_dir, None)
+        self.assertEqual(r["new_fires_by_entry"], {"/m/other.md": [1]})
+        self.assertEqual(r["n_pick_changes"], 2)
+
+    def test_strata_mark_cand_dropped(self):
+        r = _build_report(self.run_dir, None)
+        s = next(
+            s
+            for s in r["strata"]
+            if s["entry"] == "/m/target.md"
+            and s["relevance"] == 0
+            and s["reconstructed"]
+        )
+        self.assertEqual((s["killed"], s["n_cand_dropped"]), (1, 1))
+        s2 = next(
+            s for s in r["strata"] if s["relevance"] == 2 and not s["reconstructed"]
+        )
+        self.assertAlmostEqual(s2["score_delta_avg"], -0.01)
 
 
 @unittest.skipUnless(os.path.exists(_REPO_HOOK_PATH), "repo hook module not found")
 class EndToEndTest(unittest.TestCase):
-    """dataset -> rescore -> report over a fabricated live DB + transcript, live-write-free."""
-
     def setUp(self):
         import tempfile
+        from unittest import mock
 
         self.tmp = tempfile.mkdtemp()
         self.hook = _load_hook_module(_REPO_HOOK_PATH)
-        self.fake_live = os.path.join(self.tmp, "fake_live.sqlite3")
-        self.run_dir = os.path.join(self.tmp, "run")
-        os.makedirs(self.run_dir)
+        self.fake_live = os.path.join(self.tmp, "live", "fake_live.sqlite3")
+        os.makedirs(os.path.dirname(self.fake_live))
+        self.root = os.path.join(self.tmp, "analyzer")
+        os.makedirs(self.root)
+        self.run_dir = os.path.join(self.root, "run")
         self.mem_dir = os.path.join(self.tmp, "mem")
         os.makedirs(self.mem_dir)
+        mod = sys.modules[__name__]
+        for name, val in (
+            ("LIVE_DB_PATH", self.fake_live),
+            ("ALLOWED_OUTPUT_ROOTS", (self.root,)),
+            ("PROJECTS_DIR", os.path.join(self.tmp, "projects")),
+        ):
+            patcher = mock.patch.object(mod, name, val)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.entry_path = os.path.join(self.mem_dir, "feedback_test.md")
         with open(self.entry_path, "w", encoding="utf-8") as f:
             f.write(
                 "---\n---\nreminder: committed 前に diff を確認する\nkeywords: uncommitted, diff, commit\n"
             )
-        con = _open_scratch_con(self.hook, self.fake_live)
+        # Fixture seeding writes the FAKE live DB directly (deliberately bypasses scratch asserts).
+        prev = self.hook.DB_PATH
+        self.hook.DB_PATH = self.fake_live  # ty: ignore[unresolved-attribute]
+        try:
+            con = self.hook._connect()
+        finally:
+            self.hook.DB_PATH = prev  # ty: ignore[unresolved-attribute]
+        assert con is not None
         self.hook._upsert_entry(con, self.entry_path, None)
         self.query_text = "uncommitted の diff を確認してから commit します。" * 3
         con.execute(
@@ -719,19 +1306,11 @@ class EndToEndTest(unittest.TestCase):
         )
         con.commit()
         con.close()
-
-        proj_dir = os.path.join(PROJECTS_DIR, "-tmp-proj-does-not-exist")
-        self.proj_dir_patch = (
-            proj_dir  # unused directly; transcript path built via mock below
-        )
-
-    def test_dataset_rescore_report_roundtrip(self):
-        from unittest import mock
-
         transcript_dir = os.path.join(self.tmp, "projects", "-tmp-proj")
         os.makedirs(transcript_dir)
-        transcript_path = os.path.join(transcript_dir, "sess-1.jsonl")
-        with open(transcript_path, "w", encoding="utf-8") as f:
+        with open(
+            os.path.join(transcript_dir, "sess-1.jsonl"), "w", encoding="utf-8"
+        ) as f:
             f.write(
                 json.dumps({"type": "user", "message": {"content": self.query_text}})
                 + "\n"
@@ -746,75 +1325,130 @@ class EndToEndTest(unittest.TestCase):
                 + "\n"
             )
 
-        mod = sys.modules[__name__]
-        with (
-            mock.patch.object(mod, "LIVE_DB_PATH", self.fake_live),
-            mock.patch.object(mod, "PROJECTS_DIR", os.path.join(self.tmp, "projects")),
-        ):
-            ds_args = argparse.Namespace(
+    def _dataset(self):
+        return cmd_dataset(
+            argparse.Namespace(
                 out=self.run_dir, since=None, labels=None, hook=_REPO_HOOK_PATH
             )
-            self.assertEqual(cmd_dataset(ds_args), 0)
-            events = _read_jsonl(os.path.join(self.run_dir, "events.jsonl"))
-            self.assertEqual(len(events), 1)
-            self.assertTrue(events[0]["reconstructed"])
-            self.assertEqual(events[0]["query"], self.query_text)
+        )
 
-            rs_args = argparse.Namespace(
+    def _rescore(self, candidate_memory=None, candidate_delete=None):
+        return cmd_rescore(
+            argparse.Namespace(
                 run=self.run_dir,
-                candidate_memory=self.mem_dir,
+                candidate_memory=candidate_memory,
+                candidate_delete=candidate_delete,
                 baseline_db=None,
                 hook=_REPO_HOOK_PATH,
             )
-            self.assertEqual(cmd_rescore(rs_args), 0)
-            rescored = _read_jsonl(os.path.join(self.run_dir, "rescored.jsonl"))
-            self.assertEqual(len(rescored), 1)
-            self.assertTrue(rescored[0]["fired_base"])
-            self.assertTrue(rescored[0]["fired_cand"])  # same entry, unchanged keywords
+        )
 
-            rp_args = argparse.Namespace(run=self.run_dir)
-            self.assertEqual(cmd_report(rp_args), 0)
-            report = json.loads(open(os.path.join(self.run_dir, "report.json")).read())
-            self.assertEqual(report["n_baseline_fired"], 1)
-            self.assertEqual(report["reconstruction_rate"], 1.0)
+    def test_control_run_is_exactly_zero_change(self):
+        # Health line: identical clones -> no kills, no new fires, no pick changes.
+        self.assertEqual(self._dataset(), 0)
+        self.assertEqual(self._rescore(), 0)
+        self.assertEqual(
+            cmd_report(argparse.Namespace(run=self.run_dir, gate_entries=None)), 0
+        )
+        report = json.load(open(os.path.join(self.run_dir, "report.json")))
+        self.assertEqual(
+            report["killed_all"], {"r0": 0, "r1": 0, "r2": 0, "unlabeled": 0}
+        )
+        self.assertEqual(report["n_new_fire_pairs"], 0)
+        self.assertEqual(report["n_pick_changes"], 0)
+        self.assertEqual(report["reconstruction_rate"], 1.0)
+        self.assertEqual(report["baseline_refire_rate"], 1.0)
+        meta = json.load(open(os.path.join(self.run_dir, "rescore_meta.json")))
+        self.assertEqual(meta["baseline_entries"], meta["candidate_entries"])
 
-    def test_rescore_detects_kill_after_keyword_narrowing(self):
-        from unittest import mock
+    def test_keyword_narrowing_kill_detected(self):
+        self.assertEqual(self._dataset(), 0)
+        with open(self.entry_path, "w", encoding="utf-8") as f:
+            f.write("---\n---\nreminder: 全く別の話題\nkeywords: 無関係\n")
+        self.assertEqual(self._rescore(candidate_memory=self.mem_dir), 0)
+        rescored = _read_jsonl(os.path.join(self.run_dir, "rescored.jsonl"))
+        self.assertTrue(rescored[0]["fired_base"])
+        self.assertFalse(rescored[0]["fired_cand"])
 
-        transcript_dir = os.path.join(self.tmp, "projects", "-tmp-proj")
-        os.makedirs(transcript_dir, exist_ok=True)
-        transcript_path = os.path.join(transcript_dir, "sess-1.jsonl")
-        with open(transcript_path, "w", encoding="utf-8") as f:
-            f.write(
-                json.dumps({"type": "user", "message": {"content": self.query_text}})
-                + "\n"
-            )
+    def test_delete_scenario_removes_entry(self):
+        self.assertEqual(self._dataset(), 0)
+        self.assertEqual(self._rescore(candidate_delete=self.entry_path), 0)
+        rescored = _read_jsonl(os.path.join(self.run_dir, "rescored.jsonl"))
+        self.assertTrue(rescored[0]["fired_base"])
+        self.assertFalse(rescored[0]["fired_cand"])
+        meta = json.load(open(os.path.join(self.run_dir, "rescore_meta.json")))
+        self.assertEqual(meta["n_deletes"], 1)
 
-        mod = sys.modules[__name__]
-        with (
-            mock.patch.object(mod, "LIVE_DB_PATH", self.fake_live),
-            mock.patch.object(mod, "PROJECTS_DIR", os.path.join(self.tmp, "projects")),
-        ):
-            cmd_dataset(
-                argparse.Namespace(
-                    out=self.run_dir, since=None, labels=None, hook=_REPO_HOOK_PATH
+    def test_delete_of_unindexed_entry_errors(self):
+        self.assertEqual(self._dataset(), 0)
+        self.assertEqual(
+            self._rescore(candidate_delete="/nonexistent/feedback_x.md"), 1
+        )
+
+    def test_empty_candidate_dir_errors(self):
+        self.assertEqual(self._dataset(), 0)
+        empty = os.path.join(self.tmp, "emptymem")
+        os.makedirs(empty)
+        self.assertEqual(self._rescore(candidate_memory=empty), 1)
+
+    def test_miss_multi_session_hits_are_low_confidence(self):
+        self.assertEqual(self._dataset(), 0)
+        self.assertEqual(self._rescore(), 0)
+        proj = os.path.join(self.tmp, "projects", "-tmp-proj")
+        for sid in ("sess-A", "sess-B"):
+            with open(os.path.join(proj, sid + ".jsonl"), "w", encoding="utf-8") as f:
+                f.write(
+                    json.dumps(
+                        {
+                            "type": "user",
+                            "timestamp": "2026-07-02T19:45:00Z",
+                            "message": {"content": self.query_text},
+                        }
+                    )
+                    + "\n"
                 )
+        judgments_path = os.path.join(self.tmp, "judgments.json")
+        with open(judgments_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "misses": [
+                        {
+                            "approx_time": "2026-07-02T19:44:28Z - 19:46:35Z",
+                            "catalog_file": self.entry_path,
+                            "why": "test",
+                        }
+                    ]
+                },
+                f,
             )
-            # candidate dir has an entry at the SAME file_path but unrelated keywords -> should not fire.
-            same_path_dir = os.path.dirname(self.entry_path)
-            with open(self.entry_path, "w", encoding="utf-8") as f:
-                f.write("---\n---\nreminder: 全く別の話題\nkeywords: 無関係\n")
-            cmd_rescore(
+        self.assertEqual(
+            cmd_misses(
                 argparse.Namespace(
-                    run=self.run_dir,
-                    candidate_memory=same_path_dir,
-                    baseline_db=None,
-                    hook=_REPO_HOOK_PATH,
+                    run=self.run_dir, judgments=judgments_path, hook=_REPO_HOOK_PATH
                 )
-            )
-            rescored = _read_jsonl(os.path.join(self.run_dir, "rescored.jsonl"))
-            self.assertTrue(rescored[0]["fired_base"])
-            self.assertFalse(rescored[0]["fired_cand"])
+            ),
+            0,
+        )
+        rows = _read_jsonl(os.path.join(self.run_dir, "misses.jsonl"))
+        self.assertTrue(rows[0]["fired_cand"])
+        self.assertEqual(rows[0]["n_hit_sessions"], 2)
+        self.assertTrue(rows[0]["low_confidence"])
+        self.assertTrue(all(h["ts"] and h["session"] for h in rows[0]["hits"]))
+
+    def test_upsert_respects_project_id(self):
+        self.assertEqual(self._dataset(), 0)
+        proj_dir = os.path.join(self.tmp, "projmem")
+        os.makedirs(proj_dir)
+        with open(
+            os.path.join(proj_dir, "feedback_proj.md"), "w", encoding="utf-8"
+        ) as f:
+            f.write("---\n---\nreminder: project entry\nkeywords: projonly\n")
+        self.assertEqual(self._rescore(candidate_memory=f"{proj_dir}=-some-proj"), 0)
+        con = sqlite3.connect(os.path.join(self.run_dir, "candidate.sqlite3"))
+        rows = con.execute("SELECT file_path, project_id FROM entries_fts").fetchall()
+        con.close()
+        pids = [pid for fp, pid in rows if fp.endswith("feedback_proj.md")]
+        self.assertEqual(pids, ["-some-proj"])
 
 
 if __name__ == "__main__":
