@@ -20,9 +20,20 @@ Goal: UserPromptSubmit (`memory_surface.py`) と Stop (`stop_checks.py` の RAG 
 Exit Criteria:
 - [x] surface 実績 dataset 化 — inject_log 306 行から実 296 event / 45 session を抽出 (L4 sentinel・合成 session 除外)
 - [x] relevance 判定と miss 推定 — LLM judge 46 体で全 296 event 判定 (strict precision 50%、UPS 40% / Stop 52%) + miss 63 件収集。判定 raw は scratchpad judgments.json
-- [ ] 数値 + 誤り傾向 + 改善候補を分析レポートにまとめ共有・方針合意
+- [x] 数値 + 誤り傾向 + 改善候補を分析レポートにまとめ共有・方針合意 — 2026-07-10 ユーザー承認: 案1 rebuild 実行 / 案2 上位5 entry 修正+バックテスト / 案3 改善計画は fable subagent (xhigh) で作成 / 案5 閾値は現状維持を記録。加えて再測定コマンド `/usr/local/bin/claude_memory_surface_analyzer` の実装指示
 
-Work file: 分析レポート = `drafts/memory-surface-analysis.md` (改善候補 5 案の優先順位付き。即効候補: 未 index の project entry 18 件を --rebuild 登録)
+Work file: 分析レポート = `drafts/memory-surface-analysis.md` (改善候補 5 案の優先順位付き)
+
+### memory surface 改善実装
+
+Goal: 分析レポート (`drafts/memory-surface-analysis.md`) の合意済み方針を実装する — project entry の index 登録、noise 上位 entry の keyword 修正 + バックテストによる効果測定、fable 作成の改善計画、再測定コマンドの実装・インストール。
+
+Exit Criteria:
+- [ ] 未 index の project entry (terminal-configs 3 + genai 15) を --rebuild 登録し、index 件数 23→41 を確認
+- [ ] noise 上位 5 entry の keyword 修正 + バックテストで precision/recall 改善を数値実証
+- [ ] 改善計画 (fable subagent, effort xhigh) を作成しレビュー・合意
+- [ ] `claude_memory_surface_analyzer` を canonical `files/` に実装し `/usr/local/bin/` へ install・commit (再バックテストが 1 コマンドで回ること)
+- [ ] 閾値現状維持の結論を記録として commit (分析レポートの commit で充足)
 
 ## Medium
 
