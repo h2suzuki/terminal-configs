@@ -21,8 +21,8 @@ Goal: (1) claude 起動/resume 直後は SessionStart hook の terminalSequence 
 
 Exit Criteria:
 - [x] (2) の原因確定 (2026-07-10 実 shell で PS1 に `\e]0;` 前置が残存し、printf TITLE-TEST → prompt 再描画で即復帰を H.S. が観測。 shell 正常・cd 追従も機能、昨夜の観測は非再現で close)
-- [ ] (1) が CLI 側の適用タイミング問題かを切り分け (SessionStart で state file は書かれるが端末が変わらない、の再現確認)
-- [ ] 対応方針を H.S. と合意 (許容 / hook 側工夫 / 上流 issue / shell 設定修正)
+- [x] (1) が CLI 側の適用タイミング問題かを切り分け (2026-07-10 resume 直後: hook 発火・state 書込あり・端末未変化、初回プロンプトで回復を観測。 CLI 起動直後の terminalSequence 未適用と判定)
+- [x] 対応方針決定 (2026-07-10 宣言: 許容で close、上流 issue は立てない。 declare-and-proceed による default 判断、事後 redirect 可)
 
 ### skill_reminder_gate.py が subagent の Edit/Write を deny し続ける
 
