@@ -68,6 +68,14 @@ Combined Stop hook for org-managed Claude Code:
     ownership ぼかしする発話を warn。 attribute-existing-issues skill の機械 proxy。
     blur phrase と wrong-marker の 60 字近接 pairing で FP 抑制 (v1 observe-then-tighten)。
 
+  edited-executable-not-run (warning-only, exit 0):
+    実行可能 artifact を Edit/Write して done-claim したが、 同 turn の Bash で
+    該当 file を一度も実行/テストしていなければ warn。
+
+  ui-edit-without-screenshot (warning-only, exit 0):
+    UI artifact を Edit/Write して done-claim したが、 同 turn に screenshot 系
+    tool_use が無ければ warn。
+
   turn-marker (bonus, exit 0 only):
     enforcement が pass した turn 終了時のみ、 per-turn marker (時刻 / Turn #N / context
     size / User Prompt からの経過) を JSON `systemMessage` で USER に表示 (Claude には非可視)。
@@ -351,6 +359,15 @@ HONEST_WRONG_RE = re.compile(
     re.IGNORECASE,
 )
 
+# --- Pattern: post-edit verification (warning, no block) ---
+DONE_CLAIM_RE = re.compile(r"(実装|修正|対応)?完了|\bdone\b|\blanded\b|着地", re.IGNORECASE)
+EXECUTABLE_ARTIFACT_RE = re.compile(
+    r"\.(py|sh)$|/hooks/|/usr/local/bin/|settings.*\.json$", re.IGNORECASE
+)
+UI_ARTIFACT_RE = re.compile(
+    r"\.(css|scss|tsx|jsx|vue|svelte|html)$", re.IGNORECASE
+)
+
 # --- Pattern: known-possible-denial (block, no pairing) ---
 # 既知で可能と判明済みの操作を「できない/不可」と断定したら却下を促す。 op-keyword と
 # 不可語が同一行で共起した時のみ block (verify し直させず既知 method を実行させる)。
@@ -455,8 +472,10 @@ def _parse_ts(ts) -> float | None:
 
 def _current_turn(
     entries: list[dict],
-) -> tuple[str, set[str], list[str], bool, float | None]:
-    """Return (assistant_text, tool_names, tool_paths, has_git_verify, prompt_epoch) for the turn after the most recent string-content user entry; empty values if none (avoids fail-broad whole-transcript scan)."""
+) -> tuple[
+    str, str, set[str], list[str], list[str], list[str], bool, float | None
+]:
+    """Return current-turn text, final text, tools, paths, commands, git state, and prompt time."""
     start_idx = -1
     prompt_epoch: float | None = None
     for i in range(len(entries) - 1, -1, -1):
@@ -469,11 +488,14 @@ def _current_turn(
             prompt_epoch = _parse_ts(obj.get("timestamp"))
             break
     if start_idx == -1:
-        return "", set(), [], False, None
+        return "", "", set(), [], [], [], False, None
 
     text_parts: list[str] = []
+    final_text = ""
     tool_names: set[str] = set()
     tool_paths: list[str] = []
+    edited_paths: list[str] = []
+    bash_commands: list[str] = []
     has_git_verify = False
 
     for obj in entries[start_idx:]:
@@ -488,7 +510,8 @@ def _current_turn(
                 continue
             btype = block.get("type")
             if btype == "text":
-                text_parts.append(str(block.get("text", "")))
+                final_text = str(block.get("text", ""))
+                text_parts.append(final_text)
             elif btype == "tool_use":
                 name = str(block.get("name", ""))
                 if name:
@@ -500,12 +523,40 @@ def _current_turn(
                     fp = inp.get("file_path") or inp.get("notebook_path")
                     if isinstance(fp, str):
                         tool_paths.append(fp)
+                        if name in {"Edit", "Write"}:
+                            edited_paths.append(fp)
                 if name == "Bash":
                     cmd = inp.get("command", "")
-                    if isinstance(cmd, str) and GIT_VERIFY_RE.search(cmd):
-                        has_git_verify = True
+                    if isinstance(cmd, str):
+                        bash_commands.append(cmd)
+                        if GIT_VERIFY_RE.search(cmd):
+                            has_git_verify = True
 
-    return "\n".join(text_parts), tool_names, tool_paths, has_git_verify, prompt_epoch
+    return (
+        "\n".join(text_parts),
+        final_text,
+        tool_names,
+        tool_paths,
+        edited_paths,
+        bash_commands,
+        has_git_verify,
+        prompt_epoch,
+    )
+
+
+def _artifact_was_run(path: str, bash_commands: list[str]) -> bool:
+    basename = os.path.basename(path).lower()
+    module = os.path.splitext(basename)[0]
+    for command in bash_commands:
+        lowered = command.lower()
+        if basename in lowered:
+            return True
+        module_named = module and re.search(
+            rf"(?<![\w]){re.escape(module)}(?![\w])", lowered
+        )
+        if re.search(r"\b(unittest|pytest)\b", lowered) and module_named:
+            return True
+    return False
 
 
 def _declare_proceed_active(entries: list[dict], now: float) -> bool:
@@ -562,8 +613,11 @@ def _known_possible_denial(text: str) -> str | None:
 
 def _check(
     text: str,
+    final_text: str,
     tool_names: set[str],
     tool_paths: list[str],
+    edited_paths: list[str],
+    bash_commands: list[str],
     has_git_verify: bool,
     declare_active: bool,
 ) -> tuple[int, list[str], list[str]]:
@@ -723,6 +777,28 @@ def _check(
                 f"pre-existing pattern に対する自分の行為を honest に名指してください。"
             )
 
+    # edited-executable-not-run (warning-only): done claim after an unobserved edit
+    if DONE_CLAIM_RE.search(final_text):
+        executable_paths = [p for p in edited_paths if EXECUTABLE_ARTIFACT_RE.search(p)]
+        unrun_paths = [p for p in executable_paths if not _artifact_was_run(p, bash_commands)]
+        if unrun_paths:
+            warnings.append(
+                f"edited-executable-not-run: {', '.join(os.path.basename(p) for p in unrun_paths)} "
+                f"を Edit/Write して done-claim していますが、 同 turn の Bash で実行した "
+                f"記録がありません。 実行して結果を観測してから done を出してください。"
+            )
+
+        ui_edited = any(UI_ARTIFACT_RE.search(p) for p in edited_paths)
+        screenshot_used = "browser_take_screenshot" in tool_names or any(
+            "screenshot" in command.lower() for command in bash_commands
+        )
+        if ui_edited and not screenshot_used:
+            warnings.append(
+                "ui-edit-without-screenshot: UI file を Edit/Write して done-claim していますが、 "
+                "同 turn に screenshot の記録がありません。 screenshot で表示を観測してから "
+                "done を出してください。"
+            )
+
     exit_code = 2 if blocking else 0
     return exit_code, warnings, blocking
 
@@ -737,18 +813,35 @@ def _run(payload: dict) -> tuple[int, float | None, str]:
     entries = _load_tail(transcript_path)
     if not entries:
         return 0, None, ""
-    text, tool_names, tool_paths, has_git_verify, prompt_epoch = _current_turn(entries)
+    (
+        text,
+        final_text,
+        tool_names,
+        tool_paths,
+        edited_paths,
+        bash_commands,
+        has_git_verify,
+        prompt_epoch,
+    ) = _current_turn(entries)
     # Claude Code が Stop hook を invoke する時点で最新 assistant text はまだ transcript に
     # flush されていない (v2.1.47+ で payload に last_assistant_message が提供されたのはこの
     # gap を埋めるため)。 transcript 由来 text に concat して全 family の取りこぼしを防ぐ。
     last_msg = payload.get("last_assistant_message")
     if isinstance(last_msg, str) and last_msg:
         text = (text + "\n" + last_msg) if text else last_msg
+        final_text = last_msg
     if not text:
         return 0, prompt_epoch, ""
     declare_active = _declare_proceed_active(entries, time.time())
     exit_code, warnings, blocking = _check(
-        text, tool_names, tool_paths, has_git_verify, declare_active
+        text,
+        final_text,
+        tool_names,
+        tool_paths,
+        edited_paths,
+        bash_commands,
+        has_git_verify,
+        declare_active,
     )
     # advise-once: a stop_hook_active retry never re-blocks — demote to pass (see docstring turn-marker / Exit).
     if exit_code == 2 and payload.get("stop_hook_active"):
@@ -1024,16 +1117,21 @@ class TurnMarkerTest(unittest.TestCase):
             self.assertIsNone(_parse_ts(bad))
 
     def test_current_turn_returns_prompt_epoch(self):
-        text, _n, _p, _g, pe = _current_turn([self._user(), self._asst("done.")])
+        text, final, _n, _p, _e, _b, _g, pe = _current_turn(
+            [self._user(), self._asst("done.")]
+        )
         self.assertEqual(text, "done.")
+        self.assertEqual(final, "done.")
         self.assertEqual(pe, _parse_ts(self.TS))
         no_ts = [{"type": "user", "message": {"content": "x"}}, self._asst("y")]
-        self.assertIsNone(_current_turn(no_ts)[4])
+        self.assertIsNone(_current_turn(no_ts)[7])
         tool_only = [
             {"type": "user", "message": {"content": [{"type": "tool_result"}]}},
             self._asst("y"),
         ]
-        self.assertEqual(_current_turn(tool_only), ("", set(), [], False, None))
+        self.assertEqual(
+            _current_turn(tool_only), ("", "", set(), [], [], [], False, None)
+        )
 
     def test_load_tail_matches_whole_transcript(self):
         u1, a1 = self._user(content="q1"), self._asst("a1")
@@ -1113,8 +1211,24 @@ class EnforcementFamilyTest(unittest.TestCase):
     """H3 evaluative regression + H4 confirm/routing gate. Run: python3 -m unittest stop_checks"""
 
     @staticmethod
-    def _c(text, tools=None, declare_active=False):
-        return _check(text, set(tools or []), [], False, declare_active)
+    def _c(
+        text,
+        tools=None,
+        paths=None,
+        commands=None,
+        final_text=None,
+        declare_active=False,
+    ):
+        return _check(
+            text,
+            text if final_text is None else final_text,
+            set(tools or []),
+            list(paths or []),
+            list(paths or []),
+            list(commands or []),
+            False,
+            declare_active,
+        )
 
     def _blk(self, *a, **k):
         return self._c(*a, **k)[2]
@@ -1228,6 +1342,73 @@ class EnforcementFamilyTest(unittest.TestCase):
     def test_honest_attribution_proximity_bound(self):
         far = "既存のパターンを採用した。" + ("あ" * 70) + "別件で誤りがあった"
         self.assertFalse(any("honest-attribution" in x for x in self._warn(far)))
+
+    # --- edited-executable-not-run (warning-only) ---
+    def test_edited_executable_not_run_warns(self):
+        warnings = self._warn("実装完了", paths=["/project/hooks/check.py"])
+        self.assertTrue(any("edited-executable-not-run" in x for x in warnings))
+
+    def test_edited_executable_not_run_passes_after_module_test(self):
+        warnings = self._warn(
+            "done",
+            paths=["/project/hooks/check.py"],
+            commands=["python3 -m unittest check"],
+        )
+        self.assertFalse(any("edited-executable-not-run" in x for x in warnings))
+
+    def test_edited_executable_not_run_active_retry_is_nonblocking(self):
+        code, stderr = self._run_warning_retry("/project/hooks/check.py")
+        self.assertEqual(code, 0)
+        self.assertIn("edited-executable-not-run", stderr)
+
+    # --- ui-edit-without-screenshot (warning-only) ---
+    def test_ui_edit_without_screenshot_warns(self):
+        warnings = self._warn("対応完了", paths=["/project/app.tsx"])
+        self.assertTrue(any("ui-edit-without-screenshot" in x for x in warnings))
+
+    def test_ui_edit_without_screenshot_passes_with_browser_capture(self):
+        warnings = self._warn(
+            "landed", paths=["/project/app.tsx"], tools=["browser_take_screenshot"]
+        )
+        self.assertFalse(any("ui-edit-without-screenshot" in x for x in warnings))
+
+    def test_ui_edit_without_screenshot_active_retry_is_nonblocking(self):
+        code, stderr = self._run_warning_retry("/project/app.tsx")
+        self.assertEqual(code, 0)
+        self.assertIn("ui-edit-without-screenshot", stderr)
+
+    @staticmethod
+    def _run_warning_retry(path):
+        import io
+        import tempfile
+        from contextlib import redirect_stderr
+
+        entries = [
+            {"type": "user", "message": {"content": "implement"}},
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "Edit",
+                            "input": {"file_path": path},
+                        },
+                        {"type": "text", "text": "実装完了"},
+                    ]
+                },
+            },
+        ]
+        transcript = os.path.join(tempfile.mkdtemp(), "turn.jsonl")
+        with open(transcript, "w", encoding="utf-8") as f:
+            for entry in entries:
+                f.write(json.dumps(entry) + "\n")
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            code = _run(
+                {"transcript_path": transcript, "stop_hook_active": True}
+            )[0]
+        return code, stderr.getvalue()
 
     # --- intent-without-task ---
     def test_intent_declare_alone_blocks(self):

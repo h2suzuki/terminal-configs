@@ -18,6 +18,7 @@
         "matcher": "Bash",
         "hooks": [
           { "type": "command", "command": "/etc/claude-code/hooks/avoid_cd.py" },
+          { "type": "command", "command": "/etc/claude-code/hooks/sandbox_server_gate.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/tmpdir_scratch_gate.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/deny_compound_git_add.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/deny_compound_git_commit.py" },

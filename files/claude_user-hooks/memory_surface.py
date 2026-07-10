@@ -95,11 +95,12 @@ _UNK_ID = 1
 _VITERBI_UNK_SCORE = -20.0  # below any real token score; spm uses min_score - 10
 _SQL_VAR_CHUNK = 500
 
-# --- L4: concern / correction injector (UserPromptSubmit) ---
-# Raises (not enforces) illuminate-not-reassure / memory-routing via tight prompt phrases (precision>recall — noisy L4 is net-negative; per-channel throttle).
+# --- L4: concern / correction / pixel injector (UserPromptSubmit) ---
+# Raises (not enforces) illuminate-not-reassure / memory-routing / pixel-diff via tight prompt phrases (precision>recall — noisy L4 is net-negative; per-channel throttle).
 # 間違 INTENTIONALLY excluded: fires on generic "X is wrong" (code bugs / rule-authoring prose), not assistant-correction — dominant FP.
 _L4_CONCERN_KEY = "<L4-concern>"
 _L4_CORRECTION_KEY = "<L4-correction>"
+_L4_PIXEL_KEY = "<L4-pixel-diff>"
 _CONCERN_REMINDER = (
     "<concern-detected>懸念/不安が表明された可能性。 illuminate-not-reassure: "
     "「大丈夫/安全」で覆わず、 (1)核心を言い直し (2)起こり得る可能性を本気で深掘り "
@@ -128,6 +129,20 @@ _CORRECTION_RES = [
         r"(?:そう|それ)じゃ(?:なく|ない)",
         r"勝手に",
         r"(?:前|さっき|何度|毎回|以前)(?:に)?も(?:言|いっ|指摘|伝え)",
+    )
+]
+_PIXEL_REMINDER = (
+    "<pixel-diff-detected>1px/見た目ずれの可能性。 個別修正でなく mock/実装両方の "
+    "computed style を機械 dump して diff、再 dump 0 件で収束証明。 詳細: "
+    "~/.claude/memory/feedback_pixel_perfect_computed_style_diff.md</pixel-diff-detected>"
+)
+_PIXEL_RES = [
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"(?<!\d)1\s?px(?![a-z0-9])",  # 11px/21px/1pxel は除外、和文接続 (1pxずれ) は許可
+        r"ピクセル(?:パーフェクト)?",
+        r"ずれて(?:い|る|ます)",
+        r"見た目が(?:ずれ|違|ちが)",  # §C-5 明記 trigger「見た目がずれ」(語尾なし) を含む
     )
 ]
 
@@ -737,7 +752,7 @@ def _fuse(bm_score: float | None, cos: float) -> float:
 
 
 def _concern_inject(payload: dict) -> str | None:
-    # Raise the two user-prompt-triggered skills; throttled per channel sentinel.
+    # Raise the three prompt-triggered channels (concern/correction/pixel); throttled per channel sentinel.
     prompt = payload.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         return None
@@ -751,6 +766,8 @@ def _concern_inject(payload: dict) -> str | None:
         hits.append((_L4_CONCERN_KEY, _CONCERN_REMINDER))
     if any(r.search(prompt) for r in _CORRECTION_RES):
         hits.append((_L4_CORRECTION_KEY, _CORRECTION_REMINDER))
+    if any(r.search(prompt) for r in _PIXEL_RES):
+        hits.append((_L4_PIXEL_KEY, _PIXEL_REMINDER))
     if not hits:
         return None
     try:
@@ -776,7 +793,7 @@ def _concern_inject(payload: dict) -> str | None:
 
 
 def _main_query() -> int:
-    """UserPromptSubmit handler — always exit 0 (fail-open). Turn marker + memory entry ride BOTH channels (TUI may drop UPS systemMessage, an undocumented CC gap, so additionalContext is the reliable copy); L4 concern/correction rides additionalContext only — a private model nudge."""
+    """UserPromptSubmit handler — always exit 0 (fail-open). Turn marker + memory entry ride BOTH channels (TUI may drop UPS systemMessage, an undocumented CC gap, so additionalContext is the reliable copy); L4 concern/correction/pixel rides additionalContext only — a private model nudge."""
     try:
         payload = json.loads(sys.stdin.read() or "{}")
     except Exception:
@@ -1068,6 +1085,89 @@ class SurfaceCoreTest(unittest.TestCase):
             self.assertEqual(surface_for_text("", "s", "proj"), [])
             out = surface_for_text("deploy repo 放置", "s", "proj", 1)
             self.assertEqual([p[0] for p in out], ["/m/a.md"])
+
+
+class PixelL4InjectTest(unittest.TestCase):
+    """_concern_inject pixel channel: fire / throttle / no-fire. Run: python3 -m unittest memory_surface"""
+
+    @staticmethod
+    def _tmp_db():
+        import tempfile
+
+        return os.path.join(tempfile.mkdtemp(), "idx.sqlite3")
+
+    # §C-5 明記 trigger 全部 + regex 各 branch (table-driven)
+    _POSITIVE = (
+        "1pxずれの知見についても気をつけましょう",
+        "1px 問題かも",
+        "1 px の差があります",
+        "見た目がずれ",
+        "見た目が違う気がします",
+        "ピクセルパーフェクトにしたい",
+        "ピクセル単位で確認して",
+        "ヘッダーがずれています",
+    )
+    # 数値部分一致 (11px/21px)・英字連結・無関係 prompt は非発火
+    _NEGATIVE = (
+        "margin を 11px にしてください",
+        "padding: 21px で統一",
+        "1pxel という単語",
+        "テストを追加してください",
+    )
+
+    def test_fires_on_all_spec_triggers(self):
+        from unittest import mock
+
+        mod = sys.modules[__name__]
+        for i, prompt in enumerate(self._POSITIVE):
+            with mock.patch.object(mod, "DB_PATH", self._tmp_db()):
+                out = _concern_inject({"prompt": prompt, "session_id": "s%d" % i})
+                assert out is not None, prompt
+                self.assertIn("pixel-diff-detected", out)
+
+    def test_no_fire_on_negatives(self):
+        from unittest import mock
+
+        mod = sys.modules[__name__]
+        with mock.patch.object(mod, "DB_PATH", self._tmp_db()):
+            for prompt in self._NEGATIVE:
+                self.assertIsNone(
+                    _concern_inject({"prompt": prompt, "session_id": "s1"}), prompt
+                )
+
+    def test_throttled_same_session_and_sentinel_logged(self):
+        from unittest import mock
+
+        mod = sys.modules[__name__]
+        with mock.patch.object(mod, "DB_PATH", self._tmp_db()):
+            payload = {"prompt": "見た目がずれています", "session_id": "s1"}
+            self.assertIsNotNone(_concern_inject(payload))
+            self.assertIsNone(_concern_inject(payload))  # same-session throttle
+            con = _connect()
+            assert con is not None
+            try:
+                rows = con.execute(
+                    "SELECT file_path, session_id FROM inject_log"
+                ).fetchall()
+            finally:
+                con.close()
+            self.assertEqual(rows, [(_L4_PIXEL_KEY, "s1")])  # sentinel key 記録
+
+    def test_channels_are_independent(self):
+        from unittest import mock
+
+        mod = sys.modules[__name__]
+        with mock.patch.object(mod, "DB_PATH", self._tmp_db()):
+            # pixel-only prompt は concern/correction を出さない
+            out = _concern_inject({"prompt": "1px 問題かも", "session_id": "s1"})
+            assert out is not None
+            self.assertNotIn("concern-detected", out)
+            self.assertNotIn("correction-detected", out)
+            # pixel throttle 後も concern channel は独立に発火する
+            out2 = _concern_inject({"prompt": "この変更、心配です", "session_id": "s1"})
+            assert out2 is not None
+            self.assertIn("concern-detected", out2)
+            self.assertNotIn("pixel-diff-detected", out2)
 
 
 if __name__ == "__main__":
