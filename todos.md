@@ -22,9 +22,11 @@ Goal: subagent セッションで skill invoke を検出できず Edit/Write が
 Note: stale-transcript freshness guard (commit 5a0d1ff, 2026-07-10 deploy 済) では直らないことを deploy 後の live subagent 再演で確認済み — invoke 直後の Edit が同一 deny 文言で拒否された。つまり subagent 変種は「transcript は fresh (または timestamp 無しで fresh 扱い) だが Skill invoke が gate から見えない」経路であり、staleness とは別原因。
 
 Exit Criteria:
-- [ ] 原因確定 (subagent transcript の構造と gate の skill 検出・turn boundary 判定の不整合を実測)
+- [x] 原因確定 — H1: Claude Code 2.1.206 が subagent 内 PreToolUse payload の `transcript_path` に親 session の path を渡す (バイナリの `Cf(o,void 0,n)` → `transcript_path:QI(n)` を実抽出、replay で親=DENY/子=ALLOW を再現、Claude が独立 spot-check 済)。gate 側の構造不整合 (H2)・flush 遅延 (H3) は却下
 - [ ] 修正 (subagent では skip する等) を canonical `files/claude_managed-hooks/skill_reminder_gate.py` に実装し deploy・commit
 - [ ] subagent から Edit が通ることを実証
+
+Work file: 診断レポート = `drafts/subagent-gate-diagnosis.md` (実験ログ verbatim + 修正方針 5 案のコスト評価)
 
 ### stop_checks.py の intent-without-task を Task tools 不在セッションで満たせない (要相談)
 
