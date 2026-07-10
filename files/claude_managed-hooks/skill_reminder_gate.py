@@ -36,6 +36,7 @@ gate flow:
   required が空            → ALLOW (skill-less file。transcript 非読込)
   active = 現 turn かつ直近 5 分以内の Skill invoke 集合 (現 turn を後方 1 つ読み ts で drop)
   active 判定不能 (corrupted) → ALLOW (fail-open)
+  transcript stale (newest entry ts < now-120s) → ALLOW (fail-open; resume/subagent)
   required ⊆ active        → ALLOW
   else                    → DENY「<missing> を invoke してから編集」
 
@@ -81,6 +82,12 @@ deny 方式・fail-open
 deny は JSON permissionDecision: "deny" (exit 0) — hook bug が誤って tool を
 block しない。全例外を握り潰し exit 0 (fail-open)。transcript が読めない /
 boundary 不在のときも ALLOW に倒す。
+Stale transcript (newest entry ts older than TRANSCRIPT_FRESH_SECONDS) also falls
+to ALLOW: resumed-session bg-notification turns (2026-07-09) and subagents
+(2026-07-06) were observed handing the gate transcript content missing the
+just-made Skill invoke, turning every legit invoke->edit into a false deny.
+A stale transcript proves nothing about invoke absence, so the gate must not
+deny from it.
 
 residual (閉じない・既知)
 =========================
@@ -113,6 +120,7 @@ HOME = os.path.expanduser("~")
 STATE_DIR = os.path.join(HOME, ".claude", "hooks", "state", "skill_reminder")
 DECL_STALE_SECONDS = 7 * 24 * 3600  # 放置宣言 session dir の自己掃除閾値
 SKILL_WINDOW_SECONDS = 300  # skill-active 窓 = 現 turn かつ直近 5 分以内
+TRANSCRIPT_FRESH_SECONDS = 120  # newest-entry age beyond this = stale transcript -> fail-open
 GATE_TOOLS = ("Edit", "Write", "MultiEdit")
 
 # kind → 当該 kind が要求する skill 集合 (additive。else は ∅)。
@@ -446,6 +454,16 @@ def _parse_ts(ts) -> float | None:
         return None
 
 
+def _transcript_stale(entries: list[dict], now: float, fresh_s: int) -> bool:
+    """True iff newest parsed entry ts is older than now - fresh_s (no ts at all -> False)."""
+    newest = None
+    for obj in entries:
+        ep = _parse_ts(obj.get("timestamp"))
+        if ep is not None and (newest is None or ep > newest):
+            newest = ep
+    return newest is not None and newest < now - fresh_s
+
+
 def _active_skills(entries: list[dict], now: float, window_s: int) -> set[str] | None:
     """invoke 済 skill 集合 = 現 turn のうち直近 window_s 秒以内 (それより前は drop)。boundary 不在は None (fail-open)。"""
     start_idx = -1
@@ -574,6 +592,8 @@ def cmd_gate(payload: dict) -> None:
     )  # 現 turn のみ (drop は _active_skills が ts で実施)
     if not entries:
         return  # fail-open
+    if _transcript_stale(entries, now, TRANSCRIPT_FRESH_SECONDS):
+        return  # fail-open: stale transcript (resume/subagent) cannot prove invoke absence
     active = _active_skills(entries, now, SKILL_WINDOW_SECONDS)
     if active is None:
         return  # fail-open: boundary 不在
@@ -675,6 +695,14 @@ class GateTest(unittest.TestCase):
         if ts is not None:
             e["timestamp"] = cls._iso(ts)
         return e
+
+    @classmethod
+    def _text(cls, ts):
+        return {
+            "type": "assistant",
+            "timestamp": cls._iso(ts),
+            "message": {"content": [{"type": "text", "text": "x"}]},
+        }
 
     @staticmethod
     def _transcript(entries):
@@ -927,7 +955,7 @@ class GateTest(unittest.TestCase):
 
     def test_gate_denies_when_skill_too_old(self):
         # C5 end-to-end: same-turn invoke older than 5 min is dropped -> deny.
-        old = 1_000_000  # epoch far before real time.time()
+        old = time.time() - SKILL_WINDOW_SECONDS - 60
         r = self._reason(
             self._gate(
                 "/tmp/foo.py",
@@ -935,10 +963,26 @@ class GateTest(unittest.TestCase):
                     self._user(),
                     self._skill("writing-code", old),
                     self._skill("writing-python", old),
+                    self._text(time.time()),  # fresh anchor: transcript itself is current
                 ],
             )
         )
         self.assertIn("writing-code", r)
+
+    def test_transcript_stale(self):
+        now, f = 1_000_000.0, TRANSCRIPT_FRESH_SECONDS
+        self.assertFalse(_transcript_stale([self._user(), self._text(now - 5)], now, f))
+        self.assertTrue(
+            _transcript_stale([self._user(), self._text(now - f - 1)], now, f)
+        )
+        self.assertFalse(_transcript_stale([self._user()], now, f))  # no ts: undecidable
+
+    def test_gate_failopen_on_stale_transcript(self):
+        # Stale transcript (resume/subagent) proves nothing -> allow, never deny.
+        old = 1_000_000  # epoch far before real time.time()
+        self.assertIsNone(
+            self._gate("/tmp/foo.py", entries=[self._user(), self._text(old)])
+        )
 
     def test_gate_shebang_extensionless(self):
         # C2 end-to-end: undeclared extensionless file, kind from shebang.
