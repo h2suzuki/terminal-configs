@@ -22,9 +22,9 @@ Exit Criteria:
 - [ ] noise 上位 5 entry の keyword 修正 + バックテストで precision/recall 改善を数値実証
 - [x] 改善計画 (fable subagent, effort xhigh) を作成しレビュー — `drafts/memory-surface-improvement-plan.md` (A keyword diff 5 件 / B backtest 設計 / C hook 移管 6 判定 / D analyzer / E 実装順)。Claude レビュー済・実装続行を宣言 (Step 0 rebuild は完了済み、検証値 41→50 に読み替え)
 - [x] analyzer の実装形態を合意 — 2026-07-10 hybrid (deterministic 核 = /usr/local/bin command、LLM 判定・解釈 = 薄い skill) をユーザー選択
-- [ ] `claude_memory_surface_analyzer` を合意形態で canonical `files/` に実装 (実装は sonnet→codex レビュー / codex→opus レビューの cross-model パターン)・install・commit (再バックテストが 1 コマンドで回ること)。実装本体は commit 50641cf で files/ に退避済 (WIP)、残 = cross-model レビュー + install
-- [ ] ubuntu2404-wsl.sh / debian12.sh に install 手順を組み込み (**組み込み直前にユーザーへ相談** — 方法は実装形態に依存)
-- [ ] 閾値現状維持の結論を記録として commit (分析レポートの commit で充足)
+- [ ] `claude_memory_surface_analyzer` (hybrid) 完成 — CLI は codex 2 巡 + 司令塔仕分けで hardening 済 (commit c20280a, 89b6c72、32/32 tests・control run 厳密ゼロ・live DB 不変実証)、skill は codex 起草 + opus レビュー 3 所見反映済 (89b6c72)。残 = ユーザーの sudo による本機 deploy 反映確認
+- [x] ubuntu2404-wsl.sh / debian12.sh に install 手順を組み込み — 相談・承認済み、copy 行追加 commit 4ee80ae (skill は既存 copy_dir が自動で拾うため追加行不要)
+- [x] 閾値現状維持の結論を記録として commit — `docs/memory-surface-analysis-2026-07-10.md` (commit 128a41c) の §1 score 分離なし根拠 + §4 案5 非推奨判断で充足
 
 Work file: `last-session-handoff.md` の「memory surface 改善実装」 section
 
