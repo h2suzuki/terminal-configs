@@ -22,9 +22,11 @@ Exit Criteria:
 - [ ] noise 上位 5 entry の keyword 修正 + バックテストで precision/recall 改善を数値実証
 - [x] 改善計画 (fable subagent, effort xhigh) を作成しレビュー — `drafts/memory-surface-improvement-plan.md` (A keyword diff 5 件 / B backtest 設計 / C hook 移管 6 判定 / D analyzer / E 実装順)。Claude レビュー済・実装続行を宣言 (Step 0 rebuild は完了済み、検証値 41→50 に読み替え)
 - [x] analyzer の実装形態を合意 — 2026-07-10 hybrid (deterministic 核 = /usr/local/bin command、LLM 判定・解釈 = 薄い skill) をユーザー選択
-- [ ] `claude_memory_surface_analyzer` を合意形態で canonical `files/` に実装 (実装は sonnet→codex レビュー / codex→opus レビューの cross-model パターン)・install・commit (再バックテストが 1 コマンドで回ること)
+- [ ] `claude_memory_surface_analyzer` を合意形態で canonical `files/` に実装 (実装は sonnet→codex レビュー / codex→opus レビューの cross-model パターン)・install・commit (再バックテストが 1 コマンドで回ること)。実装本体は commit 50641cf で files/ に退避済 (WIP)、残 = cross-model レビュー + install
 - [ ] ubuntu2404-wsl.sh / debian12.sh に install 手順を組み込み (**組み込み直前にユーザーへ相談** — 方法は実装形態に依存)
 - [ ] 閾値現状維持の結論を記録として commit (分析レポートの commit で充足)
+
+Work file: `last-session-handoff.md` の「memory surface 改善実装」 section
 
 ## Medium
 
