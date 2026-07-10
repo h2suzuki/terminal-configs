@@ -23,6 +23,7 @@ mechanism
           同じ絶対 path を後続 Edit でも使う。
 
 gate flow:
+  agent_id あり (subagent) → ALLOW
   declared(sid, path) あり:
       拡張子あり → required = relevant_skills(path) ∪ ∪(宣言 kind の skill)
                    (declare は **追加のみ**。 auto-detect を下回れない —
@@ -546,6 +547,9 @@ def _deny_missing(missing: set[str]) -> None:
 def cmd_gate(payload: dict) -> None:
     if not isinstance(payload, dict):
         return
+    # subagent hook は親 transcript を渡される 2.1.206 bug のため判定不能 → fail-open
+    if payload.get("agent_id"):
+        return
     if payload.get("tool_name") not in GATE_TOOLS:
         return
     inp = payload.get("tool_input") or {}
@@ -875,6 +879,39 @@ class GateTest(unittest.TestCase):
         r = self._reason(self._gate("/tmp/foo.py", entries=[self._user()]))
         self.assertIn("writing-code", r)
         self.assertIn("writing-python", r)
+
+    def test_gate_allows_subagent_without_skill(self):
+        # Fresh transcript w/ boundary but no skill invoke -> would DENY without agent_id skip.
+        self.assertEqual(
+            self._raw(
+                {
+                    "agent_id": "agent-1",
+                    "tool_name": "Edit",
+                    "tool_input": {"file_path": "/tmp/foo.py"},
+                    "cwd": "/tmp",
+                    "session_id": "s1",
+                    "transcript_path": self._transcript(
+                        [self._user(), self._text(time.time())]
+                    ),
+                }
+            ),
+            "",
+        )
+
+    def test_gate_denies_same_fresh_payload_without_agent_id(self):
+        result = self._raw(
+            {
+                "tool_name": "Edit",
+                "tool_input": {"file_path": "/tmp/foo.py"},
+                "cwd": "/tmp",
+                "session_id": "s1",
+                "transcript_path": self._transcript(
+                    [self._user(), self._text(time.time())]
+                ),
+            }
+        )
+        self.assertNotEqual(result, "")
+        self._reason(json.loads(result))
 
     def test_gate_allows_code_file_with_skills_active(self):
         self.assertIsNone(
