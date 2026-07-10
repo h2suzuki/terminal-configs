@@ -21,7 +21,9 @@ Exit Criteria:
 - [x] 未 index の project entry を --rebuild 登録 — 2026-07-10 実行、index 23→50 (terminal-configs 6 + genai 20、事前推定 3+15 は MEMORY.md 参照の undercount)。fts/vec 両テーブルで件数一致を確認
 - [x] noise 上位 entry の keyword 修正 + バックテスト — 2026-07-11 ユーザー承認の部分反映: 4 entry (doc_editor/run_exec/emergency/rebase) を live 反映 (backtest: killed_r0 7/20、killed_r2 は許容例外のみ、run artifacts = analyzer/20260710T-step2-tune1)。rebut_user は net negative 疑いで保留
 - [ ] rebut_user の reminder 文言書き直し + 保留解除の再 backtest (killed_r0 44% 未達の構造要因 = 自己検査文の教訓引用 loop / dense-only 発火への対処もここで検討)
-- [ ] 計画 Step 3: 行動パターン型教訓の hook 移管 (C-1 declared_intent 退役 / C-2 run_exec / C-3 ui_screenshot / C-5 pixel L4 / C-6 sandbox_server — `drafts/memory-surface-improvement-plan.md` §C)
+- [x] 計画 Step 3 実装 — C-1 declared_intent 退役済 (OLD-MEMORY 移動 + --delete、index 49)。C-2/C-3 stop_checks warn family (codex 実装・opus APPLY-AS-IS・44/44)、C-5 pixel L4 channel + C-6 sandbox_server_gate (sonnet 実装・codex レビュー 1 blocker+regex 修正済・20/20+4/4) を commit 41aa5eb
+- [ ] Step 3 の二段階退役: 各 hook の deploy 後、実運用で正発火を 1 回ずつ確認してから run_executable / ui_screenshot / pixel / sandbox_server の 4 entry を退役 (--delete + OLD-MEMORY 移動)
+- [ ] deploy 反映待ち (ユーザー sudo): analyzer + skill (前回分・未実行確認済) と Step 3 hook 4 ファイル
 - [x] 改善計画 (fable subagent, effort xhigh) を作成しレビュー — `drafts/memory-surface-improvement-plan.md` (A keyword diff 5 件 / B backtest 設計 / C hook 移管 6 判定 / D analyzer / E 実装順)。Claude レビュー済・実装続行を宣言 (Step 0 rebuild は完了済み、検証値 41→50 に読み替え)
 - [x] analyzer の実装形態を合意 — 2026-07-10 hybrid (deterministic 核 = /usr/local/bin command、LLM 判定・解釈 = 薄い skill) をユーザー選択
 - [ ] `claude_memory_surface_analyzer` (hybrid) 完成 — CLI は codex 2 巡 + 司令塔仕分けで hardening 済 (commit c20280a, 89b6c72、32/32 tests・control run 厳密ゼロ・live DB 不変実証)、skill は codex 起草 + opus レビュー 3 所見反映済 (89b6c72)。残 = ユーザーの sudo による本機 deploy 反映確認
