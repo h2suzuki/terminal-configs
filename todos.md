@@ -21,7 +21,9 @@ Exit Criteria:
 - [x] 未 index の project entry を --rebuild 登録 — 2026-07-10 実行、index 23→50 (terminal-configs 6 + genai 20、事前推定 3+15 は MEMORY.md 参照の undercount)。fts/vec 両テーブルで件数一致を確認
 - [ ] noise 上位 5 entry の keyword 修正 + バックテストで precision/recall 改善を数値実証
 - [ ] 改善計画 (fable subagent, effort xhigh) を作成しレビュー・合意
-- [ ] `claude_memory_surface_analyzer` を canonical `files/` に実装し `/usr/local/bin/` へ install・commit (再バックテストが 1 コマンドで回ること)
+- [ ] analyzer の実装形態 (plain command / skill / plugin / 他) を比較提案しユーザーと合意。設計は deterministic 部と LLM 質的判定部を明確分離
+- [ ] `claude_memory_surface_analyzer` を合意形態で canonical `files/` に実装 (実装は sonnet→codex レビュー / codex→opus レビューの cross-model パターン)・install・commit (再バックテストが 1 コマンドで回ること)
+- [ ] ubuntu2404-wsl.sh / debian12.sh に install 手順を組み込み (**組み込み直前にユーザーへ相談** — 方法は実装形態に依存)
 - [ ] 閾値現状維持の結論を記録として commit (分析レポートの commit で充足)
 
 ## Medium
