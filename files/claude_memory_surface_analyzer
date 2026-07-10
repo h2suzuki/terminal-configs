@@ -1,0 +1,821 @@
+#!/usr/bin/env python3
+"""Backtest CLI for memory_surface.py keyword/entry changes (memory-surface-improvement-plan.md §B/§D).
+
+Subcommands (v1 scope — no judge/compare):
+
+  dataset --out RUNDIR [--since ISO] [--labels judgments.json] [--hook PATH]
+    Reads inject_log from a scratch copy of the live DB, reconstructs each
+    event's full query text from the session transcript (prefix-verified
+    against the stored 200-char excerpt), optionally joins relevance/
+    influence/note labels by id -> events.jsonl.
+
+  rescore --run RUNDIR --candidate-memory DIR[,DIR...] [--baseline-db PATH] [--hook PATH]
+    baseline = scratch copy of the live DB; candidate = baseline + every
+    *.md under the given dirs upserted -> rescored.jsonl (fired/score under
+    both indices per event).
+
+  misses --run RUNDIR --judgments judgments.json [--hook PATH]
+    For each judgments.json miss (approx_time + catalog_file), scans all
+    project transcripts within a time window, rescoring candidate turn text
+    against the candidate index -> misses.jsonl.
+
+  report --run RUNDIR
+    Aggregates §B-3 metrics (killed r0/r1/r2, new fires, reconstructed vs
+    excerpt-only score-delta stratification) -> report.md + report.json.
+
+Never writes to the live DB (/var/lib/claude-rag-memory/memory_index.sqlite3):
+every scratch DB path is asserted != LIVE_DB_PATH before open/copy.
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import importlib.util
+import json
+import os
+import shutil
+import sqlite3
+import sys
+import time
+import types
+import unittest
+from datetime import date, datetime, timezone
+
+HOME = os.path.expanduser("~")
+LIVE_DB_PATH = "/var/lib/claude-rag-memory/memory_index.sqlite3"
+RUN_ROOT = "/var/lib/claude-rag-memory/analyzer"
+DEFAULT_HOOK_PATH = os.path.join(HOME, ".claude", "hooks", "memory_surface.py")
+PROJECTS_DIR = os.path.join(HOME, ".claude", "projects")
+QUERY_EXCERPT_LEN = 200
+MISS_WINDOW_SECONDS = 120
+KILLED_R0_TARGET = 15
+KILLED_R0_DENOM = 34
+KILLED_R2_MAX_PER_ENTRY = 1
+
+
+def _iso_to_epoch(s: str | None) -> float | None:
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _utc_now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _new_run_dir() -> str:
+    return os.path.join(RUN_ROOT, time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()))
+
+
+def _load_hook_module(path: str) -> types.ModuleType:
+    spec = importlib.util.spec_from_file_location("memory_surface_under_test", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load hook module: " + path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _assert_scratch_path(path: str) -> None:
+    if os.path.abspath(path) == os.path.abspath(LIVE_DB_PATH):
+        raise RuntimeError("refusing to touch live DB: " + path)
+
+
+def _copy_baseline_db(dst: str) -> str:
+    """Scratch copy of the live DB (read-only source), never a live-path write."""
+    _assert_scratch_path(dst)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    if os.path.exists(LIVE_DB_PATH):
+        shutil.copyfile(LIVE_DB_PATH, dst)
+    else:
+        sqlite3.connect(dst).close()
+    return dst
+
+
+def _open_scratch_con(hook_mod: types.ModuleType, path: str) -> sqlite3.Connection:
+    """Open path via the hook's own _connect() (schema/migrations parity), asserting scratch-only."""
+    _assert_scratch_path(path)
+    prev = hook_mod.DB_PATH
+    hook_mod.DB_PATH = path  # ty: ignore[unresolved-attribute]
+    try:
+        con = hook_mod._connect()
+    finally:
+        hook_mod.DB_PATH = prev  # ty: ignore[unresolved-attribute]
+    if con is None:
+        raise RuntimeError("failed to open scratch db: " + path)
+    return con
+
+
+def _read_jsonl(path: str) -> list[dict]:
+    out = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                out.append(json.loads(line))
+    return out
+
+
+def _write_jsonl(path: str, rows: list[dict]) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+# --- transcript / query reconstruction (§B-1) ---
+
+
+def _transcript_path(project_id: str, session_id: str) -> str:
+    return os.path.join(PROJECTS_DIR, project_id, session_id + ".jsonl")
+
+
+def _load_transcript(path: str) -> list[dict] | None:
+    entries: list[dict] = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return None
+    return entries
+
+
+def _is_prompt(obj: dict) -> bool:
+    msg = obj.get("message", {})
+    return (
+        obj.get("type") == "user"
+        and isinstance(msg, dict)
+        and isinstance(msg.get("content"), str)
+    )
+
+
+def _assistant_text(obj: dict) -> str:
+    msg = obj.get("message", {})
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if not isinstance(content, list):
+        return ""
+    parts = [
+        str(b.get("text", ""))
+        for b in content
+        if isinstance(b, dict) and b.get("type") == "text"
+    ]
+    return "\n".join(p for p in parts if p)
+
+
+def _turn_candidates(entries: list[dict]) -> list[tuple[str, str, int]]:
+    """(source, text, boundary_index) for every UPS prompt and Stop current-turn text; mirrors
+    stop_checks.py _current_turn's boundary (most-recent-prompt-only) applied at every boundary."""
+    boundaries = [i for i, e in enumerate(entries) if _is_prompt(e)]
+    out: list[tuple[str, str, int]] = []
+    for bi, idx in enumerate(boundaries):
+        prompt = entries[idx]["message"]["content"]
+        out.append(("UPS", prompt, idx))
+        end = boundaries[bi + 1] if bi + 1 < len(boundaries) else len(entries)
+        parts = [
+            _assistant_text(o)
+            for o in entries[idx + 1 : end]
+            if o.get("type") == "assistant"
+        ]
+        stop_text = "\n".join(p for p in parts if p)
+        if stop_text:
+            out.append(("Stop", stop_text, idx))
+    return out
+
+
+def _reconstruct(
+    candidates: list[tuple[str, str, int]], excerpt: str
+) -> tuple[str | None, str | None]:
+    """(source, full_text) whose [:200] prefix-matches excerpt, else (None, None)."""
+    for source, text, _idx in candidates:
+        if text[:QUERY_EXCERPT_LEN] == excerpt:
+            return source, text
+    return None, None
+
+
+# --- dataset ---
+
+
+def cmd_dataset(args: argparse.Namespace) -> int:
+    run_dir = args.out or _new_run_dir()
+    os.makedirs(run_dir, exist_ok=True)
+    snapshot = _copy_baseline_db(os.path.join(run_dir, "live_snapshot.sqlite3"))
+    con = sqlite3.connect(snapshot)
+    try:
+        rows = con.execute(
+            "SELECT id, file_path, project_id, session_id, ts, score, query_excerpt "
+            "FROM inject_log ORDER BY id"
+        ).fetchall()
+    finally:
+        con.close()
+    since_epoch = _iso_to_epoch(args.since) if args.since else None
+    labels: dict[int, dict] = {}
+    if args.labels:
+        with open(args.labels, encoding="utf-8") as f:
+            raw = json.load(f)
+        for ev in raw.get("events", []):
+            labels[ev["id"]] = ev
+    events = []
+    n_recon = 0
+    for rid, file_path, project_id, session_id, ts, score, excerpt in rows:
+        if since_epoch is not None and (ts is None or ts < since_epoch):
+            continue
+        label = labels.get(rid, {})
+        entries = None
+        if project_id and session_id:
+            entries = _load_transcript(_transcript_path(project_id, session_id))
+        source, query, reconstructed = None, excerpt, False
+        if entries:
+            cands = _turn_candidates(entries)
+            source, full = _reconstruct(cands, excerpt or "")
+            if full is not None:
+                query, reconstructed = full, True
+        if reconstructed:
+            n_recon += 1
+        events.append(
+            {
+                "id": rid,
+                "file_path": file_path,
+                "project_id": project_id,
+                "session_id": session_id,
+                "ts": ts,
+                "score_orig": score,
+                "query_excerpt": excerpt,
+                "query": query,
+                "reconstructed": reconstructed,
+                "source": source or label.get("source"),
+                "relevance": label.get("relevance"),
+                "influence": label.get("influence"),
+                "note": label.get("note"),
+            }
+        )
+    _write_jsonl(os.path.join(run_dir, "events.jsonl"), events)
+    manifest = {
+        "run_dir": run_dir,
+        "live_snapshot": snapshot,
+        "hook_path": args.hook or DEFAULT_HOOK_PATH,
+        "n_events": len(events),
+        "n_reconstructed": n_recon,
+        "created": _utc_now_iso(),
+    }
+    with open(os.path.join(run_dir, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    rate = (n_recon / len(events)) if events else 0.0
+    sys.stderr.write(
+        f"dataset: {len(events)} events, reconstructed {n_recon} ({rate:.1%}) -> {run_dir}\n"
+    )
+    return 0
+
+
+# --- rescore ---
+
+
+def cmd_rescore(args: argparse.Namespace) -> int:
+    run_dir = args.run
+    with open(os.path.join(run_dir, "manifest.json"), encoding="utf-8") as f:
+        manifest = json.load(f)
+    hook_path = args.hook or manifest.get("hook_path") or DEFAULT_HOOK_PATH
+    hook = _load_hook_module(hook_path)
+    baseline_src = args.baseline_db or manifest["live_snapshot"]
+    _assert_scratch_path(baseline_src)
+    baseline_work = os.path.join(run_dir, "baseline_work.sqlite3")
+    candidate_work = os.path.join(run_dir, "candidate.sqlite3")
+    _assert_scratch_path(baseline_work)
+    _assert_scratch_path(candidate_work)
+    shutil.copyfile(baseline_src, baseline_work)
+    shutil.copyfile(baseline_src, candidate_work)
+
+    dirs = [d.strip() for d in args.candidate_memory.split(",") if d.strip()]
+    n_upserts = 0
+    con_cand = _open_scratch_con(hook, candidate_work)
+    try:
+        for d in dirs:
+            for md in sorted(glob.glob(os.path.join(d, "*.md"))):
+                if hook._upsert_entry(con_cand, os.path.abspath(md), None) == 0:
+                    n_upserts += 1
+    finally:
+        con_cand.close()
+
+    events = _read_jsonl(os.path.join(run_dir, "events.jsonl"))
+    con_base = _open_scratch_con(hook, baseline_work)
+    con_cand = _open_scratch_con(hook, candidate_work)
+    out = []
+    try:
+        for ev in events:
+            query = ev["query"]
+            project_id = ev.get("project_id") or ""
+            now = ev.get("ts") or time.time()
+            sid = f"bt-{ev['id']}"
+            picks_base = hook._surface_core(con_base, query, sid, project_id, now, 2)
+            picks_cand = hook._surface_core(con_cand, query, sid, project_id, now, 2)
+            fp = ev["file_path"]
+            fired_base = any(p[0] == fp for p in picks_base)
+            fired_cand = any(p[0] == fp for p in picks_cand)
+            out.append(
+                {
+                    "id": ev["id"],
+                    "file_path": fp,
+                    "relevance": ev.get("relevance"),
+                    "influence": ev.get("influence"),
+                    "reconstructed": ev.get("reconstructed"),
+                    "source": ev.get("source"),
+                    "fired_base": fired_base,
+                    "fired_cand": fired_cand,
+                    "score_base": next((p[2] for p in picks_base if p[0] == fp), None),
+                    "score_cand": next((p[2] for p in picks_cand if p[0] == fp), None),
+                    "picks_cand": [p[0] for p in picks_cand],
+                }
+            )
+    finally:
+        con_base.close()
+        con_cand.close()
+    _write_jsonl(os.path.join(run_dir, "rescored.jsonl"), out)
+    n_fired_base = sum(1 for r in out if r["fired_base"])
+    rate = n_fired_base / len(out) if out else 0.0
+    sys.stderr.write(
+        f"rescore: {len(out)} events, {n_upserts} candidate upserts, "
+        f"baseline refire {n_fired_base}/{len(out)} ({rate:.1%})\n"
+    )
+    return 0
+
+
+# --- misses ---
+
+
+def _parse_approx_range(s: str | None) -> tuple[float | None, float | None]:
+    if not s:
+        return None, None
+    parts = [p.strip() for p in s.split(" - ")]
+    if len(parts) == 2:
+        start = _iso_to_epoch(parts[0])
+        end_str = parts[1]
+        if start is not None and "T" not in end_str:
+            end_str = parts[0].split("T")[0] + "T" + end_str
+        return start, _iso_to_epoch(end_str)
+    ep = _iso_to_epoch(parts[0])
+    return ep, ep
+
+
+def _date_range(lo: float, hi: float) -> set[str]:
+    lo_date = datetime.fromtimestamp(lo, tz=timezone.utc).date()
+    hi_date = datetime.fromtimestamp(hi, tz=timezone.utc).date()
+    out: set[str] = set()
+    d = lo_date
+    while d <= hi_date:
+        out.add(str(d))
+        d = date.fromordinal(d.toordinal() + 1)
+    return out
+
+
+def _scan_transcripts(lo: float, hi: float):
+    dates = _date_range(lo, hi)
+    for path in glob.glob(os.path.join(PROJECTS_DIR, "*", "*.jsonl")):
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+        except OSError:
+            continue
+        if not any(d in content for d in dates):
+            continue
+        project_id = os.path.basename(os.path.dirname(path))
+        session_id = os.path.basename(path)[: -len(".jsonl")]
+        yield path, project_id, session_id
+
+
+def _entry_epoch_near(entries: list[dict], idx: int) -> float | None:
+    for i in range(idx, min(idx + 20, len(entries))):
+        ep = _iso_to_epoch(entries[i].get("timestamp"))
+        if ep is not None:
+            return ep
+    return None
+
+
+def cmd_misses(args: argparse.Namespace) -> int:
+    run_dir = args.run
+    with open(os.path.join(run_dir, "manifest.json"), encoding="utf-8") as f:
+        manifest = json.load(f)
+    hook_path = args.hook or manifest.get("hook_path") or DEFAULT_HOOK_PATH
+    hook = _load_hook_module(hook_path)
+    candidate_work = os.path.join(run_dir, "candidate.sqlite3")
+    if not os.path.exists(candidate_work):
+        sys.stderr.write("misses: candidate.sqlite3 not found; run rescore first\n")
+        return 1
+    with open(args.judgments, encoding="utf-8") as f:
+        judgments = json.load(f)
+    con = _open_scratch_con(hook, candidate_work)
+    out = []
+    try:
+        for i, m in enumerate(judgments.get("misses", [])):
+            catalog_file = m.get("catalog_file")
+            start_ep, end_ep = _parse_approx_range(m.get("approx_time"))
+            fired, score, trigger, matched_session = False, None, None, None
+            if start_ep is not None:
+                lo = start_ep - MISS_WINDOW_SECONDS
+                hi = (end_ep or start_ep) + MISS_WINDOW_SECONDS
+                for tpath, project_id, session_id in _scan_transcripts(lo, hi):
+                    entries = _load_transcript(tpath)
+                    if not entries:
+                        continue
+                    for _source, text, idx in _turn_candidates(entries):
+                        ts_ep = _entry_epoch_near(entries, idx)
+                        if ts_ep is None or not (lo <= ts_ep <= hi):
+                            continue
+                        picks = hook._surface_core(
+                            con, text, f"bt-miss-{i}", project_id, ts_ep, 2
+                        )
+                        if trigger is None:
+                            trigger, matched_session = text[:400], session_id
+                        hit = next((p for p in picks if p[0] == catalog_file), None)
+                        if hit is not None and not fired:
+                            fired, score = True, hit[2]
+                            trigger, matched_session = text[:400], session_id
+            out.append(
+                {
+                    "index": i,
+                    "catalog_file": catalog_file,
+                    "approx_time": m.get("approx_time"),
+                    "why": m.get("why"),
+                    "matched_session": matched_session,
+                    "trigger_excerpt": trigger,
+                    "fired_cand": fired,
+                    "score_cand": score,
+                }
+            )
+    finally:
+        con.close()
+    _write_jsonl(os.path.join(run_dir, "misses.jsonl"), out)
+    n_recovered = sum(1 for r in out if r["fired_cand"])
+    sys.stderr.write(f"misses: {len(out)} miss events, recovered {n_recovered}\n")
+    return 0
+
+
+# --- report ---
+
+
+def _avg(xs: list[float]) -> float | None:
+    return sum(xs) / len(xs) if xs else None
+
+
+def _build_report(run_dir: str) -> dict:
+    events = _read_jsonl(os.path.join(run_dir, "events.jsonl"))
+    rescored_path = os.path.join(run_dir, "rescored.jsonl")
+    rescored = _read_jsonl(rescored_path) if os.path.exists(rescored_path) else []
+    misses_path = os.path.join(run_dir, "misses.jsonl")
+    misses = _read_jsonl(misses_path) if os.path.exists(misses_path) else []
+
+    n_total = len(events)
+    n_recon = sum(1 for e in events if e.get("reconstructed"))
+    recon_rate = n_recon / n_total if n_total else 0.0
+
+    measurable = [r for r in rescored if r["fired_base"]]
+    baseline_refire_rate = len(measurable) / len(rescored) if rescored else 0.0
+
+    per_entry: dict[str, dict] = {}
+    for r in measurable:
+        d = per_entry.setdefault(
+            r["file_path"],
+            {"killed_r0": 0, "killed_r1": 0, "killed_r2": 0, "retained": 0},
+        )
+        if r["fired_cand"]:
+            d["retained"] += 1
+        else:
+            key = {0: "killed_r0", 1: "killed_r1", 2: "killed_r2"}.get(
+                r.get("relevance")
+            )
+            if key:
+                d[key] += 1
+
+    total_killed_r0 = sum(d["killed_r0"] for d in per_entry.values())
+    max_killed_r2 = max((d["killed_r2"] for d in per_entry.values()), default=0)
+
+    new_fires = [r for r in rescored if r["fired_cand"] and not r["fired_base"]]
+    unlabeled_new = [r for r in new_fires if r.get("relevance") is None]
+
+    recon_by_id = {e["id"]: e.get("reconstructed") for e in events}
+    strata: dict[str, list[float]] = {"reconstructed": [], "excerpt_only": []}
+    for r in rescored:
+        key = "reconstructed" if recon_by_id.get(r["id"]) else "excerpt_only"
+        sb, sc = r.get("score_base"), r.get("score_cand")
+        if sb is not None and sc is not None:
+            strata[key].append(sc - sb)
+
+    return {
+        "run_dir": run_dir,
+        "n_events": n_total,
+        "n_reconstructed": n_recon,
+        "reconstruction_rate": recon_rate,
+        "n_rescored": len(rescored),
+        "n_baseline_fired": len(measurable),
+        "baseline_refire_rate": baseline_refire_rate,
+        "n_excluded": len(rescored) - len(measurable),
+        "per_entry": per_entry,
+        "total_killed_r0": total_killed_r0,
+        "max_killed_r2": max_killed_r2,
+        "gate_pass": total_killed_r0 >= KILLED_R0_TARGET
+        and max_killed_r2 <= KILLED_R2_MAX_PER_ENTRY,
+        "n_new_fires": len(new_fires),
+        "n_unlabeled_new_fires": len(unlabeled_new),
+        "score_delta_avg_reconstructed": _avg(strata["reconstructed"]),
+        "score_delta_avg_excerpt_only": _avg(strata["excerpt_only"]),
+        "n_misses": len(misses),
+        "n_misses_recovered": sum(1 for m in misses if m.get("fired_cand")),
+        "_unlabeled_new_rows": unlabeled_new,
+    }
+
+
+def _render_report_md(r: dict) -> str:
+    lines = [
+        "# memory-surface analyzer report",
+        "",
+        f"- reconstruction rate: {r['n_reconstructed']}/{r['n_events']} ({r['reconstruction_rate']:.1%})",
+        f"- baseline refire rate: {r['n_baseline_fired']}/{r['n_rescored']} ({r['baseline_refire_rate']:.1%})",
+        f"- excluded (baseline never fired): {r['n_excluded']}",
+        f"- killed r0 total: {r['total_killed_r0']} (target >= {KILLED_R0_TARGET}/{KILLED_R0_DENOM})",
+        f"- max killed r2 per entry: {r['max_killed_r2']} (target <= {KILLED_R2_MAX_PER_ENTRY})",
+        f"- gate_pass: {r['gate_pass']}",
+        f"- new fires (candidate-only): {r['n_new_fires']} (unlabeled: {r['n_unlabeled_new_fires']})",
+        f"- score delta avg (reconstructed queries): {r['score_delta_avg_reconstructed']}",
+        f"- score delta avg (excerpt-only queries): {r['score_delta_avg_excerpt_only']}",
+        f"- misses recovered: {r['n_misses_recovered']}/{r['n_misses']}",
+        "",
+        "## per-entry killed breakdown",
+        "",
+        "| entry | killed_r0 | killed_r1 | killed_r2 | retained |",
+        "|---|---|---|---|---|",
+    ]
+    for fp, d in sorted(r["per_entry"].items()):
+        lines.append(
+            f"| {fp} | {d['killed_r0']} | {d['killed_r1']} | {d['killed_r2']} | {d['retained']} |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    run_dir = args.run
+    report = _build_report(run_dir)
+    unlabeled = report.pop("_unlabeled_new_rows")
+    with open(os.path.join(run_dir, "report.json"), "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+    with open(os.path.join(run_dir, "report.md"), "w", encoding="utf-8") as f:
+        f.write(_render_report_md(report))
+    if unlabeled:
+        _write_jsonl(os.path.join(run_dir, "unlabeled.jsonl"), unlabeled)
+    sys.stderr.write(
+        f"report: reconstruction {report['reconstruction_rate']:.1%}, "
+        f"baseline refire {report['baseline_refire_rate']:.1%}, "
+        f"killed_r0={report['total_killed_r0']} max_killed_r2={report['max_killed_r2']} "
+        f"gate_pass={report['gate_pass']}\n"
+    )
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(prog="claude_memory_surface_analyzer")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p_ds = sub.add_parser("dataset")
+    p_ds.add_argument("--out")
+    p_ds.add_argument("--since")
+    p_ds.add_argument("--labels")
+    p_ds.add_argument("--hook")
+    p_ds.set_defaults(func=cmd_dataset)
+
+    p_rs = sub.add_parser("rescore")
+    p_rs.add_argument("--run", required=True)
+    p_rs.add_argument("--candidate-memory", required=True)
+    p_rs.add_argument("--baseline-db")
+    p_rs.add_argument("--hook")
+    p_rs.set_defaults(func=cmd_rescore)
+
+    p_ms = sub.add_parser("misses")
+    p_ms.add_argument("--run", required=True)
+    p_ms.add_argument("--judgments", required=True)
+    p_ms.add_argument("--hook")
+    p_ms.set_defaults(func=cmd_misses)
+
+    p_rp = sub.add_parser("report")
+    p_rp.add_argument("--run", required=True)
+    p_rp.set_defaults(func=cmd_report)
+
+    args = ap.parse_args()
+    return args.func(args)
+
+
+# --- unittest ---
+
+_REPO_HOOK_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "claude_user-hooks", "memory_surface.py"
+)
+
+
+class QueryReconstructionTest(unittest.TestCase):
+    def test_turn_candidates_ups_and_stop(self):
+        entries = [
+            {"type": "user", "message": {"content": "first prompt"}},
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "reply one"}]},
+            },
+            {"type": "user", "message": {"content": "second prompt"}},
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "reply two"}]},
+            },
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "more"}]},
+            },
+        ]
+        cands = _turn_candidates(entries)
+        self.assertIn(("UPS", "first prompt", 0), cands)
+        self.assertIn(("Stop", "reply one", 0), cands)
+        self.assertIn(("UPS", "second prompt", 2), cands)
+        self.assertIn(("Stop", "reply two\nmore", 2), cands)
+
+    def test_reconstruct_prefix_match_self_verifies(self):
+        cands = [("UPS", "hello world " * 30, 0)]
+        excerpt = cands[0][1][:QUERY_EXCERPT_LEN]
+        source, text = _reconstruct(cands, excerpt)
+        self.assertEqual(source, "UPS")
+        self.assertEqual(text, cands[0][1])
+
+    def test_reconstruct_no_match(self):
+        cands = [("UPS", "abc", 0)]
+        self.assertEqual(_reconstruct(cands, "xyz"), (None, None))
+
+
+class ScratchSafetyTest(unittest.TestCase):
+    def test_assert_scratch_path_rejects_live(self):
+        with self.assertRaises(RuntimeError):
+            _assert_scratch_path(LIVE_DB_PATH)
+
+    def test_assert_scratch_path_allows_scratch(self):
+        _assert_scratch_path(
+            "/var/lib/claude-rag-memory/analyzer/x/db.sqlite3"
+        )  # no raise
+
+    def test_copy_baseline_db_never_targets_live(self):
+        with self.assertRaises(RuntimeError):
+            _copy_baseline_db(LIVE_DB_PATH)
+
+
+class ApproxRangeTest(unittest.TestCase):
+    def test_range_with_time_only_end(self):
+        start, end = _parse_approx_range("2026-07-02T19:44:28Z - 19:46:35Z")
+        self.assertEqual(start, _iso_to_epoch("2026-07-02T19:44:28Z"))
+        self.assertEqual(end, _iso_to_epoch("2026-07-02T19:46:35Z"))
+
+    def test_single_timestamp(self):
+        start, end = _parse_approx_range("2026-07-02T19:44:28Z")
+        self.assertEqual(start, end)
+
+    def test_none(self):
+        self.assertEqual(_parse_approx_range(None), (None, None))
+
+
+@unittest.skipUnless(os.path.exists(_REPO_HOOK_PATH), "repo hook module not found")
+class EndToEndTest(unittest.TestCase):
+    """dataset -> rescore -> report over a fabricated live DB + transcript, live-write-free."""
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.mkdtemp()
+        self.hook = _load_hook_module(_REPO_HOOK_PATH)
+        self.fake_live = os.path.join(self.tmp, "fake_live.sqlite3")
+        self.run_dir = os.path.join(self.tmp, "run")
+        os.makedirs(self.run_dir)
+        self.mem_dir = os.path.join(self.tmp, "mem")
+        os.makedirs(self.mem_dir)
+        self.entry_path = os.path.join(self.mem_dir, "feedback_test.md")
+        with open(self.entry_path, "w", encoding="utf-8") as f:
+            f.write(
+                "---\n---\nreminder: committed 前に diff を確認する\nkeywords: uncommitted, diff, commit\n"
+            )
+        con = _open_scratch_con(self.hook, self.fake_live)
+        self.hook._upsert_entry(con, self.entry_path, None)
+        self.query_text = "uncommitted の diff を確認してから commit します。" * 3
+        con.execute(
+            "INSERT INTO inject_log(file_path, project_id, session_id, ts, score, "
+            "query_excerpt) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                self.entry_path,
+                "-tmp-proj",
+                "sess-1",
+                1_700_000_000.0,
+                -5.0,
+                self.query_text[:QUERY_EXCERPT_LEN],
+            ),
+        )
+        con.commit()
+        con.close()
+
+        proj_dir = os.path.join(PROJECTS_DIR, "-tmp-proj-does-not-exist")
+        self.proj_dir_patch = (
+            proj_dir  # unused directly; transcript path built via mock below
+        )
+
+    def test_dataset_rescore_report_roundtrip(self):
+        from unittest import mock
+
+        transcript_dir = os.path.join(self.tmp, "projects", "-tmp-proj")
+        os.makedirs(transcript_dir)
+        transcript_path = os.path.join(transcript_dir, "sess-1.jsonl")
+        with open(transcript_path, "w", encoding="utf-8") as f:
+            f.write(
+                json.dumps({"type": "user", "message": {"content": self.query_text}})
+                + "\n"
+            )
+            f.write(
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {"content": [{"type": "text", "text": "ack"}]},
+                    }
+                )
+                + "\n"
+            )
+
+        mod = sys.modules[__name__]
+        with (
+            mock.patch.object(mod, "LIVE_DB_PATH", self.fake_live),
+            mock.patch.object(mod, "PROJECTS_DIR", os.path.join(self.tmp, "projects")),
+        ):
+            ds_args = argparse.Namespace(
+                out=self.run_dir, since=None, labels=None, hook=_REPO_HOOK_PATH
+            )
+            self.assertEqual(cmd_dataset(ds_args), 0)
+            events = _read_jsonl(os.path.join(self.run_dir, "events.jsonl"))
+            self.assertEqual(len(events), 1)
+            self.assertTrue(events[0]["reconstructed"])
+            self.assertEqual(events[0]["query"], self.query_text)
+
+            rs_args = argparse.Namespace(
+                run=self.run_dir,
+                candidate_memory=self.mem_dir,
+                baseline_db=None,
+                hook=_REPO_HOOK_PATH,
+            )
+            self.assertEqual(cmd_rescore(rs_args), 0)
+            rescored = _read_jsonl(os.path.join(self.run_dir, "rescored.jsonl"))
+            self.assertEqual(len(rescored), 1)
+            self.assertTrue(rescored[0]["fired_base"])
+            self.assertTrue(rescored[0]["fired_cand"])  # same entry, unchanged keywords
+
+            rp_args = argparse.Namespace(run=self.run_dir)
+            self.assertEqual(cmd_report(rp_args), 0)
+            report = json.loads(open(os.path.join(self.run_dir, "report.json")).read())
+            self.assertEqual(report["n_baseline_fired"], 1)
+            self.assertEqual(report["reconstruction_rate"], 1.0)
+
+    def test_rescore_detects_kill_after_keyword_narrowing(self):
+        from unittest import mock
+
+        transcript_dir = os.path.join(self.tmp, "projects", "-tmp-proj")
+        os.makedirs(transcript_dir, exist_ok=True)
+        transcript_path = os.path.join(transcript_dir, "sess-1.jsonl")
+        with open(transcript_path, "w", encoding="utf-8") as f:
+            f.write(
+                json.dumps({"type": "user", "message": {"content": self.query_text}})
+                + "\n"
+            )
+
+        mod = sys.modules[__name__]
+        with (
+            mock.patch.object(mod, "LIVE_DB_PATH", self.fake_live),
+            mock.patch.object(mod, "PROJECTS_DIR", os.path.join(self.tmp, "projects")),
+        ):
+            cmd_dataset(
+                argparse.Namespace(
+                    out=self.run_dir, since=None, labels=None, hook=_REPO_HOOK_PATH
+                )
+            )
+            # candidate dir has an entry at the SAME file_path but unrelated keywords -> should not fire.
+            same_path_dir = os.path.dirname(self.entry_path)
+            with open(self.entry_path, "w", encoding="utf-8") as f:
+                f.write("---\n---\nreminder: 全く別の話題\nkeywords: 無関係\n")
+            cmd_rescore(
+                argparse.Namespace(
+                    run=self.run_dir,
+                    candidate_memory=same_path_dir,
+                    baseline_db=None,
+                    hook=_REPO_HOOK_PATH,
+                )
+            )
+            rescored = _read_jsonl(os.path.join(self.run_dir, "rescored.jsonl"))
+            self.assertTrue(rescored[0]["fired_base"])
+            self.assertFalse(rescored[0]["fired_cand"])
+
+
+if __name__ == "__main__":
+    sys.exit(main())
