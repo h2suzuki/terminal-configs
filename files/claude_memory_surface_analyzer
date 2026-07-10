@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 import sqlite3
+import struct
 import sys
 import time
 import types
@@ -366,19 +367,87 @@ def _parse_specs(s: str | None) -> list[tuple[str, str | None]]:
     return out
 
 
+def _replace_entry(
+    hook: types.ModuleType,
+    con: sqlite3.Connection,
+    src_md: str,
+    dst_path: str,
+    project_id: str | None,
+) -> None:
+    """Replace indexed entry (dst_path, project_id) with content parsed from src_md (SQL mirrors hook._upsert_entry)."""
+    parsed = hook._parse_entry(src_md)
+    if parsed is None:
+        raise RuntimeError("cannot parse candidate entry: " + src_md)
+    reminder, keywords, body = parsed
+    mtime = os.path.getmtime(src_md)
+    con.execute(
+        "DELETE FROM entries_fts WHERE file_path = ? "
+        "AND coalesce(project_id, '') = coalesce(?, '')",
+        (dst_path, project_id),
+    )
+    con.execute(
+        "INSERT INTO entries_fts(file_path, project_id, "
+        "reminder, keywords, body, last_modified) VALUES (?, ?, ?, ?, ?, ?)",
+        (dst_path, project_id, reminder, keywords, body, mtime),
+    )
+    con.execute(
+        "DELETE FROM entries_vec WHERE file_path = ? "
+        "AND coalesce(project_id, '') = coalesce(?, '')",
+        (dst_path, project_id),
+    )
+    model = hook._model_open()
+    if model is not None:
+        mcon, dim, max_len = model
+        try:
+            vec = hook._embed(
+                mcon, dim, max_len, hook._embed_entry_text(reminder, keywords)
+            )
+        finally:
+            mcon.close()
+        if vec is not None:
+            con.execute(
+                "INSERT INTO entries_vec(file_path, project_id, vec, "
+                "last_modified) VALUES (?, ?, ?, ?)",
+                (dst_path, project_id, struct.pack("<%de" % dim, *vec), mtime),
+            )
+    con.commit()
+
+
 def _apply_candidate_changes(
     hook: types.ModuleType, con: sqlite3.Connection, args: argparse.Namespace
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     """Apply upsert/delete specs; any failure raises (no silent partial candidate corpus)."""
-    n_upserts = n_deletes = 0
+    n_replaced = n_added = n_deletes = 0
+    by_basename: dict[str, list[tuple[str, str | None]]] = {}
+    for fp, epid in con.execute(
+        "SELECT file_path, project_id FROM entries_fts"
+    ).fetchall():
+        by_basename.setdefault(os.path.basename(fp), []).append((fp, epid))
     for d, pid in _parse_specs(args.candidate_memory):
         mds = sorted(glob.glob(os.path.join(d, "*.md")))
         if not mds:
             raise RuntimeError("candidate-memory dir has no *.md: " + d)
         for md in mds:
-            if hook._upsert_entry(con, os.path.abspath(md), pid) != 0:
-                raise RuntimeError("upsert failed: %s (project_id=%s)" % (md, pid))
-            n_upserts += 1
+            base = os.path.basename(md)
+            scopes = by_basename.get(base, [])
+            if pid is not None:
+                scopes = [s for s in scopes if s[1] == pid]
+            if len(scopes) > 1:
+                raise RuntimeError(
+                    "candidate %s matches multiple index scopes %s; qualify with DIR=PROJECT_ID"
+                    % (base, sorted({s[1] or "(user)" for s in scopes}))
+                )
+            if scopes:
+                # Replace: keep the indexed file_path so the backtest swaps content, not identity.
+                dst_path, dst_pid = scopes[0]
+                _replace_entry(hook, con, os.path.abspath(md), dst_path, dst_pid)
+                n_replaced += 1
+            else:
+                abs_md = os.path.abspath(md)
+                if hook._upsert_entry(con, abs_md, pid) != 0:
+                    raise RuntimeError("upsert failed: %s (project_id=%s)" % (md, pid))
+                by_basename.setdefault(base, []).append((abs_md, pid))
+                n_added += 1
     for path, pid in _parse_specs(args.candidate_delete):
         abs_path = os.path.abspath(path)
         row = con.execute(
@@ -394,7 +463,7 @@ def _apply_candidate_changes(
         if hook._delete_entry(con, abs_path, pid) != 0:
             raise RuntimeError("delete failed: %s (project_id=%s)" % (abs_path, pid))
         n_deletes += 1
-    return n_upserts, n_deletes
+    return n_replaced, n_added, n_deletes
 
 
 def _entry_count(path: str) -> int:
@@ -419,7 +488,7 @@ def cmd_rescore(args: argparse.Namespace) -> int:
 
     con_cand = _open_scratch_con(hook, candidate_work)
     try:
-        n_upserts, n_deletes = _apply_candidate_changes(hook, con_cand, args)
+        n_replaced, n_added, n_deletes = _apply_candidate_changes(hook, con_cand, args)
     except RuntimeError as e:
         sys.stderr.write("rescore: %s\n" % e)
         return 1
@@ -468,7 +537,8 @@ def cmd_rescore(args: argparse.Namespace) -> int:
     meta = {
         "baseline_entries": _entry_count(baseline_work),
         "candidate_entries": _entry_count(candidate_work),
-        "n_upserts": n_upserts,
+        "n_replaced": n_replaced,
+        "n_added": n_added,
         "n_deletes": n_deletes,
         "created": _utc_now_iso(),
     }
@@ -478,7 +548,8 @@ def cmd_rescore(args: argparse.Namespace) -> int:
     rate = n_fired_base / len(out) if out else 0.0
     sys.stderr.write(
         f"rescore: {len(out)} events, corpus {meta['baseline_entries']}->"
-        f"{meta['candidate_entries']} ({n_upserts} upserts, {n_deletes} deletes), "
+        f"{meta['candidate_entries']} ({n_replaced} replaced, {n_added} added, "
+        f"{n_deletes} deletes), "
         f"baseline refire {n_fired_base}/{len(out)} ({rate:.1%}), "
         f"killed {n_killed}, new pick entries {n_new}\n"
     )
@@ -1413,6 +1484,46 @@ class EndToEndTest(unittest.TestCase):
         self.assertFalse(rescored[0]["fired_cand"])
         meta = json.load(open(os.path.join(self.run_dir, "rescore_meta.json")))
         self.assertEqual(meta["n_deletes"], 1)
+
+    def test_scratch_copy_dir_replaces_entry_in_place(self):
+        # (a)+(b): same basename, different path -> in-place replacement whose content change kills the fire.
+        self.assertEqual(self._dataset(), 0)
+        copy_dir = os.path.join(self.tmp, "scratchmem")
+        os.makedirs(copy_dir)
+        with open(
+            os.path.join(copy_dir, "feedback_test.md"), "w", encoding="utf-8"
+        ) as f:
+            f.write("---\n---\nreminder: 全く別の話題\nkeywords: 無関係\n")
+        self.assertEqual(self._rescore(candidate_memory=copy_dir), 0)
+        meta = json.load(open(os.path.join(self.run_dir, "rescore_meta.json")))
+        self.assertEqual((meta["n_replaced"], meta["n_added"]), (1, 0))
+        self.assertEqual(meta["baseline_entries"], meta["candidate_entries"])
+        con = sqlite3.connect(os.path.join(self.run_dir, "candidate.sqlite3"))
+        fps = [fp for (fp,) in con.execute("SELECT file_path FROM entries_fts")]
+        con.close()
+        self.assertEqual(fps, [self.entry_path])  # original indexed path preserved
+        rescored = _read_jsonl(os.path.join(self.run_dir, "rescored.jsonl"))
+        self.assertTrue(rescored[0]["fired_base"])
+        self.assertFalse(rescored[0]["fired_cand"])
+
+    def test_same_basename_in_multiple_scopes_requires_project_id(self):
+        # (c): user + project scope both hold feedback_test.md -> unqualified candidate errors.
+        other_dir = os.path.join(self.tmp, "othermem")
+        os.makedirs(other_dir)
+        other = os.path.join(other_dir, "feedback_test.md")
+        with open(other, "w", encoding="utf-8") as f:
+            f.write("---\n---\nreminder: project 側\nkeywords: projscope\n")
+        prev = self.hook.DB_PATH
+        self.hook.DB_PATH = self.fake_live  # ty: ignore[unresolved-attribute]
+        try:
+            con = self.hook._connect()
+        finally:
+            self.hook.DB_PATH = prev  # ty: ignore[unresolved-attribute]
+        assert con is not None
+        self.hook._upsert_entry(con, other, "-projX")
+        con.close()
+        self.assertEqual(self._dataset(), 0)
+        self.assertEqual(self._rescore(candidate_memory=self.mem_dir), 1)
 
     def test_delete_of_unindexed_entry_errors(self):
         self.assertEqual(self._dataset(), 0)
