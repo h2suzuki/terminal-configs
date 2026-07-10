@@ -28,6 +28,15 @@ Exit Criteria:
 
 Work file: 診断レポート = `drafts/subagent-gate-diagnosis.md` (実験ログ verbatim + 修正方針 5 案のコスト評価)
 
+### skill_reminder_gate の恒久策: PostToolUse Skill 記録方式 (要相談)
+
+Goal: transcript 依存を排し、PostToolUse `^Skill$` で invoke を session/agent-key state に記録して gate が参照する方式へ移行する。subagent hotfix (agent_id skip = subagent で enforcement 喪失) と resume 系 flush lag <120s の両残穴を同時に塞ぐ。
+
+Exit Criteria:
+- [ ] 方針合意 (実装規模 1.5-3 日 + managed-settings.d/extensions.json への hook 配線追加。診断 = `drafts/subagent-gate-diagnosis.md` 案 2/5 参照)
+- [ ] PostToolUse:Skill が subagent 含む全成功経路で発火することの live probe
+- [ ] 実装・deploy・commit し、subagent skip を撤去して enforcement 回復
+
 ### stop_checks.py の intent-without-task を Task tools 不在セッションで満たせない (要相談)
 
 Goal: Fable 5 ハーネスは TaskCreate/TaskUpdate/TodoWrite を提供せず (subagent 含む、settings 要因ではないことを 2026-07-10 に確認済み)、intent-without-task 指摘に機構的に応答不能。hook 側の対応方針を H.S. と合意して実装する。
