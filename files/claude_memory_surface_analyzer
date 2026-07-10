@@ -291,10 +291,11 @@ def cmd_dataset(args: argparse.Namespace) -> int:
             continue
         label = labels.get(rid, {})
         entries, corrupt = (None, False)
+        transcript_missing = True
         if project_id and session_id:
-            entries, corrupt = _load_transcript(
-                _transcript_path(project_id, session_id)
-            )
+            tpath = _transcript_path(project_id, session_id)
+            transcript_missing = not os.path.exists(tpath)
+            entries, corrupt = _load_transcript(tpath)
         source, query, reconstructed, n_matches, ambiguous = (
             None,
             excerpt,
@@ -323,6 +324,7 @@ def cmd_dataset(args: argparse.Namespace) -> int:
                 "reconstructed": reconstructed,
                 "ambiguous": ambiguous,
                 "n_prefix_matches": n_matches,
+                "transcript_missing": transcript_missing,
                 "transcript_corrupt": corrupt,
                 "source": source or label.get("source"),
                 "relevance": label.get("relevance"),
@@ -683,6 +685,7 @@ def _build_report(run_dir: str, gate_entries: list[str] | None) -> dict:
 
     n_total = len(events)
     n_recon = sum(1 for e in events if e.get("reconstructed"))
+    n_missing = sum(1 for e in events if e.get("transcript_missing"))
     measurable = [r for r in rescored if r["fired_base"]]
 
     per_entry: dict[str, dict] = {}
@@ -735,6 +738,10 @@ def _build_report(run_dir: str, gate_entries: list[str] | None) -> dict:
         "n_events": n_total,
         "n_reconstructed": n_recon,
         "reconstruction_rate": n_recon / n_total if n_total else 0.0,
+        "n_transcript_missing": n_missing,
+        "reconstruction_rate_existing": (
+            n_recon / (n_total - n_missing) if n_total > n_missing else None
+        ),
         "n_ambiguous": sum(1 for e in events if e.get("ambiguous")),
         "n_transcript_corrupt": sum(1 for e in events if e.get("transcript_corrupt")),
         "n_rescored": len(rescored),
@@ -766,6 +773,14 @@ def _render_report_md(r: dict) -> str:
         "",
         f"- reconstruction rate: {r['n_reconstructed']}/{r['n_events']} ({r['reconstruction_rate']:.1%})"
         f" (ambiguous: {r['n_ambiguous']}, corrupt transcripts: {r['n_transcript_corrupt']})",
+        f"- reconstruction rate (existing transcripts): {r['n_reconstructed']}/"
+        f"{r['n_events'] - r['n_transcript_missing']} "
+        + (
+            f"({r['reconstruction_rate_existing']:.1%})"
+            if r["reconstruction_rate_existing"] is not None
+            else "(n/a)"
+        )
+        + f" — transcript missing: {r['n_transcript_missing']}",
         f"- baseline refire rate: {r['n_baseline_fired']}/{r['n_rescored']} ({r['baseline_refire_rate']:.1%})",
         f"- excluded (baseline never fired): {r['n_excluded']}",
         f"- killed (all entries): r0={r['killed_all']['r0']} r1={r['killed_all']['r1']}"
@@ -1154,18 +1169,29 @@ class ReportAggregationTest(unittest.TestCase):
                     "id": 1,
                     "reconstructed": True,
                     "ambiguous": False,
+                    "transcript_missing": False,
                     "transcript_corrupt": False,
                 },
                 {
                     "id": 2,
                     "reconstructed": True,
                     "ambiguous": False,
+                    "transcript_missing": False,
                     "transcript_corrupt": False,
                 },
                 {
                     "id": 3,
                     "reconstructed": False,
                     "ambiguous": True,
+                    "transcript_missing": False,
+                    "transcript_corrupt": False,
+                },
+                # transcript file gone: excluded from the existing-transcript denominator
+                {
+                    "id": 4,
+                    "reconstructed": False,
+                    "ambiguous": False,
+                    "transcript_missing": True,
                     "transcript_corrupt": False,
                 },
             ],
@@ -1231,6 +1257,13 @@ class ReportAggregationTest(unittest.TestCase):
 
     def test_gate_absent_without_gate_entries(self):
         self.assertIsNone(_build_report(self.run_dir, None)["gate"])
+
+    def test_reconstruction_rate_existing_excludes_missing_transcripts(self):
+        r = _build_report(self.run_dir, None)
+        self.assertEqual(r["n_events"], 4)
+        self.assertEqual(r["n_transcript_missing"], 1)
+        self.assertEqual(r["reconstruction_rate"], 0.5)  # 2/4 raw
+        self.assertAlmostEqual(r["reconstruction_rate_existing"], 2 / 3)  # 2/(4-1)
 
     def test_new_fires_and_pick_changes(self):
         r = _build_report(self.run_dir, None)
@@ -1357,6 +1390,8 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(report["n_new_fire_pairs"], 0)
         self.assertEqual(report["n_pick_changes"], 0)
         self.assertEqual(report["reconstruction_rate"], 1.0)
+        self.assertEqual(report["n_transcript_missing"], 0)
+        self.assertEqual(report["reconstruction_rate_existing"], 1.0)
         self.assertEqual(report["baseline_refire_rate"], 1.0)
         meta = json.load(open(os.path.join(self.run_dir, "rescore_meta.json")))
         self.assertEqual(meta["baseline_entries"], meta["candidate_entries"])
