@@ -8,7 +8,7 @@ import platform
 import sys
 from pathlib import Path
 
-ICON = {"run": "", "wait": "💬", "ask": "❓", "perm": "⚠️"}  # この行で差替可
+ICON = {"run": "", "bg": "🔄💬", "wait": "💬", "ask": "❓", "perm": "⚠️"}  # この行で差替可  # fmt: skip
 BELL = {"ask", "perm"}  # 突入時に BEL を鳴らす状態 (Windows Terminal のタブ点滅用)
 BG_RUN_TYPES = {"workflow", "subagent"}  # 稼働中とみなす background_tasks の type
 STATE_DIR = Path.home() / ".claude" / "title-icon-state"
@@ -137,7 +137,7 @@ def main():
         running = any(
             isinstance(t, dict) and t.get("type") in BG_RUN_TYPES for t in tasks
         )
-        new = "run" if running else "wait"
+        new = "bg" if running else "wait"
     elif ev == "PermissionRequest":
         new = "perm"
     elif ev == "PermissionDenied":

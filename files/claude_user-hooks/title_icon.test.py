@@ -43,11 +43,17 @@ class TitleIconTest(unittest.TestCase):
         data.update(extra)
         return self.run_hook(data)
 
-    def test_stop_with_workflow_bg_task_is_run(self):
+    def test_stop_with_workflow_bg_task_is_bg_icon(self):
         out = self.emit("Stop", background_tasks=[{"type": "workflow"}])
-        self.assertNotIn("💬", out)
+        self.assertIn("🔄💬", out)
         self.assertIn("]0;", out)
-        self.assertEqual(self.state()["state"], "run")
+        self.assertEqual(self.state()["state"], "bg")
+
+    def test_bg_then_idle_stop_returns_to_wait(self):
+        self.emit("Stop", background_tasks=[{"type": "subagent"}])
+        out = self.emit("Stop")
+        self.assertNotIn("🔄", out)
+        self.assertIn("💬", out)
 
     def test_stop_without_bg_tasks_is_wait(self):
         out = self.emit("Stop")
