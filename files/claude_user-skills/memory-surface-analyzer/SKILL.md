@@ -36,6 +36,7 @@ inject_log から復元した query を再スコアし、既存 relevance label 
 ## Rules
 
 - **Health gate**: `reconstruction_rate_existing >= 0.90`、`baseline_refire_rate >= 0.85`、strict control の `killed_all` 全 category・`n_new_fire_pairs`・`n_pick_changes` がすべて 0 の時だけ判定に使う。0.85 は field 固有の根拠から導出された値ではなく guidance threshold として扱う。1 つでも下回れば run を棄却し、原因と再実行条件だけを報告する。raw `reconstruction_rate` は削除済み transcript event も分母に残るため、`n_transcript_missing` と併読し慎重に解釈する。
+- **Event ownership**: kill / retained / gate の集計単位は「その event を元々発火させた entry」(`rescored.jsonl` の `file_path` 列) である。他 entry 所有 event の `picks_base` / `picks_cand` への同乗・離脱は pick change であり killed に数えない。picks を目視 join した手集計で gate を代替しない (2026-07-11 に所有権無視の手集計で killed_r2 を過大評価した実例あり)。
 - **Killed R2 review**: `relevance == 2` かつ baseline 発火・candidate 非発火の event を全件目視する。query、picks、`score_base` / `score_cand` とその差を根拠に、真の actionable loss か、僅少 delta の borderline かを個別に判定する。固定閾値を捏造しない。
 - **Unlabeled queue**: 新規発火 event を全件判定し、`2=actionable`、`1=adjacent`、`0=noise` を付け、短い根拠を残す。既存 label や機械集計を上書きしない。
 - **Recommendations**: `per_entry`、`killed_all`、`new_fires_by_entry`、`strata`、miss recovery、gate と個別判定を結び、keyword 修正案、entry 退役、または deterministic hook への移管案を起草する。数値だけで因果を断定しない。
