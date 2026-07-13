@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """
-PreToolUse(Bash) hook: deny broken sandbox excluded-command invocations.
+PreToolUse(Bash) hook: classify sandbox excluded-command invocations.
 
-Claude Code matches sandbox.excludedCommands globs at the start of the raw
-command. Path, environment/wrapper, and non-leading compound forms can miss
-that anchor and silently run inside the sandbox. This hook finds an excluded
-command after normalizing those forms and denies it so callers can retry with
-the bare command at the leading anchor.
+Claude Code recognizes bare shell command words for sandbox.excludedCommands.
+Path-prefixed and sudo invocations are denied when they would fail inside the
+sandbox; ambiguous env/compound/sudo-option forms receive an advisory.
 
 Exit:
-  0: command matches the host-execution glob, or contains no broken invocation
-  2: an excluded command would miss the leading-anchor glob
+  0: pass, or warn with hookSpecificOutput.additionalContext
+  2: a path-prefixed or bare-sudo excluded command is blocked
 
 Always exits 0 on any unexpected error (fail-open).
 """
@@ -31,21 +29,11 @@ STATE_DIR = os.path.join(
     os.path.expanduser("~"), ".claude", "hooks", "state", "sandbox_exclusion_guard"
 )
 CACHE_PATH = os.path.join(STATE_DIR, "cache.json")
-WRAPPERS = {
-    "sudo",
-    "env",
-    "command",
-    "nohup",
-    "nice",
-    "time",
-    "stdbuf",
-    "setsid",
-    "ionice",
-}
 ASSIGNMENT = re.compile(r"^\w+=\S*$")
-# top-level 制御演算子のみで分割。$(...)/`...` は host 化不能ゆえ segment 対象外 (F1)。
-SEPARATOR = re.compile(r"&&|\|\||[;|&\n]")
+SEPARATOR = re.compile(r"&&|\|\||[;|&\n]")  # top-level 制御演算子のみ
 COMMENT = re.compile(r"#.*$", re.MULTILINE)
+# $(...)/`...` は host 化不能ゆえマスクして segment 対象外にする (F1)。
+SUBST = re.compile(r"\$\([^()]*\)|`[^`]*`")
 QUOTED = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
 HEREDOC = re.compile(
     r"<<-?\s*['\"]?(\w+)['\"]?([^\n]*)\n[\s\S]*?^[ \t]*\1\b",
@@ -119,47 +107,61 @@ def _glob_match(value: str, pattern: str) -> bool:
     return re.fullmatch(translated, value, re.DOTALL) is not None
 
 
-def _segment_violation(cmd: str, patterns: list[str]) -> tuple[str, list[str]] | None:
-    """Return the normalized excluded invocation and broken-form reasons."""
+def _classify(cmd: str, patterns: list[str]) -> tuple[str, str, str]:
+    """Return block/warn/pass, the excluded invocation, and its reason."""
     scanned = HEREDOC.sub(_strip_heredoc, cmd)
     scanned = QUOTED.sub("_", scanned)
+    scanned = SUBST.sub("_", scanned)
     scanned = COMMENT.sub("", scanned)
-    segments = SEPARATOR.split(scanned)
+    segments = [s for s in SEPARATOR.split(scanned) if s.strip()]
+    warning: tuple[str, str, str] | None = None
     for index, segment in enumerate(segments):
         tokens = segment.strip().split()
         if not tokens:
             continue
-        env_prefix = False
-        wrapper_prefix = False
+        had_env = False
         while tokens and ASSIGNMENT.match(tokens[0]):
-            env_prefix = True
+            had_env = True
             tokens.pop(0)
-        while tokens and os.path.basename(tokens[0]) in WRAPPERS:
-            wrapper_prefix = True
-            tokens.pop(0)
-            # wrapper の env 代入 / bare option を読み飛ばす (値付き option は既知ギャップ)。
-            while tokens and (ASSIGNMENT.match(tokens[0]) or tokens[0].startswith("-")):
-                if ASSIGNMENT.match(tokens[0]):
-                    env_prefix = True
-                tokens.pop(0)
         if not tokens:
             continue
         program = tokens[0]
         basename = os.path.basename(program)
+        if basename == "sudo":
+            for position, candidate in enumerate(tokens[1:], start=1):
+                if "/" in candidate or candidate.startswith("-"):
+                    continue
+                normalized = " ".join(tokens[position:])
+                if not any(_glob_match(normalized, pattern) for pattern in patterns):
+                    continue
+                if position == 1:
+                    return "block", normalized, "bare sudo"
+                if warning is None:
+                    warning = "warn", normalized, "sudo with options"
+                break
+            continue
         normalized = " ".join([basename, *tokens[1:]])
-        if any(_glob_match(normalized, pattern) for pattern in patterns):
-            reasons = []
-            if "/" in program:
-                reasons.append("path prefix")
-            if env_prefix:
-                reasons.append("environment prefix")
-            if wrapper_prefix:
-                reasons.append("wrapper prefix")
-            if index > 0:
-                reasons.append("non-leading compound segment")
-            if reasons:
-                return normalized, reasons
-    return None
+        if not any(_glob_match(normalized, pattern) for pattern in patterns):
+            # Non-sudo wrappers are intentionally not traversed; path forms behind them are a known gap.
+            continue
+        if "/" in program:
+            return "block", normalized, "path prefix"
+        if had_env and warning is None:
+            warning = "warn", normalized, "environment prefix"
+        elif index > 0 and warning is None:
+            warning = "warn", normalized, "non-leading compound segment"
+    return warning or ("pass", "", "")
+
+
+def _emit(msg: str) -> None:
+    payload = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "additionalContext": msg,
+        }
+    }
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
 def _run(payload: object, patterns: list[str] | None = None) -> int:
@@ -172,22 +174,28 @@ def _run(payload: object, patterns: list[str] | None = None) -> int:
     if not isinstance(cmd, str):
         return 0
     patterns = _load_patterns() if patterns is None else patterns
-    raw_lstripped = cmd.lstrip()
-    if any(_glob_match(raw_lstripped, pattern) for pattern in patterns):
+    decision, normalized, reason = _classify(cmd, patterns)
+    if decision == "pass":
         return 0
-    violation = _segment_violation(cmd, patterns)
-    if not violation:
+    if decision == "warn":
+        message = (
+            f"除外コマンド `{normalized}` のこの呼び出し方 ({reason}) は sandbox 内実行に"
+            "なる可能性があります。除外コマンドは path/env/wrapper を付けず、裸名で先頭に"
+            "置くと確実に host 実行されます。"
+        )
+        if reason == "sudo with options":
+            message += " sudo は sandbox 内で権限昇格できず失敗します。"
+        _emit(message)
         return 0
-    normalized, reasons = violation
+    if reason == "bare sudo":
+        detail = "sudo は sandbox 内で権限昇格できず失敗します"
+    else:
+        detail = "path 前置では除外対象にならず sandbox 内実行に落ちるため失敗します"
     sys.stderr.write(
-        "sandbox-exclusion-guard: denied excluded command "
-        f"`{normalized}` because its {' / '.join(reasons)} prevents the "
-        "leading-anchor excludedCommands glob from matching, so it would "
-        "silently run inside the sandbox and may break.\n\n"
-        "Retry: invoke the excluded command by its bare name without a path, "
-        "environment assignment, or wrapper, and put it first in the compound "
-        "command or run it as a standalone Bash call. This guarantees the "
-        "leading-anchor glob matches and the command runs on the host.\n"
+        f"sandbox-exclusion-guard: excluded command `{normalized}` を block しました。"
+        f"{detail}。\n\n"
+        "Retry: path や sudo を付けず、除外コマンドを裸名で command の先頭に置いて"
+        "呼び出してください。これにより確実に host 実行されます。\n"
     )
     return 2
 
@@ -210,52 +218,86 @@ class GateTest(unittest.TestCase):
         "cargo test *",
         "node *codex-companion.mjs*",
     ]
-    POSITIVE = (
-        "cd app && git push",
-        "set -e; dsa foo",
+    BLOCK = (
         "/usr/bin/git push",
         "tools/dsa_launcher restart db",
-        "FOO=1 git push",
+        "cd x && /usr/bin/git push",
         "sudo git push",
-        "env dsa_launcher restart db",
-        "echo hi && cargo test foo",
-        "/usr/bin/node /path/codex-companion.mjs --x",
-        "env -i git push",
+        "sudo dsa_launcher restart db",
+        "VAR=x git push && /usr/bin/git push",
     )
-    NEGATIVE = (
+    WARN = (
+        "VAR=val git push",
+        "FOO=1 BAR=2 dsa foo",
+        "cd app && git push",
+        "echo hi ; cargo test x",
+        "sudo -u deploy git push",
+    )
+    PASS = (
         "git push",
         "dsa_launcher restart db",
         "cargo test foo",
         "git push && echo done",
         "git log | head",
-        "git",
+        "timeout 5 git push",
+        "nice -n 10 cargo test x",
+        "env -i git push",
+        "VERSION=$(git describe)",
+        "x=$(dsa foo)",
         "cargo build",
         "node app.js",
         "which git",
         "man dsa",
-        "type cargo",
         'echo "cd x && git push"',
         "# git push",
-        "grep 'dsa foo' README.md",
-        "VERSION=$(git describe --tags)",
-        "X=$(dsa foo)",
+        "result=$(cd /repo; tools/dsa_launcher status)",
+        "echo `git status`",
+        "# deploy\ngit push",
     )
 
     @staticmethod
-    def _result(cmd: str, patterns: list[str]) -> int:
+    def _result(cmd: str, patterns: list[str]) -> tuple[int, str, str]:
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+
         payload = {"tool_name": "Bash", "tool_input": {"command": cmd}}
-        return _run(payload, patterns)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            result = _run(payload, patterns)
+        return result, stdout.getvalue(), stderr.getvalue()
 
-    def test_denies_broken_excluded_invocations(self):
-        for cmd in self.POSITIVE:
-            self.assertEqual(self._result(cmd, self.PATTERNS), 2, cmd)
+    def test_blocks_path_and_bare_sudo_invocations(self):
+        for cmd in self.BLOCK:
+            result, stdout, stderr = self._result(cmd, self.PATTERNS)
+            self.assertEqual(result, 2, cmd)
+            self.assertEqual(stdout, "", cmd)
+            self.assertIn("excluded command", stderr, cmd)
+            self.assertIn("裸名", stderr, cmd)
 
-    def test_allows_anchor_matches_and_boundaries(self):
-        for cmd in self.NEGATIVE:
-            self.assertEqual(self._result(cmd, self.PATTERNS), 0, cmd)
+    def test_warns_without_blocking_ambiguous_invocations(self):
+        for cmd in self.WARN:
+            result, stdout, stderr = self._result(cmd, self.PATTERNS)
+            self.assertEqual(result, 0, cmd)
+            self.assertEqual(stderr, "", cmd)
+            output = json.loads(stdout)["hookSpecificOutput"]
+            self.assertEqual(output["hookEventName"], "PreToolUse", cmd)
+            self.assertEqual(output["permissionDecision"], "allow", cmd)
+            self.assertIn(
+                "sandbox 内実行になる可能性", output["additionalContext"], cmd
+            )
+            if cmd.startswith("sudo"):
+                self.assertIn("権限昇格できず失敗", output["additionalContext"], cmd)
+
+    def test_passes_host_and_nonmatching_invocations_silently(self):
+        for cmd in self.PASS:
+            result, stdout, stderr = self._result(cmd, self.PATTERNS)
+            self.assertEqual(result, 0, cmd)
+            self.assertEqual(stdout, "", cmd)
+            self.assertEqual(stderr, "", cmd)
 
     def test_empty_patterns_allow_everything(self):
-        self.assertEqual(self._result("cd app && git push", []), 0)
+        self.assertEqual(self._result("cd app && git push", []), (0, "", ""))
 
     def test_mtime_cache_recomputes(self):
         import tempfile
