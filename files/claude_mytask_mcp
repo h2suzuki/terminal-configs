@@ -365,7 +365,7 @@ def dispatch(message: object) -> dict[str, object] | None:
                 },
             )
         if method == "tools/list":
-            return _response(request_id, {"tools": TOOLS, "nextCursor": None})
+            return _response(request_id, {"tools": TOOLS})
         if method == "tools/call":
             return _response(request_id, _call_tool(message.get("params")))
         if method == "ping":
