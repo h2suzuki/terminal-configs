@@ -43,20 +43,33 @@ Exit Criteria:
 - [ ] PostToolUse:Skill が subagent 含む全成功経路で発火することの live probe
 - [ ] 実装・deploy・commit し、subagent skip を撤去して enforcement 回復
 
-### stop_checks.py の intent-without-task を Task tools 不在セッションで満たせない (要相談)
+### Task 管理ツール (TaskCreate 系 / TodoWrite) が model gate で使用不可
 
-Goal: 最新 3 モデル (Opus 4.8 / Sonnet 5 / Fable 5) では TaskCreate/TaskGet/TaskList/TaskUpdate と旧 TodoWrite がサーバー側 gate で無効化され (subagent 含む、settings 要因でないことを 2026-07-10 に確認、2026-07-13 に model gate と特定)、intent-without-task 指摘に機構的に応答不能。hook 側の対応方針を H.S. と合意して実装する。
+Goal: 最新 3 モデル (Opus 4.8 / Sonnet 5 / Fable 5) で TaskCreate/TaskGet/TaskList/TaskUpdate と旧 TodoWrite がサーバー側 feature-flag gate で無効化される問題を、原因確定の上で対処方針を H.S. と合意する。これが本質であり、hook 誤発火等は下流被害。
+
+Exit Criteria:
+- [x] 原因の確定 — 2026-07-13 に model gate `tengu_vellum_ash` と特定 (下記「確定済み背景」、実機裏取り済)
+- [ ] 対処方針の合意 (案: 一時 gate とみて待機 / kill-list 外 model へ切替 / #76076 に実機確認を追記)
+
+確定済み背景 (2026-07-13・再導出不要):
+- **問題定義**: Opus 4.8 セッションで TaskCreate/TaskGet/TaskList/TaskUpdate と旧 TodoWrite が完全に不在 (tool 一覧にも ToolSearch deferred にも出ない)。background-agent 系の TaskStop/TaskOutput のみ残る。
+- **メカニズム**: 各 Task 系 tool の isEnabled() が `JI() && !VY()` (TodoWrite は `!JI() && !VY()`) を評価。JI() (CLAUDE_CODE_ENABLE_TASKS gate) は満たされ、ブロック元は VY()。VY() は GrowthBook/Statsig の feature flag `tengu_vellum_ash` を走行 model id で照合する。実機 ~/.claude.json の cachedGrowthBookFeatures.tengu_vellum_ash = ["claude-opus-4-8","claude-sonnet-5","claude-fable-5"]。現 model id が list の claude-opus-4-8 に部分一致し VY()=true → isEnabled()=false。env・settings・再起動とは独立した server 側 model 別 kill-list。裏付け = anthropics/claude-code issue #76076。
+- **sandbox は無関係**: filesystem 権限と tool 提供有無は直交。~/.claude/tasks を sandbox write allowlist に追加する deploy (managed-settings の allowWrite、2026-07-13 実施) を行っても tool は復活しない。tasks dir が read-only だったことは gate の原因ではなく、無関係な別事象。
+- **こうなっている理由 (推論)**: 公式 CHANGELOG (2.1.100-207) に gate 化の記載はなく、tengu_ flag は「機能的意味を外部から隠す randomized 2 単語」命名の内部 kill-switch 群 (decode 解析で確認)。ゆえに理由は非公開。証拠相関の最有力は「新モデル群で task tool が深刻に回帰し、修正まで一時 kill した緊急スイッチ」説: 対象が最新 3 モデルちょうど / #68140 (TodoWrite が更新ごとに context 先頭を貼り直し prompt cache を全無効化、Sonnet 5 の 1M context で致命的) / #71880 (非 ASCII を lone UTF-16 surrogate に誤エンコード→API 400 crash) / #76229 (多バイト文字破損) が候補。永久廃止を示す証拠は無く一時 gate の公算が高い。
+- **回避策**: kill-list 外の model (Opus 4.7 / Haiku 4.5) に切替で即復活 (issue #76076 repro step 4)。Opus 4.8 維持なら todos.md 追跡で代替。
+
+関連 — GrowthBook flag が local 設定を上書きする同型事例 (2026-07-13 調査。tengu_vellum_ash とは別 flag だが同機構):
+- Qiita「defaultMode が勝手に戻る」 https://qiita.com/yurukusa/items/98f044fe42f25c4459ba — flag `tengu_quill_harbor` / `tengu_permission_friction` が ~9 分ごとの server sync で settings.json を上書きし defaultMode を bypassPermissions→acceptEdits に戻す。**GrowthBook flag が periodic sync で local を上書きする機構を実証** = 上記回避策の懸念「cache 手編集は再 fetch で消える」の裏付け。
+- 裏取り issue: #62205 (OPEN, root cause = 上記 2 flag が ~9 分 sync で override) / #61415・#61436 (症状クラスタ = Desktop が Accept Edits に戻る、#61436 は closed) / #63015 (別件・auto-compact 不発、参考)。
+- cc-safe-setup (npm, 記事著者): flag drift 監視 hook 群 (growthbook-flag-monitor / compact-dispatch-watchdog / permission-mode-drift-guard) を導入する緩和ツール。npm ページは 403 で本文未取得、記述は記事準拠。
+
+### stop_checks.py の intent-without-task が Task tools 不在で誤発火 (下流被害・要相談)
+
+Goal: 上記「Task 管理ツールが model gate で使用不可」の下流被害として、stop_checks.py の intent-without-task が呼べない tool を要求し進捗語ごとに誤発火する (被害であって原因ではない)。hook 側の緩和方針を H.S. と合意して実装する。
 
 Exit Criteria:
 - [ ] 方針合意 (案: Task tools 不在セッションでは skip / todos.md 追跡に代替 / 上流 issue 報告)
 - [ ] 合意した対応を実装・deploy・commit
-
-調査済み背景 (2026-07-13・再導出不要):
-- **問題定義**: Opus 4.8 セッションで TaskCreate/TaskGet/TaskList/TaskUpdate と旧 TodoWrite が完全に不在 (tool 一覧にも ToolSearch deferred にも出ない)。background-agent 系の TaskStop/TaskOutput のみ残る。よって stop_checks.py の intent-without-task が要求する tool を呼べず、進捗語を発するたび hook が満たせない要求で誤発火する (本セッションで 2 回実発生)。
-- **メカニズム**: 各 Task 系 tool の isEnabled() が `JI() && !VY()` (TodoWrite は `!JI() && !VY()`) を評価。JI() (CLAUDE_CODE_ENABLE_TASKS gate) は満たされ、ブロック元は VY()。VY() は GrowthBook/Statsig の feature flag `tengu_vellum_ash` を走行 model id で照合する。実機 ~/.claude.json の cachedGrowthBookFeatures.tengu_vellum_ash = ["claude-opus-4-8","claude-sonnet-5","claude-fable-5"]。現 model id が list の claude-opus-4-8 に部分一致し VY()=true → isEnabled()=false。env・settings・再起動とは独立した server 側 model 別 kill-list。裏付け = anthropics/claude-code issue #76076。
-- **sandbox は無関係**: filesystem 権限と tool 提供有無は直交。~/.claude/tasks を sandbox write allowlist に追加する deploy (managed-settings の allowWrite、2026-07-13 実施) を行っても tool は復活しない。tasks dir が read-only だったことは gate の原因ではなく、無関係な別事象。
-- **こうなっている理由 (推論)**: 公式 CHANGELOG (2.1.100-207) に gate 化の記載はなく、tengu_ flag は「機能的意味を外部から隠す randomized 2 単語」命名の内部 kill-switch 群 (decode 解析で確認)。ゆえに理由は非公開。証拠相関の最有力は「新モデル群で task tool が深刻に回帰し、修正まで一時 kill した緊急スイッチ」説: 対象が最新 3 モデルちょうど / #68140 (TodoWrite が更新ごとに context 先頭を貼り直し prompt cache を全無効化、Sonnet 5 の 1M context で致命的) / #71880 (非 ASCII を lone UTF-16 surrogate に誤エンコード→API 400 crash) / #76229 (多バイト文字破損) が候補。永久廃止を示す証拠は無く一時 gate の公算が高い。
-- **回避策**: kill-list 外の model (Opus 4.7 / Haiku 4.5) に切替で即復活 (issue repro step 4 で確認)。Opus 4.8 維持なら todos.md 追跡で代替。
 
 
 ### memory surface の閾値をモデル別に変えられるか調査
