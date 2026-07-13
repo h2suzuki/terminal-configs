@@ -80,8 +80,12 @@
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/check_uncommitted_at_handoff.py" } ] },
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/codex_delegation_surface.py" } ] }
     ],
+    "MessageDisplay": [
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/claude_court_guard --hook" } ] }
+    ],
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/stop_checks.py" } ] }
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/stop_checks.py" } ] },
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/claude_court_guard --hook" } ] }
     ],
     "SessionEnd": [
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/session_cleanup.py" } ] },

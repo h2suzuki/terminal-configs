@@ -9,10 +9,27 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 
 RE_STRAY = re.compile(r"(?m)^[ \t]*(?:court|count)[ \t]*$")
 RE_INVOKE_LEAK = re.compile(r'(?m)^[ \t]*<invoke name="')
+
+USAGE = """\
+claude_court_guard — detect Claude "court/count" transcript contamination (court bug #64108).
+
+Usage:
+  claude_court_guard <transcript.jsonl>   Scan a session transcript's assistant text; exit 2 on hit.
+  claude_court_guard --stdin              Scan raw text from stdin; exit 2 on hit.
+  claude_court_guard --hook               Hook mode: read hook JSON from stdin. Scans the MessageDisplay
+                                          `delta` chunk if present, else the Stop `transcript_path`.
+                                          Warns via systemMessage only; always exit 0 (never alters the
+                                          message, never blocks).
+  claude_court_guard -h, --help           Show this help.
+
+Exit codes: 0 = clean or fail-open; 2 = contamination detected (non-hook modes).
+Wire --hook on MessageDisplay to check every message (Stop as a turn-end backstop). See docs/court-bug.md.
+"""
 
 
 def scan_text(text: str) -> list[str]:
@@ -25,6 +42,15 @@ def scan_text(text: str) -> list[str]:
     if invoke_count:
         findings.append(f"invoke-leak x{invoke_count}")
     return findings
+
+
+def _report(findings: list[str]) -> str:
+    """Human-facing contamination message shared by CLI stderr and hook systemMessage."""
+    return (
+        "court-guard: contamination detected ("
+        + ", ".join(findings)
+        + ") — session 汚染の疑い、reset 推奨 (#64108/#76912)"
+    )
 
 
 def _transcript_text(raw: str) -> str:
@@ -45,8 +71,36 @@ def _transcript_text(raw: str) -> str:
     return "\n".join(parts)
 
 
+def _hook_mode() -> int:
+    """MessageDisplay/Stop adapter: scan the delta chunk (MessageDisplay) or transcript (Stop), warn via systemMessage; never emit displayContent so the message is never altered."""
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+        if not isinstance(payload, dict):
+            return 0
+        delta = payload.get("delta")
+        if isinstance(delta, str):
+            text = delta
+        else:
+            path = payload.get("transcript_path")
+            if not isinstance(path, str) or not path:
+                return 0
+            with open(path, encoding="utf-8") as transcript:
+                text = _transcript_text(transcript.read())
+        findings = scan_text(text)
+        if findings:
+            print(json.dumps({"systemMessage": _report(findings)}))
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        return 0
+    return 0
+
+
 def _main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
+    if args and args[0] in ("-h", "--help"):
+        sys.stdout.write(USAGE)
+        return 0
+    if args == ["--hook"]:
+        return _hook_mode()
     try:
         if args == ["--stdin"]:
             text = sys.stdin.read()
@@ -60,11 +114,7 @@ def _main(argv: list[str] | None = None) -> int:
         return 0
     if not findings:
         return 0
-    sys.stderr.write(
-        "court-guard: contamination detected ("
-        + ", ".join(findings)
-        + ") — session 汚染の疑い、reset 推奨 (#64108/#76912)\n"
-    )
+    sys.stderr.write(_report(findings) + "\n")
     return 2
 
 
@@ -74,9 +124,7 @@ class CourtGuardTest(unittest.TestCase):
         self.assertEqual(scan_text("...\ncount"), ["stray-token x1"])
 
     def test_scan_text_hits_invoke_leak(self):
-        self.assertEqual(
-            scan_text('\ncâu\n<invoke name="Bash">'), ["invoke-leak x1"]
-        )
+        self.assertEqual(scan_text('\ncâu\n<invoke name="Bash">'), ["invoke-leak x1"])
 
     def test_scan_text_counts_signatures(self):
         self.assertEqual(
@@ -114,12 +162,90 @@ class CourtGuardTest(unittest.TestCase):
 
     def test_cli_stdin_exit_codes(self):
         command = [sys.executable, os.path.abspath(__file__), "--stdin"]
-        hit = subprocess.run(command, input="answer\ncount", text=True, capture_output=True)
-        clean = subprocess.run(command, input="court バグを修正", text=True, capture_output=True)
+        hit = subprocess.run(
+            command, input="answer\ncount", text=True, capture_output=True, check=False
+        )
+        clean = subprocess.run(
+            command,
+            input="court バグを修正",
+            text=True,
+            capture_output=True,
+            check=False,
+        )
         self.assertEqual(hit.returncode, 2)
         self.assertIn("stray-token x1", hit.stderr)
         self.assertEqual(clean.returncode, 0)
         self.assertEqual(clean.stderr, "")
+
+    def test_cli_help_exits_zero(self):
+        for flag in ("-h", "--help"):
+            result = subprocess.run(
+                [sys.executable, os.path.abspath(__file__), flag],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("Usage:", result.stdout)
+
+    def test_cli_hook_mode_emits_system_message_on_hit(self):
+        command = [sys.executable, os.path.abspath(__file__), "--hook"]
+        block = {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "answer\ncount"}]},
+        }
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".jsonl", delete=False, encoding="utf-8"
+        ) as transcript:
+            transcript.write(json.dumps(block))
+            path = transcript.name
+        try:
+            payload = json.dumps({"transcript_path": path})
+            hit = subprocess.run(
+                command, input=payload, text=True, capture_output=True, check=False
+            )
+            self.assertEqual(hit.returncode, 0)
+            emitted = json.loads(hit.stdout)
+            self.assertIn("stray-token x1", emitted["systemMessage"])
+            with open(path, "w", encoding="utf-8") as clean_transcript:
+                block["message"]["content"][0]["text"] = "all good"
+                clean_transcript.write(json.dumps(block))
+            clean = subprocess.run(
+                command, input=payload, text=True, capture_output=True, check=False
+            )
+            self.assertEqual(clean.returncode, 0)
+            self.assertEqual(clean.stdout, "")
+        finally:
+            os.unlink(path)
+
+    def test_cli_hook_mode_scans_messagedisplay_delta(self):
+        command = [sys.executable, os.path.abspath(__file__), "--hook"]
+        hit = subprocess.run(
+            command,
+            input=json.dumps({"delta": "answer\ncount", "transcript_path": "/nope"}),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(hit.returncode, 0)
+        self.assertIn("stray-token x1", json.loads(hit.stdout)["systemMessage"])
+        clean = subprocess.run(
+            command,
+            input=json.dumps({"delta": "answer\ncounter", "final": True}),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(clean.returncode, 0)
+        self.assertEqual(clean.stdout, "")
+
+    def test_hook_mode_fails_open_on_bad_stdin(self):
+        old_stdin = sys.stdin
+        try:
+            sys.stdin = io.StringIO("not json")
+            self.assertEqual(_main(["--hook"]), 0)
+        finally:
+            sys.stdin = old_stdin
 
     def test_invalid_arguments_fail_open(self):
         old_stderr = sys.stderr
