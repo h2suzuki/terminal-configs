@@ -27,14 +27,10 @@ import unittest
 SYSTEM_SETTINGS = "/etc/claude-code/managed-settings.json"
 SYSTEM_SETTINGS_GLOB = "/etc/claude-code/managed-settings.d/*.json"
 USER_SETTINGS = os.path.join(os.path.expanduser("~"), ".claude", "settings.json")
-CACHE_PATH = os.path.join(
-    os.path.expanduser("~"),
-    ".claude",
-    "hooks",
-    "state",
-    "sandbox_exclusion_guard",
-    "cache.json",
+STATE_DIR = os.path.join(
+    os.path.expanduser("~"), ".claude", "hooks", "state", "sandbox_exclusion_guard"
 )
+CACHE_PATH = os.path.join(STATE_DIR, "cache.json")
 WRAPPERS = {
     "sudo",
     "env",
