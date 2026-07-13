@@ -10,9 +10,10 @@ Task ツールが gate で使えないセッションに限り、同等の作業
 
 ## Process
 
-1. `drafts/tasks/${CLAUDE_CODE_SESSION_ID}.json` を読む。ファイルまたは親 directory が無ければ作成する。
-2. JSON 配列を read-modify-write し、作業項目を追加または更新する。
-3. 着手時は対象を `in_progress`、完了時は `completed` に更新する。
+1. task JSON を書く前後に、`~/.claude/projects/*/${CLAUDE_CODE_SESSION_ID}.jsonl` の各 transcript へ `claude_court_guard <transcript>` を実行する。contamination を検出した場合は H.S. に session reset を促す。
+2. `drafts/tasks/${CLAUDE_CODE_SESSION_ID}.json` を読む。ファイルまたは親 directory が無ければ作成する。
+3. JSON 配列を read-modify-write し、作業項目を追加または更新する。
+4. 着手時は対象を `in_progress`、完了時は `completed` に更新する。
 
 ## Rules
 

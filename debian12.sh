@@ -337,6 +337,7 @@ copy claude_user_settings           /usr/local/bin/claude_user_settings
 copy claude_memory_rag_builder      /usr/local/bin/claude_memory_rag_builder
 copy claude_memory_surface_analyzer /usr/local/bin/claude_memory_surface_analyzer
 copy toolbox_bigquery_mcp           /usr/local/bin/toolbox_bigquery_mcp
+copy claude_court_guard             /usr/local/bin/claude_court_guard
 
 # Initialize our RAG memory
 run claude_memory_rag_builder /var/lib/claude-rag-memory

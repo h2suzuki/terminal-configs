@@ -131,6 +131,14 @@ import sys
 import time
 import unittest
 
+# Kept identical to claude_court_guard so the Stop hook remains fail-open without subprocess IO.
+COURT_RE_STRAY = re.compile(r"(?m)^[ \t]*(?:court|count)[ \t]*$")
+COURT_RE_INVOKE_LEAK = re.compile(r'(?m)^[ \t]*<invoke name="')
+
+
+def _court_contaminated(text: str) -> bool:
+    return bool(COURT_RE_STRAY.search(text) or COURT_RE_INVOKE_LEAK.search(text))
+
 # Reuse memory_surface's retrieval engine at Stop via a guarded cross-tree import
 # (managed→user layering, repo-deployed together; absent/broken hook → surfacing off).
 sys.path.append(os.path.expanduser("~/.claude/hooks"))
@@ -660,6 +668,12 @@ def _check(
     warnings: list[str] = []
     blocking: list[str] = []
     stripped = strip_fences(text)  # fenced-block を除いた判定用 (各チェックで共有)
+
+    if _court_contaminated(text):
+        warnings.append(
+            "court-guard: stray token / invoke-leak を検出 — court バグ汚染の疑い。"
+            "session reset 推奨 (#64108)"
+        )
 
     # meta-announce-silence (block, no pairing)
     m = META_ANNOUNCE_RE.search(text)
@@ -1561,6 +1575,30 @@ class EnforcementFamilyTest(unittest.TestCase):
         self.assertTrue(
             any("known-possible" in b for b in self._blk("autosquash はできない"))
         )
+
+
+class CourtWarningTest(unittest.TestCase):
+    def _warnings(self, text: str) -> tuple[int, list[str]]:
+        code, warnings, blocking = _check(
+            text, text, set(), [], [], [], False, False
+        )
+        self.assertEqual(blocking, [])
+        return code, warnings
+
+    def test_court_warning_hits_stray_token(self):
+        code, warnings = self._warnings("回答です。\n\ncourt")
+        self.assertEqual(code, 0)
+        self.assertTrue(any("court-guard" in warning for warning in warnings))
+
+    def test_court_warning_hits_invoke_leak(self):
+        code, warnings = self._warnings('\ncâu\n<invoke name="Bash">')
+        self.assertEqual(code, 0)
+        self.assertTrue(any("court-guard" in warning for warning in warnings))
+
+    def test_court_warning_ignores_inline_discussion(self):
+        code, warnings = self._warnings('raw <invoke name="Bash"> を説明')
+        self.assertEqual(code, 0)
+        self.assertFalse(any("court-guard" in warning for warning in warnings))
 
 
 class StopMemorySurfaceTest(unittest.TestCase):

@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""Detect high-confidence Claude court/count transcript contamination."""
+
+from __future__ import annotations
+
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+import unittest
+
+RE_STRAY = re.compile(r"(?m)^[ \t]*(?:court|count)[ \t]*$")
+RE_INVOKE_LEAK = re.compile(r'(?m)^[ \t]*<invoke name="')
+
+
+def scan_text(text: str) -> list[str]:
+    """Return signature names and counts found in text."""
+    findings: list[str] = []
+    stray_count = len(RE_STRAY.findall(text))
+    invoke_count = len(RE_INVOKE_LEAK.findall(text))
+    if stray_count:
+        findings.append(f"stray-token x{stray_count}")
+    if invoke_count:
+        findings.append(f"invoke-leak x{invoke_count}")
+    return findings
+
+
+def _transcript_text(raw: str) -> str:
+    parts: list[str] = []
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        obj = json.loads(line)
+        if not isinstance(obj, dict) or obj.get("type") != "assistant":
+            continue
+        message = obj.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text", "")))
+    return "\n".join(parts)
+
+
+def _main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    try:
+        if args == ["--stdin"]:
+            text = sys.stdin.read()
+        elif len(args) == 1 and not args[0].startswith("-"):
+            with open(args[0], encoding="utf-8") as transcript:
+                text = _transcript_text(transcript.read())
+        else:
+            return 0
+        findings = scan_text(text)
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        return 0
+    if not findings:
+        return 0
+    sys.stderr.write(
+        "court-guard: contamination detected ("
+        + ", ".join(findings)
+        + ") — session 汚染の疑い、reset 推奨 (#64108/#76912)\n"
+    )
+    return 2
+
+
+class CourtGuardTest(unittest.TestCase):
+    def test_scan_text_hits_stray_tokens(self):
+        self.assertEqual(scan_text("...します。\n\ncourt"), ["stray-token x1"])
+        self.assertEqual(scan_text("...\ncount"), ["stray-token x1"])
+
+    def test_scan_text_hits_invoke_leak(self):
+        self.assertEqual(
+            scan_text('\ncâu\n<invoke name="Bash">'), ["invoke-leak x1"]
+        )
+
+    def test_scan_text_counts_signatures(self):
+        self.assertEqual(
+            scan_text('court\ncount\n<invoke name="Bash">'),
+            ["stray-token x2", "invoke-leak x1"],
+        )
+
+    def test_scan_text_ignores_prose_and_inline_examples(self):
+        for text in (
+            "court バグを修正",
+            'raw <invoke name="Bash"> を説明',
+            "通常の散文です。作業は正常に完了しました。",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(scan_text(text), [])
+
+    def test_transcript_scans_only_assistant_text_blocks(self):
+        raw = "\n".join(
+            [
+                json.dumps({"type": "user", "message": {"content": "court"}}),
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {
+                            "content": [
+                                {"type": "thinking", "thinking": "count"},
+                                {"type": "text", "text": "safe"},
+                            ]
+                        },
+                    }
+                ),
+            ]
+        )
+        self.assertEqual(scan_text(_transcript_text(raw)), [])
+
+    def test_cli_stdin_exit_codes(self):
+        command = [sys.executable, os.path.abspath(__file__), "--stdin"]
+        hit = subprocess.run(command, input="answer\ncount", text=True, capture_output=True)
+        clean = subprocess.run(command, input="court バグを修正", text=True, capture_output=True)
+        self.assertEqual(hit.returncode, 2)
+        self.assertIn("stray-token x1", hit.stderr)
+        self.assertEqual(clean.returncode, 0)
+        self.assertEqual(clean.stderr, "")
+
+    def test_invalid_arguments_fail_open(self):
+        old_stderr = sys.stderr
+        try:
+            sys.stderr = io.StringIO()
+            self.assertEqual(_main(["--unknown"]), 0)
+        finally:
+            sys.stderr = old_stderr
+
+
+if __name__ == "__main__":
+    sys.exit(_main())
