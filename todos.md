@@ -49,7 +49,8 @@ Goal: 最新 3 モデル (Opus 4.8 / Sonnet 5 / Fable 5) で TaskCreate/TaskGet/
 
 Exit Criteria:
 - [x] 原因の確定 — 2026-07-13 に model gate `tengu_vellum_ash` と特定 (下記「確定済み背景」、実機裏取り済)
-- [ ] 対処方針の合意 (案: 一時 gate とみて待機 / kill-list 外 model へ切替 / #76076 に実機確認を追記)
+- [x] 対処方針を確定・実装 — hook gate エミュレーション + /my-tasks 代替 skill + court-guard + DISABLE_GROWTHBOOK ad-hoc、全 deploy 済 (9eac0bc/02e3054)。env-check (DISABLE_GROWTHBOOK 迂回) は H.S. が 2 度不採用・再提起しない (2026-07-13)
+- [ ] 上流 gate (tengu_vellum_ash) の解除を watch (opportunistic)
 
 確定済み背景 (2026-07-13・再導出不要):
 - **問題定義**: Opus 4.8 セッションで TaskCreate/TaskGet/TaskList/TaskUpdate と旧 TodoWrite が完全に不在 (tool 一覧にも ToolSearch deferred にも出ない)。background-agent 系の TaskStop/TaskOutput のみ残る。
@@ -63,25 +64,13 @@ Exit Criteria:
 - 裏取り issue: #62205 (OPEN, root cause = 上記 2 flag が ~9 分 sync で override) / #61415・#61436 (症状クラスタ = Desktop が Accept Edits に戻る、#61436 は closed) / #63015 (別件・auto-compact 不発、参考)。
 - cc-safe-setup (npm, 記事著者): flag drift 監視 hook 群 (growthbook-flag-monitor / compact-dispatch-watchdog / permission-mode-drift-guard) を導入する緩和ツール。npm ページは 403 で本文未取得、記述は記事準拠。
 
-### stop_checks.py の intent-without-task が Task tools 不在で誤発火 (下流被害)
-
-Goal: 上記「Task 管理ツールが model gate で使用不可」の下流被害として、stop_checks.py の intent-without-task が呼べない tool を要求し進捗語ごとに誤発火する (被害であって原因ではない)。hook 側で gate をエミュレートし、gated 時は代替 CreateMyTask へ誘導する。
-
-Exit Criteria:
-- [x] 方針合意 — hard-block enforcement + 代替 CreateMyTask (2026-07-13 H.S. 選択)
-- [x] 実装 + test + commit — 9eac0bc (stop_checks に `_tasks_gated_off` gate エミュレーション + CreateMyTask skill `files/claude_user-skills/create-my-task/`、52 tests 独立再実行 OK。DISABLE_GROWTHBOOK env-check は H.S. 判断で不採用)
-- [x] deploy 完了・配置検証 — 2026-07-13 H.S. 実行、hooks/ cmp 一致・skill active 最新を確認
-- [x] intent 分岐の live 発火を確認 — 2026-07-13 実発火 (DISABLE_GROWTHBOOK セッションで stale cache により gated 枝が発動し CreateMyTask 文面出力)。機構 live 確認済
-- 既知・許容 (再提起しない): DISABLE_GROWTHBOOK セッションは stale cache で false-gated 発火する。env-check 追加は H.S. が 2 度不採用 (2026-07-13)。解消は実 TaskCreate 使用 (外側条件短絡)
-
-
 ### court バグ guard (command + stop_checks/skill 配線)
 
 Goal: stray token (court/count/câu… と揺れる) + 行頭 invoke-leak を厳密パターンで捕捉し、court バグ汚染 (#76912 / #64108) を早期検知する。
 
 Exit Criteria:
 - [x] 検出方式を実データで確定 — 888 transcript 走査で 2 signature を FP ゼロ検証: stray-token 単独行 `(?m)^[ \t]*(court|count)[ \t]*$` / 行頭 invoke-leak `(?m)^[ \t]*<invoke name="`。token 固定でなく leaked XML を token 非依存で捕捉するのが要 (実バグ例 "câu")
-- [x] 実装 + test + commit — 02e3054 (command `files/claude_court_guard` 7 tests / stop_checks warning-only 55 tests / CreateMyTask 自己チェック / 両 .sh に copy 行、独立再実行 OK)
+- [x] 実装 + test + commit — 02e3054 (command `files/claude_court_guard` 7 tests / stop_checks warning-only 55 tests / /my-tasks 自己チェック / 両 .sh に copy 行、独立再実行 OK)
 - [x] deploy 完了・配置検証 — 2026-07-13 H.S. 実行、`/usr/local/bin/claude_court_guard` PATH 動作・hooks/ 一致を確認
 - [ ] 実運用で court 汚染の live 検出を確認 (opportunistic)
 - 既知 finding (低 pri): stop_checks の court チェックは生 `text` 対象で、fence 内に court パターンを書く session は理論上 FP。`stripped` 化は要検討 (実 corpus では 0 FP)

@@ -765,7 +765,7 @@ def _check(
                 blocking.append(
                     f"intent-without-task: 作業遂行宣言「{m.group(0)}」を検出。現行モデルは "
                     f"tengu_vellum_ash gate で Task ツールが無効化されています。代替の "
-                    f"CreateMyTask skill で drafts/tasks/<session>.json に作業を記録してから"
+                    f"/my-tasks skill で drafts/tasks/<session>.json に作業を記録してから"
                     f"再出力してください。"
                 )
         else:
@@ -1516,10 +1516,10 @@ class EnforcementFamilyTest(unittest.TestCase):
         ]
         self.assertEqual(_current_turn(entries)[8], "claude-opus-4-8")
 
-    def test_intent_gated_without_mytask_blocks_for_create_mytask(self):
+    def test_intent_gated_without_mytask_blocks_for_my_tasks(self):
         with self._gate_config({"tengu_vellum_ash": ["opus-4-8"]}):
             blk = self._blk("修正します", model="claude-opus-4-8")
-        self.assertTrue(any("CreateMyTask" in b for b in blk))
+        self.assertTrue(any("my-tasks" in b for b in blk))
 
     def test_intent_gated_with_mytask_edit_passes(self):
         with self._gate_config({"tengu_vellum_ash": ["opus-4-8"]}):

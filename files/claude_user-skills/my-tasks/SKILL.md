@@ -1,10 +1,10 @@
 ---
-name: create-my-task
+name: my-tasks
 description: Tracks work items in a session-local JSON file when Claude task tools are gated off.
 when_to_use: TRIGGER when work items must be tracked but Task tools are unavailable because of a gate. SKIP when TaskCreate, TaskUpdate, TodoWrite, or equivalent Task tools are available in the session.
 ---
 
-# Create My Task
+# My Tasks
 
 Task ツールが gate で使えないセッションに限り、同等の作業追跡を session-local JSON で代替する。
 
