@@ -70,7 +70,8 @@ Goal: 上記「Task 管理ツールが model gate で使用不可」の下流被
 Exit Criteria:
 - [x] 方針合意 — hard-block enforcement + 代替 CreateMyTask (2026-07-13 H.S. 選択)
 - [x] 実装 + test + commit — 9eac0bc (stop_checks に `_tasks_gated_off` gate エミュレーション + CreateMyTask skill `files/claude_user-skills/create-my-task/`、52 tests 独立再実行 OK。DISABLE_GROWTHBOOK env-check は H.S. 判断で不採用)
-- [ ] deploy (H.S. host 側: `/etc/claude-code/hooks/` + `~/.claude/skills/`) 後、gated session で live 発火を確認
+- [x] deploy 完了・配置検証 — 2026-07-13 H.S. 実行、hooks/ cmp 一致・skill active 最新を確認
+- [ ] gated session (DISABLE_GROWTHBOOK 無し) で intent 分岐の live 発火を実運用確認 (opportunistic)
 
 
 ### court バグ guard (command + stop_checks/skill 配線)
@@ -80,7 +81,8 @@ Goal: stray token (court/count/câu… と揺れる) + 行頭 invoke-leak を厳
 Exit Criteria:
 - [x] 検出方式を実データで確定 — 888 transcript 走査で 2 signature を FP ゼロ検証: stray-token 単独行 `(?m)^[ \t]*(court|count)[ \t]*$` / 行頭 invoke-leak `(?m)^[ \t]*<invoke name="`。token 固定でなく leaked XML を token 非依存で捕捉するのが要 (実バグ例 "câu")
 - [x] 実装 + test + commit — 02e3054 (command `files/claude_court_guard` 7 tests / stop_checks warning-only 55 tests / CreateMyTask 自己チェック / 両 .sh に copy 行、独立再実行 OK)
-- [ ] deploy (H.S. host 側: `/usr/local/bin/claude_court_guard` + hooks/ 再配置) 後、gated/long session で live 確認
+- [x] deploy 完了・配置検証 — 2026-07-13 H.S. 実行、`/usr/local/bin/claude_court_guard` PATH 動作・hooks/ 一致を確認
+- [ ] 実運用で court 汚染の live 検出を確認 (opportunistic)
 - 既知 finding (低 pri): stop_checks の court チェックは生 `text` 対象で、fence 内に court パターンを書く session は理論上 FP。`stripped` 化は要検討 (実 corpus では 0 FP)
 
 ### memory surface の閾値をモデル別に変えられるか調査
