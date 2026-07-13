@@ -71,7 +71,8 @@ Exit Criteria:
 - [x] 方針合意 — hard-block enforcement + 代替 CreateMyTask (2026-07-13 H.S. 選択)
 - [x] 実装 + test + commit — 9eac0bc (stop_checks に `_tasks_gated_off` gate エミュレーション + CreateMyTask skill `files/claude_user-skills/create-my-task/`、52 tests 独立再実行 OK。DISABLE_GROWTHBOOK env-check は H.S. 判断で不採用)
 - [x] deploy 完了・配置検証 — 2026-07-13 H.S. 実行、hooks/ cmp 一致・skill active 最新を確認
-- [ ] gated session (DISABLE_GROWTHBOOK 無し) で intent 分岐の live 発火を実運用確認 (opportunistic)
+- [x] intent 分岐の live 発火を確認 — 2026-07-13 実発火 (DISABLE_GROWTHBOOK セッションで stale cache により gated 枝が発動し CreateMyTask 文面出力)。機構 live 確認済
+- 既知・許容 (再提起しない): DISABLE_GROWTHBOOK セッションは stale cache で false-gated 発火する。env-check 追加は H.S. が 2 度不採用 (2026-07-13)。解消は実 TaskCreate 使用 (外側条件短絡)
 
 
 ### court バグ guard (command + stop_checks/skill 配線)
