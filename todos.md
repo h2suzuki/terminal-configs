@@ -73,14 +73,15 @@ Exit Criteria:
 - [ ] deploy (H.S. host 側: `/etc/claude-code/hooks/` + `~/.claude/skills/`) 後、gated session で live 発火を確認
 
 
-### court バグ guard hook (後続)
+### court バグ guard (command + stop_checks/skill 配線)
 
-Goal: stray "court" token 混入を hook で捕捉し、正規の court 単語と区別してセッション汚染を早期検知する (Claude Code 2.1.148+ の court バグ、#76912 / #64108 参照)。
+Goal: stray token (court/count/câu… と揺れる) + 行頭 invoke-leak を厳密パターンで捕捉し、court バグ汚染 (#76912 / #64108) を早期検知する。
 
 Exit Criteria:
-- [ ] 検出方式の設計合意 (PreToolUse で tool input 走査 / 位置パターン / 誤検出を避ける区別ヒューリスティック)
-- [ ] 実装 + test + commit
-- [ ] deploy + live 確認
+- [x] 検出方式を実データで確定 — 888 transcript 走査で 2 signature を FP ゼロ検証: stray-token 単独行 `(?m)^[ \t]*(court|count)[ \t]*$` / 行頭 invoke-leak `(?m)^[ \t]*<invoke name="`。token 固定でなく leaked XML を token 非依存で捕捉するのが要 (実バグ例 "câu")
+- [x] 実装 + test + commit — 02e3054 (command `files/claude_court_guard` 7 tests / stop_checks warning-only 55 tests / CreateMyTask 自己チェック / 両 .sh に copy 行、独立再実行 OK)
+- [ ] deploy (H.S. host 側: `/usr/local/bin/claude_court_guard` + hooks/ 再配置) 後、gated/long session で live 確認
+- 既知 finding (低 pri): stop_checks の court チェックは生 `text` 対象で、fence 内に court パターンを書く session は理論上 FP。`stripped` 化は要検討 (実 corpus では 0 FP)
 
 ### memory surface の閾値をモデル別に変えられるか調査
 
