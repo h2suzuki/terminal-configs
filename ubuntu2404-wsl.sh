@@ -292,7 +292,13 @@ if [ -r "$USERNS_FLAG" ] && [ "$(< "$USERNS_FLAG")" = "1" ]; then
 fi
 
 
-rm -rf /etc/claude-code/
+# Reset the managed tree but keep project drop-ins (managed-settings.d/*.json)
+if [ -d /etc/claude-code/ ]; then
+    find /etc/claude-code -depth -mindepth 1 \
+        ! -path /etc/claude-code/managed-settings.d \
+        ! -path '/etc/claude-code/managed-settings.d/*.json' \
+        -delete
+fi
 copy claude_statusline.sh                       /etc/claude-code/statusline.sh
 copy claude_managed-CLAUDE.md                   /etc/claude-code/CLAUDE.md
 copy claude_managed-settings.json               /etc/claude-code/managed-settings.json
