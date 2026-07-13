@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TextIO, cast
 from unittest import mock
 
-type Task = dict[str, object]
+Task = dict[str, object]
 
 VERSION = "1.0.0"
 DEFAULT_PROTOCOL_VERSION = "2025-11-25"
