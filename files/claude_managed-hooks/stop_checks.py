@@ -407,6 +407,9 @@ EVIDENCE_TOOLS = {"Read", "Grep", "Glob", "WebSearch", "WebFetch"}
 # Task tools (deferral pairing)
 TASK_TOOLS = {"TaskCreate", "TaskUpdate", "TodoWrite"}
 
+# mytask MCP tools that record work when native Task tools are gated off.
+MYTASK_MCP_TOOLS = {"mcp__mytask__TaskCreate", "mcp__mytask__TaskUpdate"}
+
 # Tools whose file_path / notebook_path inputs are recorded for path matching.
 PATH_RECORDING_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
@@ -760,13 +763,14 @@ def _check(
     m = INTENT_DECLARE_RE.search(stripped)
     if m and not (tool_names & TASK_TOOLS):
         if _tasks_gated_off(model):
-            mytask_recorded = any(_is_mytask_path(p) for p in edited_paths)
+            mytask_recorded = bool(tool_names & MYTASK_MCP_TOOLS) or any(
+                _is_mytask_path(p) for p in edited_paths
+            )
             if not mytask_recorded:
                 blocking.append(
                     f"intent-without-task: 作業遂行宣言「{m.group(0)}」を検出。現行モデルは "
-                    f"tengu_vellum_ash gate で Task ツールが無効化されています。代替の "
-                    f"/my-tasks skill で drafts/tasks/<session>.json に作業を記録してから"
-                    f"再出力してください。"
+                    f"tengu_vellum_ash gate で Task ツールが無効化されています。mytask MCP "
+                    f"(mcp__mytask__TaskCreate / TaskUpdate) で作業を記録してから再出力してください。"
                 )
         else:
             blocking.append(
@@ -1516,10 +1520,19 @@ class EnforcementFamilyTest(unittest.TestCase):
         ]
         self.assertEqual(_current_turn(entries)[8], "claude-opus-4-8")
 
-    def test_intent_gated_without_mytask_blocks_for_my_tasks(self):
+    def test_intent_gated_without_mytask_blocks(self):
         with self._gate_config({"tengu_vellum_ash": ["opus-4-8"]}):
             blk = self._blk("修正します", model="claude-opus-4-8")
-        self.assertTrue(any("my-tasks" in b for b in blk))
+        self.assertTrue(any("mcp__mytask__" in b for b in blk))
+
+    def test_intent_gated_with_mcp_tool_passes(self):
+        with self._gate_config({"tengu_vellum_ash": ["opus-4-8"]}):
+            blk = self._blk(
+                "修正します",
+                tools=["mcp__mytask__TaskCreate"],
+                model="claude-opus-4-8",
+            )
+        self.assertFalse(any("intent-without-task" in b for b in blk))
 
     def test_intent_gated_with_mytask_edit_passes(self):
         with self._gate_config({"tengu_vellum_ash": ["opus-4-8"]}):
