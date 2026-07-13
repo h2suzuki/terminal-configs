@@ -63,14 +63,24 @@ Exit Criteria:
 - 裏取り issue: #62205 (OPEN, root cause = 上記 2 flag が ~9 分 sync で override) / #61415・#61436 (症状クラスタ = Desktop が Accept Edits に戻る、#61436 は closed) / #63015 (別件・auto-compact 不発、参考)。
 - cc-safe-setup (npm, 記事著者): flag drift 監視 hook 群 (growthbook-flag-monitor / compact-dispatch-watchdog / permission-mode-drift-guard) を導入する緩和ツール。npm ページは 403 で本文未取得、記述は記事準拠。
 
-### stop_checks.py の intent-without-task が Task tools 不在で誤発火 (下流被害・要相談)
+### stop_checks.py の intent-without-task が Task tools 不在で誤発火 (下流被害)
 
-Goal: 上記「Task 管理ツールが model gate で使用不可」の下流被害として、stop_checks.py の intent-without-task が呼べない tool を要求し進捗語ごとに誤発火する (被害であって原因ではない)。hook 側の緩和方針を H.S. と合意して実装する。
+Goal: 上記「Task 管理ツールが model gate で使用不可」の下流被害として、stop_checks.py の intent-without-task が呼べない tool を要求し進捗語ごとに誤発火する (被害であって原因ではない)。hook 側で gate をエミュレートし、gated 時は代替 CreateMyTask へ誘導する。
 
 Exit Criteria:
-- [ ] 方針合意 (案: Task tools 不在セッションでは skip / todos.md 追跡に代替 / 上流 issue 報告)
-- [ ] 合意した対応を実装・deploy・commit
+- [x] 方針合意 — hard-block enforcement + 代替 CreateMyTask (2026-07-13 H.S. 選択)
+- [x] 実装 + test + commit — 9eac0bc (stop_checks に `_tasks_gated_off` gate エミュレーション + CreateMyTask skill `files/claude_user-skills/create-my-task/`、52 tests 独立再実行 OK。DISABLE_GROWTHBOOK env-check は H.S. 判断で不採用)
+- [ ] deploy (H.S. host 側: `/etc/claude-code/hooks/` + `~/.claude/skills/`) 後、gated session で live 発火を確認
 
+
+### court バグ guard hook (後続)
+
+Goal: stray "court" token 混入を hook で捕捉し、正規の court 単語と区別してセッション汚染を早期検知する (Claude Code 2.1.148+ の court バグ、#76912 / #64108 参照)。
+
+Exit Criteria:
+- [ ] 検出方式の設計合意 (PreToolUse で tool input 走査 / 位置パターン / 誤検出を避ける区別ヒューリスティック)
+- [ ] 実装 + test + commit
+- [ ] deploy + live 確認
 
 ### memory surface の閾値をモデル別に変えられるか調査
 
