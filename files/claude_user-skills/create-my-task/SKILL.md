@@ -14,6 +14,7 @@ Task ツールが gate で使えないセッションに限り、同等の作業
 2. `drafts/tasks/${CLAUDE_CODE_SESSION_ID}.json` を読む。ファイルまたは親 directory が無ければ作成する。
 3. JSON 配列を read-modify-write し、作業項目を追加または更新する。
 4. 着手時は対象を `in_progress`、完了時は `completed` に更新する。
+5. 作業一覧を表示する時は、id 昇順で各項目を `#<id>. [<status>] <content>` 形式(実 TaskList と同形)で出力する。
 
 ## Rules
 
