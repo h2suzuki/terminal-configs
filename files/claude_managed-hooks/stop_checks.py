@@ -769,8 +769,8 @@ def _check(
             if not mytask_recorded:
                 blocking.append(
                     f"intent-without-task: 作業遂行宣言「{m.group(0)}」を検出。現行モデルは "
-                    f"tengu_vellum_ash gate で Task ツールが無効化されています。mytask MCP "
-                    f"(mcp__mytask__TaskCreate / TaskUpdate) で作業を記録してから再出力してください。"
+                    f"tengu_vellum_ash gate で Task ツールが無効化されています。mytask skill に従い "
+                    f"MCP で作業を記録してから再出力してください。"
                 )
         else:
             blocking.append(
@@ -1523,7 +1523,7 @@ class EnforcementFamilyTest(unittest.TestCase):
     def test_intent_gated_without_mytask_blocks(self):
         with self._gate_config({"tengu_vellum_ash": ["opus-4-8"]}):
             blk = self._blk("修正します", model="claude-opus-4-8")
-        self.assertTrue(any("mcp__mytask__" in b for b in blk))
+        self.assertTrue(any("mytask skill" in b for b in blk))
 
     def test_intent_gated_with_mcp_tool_passes(self):
         with self._gate_config({"tengu_vellum_ash": ["opus-4-8"]}):
