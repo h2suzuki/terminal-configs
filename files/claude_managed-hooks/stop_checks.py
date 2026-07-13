@@ -403,6 +403,27 @@ TASK_TOOLS = {"TaskCreate", "TaskUpdate", "TodoWrite"}
 PATH_RECORDING_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
 
+def _tasks_gated_off(model: str | None) -> bool:
+    if not model:
+        return False
+    try:
+        with open(os.path.expanduser("~/.claude.json"), encoding="utf-8") as f:
+            features = json.load(f).get("cachedGrowthBookFeatures")
+        if not isinstance(features, dict) or "tengu_vellum_ash" not in features:
+            return False
+        gate = features["tengu_vellum_ash"]
+        if not isinstance(gate, list) or not gate:
+            return False
+        return any(isinstance(e, str) and e and e in model for e in gate)
+    except Exception:
+        return False
+
+
+def _is_mytask_path(path: str) -> bool:
+    normalized = os.path.normpath(path).replace("\\", "/").replace(os.sep, "/")
+    return "drafts/tasks/" in normalized and normalized.endswith(".json")
+
+
 def strip_fences(text: str) -> str:
     # fenced block を先に除去し、 次に inline backtick span を除去 (順序が load-bearing:
     # fence 先除去で inline pass が fence 区切りの裸 ``` を食わない)。 [^`\n] guard で
@@ -473,9 +494,9 @@ def _parse_ts(ts) -> float | None:
 def _current_turn(
     entries: list[dict],
 ) -> tuple[
-    str, str, set[str], list[str], list[str], list[str], bool, float | None
+    str, str, set[str], list[str], list[str], list[str], bool, float | None, str | None
 ]:
-    """Return current-turn text, final text, tools, paths, commands, git state, and prompt time."""
+    """Return current-turn text, tools, paths, commands, git state, prompt time, and model."""
     start_idx = -1
     prompt_epoch: float | None = None
     for i in range(len(entries) - 1, -1, -1):
@@ -488,7 +509,7 @@ def _current_turn(
             prompt_epoch = _parse_ts(obj.get("timestamp"))
             break
     if start_idx == -1:
-        return "", "", set(), [], [], [], False, None
+        return "", "", set(), [], [], [], False, None, None
 
     text_parts: list[str] = []
     final_text = ""
@@ -497,11 +518,14 @@ def _current_turn(
     edited_paths: list[str] = []
     bash_commands: list[str] = []
     has_git_verify = False
+    model: str | None = None
 
     for obj in entries[start_idx:]:
         if obj.get("type") != "assistant":
             continue
         msg = obj.get("message", {})
+        if isinstance(msg, dict) and isinstance(msg.get("model"), str):
+            model = msg["model"]
         content = msg.get("content") if isinstance(msg, dict) else None
         if not isinstance(content, list):
             continue
@@ -532,6 +556,15 @@ def _current_turn(
                         if GIT_VERIFY_RE.search(cmd):
                             has_git_verify = True
 
+    if model is None:
+        for obj in reversed(entries):
+            if obj.get("type") != "assistant":
+                continue
+            msg = obj.get("message", {})
+            if isinstance(msg, dict) and isinstance(msg.get("model"), str):
+                model = msg["model"]
+                break
+
     return (
         "\n".join(text_parts),
         final_text,
@@ -541,6 +574,7 @@ def _current_turn(
         bash_commands,
         has_git_verify,
         prompt_epoch,
+        model,
     )
 
 
@@ -620,6 +654,7 @@ def _check(
     bash_commands: list[str],
     has_git_verify: bool,
     declare_active: bool,
+    model: str | None = None,
 ) -> tuple[int, list[str], list[str]]:
     """Return (exit_code, warnings, blocking)."""
     warnings: list[str] = []
@@ -710,12 +745,22 @@ def _check(
     # intent-without-task (block if work-execution declaration without task tool)
     m = INTENT_DECLARE_RE.search(stripped)
     if m and not (tool_names & TASK_TOOLS):
-        blocking.append(
-            f"intent-without-task: 作業遂行宣言「{m.group(0)}」を検出しましたが、このターンに"
-            f" TaskCreate/TaskUpdate/TodoWrite が記録されていません。"
-            f" System §計画と遂行: 全作業項目を大小に関わらず Task で計画・追跡。"
-            f" TaskCreate で作業を登録 (または既存タスクを TaskUpdate) してから再出力してください。"
-        )
+        if _tasks_gated_off(model):
+            mytask_recorded = any(_is_mytask_path(p) for p in edited_paths)
+            if not mytask_recorded:
+                blocking.append(
+                    f"intent-without-task: 作業遂行宣言「{m.group(0)}」を検出。現行モデルは "
+                    f"tengu_vellum_ash gate で Task ツールが無効化されています。代替の "
+                    f"CreateMyTask skill で drafts/tasks/<session>.json に作業を記録してから"
+                    f"再出力してください。"
+                )
+        else:
+            blocking.append(
+                f"intent-without-task: 作業遂行宣言「{m.group(0)}」を検出しましたが、このターンに"
+                f" TaskCreate/TaskUpdate/TodoWrite が記録されていません。"
+                f" System §計画と遂行: 全作業項目を大小に関わらず Task で計画・追跡。"
+                f" TaskCreate で作業を登録 (または既存タスクを TaskUpdate) してから再出力してください。"
+            )
 
     # deferral (warning-only)
     m = DEFERRAL_RE.search(text)
@@ -810,7 +855,7 @@ def _run(payload: dict) -> tuple[int, float | None, str]:
     transcript_path = payload.get("transcript_path")
     if not isinstance(transcript_path, str) or not transcript_path:
         return 0, None, ""
-    entries = _load_tail(transcript_path)
+    entries = _load_tail(transcript_path, turns=2)
     if not entries:
         return 0, None, ""
     (
@@ -822,6 +867,7 @@ def _run(payload: dict) -> tuple[int, float | None, str]:
         bash_commands,
         has_git_verify,
         prompt_epoch,
+        model,
     ) = _current_turn(entries)
     # Claude Code が Stop hook を invoke する時点で最新 assistant text はまだ transcript に
     # flush されていない (v2.1.47+ で payload に last_assistant_message が提供されたのはこの
@@ -842,6 +888,7 @@ def _run(payload: dict) -> tuple[int, float | None, str]:
         bash_commands,
         has_git_verify,
         declare_active,
+        model,
     )
     # advise-once: a stop_hook_active retry never re-blocks — demote to pass (see docstring turn-marker / Exit).
     if exit_code == 2 and payload.get("stop_hook_active"):
@@ -1117,12 +1164,13 @@ class TurnMarkerTest(unittest.TestCase):
             self.assertIsNone(_parse_ts(bad))
 
     def test_current_turn_returns_prompt_epoch(self):
-        text, final, _n, _p, _e, _b, _g, pe = _current_turn(
+        text, final, _n, _p, _e, _b, _g, pe, model = _current_turn(
             [self._user(), self._asst("done.")]
         )
         self.assertEqual(text, "done.")
         self.assertEqual(final, "done.")
         self.assertEqual(pe, _parse_ts(self.TS))
+        self.assertIsNone(model)
         no_ts = [{"type": "user", "message": {"content": "x"}}, self._asst("y")]
         self.assertIsNone(_current_turn(no_ts)[7])
         tool_only = [
@@ -1130,7 +1178,7 @@ class TurnMarkerTest(unittest.TestCase):
             self._asst("y"),
         ]
         self.assertEqual(
-            _current_turn(tool_only), ("", "", set(), [], [], [], False, None)
+            _current_turn(tool_only), ("", "", set(), [], [], [], False, None, None)
         )
 
     def test_load_tail_matches_whole_transcript(self):
@@ -1218,6 +1266,7 @@ class EnforcementFamilyTest(unittest.TestCase):
         commands=None,
         final_text=None,
         declare_active=False,
+        model=None,
     ):
         return _check(
             text,
@@ -1228,6 +1277,7 @@ class EnforcementFamilyTest(unittest.TestCase):
             list(commands or []),
             False,
             declare_active,
+            model,
         )
 
     def _blk(self, *a, **k):
@@ -1411,6 +1461,66 @@ class EnforcementFamilyTest(unittest.TestCase):
         return code, stderr.getvalue()
 
     # --- intent-without-task ---
+    @staticmethod
+    def _gate_config(features):
+        import tempfile
+        from unittest import mock
+
+        path = os.path.join(tempfile.mkdtemp(), ".claude.json")
+        if features is not None:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"cachedGrowthBookFeatures": features}, f)
+        return mock.patch.object(os.path, "expanduser", return_value=path)
+
+    def test_tasks_gated_off_missing_file(self):
+        with self._gate_config(None):
+            self.assertFalse(_tasks_gated_off("claude-opus-4-8"))
+
+    def test_tasks_gated_off_missing_key(self):
+        with self._gate_config({}):
+            self.assertFalse(_tasks_gated_off("claude-opus-4-8"))
+
+    def test_tasks_gated_off_matching_model(self):
+        with self._gate_config({"tengu_vellum_ash": ["opus-4-8"]}):
+            self.assertTrue(_tasks_gated_off("claude-opus-4-8"))
+
+    def test_tasks_gated_off_nonmatching_model(self):
+        with self._gate_config({"tengu_vellum_ash": ["sonnet-5"]}):
+            self.assertFalse(_tasks_gated_off("claude-opus-4-8"))
+
+    def test_current_turn_uses_last_assistant_model_as_fallback(self):
+        entries = [
+            {
+                "type": "assistant",
+                "message": {"model": "claude-opus-4-8", "content": []},
+            },
+            {"type": "user", "message": {"content": "do it"}},
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "done"}]},
+            },
+        ]
+        self.assertEqual(_current_turn(entries)[8], "claude-opus-4-8")
+
+    def test_intent_gated_without_mytask_blocks_for_create_mytask(self):
+        with self._gate_config({"tengu_vellum_ash": ["opus-4-8"]}):
+            blk = self._blk("修正します", model="claude-opus-4-8")
+        self.assertTrue(any("CreateMyTask" in b for b in blk))
+
+    def test_intent_gated_with_mytask_edit_passes(self):
+        with self._gate_config({"tengu_vellum_ash": ["opus-4-8"]}):
+            blk = self._blk(
+                "修正します",
+                paths=["/project/drafts/tasks/session.json"],
+                model="claude-opus-4-8",
+            )
+        self.assertFalse(any("intent-without-task" in b for b in blk))
+
+    def test_intent_not_gated_keeps_taskcreate_message(self):
+        with self._gate_config({"tengu_vellum_ash": ["sonnet-5"]}):
+            blk = self._blk("修正します", model="claude-opus-4-8")
+        self.assertTrue(any("TaskCreate で作業を登録" in b for b in blk))
+
     def test_intent_declare_alone_blocks(self):
         code, _w, blk = self._c("修正します")
         self.assertEqual(code, 2)
