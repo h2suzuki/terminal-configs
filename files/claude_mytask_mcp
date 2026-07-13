@@ -1,0 +1,544 @@
+#!/usr/bin/env python3
+"""Serve session-local work items through a small stdlib-only MCP server."""
+
+from __future__ import annotations
+
+import glob
+import io
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import TextIO, cast
+from unittest import mock
+
+type Task = dict[str, object]
+
+VERSION = "1.0.0"
+DEFAULT_PROTOCOL_VERSION = "2025-11-25"
+TIME_FORMAT = "%Y-%m-%d %H:%M"
+STATUSES = ("pending", "in_progress", "blocked", "completed")
+EMOJI = {
+    "pending": "🔳",
+    "in_progress": "▶️",
+    "blocked": "🚧",
+    "completed": "✅",
+}
+SUBTASK_ID = re.compile(r"^(\d+)-(\d+)$")
+
+TOOLS = [
+    {
+        "name": "TaskList",
+        "description": "List session work items (id order; pending/in_progress/blocked always shown, completed only if finished within 12h). Runs a court-bug contamination check and prepends a warning if the session transcript looks contaminated (#64108).",
+        "inputSchema": {"type": "object", "additionalProperties": False},
+    },
+    {
+        "name": "TaskCreate",
+        "description": "Add a work item (status pending). Use `parent` (a top-level id) to add a subtask.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "content": {"type": "string"},
+                "activeForm": {"type": "string"},
+                "parent": {"type": "string"},
+            },
+            "required": ["content"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "TaskUpdate",
+        "description": "Update a work item's status. Keep exactly one in_progress at a time (TodoWrite semantics): starting a new item auto-demotes the previous in_progress to pending.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "status": {"type": "string", "enum": list(STATUSES)},
+            },
+            "required": ["id", "status"],
+            "additionalProperties": False,
+        },
+    },
+]
+
+
+def _now() -> datetime:
+    return datetime.now()
+
+
+def _session_id() -> str | None:
+    value = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    return value if value else None
+
+
+def _task_path(session_id: str) -> Path:
+    root = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    return Path(root) / "drafts" / "tasks" / f"{session_id}.json"
+
+
+def read_tasks(path: Path) -> list[Task]:
+    """Read a task array, treating missing or malformed data as empty."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, list):
+            return []
+        return [cast(Task, item) for item in raw if isinstance(item, dict)]
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        return []
+
+
+def write_tasks(path: Path, tasks: list[Task]) -> str | None:
+    """Write the whole task array and return an error message on failure."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(tasks, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+    except (OSError, UnicodeError, TypeError, ValueError) as error:
+        return f"Could not save tasks: {error}"
+    return None
+
+
+def _sort_key(task: Task) -> tuple[int, int, int, str]:
+    task_id = str(task.get("id", ""))
+    if task_id.isdigit():
+        return (int(task_id), 0, 0, "")
+    match = SUBTASK_ID.fullmatch(task_id)
+    if match:
+        return (int(match.group(1)), 1, int(match.group(2)), "")
+    return (sys.maxsize, 2, 0, task_id)
+
+
+def _visible(task: Task, now: datetime) -> bool:
+    status = task.get("status")
+    if status in ("pending", "in_progress", "blocked"):
+        return True
+    if status != "completed":
+        return False
+    completed_at = task.get("completed_at")
+    if not isinstance(completed_at, str):
+        return False
+    try:
+        completed = datetime.strptime(completed_at, TIME_FORMAT)
+    except ValueError:
+        return False
+    return now - completed <= timedelta(hours=12)
+
+
+def render_tasks(tasks: list[Task], now: datetime | None = None) -> str:
+    """Render visible tasks in numeric parent and subtask order."""
+    current = _now() if now is None else now
+    lines: list[str] = []
+    for task in sorted(tasks, key=_sort_key):
+        if not _visible(task, current):
+            continue
+        task_id = str(task.get("id", ""))
+        status = str(task.get("status", ""))
+        content = str(task.get("content", ""))
+        created = task.get("created")
+        suffix = f" ({created})" if isinstance(created, str) and created else ""
+        indent = "  " if SUBTASK_ID.fullmatch(task_id) else ""
+        lines.append(f"{indent}{task_id} {EMOJI[status]} {content}{suffix}")
+    return "\n".join(lines) if lines else "(no active tasks)"
+
+
+def _load_session_tasks() -> tuple[Path | None, list[Task], str | None]:
+    session_id = _session_id()
+    if session_id is None:
+        return (
+            None,
+            [],
+            "CLAUDE_CODE_SESSION_ID is not set; cannot access session tasks.",
+        )
+    path = _task_path(session_id)
+    return path, read_tasks(path), None
+
+
+def task_list() -> tuple[str, bool]:
+    _path, tasks, error = _load_session_tasks()
+    if error:
+        return error, True
+    return render_tasks(tasks), False
+
+
+def _next_top_id(tasks: list[Task]) -> str:
+    ids = [
+        int(str(task.get("id"))) for task in tasks if str(task.get("id", "")).isdigit()
+    ]
+    return str(max(ids, default=0) + 1)
+
+
+def _next_subtask_id(tasks: list[Task], parent: str) -> str:
+    numbers: list[int] = []
+    for task in tasks:
+        match = SUBTASK_ID.fullmatch(str(task.get("id", "")))
+        if match and match.group(1) == parent:
+            numbers.append(int(match.group(2)))
+    return f"{parent}-{max(numbers, default=0) + 1}"
+
+
+def task_create(arguments: dict[str, object]) -> tuple[str, bool]:
+    path, tasks, error = _load_session_tasks()
+    if error or path is None:
+        return error or "Session task path is unavailable.", True
+    content = cast(str, arguments["content"])
+    parent = cast(str | None, arguments.get("parent"))
+    if parent is not None:
+        exists = any(
+            str(task.get("id", "")) == parent and parent.isdigit() for task in tasks
+        )
+        if not exists:
+            return (
+                f"Error: top-level parent task {parent!r} was not found.\n{render_tasks(tasks)}",
+                True,
+            )
+        task_id = _next_subtask_id(tasks, parent)
+    else:
+        task_id = _next_top_id(tasks)
+    task: Task = {
+        "id": task_id,
+        "content": content,
+        "status": "pending",
+        "created": _now().strftime(TIME_FORMAT),
+    }
+    if "activeForm" in arguments:
+        task["activeForm"] = arguments["activeForm"]
+    tasks.append(task)
+    if save_error := write_tasks(path, tasks):
+        return f"Error: {save_error}\n{render_tasks(tasks)}", True
+    return render_tasks(tasks), False
+
+
+def task_update(arguments: dict[str, object]) -> tuple[str, bool]:
+    path, tasks, error = _load_session_tasks()
+    if error or path is None:
+        return error or "Session task path is unavailable.", True
+    task_id = cast(str, arguments["id"])
+    status = cast(str, arguments["status"])
+    target = next((task for task in tasks if str(task.get("id", "")) == task_id), None)
+    if target is None:
+        return f"Error: task {task_id!r} was not found.\n{render_tasks(tasks)}", True
+    demoted: list[str] = []
+    if status == "in_progress":
+        for task in tasks:
+            if task is not target and task.get("status") == "in_progress":
+                task["status"] = "pending"
+                demoted.append(str(task.get("id", "")))
+    target["status"] = status
+    if status == "completed":
+        target["completed_at"] = _now().strftime(TIME_FORMAT)
+    else:
+        target.pop("completed_at", None)
+    if save_error := write_tasks(path, tasks):
+        return f"Error: {save_error}\n{render_tasks(tasks)}", True
+    rendered = render_tasks(tasks)
+    if demoted:
+        ids = ", ".join(demoted)
+        rendered = f"Auto-demoted in_progress task(s) {ids} to pending.\n{rendered}"
+    return rendered, False
+
+
+def scan_court_guard() -> list[str]:
+    """Return warnings from transcript scans, silently skipping all failures."""
+    session_id = _session_id()
+    if session_id is None:
+        return []
+    paths = glob.glob(os.path.expanduser(f"~/.claude/projects/*/{session_id}.jsonl"))
+    command = shutil.which("claude_court_guard")
+    candidates = [command] if command else []
+    if "/usr/local/bin/claude_court_guard" not in candidates:
+        candidates.append("/usr/local/bin/claude_court_guard")
+    warnings: list[str] = []
+    for path in paths:
+        for binary in candidates:
+            try:
+                result = subprocess.run(
+                    [binary, path], capture_output=True, text=True, check=False
+                )
+            except (OSError, UnicodeError, TypeError, ValueError):
+                continue
+            if result.returncode == 2:
+                for line in result.stderr.splitlines():
+                    message = line.removeprefix("court-guard: ").strip()
+                    if message:
+                        warnings.append(
+                            f"⚠️ court-guard: {message} — session 汚染の疑い、reset 推奨"
+                        )
+            break
+    return warnings
+
+
+def _tool_result(text: str, is_error: bool) -> dict[str, object]:
+    warnings = scan_court_guard()
+    if warnings:
+        text = "\n".join([*warnings, text])
+    return {"content": [{"type": "text", "text": text}], "isError": is_error}
+
+
+def _argument_error(name: str, arguments: object) -> str | None:
+    if not isinstance(arguments, dict):
+        return "Tool arguments must be an object."
+    typed_arguments = cast(dict[str, object], arguments)
+    keys = set(typed_arguments)
+    if name == "TaskList":
+        return "TaskList accepts no arguments." if keys else None
+    if name == "TaskCreate":
+        allowed = {"content", "activeForm", "parent"}
+        if unknown := keys - allowed:
+            return f"Unknown argument(s): {', '.join(sorted(unknown))}."
+        if not isinstance(arguments.get("content"), str):
+            return "TaskCreate requires string argument 'content'."
+        for key in ("activeForm", "parent"):
+            if key in typed_arguments and not isinstance(typed_arguments[key], str):
+                return f"TaskCreate argument {key!r} must be a string."
+        return None
+    if name == "TaskUpdate":
+        allowed = {"id", "status"}
+        if unknown := keys - allowed:
+            return f"Unknown argument(s): {', '.join(sorted(unknown))}."
+        if not isinstance(arguments.get("id"), str):
+            return "TaskUpdate requires string argument 'id'."
+        if arguments.get("status") not in STATUSES:
+            return "TaskUpdate requires status pending, in_progress, blocked, or completed."
+    return None
+
+
+def _call_tool(params: object) -> dict[str, object]:
+    if not isinstance(params, dict) or not isinstance(params.get("name"), str):
+        return _tool_result("Tool call requires a string 'name'.", True)
+    typed_params = cast(dict[str, object], params)
+    name = cast(str, typed_params["name"])
+    arguments = typed_params.get("arguments", {})
+    if name not in {"TaskList", "TaskCreate", "TaskUpdate"}:
+        return _tool_result(f"Unknown tool: {name}", True)
+    if error := _argument_error(name, arguments):
+        return _tool_result(error, True)
+    typed_arguments = cast(dict[str, object], arguments)
+    if name == "TaskList":
+        text, is_error = task_list()
+    elif name == "TaskCreate":
+        text, is_error = task_create(typed_arguments)
+    else:
+        text, is_error = task_update(typed_arguments)
+    return _tool_result(text, is_error)
+
+
+def _response(request_id: object, result: object) -> dict[str, object]:
+    return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+
+def _error(request_id: object, code: int, message: str) -> dict[str, object]:
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {"code": code, "message": message},
+    }
+
+
+def dispatch(message: object) -> dict[str, object] | None:
+    """Dispatch one parsed JSON-RPC message without touching transport streams."""
+    if not isinstance(message, dict) or "id" not in message:
+        return None
+    request_id = message.get("id")
+    method = message.get("method")
+    try:
+        if method == "initialize":
+            params = message.get("params")
+            protocol = (
+                params.get("protocolVersion")
+                if isinstance(params, dict)
+                and isinstance(params.get("protocolVersion"), str)
+                else DEFAULT_PROTOCOL_VERSION
+            )
+            return _response(
+                request_id,
+                {
+                    "protocolVersion": protocol,
+                    "capabilities": {"tools": {"listChanged": False}},
+                    "serverInfo": {"name": "mytask", "version": VERSION},
+                },
+            )
+        if method == "tools/list":
+            return _response(request_id, {"tools": TOOLS, "nextCursor": None})
+        if method == "tools/call":
+            return _response(request_id, _call_tool(message.get("params")))
+        if method == "ping":
+            return _response(request_id, {})
+        return _error(request_id, -32601, "Method not found")
+    except (OSError, UnicodeError, TypeError, ValueError, KeyError):
+        return _error(request_id, -32603, "Internal error")
+
+
+def serve(stdin: TextIO, stdout: TextIO) -> None:
+    """Process newline-delimited JSON-RPC until EOF."""
+    for line in stdin:
+        try:
+            message = json.loads(line)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+        response = dispatch(message)
+        if response is not None:
+            stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+            stdout.flush()
+
+
+class MyTasksTest(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(
+            mock.patch.dict(
+                os.environ,
+                {
+                    "CLAUDE_PROJECT_DIR": self.temp_dir,
+                    "CLAUDE_CODE_SESSION_ID": "test-session",
+                },
+                clear=False,
+            )
+        )
+        self.path = _task_path("test-session")
+
+    def test_create_adds_pending_created_and_subtask_ids(self):
+        with mock.patch(f"{__name__}._now", return_value=datetime(2026, 7, 14, 9, 5)):
+            self.assertFalse(task_create({"content": "Parent"})[1])
+            self.assertFalse(task_create({"content": "Child", "parent": "1"})[1])
+        tasks = read_tasks(self.path)
+        self.assertEqual([task["id"] for task in tasks], ["1", "1-1"])
+        self.assertEqual(tasks[0]["status"], "pending")
+        self.assertEqual(tasks[0]["created"], "2026-07-14 09:05")
+
+    def test_update_completion_and_single_in_progress(self):
+        tasks: list[Task] = [
+            {"id": "1", "content": "One", "status": "in_progress"},
+            {"id": "2", "content": "Two", "status": "pending"},
+        ]
+        self.assertIsNone(write_tasks(self.path, tasks))
+        text, is_error = task_update({"id": "2", "status": "in_progress"})
+        updated = read_tasks(self.path)
+        self.assertFalse(is_error)
+        self.assertEqual(updated[0]["status"], "pending")
+        self.assertIn("Auto-demoted", text)
+        with mock.patch(f"{__name__}._now", return_value=datetime(2026, 7, 14, 10, 0)):
+            task_update({"id": "2", "status": "completed"})
+        self.assertEqual(read_tasks(self.path)[1]["completed_at"], "2026-07-14 10:00")
+        task_update({"id": "2", "status": "pending"})
+        self.assertNotIn("completed_at", read_tasks(self.path)[1])
+
+    def test_filter_order_rendering_and_legacy_fields(self):
+        now = datetime(2026, 7, 14, 12, 0)
+        tasks: list[Task] = [
+            {"id": "2", "content": "Second", "status": "blocked"},
+            {"id": "1-2", "content": "Child two", "status": "pending"},
+            {"id": "1", "content": "First", "status": "in_progress"},
+            {
+                "id": "1-1",
+                "content": "Child one",
+                "status": "completed",
+                "completed_at": "2026-07-14 01:00",
+            },
+            {
+                "id": "3",
+                "content": "Old",
+                "status": "completed",
+                "completed_at": "2026-07-13 23:59",
+            },
+            {"id": "4", "content": "Legacy", "status": "completed"},
+        ]
+        self.assertEqual(
+            render_tasks(tasks, now).splitlines(),
+            [
+                "1 ▶️ First",
+                "  1-1 ✅ Child one",
+                "  1-2 🔳 Child two",
+                "2 🚧 Second",
+            ],
+        )
+
+    def test_protocol_sequence_unknown_method_and_notifications(self):
+        with mock.patch(f"{__name__}.scan_court_guard", return_value=[]):
+            initialized = dispatch(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {"protocolVersion": "test-version"},
+                }
+            )
+            self.assertEqual(
+                self._nested(initialized, "result", "protocolVersion"), "test-version"
+            )
+            self.assertIsNone(
+                dispatch({"jsonrpc": "2.0", "method": "notifications/initialized"})
+            )
+            listed = dispatch({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+            tools = self._nested(listed, "result", "tools")
+            self.assertIsInstance(tools, list)
+            self.assertEqual(len(cast(list[object], tools)), 3)
+            created = dispatch(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "TaskCreate",
+                        "arguments": {"content": "Protocol task"},
+                    },
+                }
+            )
+            self.assertFalse(self._nested(created, "result", "isError"))
+            listed_tasks = dispatch(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "tools/call",
+                    "params": {"name": "TaskList", "arguments": {}},
+                }
+            )
+            result = self._nested(listed_tasks, "result")
+            self.assertIn("Protocol task", json.dumps(result))
+        unknown = dispatch({"jsonrpc": "2.0", "id": 5, "method": "nope"})
+        self.assertEqual(self._nested(unknown, "error", "code"), -32601)
+        self.assertIsNone(dispatch({"jsonrpc": "2.0", "method": "ping"}))
+
+    @staticmethod
+    def _nested(value: object, *keys: str) -> object:
+        for key in keys:
+            if not isinstance(value, dict):
+                raise AssertionError(f"Expected object before key {key!r}")
+            value = cast(dict[str, object], value)[key]
+        return value
+
+    def test_court_guard_fails_open(self):
+        with (
+            mock.patch(f"{__name__}.glob.glob", return_value=["transcript.jsonl"]),
+            mock.patch(f"{__name__}.shutil.which", return_value=None),
+            mock.patch(f"{__name__}.subprocess.run", side_effect=OSError("missing")),
+        ):
+            self.assertEqual(scan_court_guard(), [])
+
+    def test_serve_skips_broken_json(self):
+        stdin = io.StringIO('not-json\n{"jsonrpc":"2.0","id":1,"method":"ping"}\n')
+        stdout = io.StringIO()
+        serve(stdin, stdout)
+        self.assertEqual(json.loads(stdout.getvalue())["result"], {})
+
+
+def _main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if args == ["--selftest"]:
+        suite = unittest.defaultTestLoader.loadTestsFromTestCase(MyTasksTest)
+        result = unittest.TextTestRunner().run(suite)
+        return 0 if result.wasSuccessful() else 1
+    if args:
+        return 0
+    serve(sys.stdin, sys.stdout)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_main())

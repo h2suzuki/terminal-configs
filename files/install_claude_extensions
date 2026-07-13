@@ -153,6 +153,10 @@ run claude mcp add cloud-run --scope user -- npx -y @google-cloud/cloud-run-mcp
 claude mcp remove toolbox --scope user
 run claude mcp add toolbox --scope user -- toolbox_bigquery_mcp
 
+# my-task MCP (session-local work-item tracker)
+claude mcp remove mytask --scope user
+run claude mcp add mytask --scope user -- claude_mytask_mcp
+
 # Vercel CLI + plugin (MCP comes from the plugin)
 run npm install -g @vercel/vc-native
 run CI=1 npx -y plugins add vercel/vercel-plugin --yes
