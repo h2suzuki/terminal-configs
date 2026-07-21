@@ -39,10 +39,10 @@ Goal: 本 session で統合した `codex-delegation` skill と commit-time skill
 Exit Criteria:
 - [x] codex 系 memory 4 本の教訓 15 件を `codex-delegation` skill へ統合 — commit 8834f36 / 62f4dc6。opus 4 レンズ + 検証 + codex cross-model の 3 巡で blocker 5 件を閉塞
 - [x] commit 時に規約 skill の invoke を強制する gate を実装 — commit 43e7bdd。過去 transcript 由来 4793 件の実 git コマンドを corpus 化し ground truth を git 自身から取得 (commit 判定 成功 85 / 取りこぼし 0 / 誤検知 1 / 宣言済み境界 9)
-- [ ] deploy 先へ反映 — `/etc/claude-code/skills/codex-delegation/SKILL.md` と `/etc/claude-code/hooks/skill_reminder_gate.py`、および hook 登録 (`claude_managed-extensions.json`)。sudo が要るため user 実行
-- [ ] deploy 後に commit-gate の正発火を実運用で 1 回確認する
-- [ ] `codex-delegation` に追記: wrapper が報告する task id は実作業の task とは限らない (1 起動で複数 task 登録の実例 2026-07-21)。完了判定は heartbeat が更新される running task を拠り所にする
-- [ ] cover 完了後に memory 3 本を退役 — `feedback_codex_bg_launch_registration_confirm` / `feedback_codex_bg_task_stall_heartbeat_monitor` / `feedback_codex_delegation_worktree_isolation` を OLD-MEMORY.md へ移し、MEMORY.md の 3 行削除 + FTS `--delete`。worktree entry の Provenance にある「user skill ゆえ退役対象外」は事実誤認なので訂正する
+- [x] deploy 先へ反映 — 2026-07-21 user 実行。skill と hook が canonical と `diff` 一致、`managed-settings.d/extensions.json:25` に `commit-gate` 登録を確認
+- [x] deploy 後に commit-gate の正発火を確認 — 実 transcript を渡した probe で DENY を取得。文面が要求 skill 3 つ (writing-code / writing-python / writing-skills) を名指しし、規約 skill 未 invoke の turn を正しく捕捉した
+- [x] `codex-delegation` に追記: wrapper が報告する task id は実作業の task とは限らない — commit ba490ca
+- [x] memory 3 本を退役 — OLD-MEMORY.md 移動 + `Covered by:` footer 追記 + FTS `--delete`。全 53 entry 中 codex entry 0 件を DB 実測で確認。worktree entry の Provenance の事実誤認 (「user skill ゆえ退役対象外」) と、stall entry の cancel 条件 (heartbeat 凍結単独 → 凍結 + ツリー静穏 + build 非実行の AND) を訂正
 
 Work file: `last-session-handoff.md` の「codex 委譲規律の deploy 同期と memory 退役」 section
 
