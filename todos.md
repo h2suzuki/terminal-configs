@@ -108,9 +108,9 @@ Exit Criteria:
 Goal: Opus セッション向け調整の memory surface (UserPromptSubmit `memory_surface.py` / Stop `stop_checks.py` の RAG surface) が Fable 5 では過剰という H.S. の体感に対し、走行モデルを hook 側から検出してモデル別に閾値・頻度を変える実装の可否と方針を確定する。
 
 Exit Criteria:
-- [ ] hook から走行モデルを検出する手段の有無を実測で確定 (hook stdin payload / env / `~/.claude/sessions/<pid>.json` / transcript 等。 2026-07-03 時点の既知: PreToolUse/PostToolUse stdin に model field は無い)
-- [ ] 対象 hook の surface 閾値・頻度パラメータの所在を特定 (`files/claude_user-hooks/memory_surface.py` / `files/claude_managed-hooks/stop_checks.py`)
-- [ ] 可否の結論とモデル別チューニング方針 (やらない選択肢含む) を H.S. と合意
+- [x] hook から走行モデルを検出する手段の有無を実測で確定 — 2026-07-21 workflow で 4 チャネル並列 probe。**transcript JSONL の `.message.model` (type=="assistant") のみ可**、他は不可。binary v2.1.216 の payload 構築 base object `sm()` = `{session_id, transcript_path, cwd, prompt_id, permission_mode, agent_id, agent_type, effort}` に model 無し、~30 の `hook_event_name` 構築箇所すべて同様で、`model` を持つのは `SessionStart` のみ。`~/.claude.json` の `lastModelUsage` は 3 model が recency 順序なく同居し現行 model を取れず、`~/.claude/sessions/<pid>.json` は model field 自体が無い。transcript は 12.8MB でも tail 抽出 0.009s、assistant message 単位 stamp ゆえ mid-session `/model` 切替に追随する
+- [x] 対象 hook の surface 閾値・頻度パラメータの所在を特定 — 計 9 個 / 2 file。`memory_surface.py`: `THROTTLE_SECONDS` / `BM25_SURFACE_FLOOR` / `BM25_STRONG_FLOOR` / `HYBRID_FLOOR` / `HYBRID_STRONG_FLOOR` / `DENSE_RESCUE_FLOOR` / `BM25_CANDIDATES` / `max_emit`(UPS=2)、`stop_checks.py`: `max_emit`(Stop=1)。体感頻度に効く第一段は 4 個 (`max_emit`(UPS) / `THROTTLE_SECONDS` / `HYBRID_FLOOR` / `HYBRID_STRONG_FLOOR`)、残る BM25_* は embedding 不在時の legacy path 用。9 個中 7 個が module-level 定数で chain は model 引数を持たないため分類は**改造 (surgical)**
+- [ ] 可否の結論とモデル別チューニング方針 (やらない選択肢含む) を H.S. と合意 — 推奨は transcript tail 方式 + `main()` 入口で profile を解決し module global を rebind する `_apply_model_profile(model)` 1 関数 (chain 全段への plumbing 不要)。SessionStart の `model` は `/model` 切替後も恒久 stale ゆえ不採用。global 引き下げ案は Opus 側の recall を確実に落とすため却下。**未 probe**: env var チャネルは probe が placeholder を返し未検証 — ただし launch 時静的ゆえ SessionStart と同じ恒久 stale 欠陥を持ち、結論は変わらない
 
 ### SKILL-HOOK-CONTRACT.md パターン集
 
