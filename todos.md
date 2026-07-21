@@ -39,13 +39,13 @@ Work file: `last-session-handoff.md` の「memory surface 改善実装」 sectio
 Goal: `codex-companion.mjs task --write` を主 checkout で起動したら deny する PreToolUse hook を入れ、共有ツリーへの委譲で並行セッションの変更が混在する事故を防ぐ。
 
 Exit Criteria:
-- [x] 判定方法を実測で確定 — `git rev-parse --absolute-git-dir` の親ディレクトリ名が `worktrees` なら linked worktree。worktree の subdir でも同値、非 repo は非ゼロ exit (2026-07-21 実測)
+- [x] 判定方法を実測で確定 — `git rev-parse --absolute-git-dir` と `--git-common-dir` を abspath 正規化して比較し、異なれば linked worktree。当初は「`--absolute-git-dir` の親ディレクトリ名が `worktrees`」で確定したが、top directory 名が literal `worktrees` の主 checkout を誤判定するためレビューを経て比較方式へ変更 (2026-07-22)
 - [x] 発注書作成 — `drafts/codex-worktree-gate-order.md`
-- [ ] hook 実装 + 登録 + test (temp repo で実 git を使った worktree 判定、resume 系も対象、`CODEX_SHARED_TREE_OK=1` の escape hatch)
-- [ ] `cd` の合成漏れを塞ぐ — `_resolve_command_cwd` が `cd` を上書きで扱い `cd --` を解さないため、`cd .. && cd <primary> && node ... task --write` と `cd -- <primary> && ...` が存在しない path を組み立てて `FileNotFoundError` → fail-open で allow する。単一 `cd <abs>` と `cd <linked> && cd <primary>` は正しく deny する。修正は (a) `cd_path` を上書きでなく累積合成、(b) `segment[1] == "--"` なら `segment[2]` を採る、の 2 点で test も要る。**`avoid_cd.py` は allow + advisory であって block しないことを 2026-07-22 に実測**したので、この経路は到達可能
-- [ ] 委譲用 worktree `<repo>/.claude/worktrees/codex-gate` を削除 — 2026-07-21 に `git worktree add --detach` で作成。成果物を本線へ取り込んだ後に `git worktree remove` する。取り込み前に消すと codex の作業が失われる
-- [x] `Agent` を `isolation: "worktree"` で起動したとき subagent の cwd が worktree を指すことを実測確認 — 2026-07-21、`pwd` = `<repo>/.claude/worktrees/agent-<id>`、`--absolute-git-dir` = `<repo>/.git/worktrees/agent-<id>` で親ディレクトリ名が `worktrees`。判定式が成立する
-- [ ] deploy 反映
+- [x] hook 実装 + 登録 + test — commit f03c3b6 (`files/claude_managed-hooks/codex_worktree_gate.py` 796 行 + `claude_managed-extensions.json` 登録 1 行、index mode 100755)。codex 3 round + sonnet 手直し 1 round + opus 3 回のレビュー。**受け入れ時に司令塔が 14 payload を自ら実行し全件期待通り**を確認 (主 checkout の `task --write` deny / linked worktree allow / 多段 segment / `cd` 追跡 / subshell 継承 / 相対 `--cwd` / 改行と CRLF の segment 境界 / escape hatch の segment スコープ / read-only allow)。in-file unittest 39 件 green、ruff・ty exit 0。mutation は 15 種中 13 kill で、生存 2 件は git 失敗時の診断文言のみ (どちらの変異でも決定は fail-open のまま不変)
+- [ ] `cd -- <path>` を解する — 残る唯一の実挙動の穴。`cd -- <primary> && node ... task --write` が存在しない path を組み立てて `FileNotFoundError` → fail-open で allow する (2026-07-22 実測)。`segment[1] == "--"` なら `segment[2]` を採るだけで塞がる。相対 `cd` の連鎖 (`cd .. && cd ..`) と絶対 `cd` の連鎖は既に deny 済み。**`avoid_cd.py` は allow + advisory で block しないことを実測**したので到達可能
+- [x] 委譲用 worktree `<repo>/.claude/worktrees/codex-gate` を削除 — 2026-07-22 に `git worktree remove --force` + `prune` 実行、`worktree list` が主 checkout のみ・`.claude/worktrees/` が空であることを確認
+- [x] 委譲時の worktree の作り方を確定 — `Agent` の `isolation: "worktree"` は**使わない**。harness が agent 終了時に unchanged な worktree を自動削除するため、agent より長生きする codex の作業ツリーが走行中に消える (2026-07-21 実測: codex が「requested worktree does not exist / filesystem is read-only」で何も書けずに完了)。発注側が `git worktree add --detach` で作り、codex の `--cwd` に渡す。`--background` を付けなければ同期実行なので Bash job の終了が真の完了シグナルになる
+- [ ] deploy 反映 — `/etc/claude-code/hooks/` は root 所有かつ `no_new_privs` で sudo 不可のため H.S. 実行。`copy_dir claude_managed-hooks/` が dir 丸ごと配るので per-file の copy 行は不要 (追加しかけたが冗長と判明し削除済み)
 
 Work file: `drafts/codex-worktree-gate-order.md`
 
