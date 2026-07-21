@@ -838,7 +838,7 @@ def _deny_unresolved_pathspec(pathspecs: list[str]) -> None:
 def cmd_gate(payload: dict) -> None:
     if not isinstance(payload, dict):
         return
-    # subagent hook は親 transcript を渡される 2.1.206 bug のため判定不能 → fail-open
+    # subagent には自身の invoke 履歴が渡るとは限らず判定できないため fail-open
     if payload.get("agent_id"):
         return
     if payload.get("tool_name") not in GATE_TOOLS:
