@@ -42,6 +42,7 @@ Exit Criteria:
 - [x] 判定方法を実測で確定 — `git rev-parse --absolute-git-dir` の親ディレクトリ名が `worktrees` なら linked worktree。worktree の subdir でも同値、非 repo は非ゼロ exit (2026-07-21 実測)
 - [x] 発注書作成 — `drafts/codex-worktree-gate-order.md`
 - [ ] hook 実装 + 登録 + test (temp repo で実 git を使った worktree 判定、resume 系も対象、`CODEX_SHARED_TREE_OK=1` の escape hatch)
+- [ ] `cd` の合成漏れを塞ぐ — `_resolve_command_cwd` が `cd` を上書きで扱い `cd --` を解さないため、`cd .. && cd <primary> && node ... task --write` と `cd -- <primary> && ...` が存在しない path を組み立てて `FileNotFoundError` → fail-open で allow する。単一 `cd <abs>` と `cd <linked> && cd <primary>` は正しく deny する。修正は (a) `cd_path` を上書きでなく累積合成、(b) `segment[1] == "--"` なら `segment[2]` を採る、の 2 点で test も要る。**`avoid_cd.py` は allow + advisory であって block しないことを 2026-07-22 に実測**したので、この経路は到達可能
 - [ ] 委譲用 worktree `<repo>/.claude/worktrees/codex-gate` を削除 — 2026-07-21 に `git worktree add --detach` で作成。成果物を本線へ取り込んだ後に `git worktree remove` する。取り込み前に消すと codex の作業が失われる
 - [x] `Agent` を `isolation: "worktree"` で起動したとき subagent の cwd が worktree を指すことを実測確認 — 2026-07-21、`pwd` = `<repo>/.claude/worktrees/agent-<id>`、`--absolute-git-dir` = `<repo>/.git/worktrees/agent-<id>` で親ディレクトリ名が `worktrees`。判定式が成立する
 - [ ] deploy 反映
