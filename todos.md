@@ -47,6 +47,21 @@ Exit Criteria:
 
 Work file: `drafts/codex-worktree-gate-order.md`
 
+### commit gate の射程: 非敵対的な commit 生成経路のカバー
+
+Goal: `git commit` 文字列を含まないが実際に commit を作る経路のうち、迂回意図なく普通に踏むものを gate 対象に加える。敵対的回避経路は対象外とする。
+
+脅威モデル (2026-07-21 調査で確定・再導出不要): 4 hook (`deny_compound_git_commit.py` / `check_commit_format.py` / `check_commit_author.py` / `deny_compound_git_add.py`) は「文字列に `git` と `commit` がこの順で現れる」regex 検出で、shell 文法パーサではない。射程限定は `skill_reminder_gate.py:17-26` docstring と `git_corpus_cases.py` の既知ケース群で明示済みの設計判断。gate の目的は自分の commit の品質担保であり、迂回主体は agent 自身ゆえ**敵対的 bypass は脅威に数えない**。
+
+- covered: `git commit` 単独形 / `-a`・`-i`・pathless (deny) / compound (deny) / `git -C`・`git -c`・先頭 env 代入 / `-F`・stdin
+- **対象とする穴** (非敵対・実害あり): `merge` / `cherry-pick` / `revert` / `rebase --continue` / `am` / `stash push` / `gh pr merge` / `gh api .*/git/commits`
+- **対象としない穴** (敵対的回避のみ): `bash -c` / heredoc / `eval` / Python・Node subprocess / shell alias。再帰的 quote パーサという機構を足す費用に見合わない
+
+Exit Criteria:
+- [ ] `commit-tree` の記述と挙動の食い違いを訂正 — docstring は「射程外」と書くが `\bcommit\b` が `commit-tree` 内に一致して実際は deny される。`-- <token>` 1 つで外れる偶然の防御であり、docstring か実装のどちらを正とするか決めて揃える
+- [ ] 非敵対経路のうち author / format チェックを適用すべきものを確定し実装
+- [ ] test 追加 (`git_corpus_cases.py` の既知ケースから昇格) + deploy
+
 ### skill_reminder_gate の恒久策: PostToolUse Skill 記録方式 (要相談)
 
 Goal: transcript 依存を排し、PostToolUse `^Skill$` で invoke を session/agent-key state に記録して gate が参照する方式へ移行する。subagent hotfix (agent_id skip = subagent で enforcement 喪失) と resume 系 flush lag <120s の両残穴を同時に塞ぐ。
