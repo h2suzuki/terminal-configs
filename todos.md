@@ -49,6 +49,18 @@ Exit Criteria:
 
 Work file: `drafts/codex-worktree-gate-order.md`
 
+### worktree 削除忘れの検知 (Stop 警告)
+
+Goal: 委譲用に作った git worktree を削除し忘れて放置する経路に歯止めを入れる。削除して失うものが無い状態になった瞬間だけ Stop で警告する。
+
+Exit Criteria:
+- [x] 実装 + test — commit c89f502 (`stop_checks.py` に warning-only family 追加、74 test green、ruff/ty exit 0)。発火条件は「作業ツリーが clean **かつ** HEAD が本線の祖先」の AND で、`status --porcelain --ignored --untracked-files=normal` を使うため gitignore 下の成果物・untracked も dirty 扱いになる。本線 ref は `refs/heads/main` / `refs/heads/master` に pin (tag の DWIM 誤判定を防ぐ)。自セッションの worktree と入れ子 worktree は候補から除外。latch は `.wt` 名前空間で memory surface (`.surf`) と分離
+- [x] **SessionEnd の自動削除 (layer 2) は設計判断として不採用** — 実装まで進めたが撤去した。理由: (1) 層 1 は repo 内でセッションが走れば全 linked worktree を列挙するので、クラッシュしたセッションの残骸も次セッションで報告され「検知」の目的は満たせる (2) SessionEnd は LLM に何も返せず削除が完全に不可視 (3) ignored file は git object でないため reflog にも index にも残らず復元不能。無人の破壊的操作という形態自体を採らない
+- [x] 実 runtime での発火確認 — 同一 worktree で 4 状態を実測: clean+merged → 警告 / gitignore 下に成果物 → 無音 / untracked file → 無音 / 除去して復元 → 警告
+- [ ] deploy 反映 (`/etc/claude-code/hooks/stop_checks.py`。root 所有ゆえ H.S. 実行)
+
+判明した事実 (再導出不要): 素の `git status --porcelain` は gitignore 下を 1 件も報告せず、`git worktree remove` は `--force` 無しでも ignored file を削除する。この repo の委譲ワークフローは発注書・レポート・test log を gitignore 下の `drafts/` に置くため、素の判定式は成果物一式を「空」と誤判定する。同型の事故は `codex-delegation/SKILL.md:48` に記録済み。
+
 ### commit gate の射程: 非敵対的な commit 生成経路のカバー
 
 Goal: `git commit` 文字列を含まないが実際に commit を作る経路のうち、迂回意図なく普通に踏むものを gate 対象に加える。敵対的回避経路は対象外とする。
