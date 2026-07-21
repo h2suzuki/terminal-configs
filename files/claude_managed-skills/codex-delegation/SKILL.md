@@ -11,6 +11,7 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
 ## Process
 
 1. **発注書を書く**: 依頼は chat 文でなく発注書 file（作業 dir の drafts/ 等）に固定する。含める: スコープ（触ってよい path / 触らない path）、仕様の優先順位（受け入れ修正節が本文に優先する等の明文）、完了条件（fmt / clippy / test の実行と **結果ログの file 保存**）、「コミットはしない（受け入れレビュー後に発注側が行う）」の明記
+   - 対象 file kind の規約 skill（`writing-code` / `writing-bash` / `writing-skills` 等）を発注側で invoke し、その規約を発注書に転記する。skill gate は subagent と codex の書き込みには効かないため、規約は発注書経由でしか届かない
    - `fuser -k` / `pkill` 等の kill-by-port を禁止し、port が塞がっていれば別 port を使い（この場合も excludedCommands 登録 launcher または `!` によるホスト側起動に限定する）、止められない process は放置して報告することも含める。subagent が port 5273 を `fuser -k` で掃除した直後にホスト側の vite が落ちた（2026-07-15）
 2. **起動**: codex rescue 系 command で発注書 path を渡す。**実装発注は `task --write` 必須（既定 = read-only sandbox）**。発注 prompt の第一動作に write probe file 作成を入れ、起動 1-2 分後に実在を確認する（数十分の空走を早期検知）。既存 thread の続き（fix round 等）は resume、新規作業は fresh。wrapper が「background job 起動」とだけ返すのは正常で、完了報告ではない
    - background 起動の出力 redirect 先は変数展開に頼らず、既知 writable な絶対 path に固定する
