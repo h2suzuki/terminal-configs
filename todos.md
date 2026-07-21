@@ -68,6 +68,16 @@ Exit Criteria:
 
 Goal: transcript 依存を排し、PostToolUse `^Skill$` で invoke を session/agent-key state に記録して gate が参照する方式へ移行する。subagent hotfix (agent_id skip = subagent で enforcement 喪失) と resume 系 flush lag <120s の両残穴を同時に塞ぐ。
 
+確定済み実態 (2026-07-22 実測・再導出不要):
+- **gate mode は false-allow**: `cmd_gate` が `agent_id` で早期 return する (`skill_reminder_gate.py:842-843`)。subagent の Edit/Write は skill 未 invoke でも素通りし enforcement を喪失。実例 = 本 repo の hook file を sonnet subagent に編集させ、Skill invoke 0 件で Edit 5 件成功
+- **commit-gate mode は false-deny**: `cmd_commit_gate` は `agent_id` で分岐せず staleness fail-open も適用しない (`:953-958` の意図的設計)。subagent が規約 skill を正しく invoke しても痕跡は親 transcript に無いため必ず deny。同一 payload で transcript だけ差し替えると allow/deny が反転することを実測
+- **共通の原因は上流**: PreToolUse payload の `transcript_path` が main session 由来に固定される。2.1.216 の binary で確認 — PreToolUse は `sm(o, void 0, n)` を呼ぶため `n` が main session id に解決される。`agentId` は hook 選択と `agent_id` field にのみ使われ path 導出に関与しない。`agent_transcript_path` は SubagentStop 専用
+- **hotfix の履歴**: `ff1129e` (2026-07-10) で `agent_id` early return を追加、`59c3925` (2026-07-21) はコメント文言のみ
+- **案 3 (child transcript path 導出) は不採用**: transcript 配置レイアウト依存 + flush race が残る。案 2 が両穴を同時に塞ぐ
+- **gate 起動には argv が必須**: `main()` は `len(sys.argv) < 2` で stdin を読まず exit 0 (`:1009-1010`)。配線は `managed-settings.d/extensions.json:13` (`gate`) と `:25` (`commit-gate`)。payload だけ流して「allow」と読むと hook が動いていない誤診になる
+
+別セッションからのバグ報告 (`drafts/terminal-config-request-skill-gate.md`) は hotfix 前の状態を記述しており、回答を `drafts/terminal-config-request-skill-gate-response.md` に作成済み。
+
 Exit Criteria:
 - [ ] 方針合意 (実装規模 1.5-3 日 + managed-settings.d/extensions.json への hook 配線追加。診断 = `drafts/subagent-gate-diagnosis.md` 案 2/5 参照)
 - [ ] PostToolUse:Skill が subagent 含む全成功経路で発火することの live probe
