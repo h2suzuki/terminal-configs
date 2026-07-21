@@ -76,6 +76,10 @@ Combined Stop hook for org-managed Claude Code:
     UI artifact を Edit/Write して done-claim したが、 同 turn に screenshot 系
     tool_use が無ければ warn。
 
+  worktree-cleanup (warning-only, exit 0):
+    payload の cwd に属する linked worktree が clean かつ本線の祖先なら、削除候補と
+    実行可能な git worktree remove コマンドを知らせる。判定不能時は fail-open。
+
   turn-marker (bonus, exit 0 only):
     enforcement が pass した turn 終了時のみ、 per-turn marker (時刻 / Turn #N / context
     size / User Prompt からの経過) を JSON `systemMessage` で USER に表示 (Claude には非可視)。
@@ -127,6 +131,8 @@ import fcntl
 import json
 import os
 import re
+import shlex
+import subprocess
 import sys
 import time
 import unittest
@@ -135,9 +141,185 @@ import unittest
 COURT_RE_STRAY = re.compile(r"(?m)^[ \t]*(?:court|count)[ \t]*$")
 COURT_RE_INVOKE_LEAK = re.compile(r'(?m)^[ \t]*<invoke name="')
 
+_GIT_COMMAND_TIMEOUT_SECONDS = 5
+
+
+def _git_command(
+    args: list[str], expected_returncodes: frozenset[int] = frozenset()
+) -> subprocess.CompletedProcess[str] | None:
+    command = " ".join(shlex.quote(arg) for arg in ("git", *args))
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        print(
+            f"worktree-cleanup: {command} timed out after "
+            f"{_GIT_COMMAND_TIMEOUT_SECONDS}s",
+            file=sys.stderr,
+        )
+        return None
+    except OSError as exc:
+        print(f"worktree-cleanup: {command} failed to start: {exc}", file=sys.stderr)
+        return None
+    if result.returncode != 0 and result.returncode not in expected_returncodes:
+        detail = (result.stderr or result.stdout).strip()
+        suffix = f": {detail}" if detail else ""
+        print(
+            f"worktree-cleanup: {command} failed with exit {result.returncode}{suffix}",
+            file=sys.stderr,
+        )
+        return None
+    return result
+
+
+def _parse_worktree_records(output: str) -> list[tuple[str, bool]]:
+    records: list[tuple[str, bool]] = []
+    path: str | None = None
+    prunable = False
+    for line in output.splitlines():
+        if line.startswith("worktree "):
+            if path is not None:
+                records.append((path, prunable))
+            raw_path = line.removeprefix("worktree ")
+            path = os.path.realpath(raw_path) if raw_path else None
+            prunable = False
+        elif path is not None and (line == "prunable" or line.startswith("prunable ")):
+            prunable = True
+    if path is not None:
+        records.append((path, prunable))
+    return records
+
+
+def _worktree_paths(cwd: str) -> tuple[str, list[tuple[str, bool]]] | None:
+    current = os.path.abspath(cwd)
+    root_result = _git_command(["-C", current, "rev-parse", "--show-toplevel"])
+    if root_result is None:
+        return None
+    repo = os.path.realpath(root_result.stdout.strip())
+    if not repo:
+        print(
+            "worktree-cleanup: git returned an empty repository root", file=sys.stderr
+        )
+        return None
+    list_result = _git_command(["-C", repo, "worktree", "list", "--porcelain"])
+    if list_result is None:
+        return None
+    records = _parse_worktree_records(list_result.stdout)
+    if not records:
+        print("worktree-cleanup: git returned no worktree paths", file=sys.stderr)
+        return None
+    return records[0][0], records
+
+
+def _main_head(repo: str) -> str | None:
+    for branch in ("refs/heads/main", "refs/heads/master"):
+        result = _git_command(
+            ["-C", repo, "rev-parse", "--verify", branch],
+            frozenset({128}),
+        )
+        if result is not None and result.returncode == 0:
+            head = result.stdout.strip()
+            if head:
+                return head
+    return None
+
+
+def _clean_merged_worktree(repo: str, path: str, main_head: str) -> bool:
+    # ignored/untracked も見る: gitignore 下の codex 成果物を「空」と誤判定しないため
+    status = _git_command(
+        ["-C", path, "status", "--porcelain", "--ignored", "--untracked-files=normal"]
+    )
+    if status is None or status.stdout:
+        return False
+    head_result = _git_command(["-C", path, "rev-parse", "--verify", "HEAD"])
+    if head_result is None:
+        return False
+    head = head_result.stdout.strip()
+    if not head:
+        return False
+    ancestor = _git_command(
+        ["-C", repo, "merge-base", "--is-ancestor", head, main_head],
+        frozenset({1}),
+    )
+    return ancestor is not None and ancestor.returncode == 0
+
+
+def _paths_related(left: str, right: str) -> bool:
+    try:
+        return os.path.commonpath((left, right)) in (left, right)
+    except ValueError:
+        return False
+
+
+def _path_is_ancestor(ancestor: str, path: str) -> bool:
+    try:
+        return os.path.commonpath((ancestor, path)) == ancestor
+    except ValueError:
+        return False
+
+
+def _worktree_candidates(cwd: str) -> tuple[str, str, list[str]] | None:
+    if not isinstance(cwd, str) or not cwd:
+        return None
+    info = _worktree_paths(cwd)
+    if info is None:
+        return None
+    primary, records = info
+    repo = primary
+    main_head = _main_head(repo)
+    if main_head is None:
+        return None
+    current = os.path.realpath(cwd)
+    current_worktree = max(
+        (path for path, _prunable in records if _path_is_ancestor(path, current)),
+        key=len,
+        default=primary,
+    )
+    linked_paths = [path for path, prunable in records[1:] if not prunable]
+    candidates = [
+        path
+        for path in linked_paths
+        if (current_worktree == primary or not _paths_related(path, current_worktree))
+        and not any(
+            path != other and _paths_related(path, other) for other in linked_paths
+        )
+    ]
+    return repo, main_head, candidates
+
+
+def _worktree_cleanup_warnings(cwd: str | None) -> list[str]:
+    info = _worktree_candidates(cwd) if isinstance(cwd, str) else None
+    if info is None:
+        return []
+    repo, main_head, candidates = info
+    warnings: list[str] = []
+    for path in candidates:
+        if _clean_merged_worktree(repo, path, main_head):
+            command = (
+                f"git -C {shlex.quote(repo)} worktree remove -- {shlex.quote(path)}"
+            )
+            warnings.append(
+                f"worktree-cleanup: clean かつ本線に取り込み済みの linked worktree "
+                f"{path} を検出しました。hook 自身は削除しません。不要なら次のコマンドを"
+                f"そのまま実行してください: {command}。次回は本線への取り込み後に削除し、"
+                "同じ状態を放置しないでください。"
+            )
+    return warnings
+
+
+def _emit_worktree_warnings(warnings: list[str]) -> None:
+    for line in warnings:
+        sys.stderr.write(line + "\n")
+
 
 def _court_contaminated(text: str) -> bool:
     return bool(COURT_RE_STRAY.search(text) or COURT_RE_INVOKE_LEAK.search(text))
+
 
 # Reuse memory_surface's retrieval engine at Stop via a guarded cross-tree import
 # (managed→user layering, repo-deployed together; absent/broken hook → surfacing off).
@@ -368,13 +550,13 @@ HONEST_WRONG_RE = re.compile(
 )
 
 # --- Pattern: post-edit verification (warning, no block) ---
-DONE_CLAIM_RE = re.compile(r"(実装|修正|対応)?完了|\bdone\b|\blanded\b|着地", re.IGNORECASE)
+DONE_CLAIM_RE = re.compile(
+    r"(実装|修正|対応)?完了|\bdone\b|\blanded\b|着地", re.IGNORECASE
+)
 EXECUTABLE_ARTIFACT_RE = re.compile(
     r"\.(py|sh)$|/hooks/|/usr/local/bin/|settings.*\.json$", re.IGNORECASE
 )
-UI_ARTIFACT_RE = re.compile(
-    r"\.(css|scss|tsx|jsx|vue|svelte|html)$", re.IGNORECASE
-)
+UI_ARTIFACT_RE = re.compile(r"\.(css|scss|tsx|jsx|vue|svelte|html)$", re.IGNORECASE)
 
 # --- Pattern: known-possible-denial (block, no pairing) ---
 # 既知で可能と判明済みの操作を「できない/不可」と断定したら却下を促す。 op-keyword と
@@ -666,6 +848,8 @@ def _check(
     has_git_verify: bool,
     declare_active: bool,
     model: str | None = None,
+    cwd: str | None = None,
+    worktree_warnings: list[str] | None = None,
 ) -> tuple[int, list[str], list[str]]:
     """Return (exit_code, warnings, blocking)."""
     warnings: list[str] = []
@@ -677,6 +861,12 @@ def _check(
             "court-guard: stray token / invoke-leak を検出 — court バグ汚染の疑い。"
             "session reset 推奨 (#64108)"
         )
+
+    warnings.extend(
+        _worktree_cleanup_warnings(cwd)
+        if worktree_warnings is None
+        else worktree_warnings
+    )
 
     # meta-announce-silence (block, no pairing)
     m = META_ANNOUNCE_RE.search(text)
@@ -843,7 +1033,9 @@ def _check(
     # edited-executable-not-run (warning-only): done claim after an unobserved edit
     if DONE_CLAIM_RE.search(final_text):
         executable_paths = [p for p in edited_paths if EXECUTABLE_ARTIFACT_RE.search(p)]
-        unrun_paths = [p for p in executable_paths if not _artifact_was_run(p, bash_commands)]
+        unrun_paths = [
+            p for p in executable_paths if not _artifact_was_run(p, bash_commands)
+        ]
         if unrun_paths:
             warnings.append(
                 f"edited-executable-not-run: {', '.join(os.path.basename(p) for p in unrun_paths)} "
@@ -870,11 +1062,19 @@ def _run(payload: dict) -> tuple[int, float | None, str]:
     # Returns (exit_code, prompt_epoch, text); text feeds Stop memory surfacing.
     if not isinstance(payload, dict):
         return 0, None, ""
+    worktree_warnings = _worktree_cleanup_warnings(payload.get("cwd"))
+    if worktree_warnings:
+        if _stop_latched(payload, ".wt"):
+            worktree_warnings = []
+        else:
+            _stop_latch_set(payload, ".wt")
     transcript_path = payload.get("transcript_path")
     if not isinstance(transcript_path, str) or not transcript_path:
+        _emit_worktree_warnings(worktree_warnings)
         return 0, None, ""
     entries = _load_tail(transcript_path, turns=2)
     if not entries:
+        _emit_worktree_warnings(worktree_warnings)
         return 0, None, ""
     (
         text,
@@ -895,6 +1095,7 @@ def _run(payload: dict) -> tuple[int, float | None, str]:
         text = (text + "\n" + last_msg) if text else last_msg
         final_text = last_msg
     if not text:
+        _emit_worktree_warnings(worktree_warnings)
         return 0, prompt_epoch, ""
     declare_active = _declare_proceed_active(entries, time.time())
     exit_code, warnings, blocking = _check(
@@ -907,6 +1108,8 @@ def _run(payload: dict) -> tuple[int, float | None, str]:
         has_git_verify,
         declare_active,
         model,
+        cwd=payload.get("cwd"),
+        worktree_warnings=worktree_warnings,
     )
     # advise-once: a stop_hook_active retry never re-blocks — demote to pass (see docstring turn-marker / Exit).
     if exit_code == 2 and payload.get("stop_hook_active"):
@@ -920,21 +1123,22 @@ def _run(payload: dict) -> tuple[int, float | None, str]:
     return exit_code, prompt_epoch, text
 
 
-def _stop_latch_key(payload: dict) -> tuple[str, str] | None:
-    """(turn key, latch-file path) or None; turn key = the .turns count, which bumps only at a clean turn end so it stays constant across a turn's Stops (incl. continuations)."""
+def _stop_latch_key(payload: dict, suffix: str = ".surf") -> tuple[str, str] | None:
+    """(turn key, latch-file path) or None; turn key = the .turns count, which bumps only at a clean turn end so it stays constant across a turn's Stops (incl. continuations).
+    suffix namespaces the latch file per feature-family (worktree-cleanup vs memory-surface no longer share one file)."""
     try:
         path = _counter_path(payload)  # session-id fallback may makedirs -> OSError
         if not path:
             return None
         with open(path, encoding="utf-8") as f:
-            return f.read().split()[0], path + ".surf"
+            return f.read().split()[0], path + suffix
     except (OSError, IndexError):
         return None
 
 
-def _stop_latched(payload: dict) -> bool:
+def _stop_latched(payload: dict, suffix: str = ".surf") -> bool:
     """True if a Stop memory surface already fired this turn (counter-keyed, independent of stop_hook_active)."""
-    k = _stop_latch_key(payload)
+    k = _stop_latch_key(payload, suffix)
     if k is None:
         return False
     key, lpath = k
@@ -945,8 +1149,8 @@ def _stop_latched(payload: dict) -> bool:
         return False
 
 
-def _stop_latch_set(payload: dict) -> None:
-    k = _stop_latch_key(payload)
+def _stop_latch_set(payload: dict, suffix: str = ".surf") -> None:
+    k = _stop_latch_key(payload, suffix)
     if k is None:
         return
     key, lpath = k
@@ -1473,9 +1677,7 @@ class EnforcementFamilyTest(unittest.TestCase):
                 f.write(json.dumps(entry) + "\n")
         stderr = io.StringIO()
         with redirect_stderr(stderr):
-            code = _run(
-                {"transcript_path": transcript, "stop_hook_active": True}
-            )[0]
+            code = _run({"transcript_path": transcript, "stop_hook_active": True})[0]
         return code, stderr.getvalue()
 
     # --- intent-without-task ---
@@ -1592,9 +1794,7 @@ class EnforcementFamilyTest(unittest.TestCase):
 
 class CourtWarningTest(unittest.TestCase):
     def _warnings(self, text: str) -> tuple[int, list[str]]:
-        code, warnings, blocking = _check(
-            text, text, set(), [], [], [], False, False
-        )
+        code, warnings, blocking = _check(text, text, set(), [], [], [], False, False)
         self.assertEqual(blocking, [])
         return code, warnings
 
@@ -1787,6 +1987,387 @@ class StopMemorySurfaceTest(unittest.TestCase):
         assert first is not None
         self.assertIsNone(second)  # same turn -> latched
         assert third is not None  # new turn -> surfaces again
+
+
+class WorktreeCleanupTest(unittest.TestCase):
+    """Worktree warning claims. Run: python3 -m unittest stop_checks"""
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory(prefix="stop-worktree-")
+        self.addCleanup(self.tmp.cleanup)
+        self.env = os.environ.copy()
+        self.env.update(
+            {
+                "HOME": os.path.join(self.tmp.name, "home"),
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_EDITOR": "true",
+                "GIT_SEQUENCE_EDITOR": "true",
+                "GIT_TERMINAL_PROMPT": "0",
+            }
+        )
+        os.makedirs(self.env["HOME"])
+
+    def _git(self, *args, cwd):
+        return subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            env=self.env,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+    def _repo(self, branch="main"):
+        from pathlib import Path
+
+        repo = Path(self.tmp.name) / "repo"
+        repo.mkdir()
+        self._git("init", "-q", "-b", branch, cwd=repo)
+        self._git("config", "user.name", "Stop test", cwd=repo)
+        self._git("config", "user.email", "stop@example.invalid", cwd=repo)
+        (repo / "tracked.txt").write_text("initial\n", encoding="utf-8")
+        self._git("add", "tracked.txt", cwd=repo)
+        self._git("commit", "-qm", "initial", cwd=repo)
+        return repo
+
+    def _linked(self, repo, name="linked", base="main"):
+        from pathlib import Path
+
+        path = Path(self.tmp.name) / name
+        self._git(
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "codex/" + name,
+            str(path),
+            base,
+            cwd=repo,
+        )
+        return path
+
+    def _advance_main(self, repo):
+        self._git("config", "user.name", "Stop test", cwd=repo)
+        (repo / "tracked.txt").write_text("main advanced\n", encoding="utf-8")
+        self._git("add", "tracked.txt", cwd=repo)
+        self._git("commit", "-qm", "advance main", cwd=repo)
+
+    def _check_cwd(self, cwd):
+        return _check(
+            "result",
+            "result",
+            set(),
+            [],
+            [],
+            [],
+            False,
+            True,
+            cwd=str(cwd),
+        )
+
+    def _check_repo(self, repo):
+        return self._check_cwd(repo)
+
+    def test_clean_merged_linked_worktree_warns(self):
+        repo = self._repo()
+        linked = self._linked(repo)
+        self._advance_main(repo)
+
+        code, warnings, blocking = self._check_repo(repo)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(blocking, [])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn(
+            f"git -C {shlex.quote(str(repo))} worktree remove -- {shlex.quote(str(linked))}",
+            warnings[0],
+        )
+        self.assertNotIn("--force", warnings[0])
+        self.assertIn("取り込み後", warnings[0])
+
+    def test_linked_worktree_under_repo_is_detected_from_main_cwd(self):
+        repo = self._repo()
+        linked = repo / ".claude" / "worktrees" / "linked"
+        linked.parent.mkdir(parents=True)
+        self._git(
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "codex/in-repo",
+            str(linked),
+            "main",
+            cwd=repo,
+        )
+        self._advance_main(repo)
+
+        _code, warnings, _blocking = self._check_repo(repo)
+
+        self.assertEqual(len(warnings), 1)
+        self.assertIn(str(linked), warnings[0])
+
+    def test_run_emits_warning_on_stderr_and_keeps_exit_zero(self):
+        import io
+        from contextlib import redirect_stderr
+        from pathlib import Path
+
+        repo = self._repo()
+        linked = self._linked(repo)
+        transcript = Path(self.tmp.name) / "turn.jsonl"
+        transcript.write_text(
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": {"content": "check"},
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "result"}]},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            code, _prompt_epoch, _text = _run(
+                {"cwd": str(repo), "transcript_path": str(transcript)}
+            )
+
+        self.assertEqual(code, 0)
+        self.assertIn(str(linked), stderr.getvalue())
+
+    def test_run_warns_without_transcript_text(self):
+        import io
+        from contextlib import redirect_stderr
+
+        repo = self._repo()
+        linked = self._linked(repo)
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            code, _prompt_epoch, _text = _run({"cwd": str(repo)})
+
+        self.assertEqual(code, 0)
+        self.assertIn(str(linked), stderr.getvalue())
+
+    def test_dirty_linked_worktree_is_silent(self):
+        repo = self._repo()
+        linked = self._linked(repo)
+        (linked / "tracked.txt").write_text("dirty\n", encoding="utf-8")
+
+        _code, warnings, _blocking = self._check_repo(repo)
+
+        self.assertEqual(warnings, [])
+
+    def test_clean_unreachable_commit_is_silent(self):
+        repo = self._repo()
+        linked = self._linked(repo)
+        (linked / "tracked.txt").write_text("unmerged\n", encoding="utf-8")
+        self._git("add", "tracked.txt", cwd=linked)
+        self._git("commit", "-qm", "unmerged", cwd=linked)
+
+        _code, warnings, _blocking = self._check_repo(repo)
+
+        self.assertEqual(warnings, [])
+
+    def test_ignored_only_worktree_is_silent(self):
+        repo = self._repo()
+        (repo / ".gitignore").write_text("drafts/\n", encoding="utf-8")
+        self._git("add", ".gitignore", cwd=repo)
+        self._git("commit", "-qm", "ignore drafts", cwd=repo)
+        linked = self._linked(repo)
+        (linked / "drafts").mkdir()
+        (linked / "drafts" / "x.md").write_text("draft\n", encoding="utf-8")
+
+        _code, warnings, _blocking = self._check_repo(repo)
+
+        self.assertEqual(warnings, [])
+
+    def test_untracked_worktree_is_silent(self):
+        repo = self._repo()
+        linked = self._linked(repo)
+        self._git("config", "status.showUntrackedFiles", "no", cwd=linked)
+        (linked / "untracked.txt").write_text("untracked\n", encoding="utf-8")
+
+        _code, warnings, _blocking = self._check_repo(repo)
+
+        self.assertEqual(warnings, [])
+
+    def test_cwd_worktree_is_not_a_warning_candidate(self):
+        repo = self._repo()
+        current = self._linked(repo, "current")
+        other = self._linked(repo, "other")
+        self._advance_main(repo)
+
+        _code, warnings, _blocking = self._check_cwd(current)
+
+        self.assertEqual(len(warnings), 1)
+        self.assertNotIn(str(current), warnings[0])
+        self.assertIn(str(other), warnings[0])
+
+    def test_nested_worktrees_are_excluded_from_candidates(self):
+        repo = self._repo()
+        parent = self._linked(repo, "parent")
+        child = parent / "child"
+        self._git(
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "codex/child",
+            str(child),
+            "main",
+            cwd=repo,
+        )
+        (child / "tracked.txt").write_text("child dirty\n", encoding="utf-8")
+
+        _code, warnings, _blocking = self._check_repo(repo)
+        candidates = _worktree_candidates(str(repo))
+
+        self.assertEqual(warnings, [])
+        self.assertIsNotNone(candidates)
+        assert candidates is not None
+        self.assertNotIn(os.path.realpath(parent), candidates[2])
+        self.assertNotIn(os.path.realpath(child), candidates[2])
+
+    def test_main_tag_without_main_branch_is_silent(self):
+        repo = self._repo()
+        self._git("branch", "-m", "develop", cwd=repo)
+        self._git("tag", "main", cwd=repo)
+        self._linked(repo, "tagged", base="develop")
+
+        _code, warnings, _blocking = self._check_repo(repo)
+
+        self.assertEqual(warnings, [])
+
+    def test_repeated_stop_warns_once_per_turn(self):
+        import io
+        from contextlib import redirect_stderr
+        from pathlib import Path
+
+        repo = self._repo()
+        linked = self._linked(repo)
+        self._advance_main(repo)
+        transcript = Path(self.tmp.name) / "latch.jsonl"
+        transcript.write_text(
+            json.dumps({"type": "user", "message": {"content": "check"}})
+            + "\n"
+            + json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "result"}]},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        with open(str(transcript)[:-6] + ".turns", "w", encoding="utf-8") as turns:
+            turns.write("7 1000\n")
+        payload = {"cwd": str(repo), "transcript_path": str(transcript)}
+
+        first_stderr = io.StringIO()
+        with redirect_stderr(first_stderr):
+            first_code, _epoch, _text = _run(payload)
+        second_stderr = io.StringIO()
+        with redirect_stderr(second_stderr):
+            second_code, _epoch, _text = _run(payload)
+
+        self.assertEqual(first_code, 0)
+        self.assertEqual(second_code, 0)
+        self.assertIn(str(linked), first_stderr.getvalue())
+        self.assertEqual(second_stderr.getvalue(), "")
+
+    def test_prunable_worktree_is_silent_but_other_candidates_continue(self):
+        import io
+        import shutil
+        from contextlib import redirect_stderr
+
+        repo = self._repo()
+        good = self._linked(repo, "good")
+        prunable = self._linked(repo, "prunable")
+        shutil.rmtree(prunable)
+        self._advance_main(repo)
+
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            _code, warnings, _blocking = self._check_repo(repo)
+
+        self.assertEqual(len(warnings), 1)
+        self.assertIn(str(good), warnings[0])
+        self.assertNotIn(str(prunable), warnings[0])
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_no_linked_worktree_is_silent(self):
+        _code, warnings, _blocking = self._check_repo(self._repo())
+
+        self.assertEqual(warnings, [])
+
+    def test_missing_main_and_master_is_silent(self):
+        repo = self._repo()
+        self._linked(repo)
+        self._git("branch", "-m", "trunk", cwd=repo)
+
+        _code, warnings, _blocking = self._check_repo(repo)
+
+        self.assertEqual(warnings, [])
+
+    def test_non_repo_fails_open_with_diagnostic(self):
+        import io
+        from contextlib import redirect_stderr
+        from pathlib import Path
+
+        path = Path(self.tmp.name) / "not-a-repo"
+        path.mkdir()
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            warnings = _worktree_cleanup_warnings(str(path))
+
+        self.assertEqual(warnings, [])
+        self.assertIn("rev-parse --show-toplevel failed", stderr.getvalue())
+        self.assertEqual(1, len(stderr.getvalue().strip().splitlines()))
+
+    def test_git_missing_fails_open_with_diagnostic(self):
+        import io
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        stderr = io.StringIO()
+        with mock.patch.dict(os.environ, {"PATH": ""}, clear=False):
+            with redirect_stderr(stderr):
+                warnings = _worktree_cleanup_warnings(self.tmp.name)
+
+        self.assertEqual(warnings, [])
+        self.assertIn("worktree-cleanup", stderr.getvalue())
+
+    def test_git_timeout_fails_open_with_diagnostic(self):
+        import io
+        from contextlib import redirect_stderr
+        from pathlib import Path
+        from unittest import mock
+
+        fake_bin = Path(self.tmp.name) / "fake-bin"
+        fake_bin.mkdir()
+        fake_git = fake_bin / "git"
+        fake_git.write_text("#!/bin/sh\nexec /bin/sleep 1\n", encoding="utf-8")
+        fake_git.chmod(0o755)
+        stderr = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, {"PATH": str(fake_bin)}, clear=False),
+            mock.patch.object(
+                sys.modules[__name__], "_GIT_COMMAND_TIMEOUT_SECONDS", 0.05
+            ),
+            redirect_stderr(stderr),
+        ):
+            warnings = _worktree_cleanup_warnings(self.tmp.name)
+
+        self.assertEqual(warnings, [])
+        self.assertIn("timed out", stderr.getvalue())
 
 
 if __name__ == "__main__":
