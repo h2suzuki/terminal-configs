@@ -11,9 +11,19 @@ skill invoke → 編集、 へ誘導する。
 
 mechanism
 =========
-2 mode (argv[1] で dispatch):
+3 mode (argv[1] で dispatch):
 
   gate    PreToolUse(^(Edit|Write|MultiEdit)$) hook。下記 flow で allow/deny。
+  commit-gate
+          PreToolUse(Bash) hook。commit 対象 file の関連 skill が active かを gate。
+          commit の実行主体が、その turn 内に対象 kind の規約 skill を invoke 済み
+          であることを要求する。
+          `git ... commit` 形のみを対象とし、commit-tree、merge、cherry-pick、revert、
+          rebase --continue、stash 等の別経路は射程外。
+          改行で区切られた直接可視の commit は全行検査する。
+          bash -c、変数 command、展開 subcommand、git alias、別言語 process 内は検出対象外。
+          pathless / -a の commit は deny-broad-git-commit が deny するため到達しない。
+          commit 対象の取得に失敗した場合は file kind を判定できないため deny。
   declare model が Bash で実行する CLI:
             skill_reminder_gate.py declare <ABS-path> <kind>[,<kind>...]
           拡張子なし file の kind 真実源を session state に記録。sid は env
@@ -51,7 +61,7 @@ kind 語彙 → skill (additive。else 必須):
   memory → memory-routing  (実 gate は memory_routing_gate、本 hook は通す)
   else   → ∅  (skill の無い file。これが無いと拡張子なし file が Write 不能)
 
-skill-active 窓 (現 turn かつ直近 SKILL_WINDOW_SECONDS=5 分以内) の根拠
+gate mode の skill-active 窓 (現 turn かつ直近 5 分以内) の根拠
 ================================================================
 現 turn を後方 1 つだけ読み (_load_tail、boundary は positional ゆえ ts 単調性に
 非依存で sound)、その中で直近 5 分以内に invoke された skill のみ active とみなす
@@ -83,6 +93,9 @@ deny 方式・fail-open
 deny は JSON permissionDecision: "deny" (exit 0) — hook bug が誤って tool を
 block しない。全例外を握り潰し exit 0 (fail-open)。transcript が読めない /
 boundary 不在のときも ALLOW に倒す。
+commit-gate は commit 対象取得失敗時のみ判定不能を ALLOW にせず DENY に倒し、
+理由と再実行条件を表示する。
+以下の stale transcript valve は gate mode のみに適用し、commit-gate には適用しない。
 Stale transcript (newest entry ts older than TRANSCRIPT_FRESH_SECONDS) also falls
 to ALLOW: resumed-session bg-notification turns (2026-07-09) and subagents
 (2026-07-06) were observed handing the gate transcript content missing the
@@ -109,10 +122,12 @@ deploy: /etc/claude-code/hooks/  両者を同 session で同内容に保つ。
 from __future__ import annotations
 
 import datetime
+from dataclasses import dataclass
 import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import unittest
@@ -121,8 +136,32 @@ HOME = os.path.expanduser("~")
 STATE_DIR = os.path.join(HOME, ".claude", "hooks", "state", "skill_reminder")
 DECL_STALE_SECONDS = 7 * 24 * 3600  # 放置宣言 session dir の自己掃除閾値
 SKILL_WINDOW_SECONDS = 300  # skill-active 窓 = 現 turn かつ直近 5 分以内
-TRANSCRIPT_FRESH_SECONDS = 120  # newest-entry age beyond this = stale transcript -> fail-open
+TRANSCRIPT_FRESH_SECONDS = (
+    120  # newest-entry age beyond this = stale transcript -> fail-open
+)
 GATE_TOOLS = ("Edit", "Write", "MultiEdit")
+
+GIT_COMMIT_RE = re.compile(r"\bgit\b(?:\s+-{1,2}\S+(?:[ =]\S+)?)*\s+commit\b(?![\w.])")
+COMMIT_QUOTED = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
+COMMIT_HEREDOC = re.compile(
+    r"<<-?\s*['\"]?(\w+)['\"]?([^\n]*)\n[\s\S]*?^[ \t]*\1\b",
+    re.MULTILINE,
+)
+COMMIT_TAIL_DELIMITER = re.compile(r"&&|\|\||;|\|")
+COMMIT_WRAPPER = re.compile(
+    r"^(?:\(+\s*|[A-Za-z_][A-Za-z0-9_]*=\S+\s+|timeout\s+\S+\s+|xargs\s+)+"
+)
+
+
+@dataclass(frozen=True)
+class CommitInvocation:
+    args: tuple[str, ...]
+    cwd_override: str
+    pathspecs: tuple[str, ...]
+    amend_like: bool
+    has_all: bool
+    has_include: bool
+
 
 # kind → 当該 kind が要求する skill 集合 (additive。else は ∅)。
 KIND_SKILLS: dict[str, set[str]] = {
@@ -432,6 +471,7 @@ def _load_tail(path: str, turns: int = 1, bufsize: int = _TAIL_BUFSIZE) -> list[
 
 def _is_turn_boundary(obj: dict) -> bool:
     """human-input turn の起点か。isMeta(skill 展開) と tool_result 継続は起点でない。"""
+    # isSidechain entry が現 format に出現すると通常 entry として数え、turn 判定がずれうる。
     if obj.get("type") != "user" or obj.get("isMeta"):
         return False
     msg = obj.get("message", {})
@@ -465,8 +505,10 @@ def _transcript_stale(entries: list[dict], now: float, fresh_s: int) -> bool:
     return newest is not None and newest < now - fresh_s
 
 
-def _active_skills(entries: list[dict], now: float, window_s: int) -> set[str] | None:
-    """invoke 済 skill 集合 = 現 turn のうち直近 window_s 秒以内 (それより前は drop)。boundary 不在は None (fail-open)。"""
+def _active_skills(
+    entries: list[dict], now: float, window_s: int | None
+) -> set[str] | None:
+    """現 turn の invoke 済 skill。window_s=None は時刻で絞らない。"""
     start_idx = -1
     for i in range(len(entries) - 1, -1, -1):
         if _is_turn_boundary(entries[i]):
@@ -475,7 +517,7 @@ def _active_skills(entries: list[dict], now: float, window_s: int) -> set[str] |
     if start_idx == -1:
         return None
 
-    cutoff = now - window_s
+    cutoff = now - window_s if window_s is not None else None
     active: set[str] = set()
     for idx, obj in enumerate(entries):
         if obj.get("type") != "assistant":
@@ -483,7 +525,7 @@ def _active_skills(entries: list[dict], now: float, window_s: int) -> set[str] |
         if idx < start_idx:
             continue  # 現 turn 外
         ep = _parse_ts(obj.get("timestamp"))
-        if ep is not None and ep < cutoff:
+        if cutoff is not None and ep is not None and ep < cutoff:
             continue  # 現 turn 内でも 300 秒以上前は drop
         msg = obj.get("message", {})
         content = msg.get("content") if isinstance(msg, dict) else None
@@ -541,6 +583,255 @@ def _deny_missing(missing: set[str]) -> None:
     )
 
 
+def _strip_commit_heredoc(match: re.Match) -> str:
+    """Hide heredoc data while preserving shell code after its opener."""
+    return "_" + match.group(2)
+
+
+def _masked_commit_command(command: str) -> tuple[str, str, list[str]]:
+    quoted: list[str] = []
+
+    def replace_quote(match: re.Match) -> str:
+        value = match.group(0)[1:-1]
+        if match.group(0).startswith('"'):
+            value = value.replace('\\"', '"').replace("\\\\", "\\")
+        quoted.append(value)
+        return f"__Q{len(quoted) - 1}__"
+
+    without_bodies = COMMIT_HEREDOC.sub(
+        _strip_commit_heredoc, command.replace("\\\n", " ")
+    )
+    tokenized = COMMIT_QUOTED.sub(replace_quote, without_bodies)
+    return COMMIT_QUOTED.sub("_", without_bodies), tokenized, quoted
+
+
+def _resolve_commit_token(token: str, quoted: list[str]) -> str:
+    def replace_placeholder(match: re.Match) -> str:
+        position = int(match.group(1))
+        return quoted[position] if position < len(quoted) else match.group(0)
+
+    return re.sub(r"__Q(\d+)__", replace_placeholder, token)
+
+
+def _commit_flags(args: tuple[str, ...]) -> tuple[bool, bool, bool]:
+    amend_like = False
+    has_all = False
+    has_include = False
+    limit = args.index("--") if "--" in args else len(args)
+    for token in args[:limit]:
+        if token.startswith("--"):
+            name = token.split("=", 1)[0]
+            amend_like |= name in {"--amend", "--fixup", "--squash"}
+            has_all |= name == "--all"
+            has_include |= name == "--include"
+            continue
+        if not token.startswith("-") or token == "-":
+            continue
+        for char in token[1:]:
+            if char in {"m", "F", "C", "c", "t", "S", "u"}:
+                break
+            has_all |= char == "a"
+            has_include |= char == "i"
+    return amend_like, has_all, has_include
+
+
+def _commit_cwd(prefix: str, quoted: list[str]) -> str:
+    tokens = [_resolve_commit_token(token, quoted) for token in prefix.split()]
+    cwd = ""
+    position = 1
+    while position < len(tokens) - 1:
+        token = tokens[position]
+        if token in {"-C", "--work-tree"} and position + 1 < len(tokens) - 1:
+            position += 1
+            cwd = tokens[position]
+        elif token.startswith("-C") and token != "-C":
+            cwd = token[2:]
+        elif token.startswith("--work-tree="):
+            cwd = token.split("=", 1)[1]
+        position += 1
+    return cwd
+
+
+def _find_commits(command: str) -> list[CommitInvocation]:
+    """Find every directly visible commit line without parsing shell grammar."""
+    masked, tokenized, quoted = _masked_commit_command(command)
+    commits: list[CommitInvocation] = []
+    for masked_line, tokenized_line in zip(
+        masked.splitlines(), tokenized.splitlines(), strict=True
+    ):
+        if masked_line.lstrip().startswith("#"):
+            continue
+        if GIT_COMMIT_RE.search(COMMIT_WRAPPER.sub("", masked_line.lstrip())) is None:
+            continue
+        tokenized_candidate = COMMIT_WRAPPER.sub("", tokenized_line.lstrip())
+        tokenized_match = GIT_COMMIT_RE.search(tokenized_candidate)
+        if tokenized_match is None:
+            continue
+        tail = tokenized_candidate[tokenized_match.end() :]
+        delimiter = COMMIT_TAIL_DELIMITER.search(tail)
+        if delimiter is not None:
+            tail = tail[: delimiter.start()]
+        raw_args: list[str] = []
+        for token in tail.split():
+            if token.startswith("#") or re.match(r"(?:\d?>|>&)", token):
+                break
+            raw_args.append(
+                token.rstrip(")") if masked_line.lstrip().startswith("(") else token
+            )
+        args = tuple(_resolve_commit_token(token, quoted) for token in raw_args)
+        pathspecs = args[args.index("--") + 1 :] if "--" in args else ()
+        amend_like, has_all, has_include = _commit_flags(args)
+        commits.append(
+            CommitInvocation(
+                args,
+                _commit_cwd(
+                    tokenized_candidate[
+                        tokenized_match.start() : tokenized_match.end()
+                    ],
+                    quoted,
+                ),
+                pathspecs,
+                amend_like,
+                has_all,
+                has_include,
+            )
+        )
+    return commits
+
+
+def _nul_paths(output: str) -> list[str]:
+    return [path for path in output.split("\0") if path]
+
+
+def _staged_under(pathspecs: list[str], cwd: str) -> tuple[list[str], str, bool]:
+    """pathspec を index/worktree の file へ展開し、成否と基準 path を返す。"""
+    try:
+        root = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout.strip()
+        staged = subprocess.run(
+            ["git", "diff", "--cached", "--name-only", "-z", "--", *pathspecs],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout
+        worktree = subprocess.run(
+            ["git", "diff", "--name-only", "-z", "--", *pathspecs],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as e:
+        sys.stderr.write(
+            f"commit-gate: pathspec 展開に失敗したため deny します ({e}).\n"
+        )
+        return pathspecs, cwd, False
+    files = sorted(set(_nul_paths(staged)) | set(_nul_paths(worktree)))
+    return (files, root, True) if files and root else (pathspecs, cwd, True)
+
+
+def _amend_paths(commit: CommitInvocation, cwd: str) -> tuple[list[str], str] | None:
+    """Return staged ∪ HEAD paths, plus worktree paths for all/include flags."""
+    try:
+        root = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout.strip()
+        staged = subprocess.run(
+            ["git", "diff", "--cached", "--name-only", "-z"],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout
+        previous = subprocess.run(
+            ["git", "show", "--pretty=", "--name-only", "-z", "HEAD"],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout
+        paths = set(_nul_paths(staged)) | set(_nul_paths(previous))
+        if commit.has_all or commit.has_include:
+            worktree = subprocess.run(
+                ["git", "diff", "--name-only", "-z"],
+                cwd=cwd,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            ).stdout
+            paths.update(_nul_paths(worktree))
+        return sorted(paths), root
+    except (OSError, subprocess.SubprocessError) as e:
+        sys.stderr.write(
+            f"commit-gate: commit 対象 path の取得に失敗したため deny します ({e}).\n"
+        )
+        return None
+
+
+def _skills_for_declared_kinds(kinds: list[str]) -> set[str]:
+    skills: set[str] = set()
+    for kind in kinds:
+        skills |= KIND_SKILLS.get(kind, set())
+    return skills
+
+
+def _commit_required_skills(path: str, sid: str) -> set[str]:
+    """Return required skills; unknown extensionless files require no skill."""
+    required = relevant_skills(path)
+    declared = _declared_kinds(sid, path)
+    if declared is None:
+        if _has_extension(path):
+            return required
+        kind = _shebang_kind(path)
+        return set(KIND_SKILLS[kind]) if kind else set()
+    declared_skills = _skills_for_declared_kinds(declared)
+    if _has_extension(path):
+        return required | declared_skills
+    return declared_skills
+
+
+def _deny_commit_missing(missing_by_path: dict[str, set[str]]) -> None:
+    details = "; ".join(
+        f"{path}: {' / '.join(sorted(skills))}"
+        for path, skills in missing_by_path.items()
+    )
+    # 解除条件と次回回避行動を自己完結させるため、deny 文面は意図的に冗長・trim 禁止。
+    _emit_deny(
+        f"commit 対象 file に必要な規約 skill が active ではありません: {details}。 "
+        f"解除するには、該当 skill を invoke してから commit をやり直してください。 "
+        f"次回この deny を避けるには、編集を subagent や codex に委譲する場合も、 "
+        f"commit を実行する主体自身が、その turn 内に対象 file kind の規約 skill を "
+        f"invoke し、その規約を委譲内容に反映してから編集を委譲してください。"
+        f"hook 自身は file を変更しません。"
+    )
+
+
+def _deny_unresolved_pathspec(pathspecs: list[str]) -> None:
+    names = " / ".join(pathspecs)
+    _emit_deny(
+        f"commit 対象の pathspec ({names}) を展開できず、file kind を判定できません。 "
+        f"repo の cwd と git の状態を確認し、commit 対象を明示してやり直してください。"
+        f"hook 自身は file を変更しません。"
+    )
+
+
 # --- modes ---
 
 
@@ -563,9 +854,7 @@ def cmd_gate(payload: dict) -> None:
 
     declared = _declared_kinds(sid, path)
     if declared is not None:
-        declared_skills: set[str] = set()
-        for k in declared:
-            declared_skills |= KIND_SKILLS.get(k, set())
+        declared_skills = _skills_for_declared_kinds(declared)
         # 拡張子あり: declare は追加のみ (auto-detect を下回れない)。なし: declare が唯一源。
         if _has_extension(path):
             required = relevant_skills(path) | declared_skills
@@ -605,6 +894,75 @@ def cmd_gate(payload: dict) -> None:
     missing = required - active
     if missing:
         _deny_missing(missing)
+
+
+def cmd_commit_gate(payload: dict) -> None:
+    if not isinstance(payload, dict) or payload.get("tool_name") != "Bash":
+        return
+    inp = payload.get("tool_input") or {}
+    if not isinstance(inp, dict):
+        return
+    command = inp.get("command") or ""
+    if not isinstance(command, str):
+        return
+    commits = _find_commits(command)
+    if not commits:
+        return
+    payload_cwd = payload.get("cwd")
+    if not isinstance(payload_cwd, str) or not payload_cwd:
+        return
+    sid = payload.get("session_id") or ""
+    required_by_path: dict[str, set[str]] = {}
+    for commit in commits:
+        cwd = payload_cwd
+        if commit.cwd_override:
+            cwd = (
+                commit.cwd_override
+                if os.path.isabs(commit.cwd_override)
+                else os.path.join(cwd, commit.cwd_override)
+            )
+        if "--" in commit.args:
+            pathspecs = list(commit.pathspecs)
+            paths, base, expanded = _staged_under(pathspecs, cwd)
+            if not expanded:
+                _deny_unresolved_pathspec(pathspecs)
+                return
+        elif commit.amend_like:
+            amended = _amend_paths(commit, cwd)
+            if amended is None:
+                _deny_unresolved_pathspec(["amend target"])
+                return
+            paths, base = amended
+        else:
+            continue
+        for raw_path in paths:
+            path = _canonical(raw_path, base)
+            if not path:
+                continue
+            required = _commit_required_skills(path, sid)
+            if required:
+                required_by_path.setdefault(path, set()).update(required)
+    if not required_by_path:
+        return
+    transcript_path = payload.get("transcript_path")
+    if not isinstance(transcript_path, str) or not transcript_path:
+        return
+    entries = _load_tail(transcript_path, 1)
+    if not entries:
+        return
+    # commit は編集から時間が空くため、wall-clock の鮮度窓は規約確認の尺度にしない。
+    # transcript の更新遅延だけで allow すると enforcement の穴になるため staleness も使わない。
+    active = _active_skills(entries, time.time(), None)
+    if active is None:
+        return
+    # commit の実行主体が同 turn に規約 skill を invoke 済みかを判定し、agent_id では分岐しない。
+    missing_by_path = {
+        path: required - active
+        for path, required in required_by_path.items()
+        if required - active
+    }
+    if missing_by_path:
+        _deny_commit_missing(missing_by_path)
 
 
 def cmd_declare(argv: list[str]) -> int:
@@ -667,6 +1025,16 @@ def main() -> int:
         except Exception:
             pass  # fail-open: hook bug が tool を block しない
         return 0
+    if sub == "commit-gate":
+        try:
+            payload = json.loads(sys.stdin.read() or "{}")
+        except json.JSONDecodeError:
+            return 0
+        try:
+            cmd_commit_gate(payload)
+        except Exception:
+            pass  # fail-open: hook bug が tool を block しない
+        return 0
     return 0
 
 
@@ -675,6 +1043,18 @@ class GateTest(unittest.TestCase):
     Run: python3 -m unittest skill_reminder_gate"""
 
     HOOKDIR = "/x/claude_managed-hooks"
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+
+        cls._repo_temp = tempfile.TemporaryDirectory()
+        cls.REPO = cls._repo_temp.name
+        cls._init_repo(cls.REPO, {"README.md": "initial\n"})
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._repo_temp.cleanup()
 
     @staticmethod
     def _iso(ep):
@@ -753,6 +1133,57 @@ class GateTest(unittest.TestCase):
             cmd_gate(payload)
         out = buf.getvalue().strip()
         return json.loads(out) if out else None
+
+    def _commit_gate(
+        self,
+        command,
+        entries=None,
+        transcript=True,
+        agent_id=None,
+        cwd=None,
+    ):
+        import io
+        from contextlib import redirect_stdout
+
+        payload = {
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+            "cwd": cwd if cwd is not None else self.REPO,
+            "session_id": "s1",
+        }
+        if transcript:
+            payload["transcript_path"] = self._transcript(entries or [])
+        if agent_id is not None:
+            payload["agent_id"] = agent_id
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            cmd_commit_gate(payload)
+        out = buf.getvalue().strip()
+        return json.loads(out) if out else None
+
+    @staticmethod
+    def _init_repo(repo, files):
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        for relative, content in files.items():
+            path = os.path.join(repo, relative)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+        subprocess.run(["git", "add", "--all"], cwd=repo, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-qm",
+                "initial",
+            ],
+            cwd=repo,
+            check=True,
+        )
 
     def _reason(self, result):
         self.assertIsNotNone(result)
@@ -1000,7 +1431,9 @@ class GateTest(unittest.TestCase):
                     self._user(),
                     self._skill("writing-code", old),
                     self._skill("writing-python", old),
-                    self._text(time.time()),  # fresh anchor: transcript itself is current
+                    self._text(
+                        time.time()
+                    ),  # fresh anchor: transcript itself is current
                 ],
             )
         )
@@ -1012,7 +1445,9 @@ class GateTest(unittest.TestCase):
         self.assertTrue(
             _transcript_stale([self._user(), self._text(now - f - 1)], now, f)
         )
-        self.assertFalse(_transcript_stale([self._user()], now, f))  # no ts: undecidable
+        self.assertFalse(
+            _transcript_stale([self._user()], now, f)
+        )  # no ts: undecidable
 
     def test_gate_failopen_on_stale_transcript(self):
         # Stale transcript (resume/subagent) proves nothing -> allow, never deny.
@@ -1198,6 +1633,502 @@ class GateTest(unittest.TestCase):
         self.assertIsNotNone(_parse_ts("2026-06-02T04:45:24.945Z"))
         for bad in (None, "", "not-a-date", 123):
             self.assertIsNone(_parse_ts(bad))
+
+    # --- commit-gate: commit path requirements ---
+    def test_commit_gate_explicit_path_allows_active_and_denies_missing(self):
+        command = "git commit -m change -- foo.py"
+        active = [
+            self._user(),
+            self._skill("writing-code"),
+            self._skill("writing-python"),
+        ]
+        self.assertIsNone(self._commit_gate(command, entries=active))
+        reason = self._reason(self._commit_gate(command, entries=[self._user()]))
+        self.assertIn(self.REPO + "/foo.py", reason)
+        self.assertIn("writing-code", reason)
+        self.assertIn("writing-python", reason)
+        self.assertIn("skill を invoke してから commit", reason)
+        self.assertIn("subagent や codex", reason)
+        self.assertIn("commit を実行する主体自身", reason)
+        self.assertNotIn("発注側", reason)
+        self.assertIn("hook 自身は file を変更しません", reason)
+
+    def test_commit_gate_allows_skill_less_path(self):
+        self.assertIsNone(
+            self._commit_gate(
+                "git commit -m notes -- notes.txt", entries=[self._user()]
+            )
+        )
+
+    def test_commit_gate_allows_non_commit_command(self):
+        for command in ("git status", "grep 'git commit' foo.md"):
+            with self.subTest(command=command):
+                self.assertIsNone(self._commit_gate(command, transcript=False))
+
+    def test_commit_gate_checks_payload_with_agent_id(self):
+        result = self._commit_gate(
+            "git commit -m change -- foo.py",
+            entries=[self._user(), self._text(time.time())],
+            agent_id="agent-1",
+        )
+        self.assertIn("writing-python", self._reason(result))
+
+    def test_commit_gate_amend_uses_staged_paths(self):
+        from unittest import mock
+
+        root = subprocess.CompletedProcess(
+            ["git", "rev-parse", "--show-toplevel"], 0, self.REPO + "\n", ""
+        )
+        staged = subprocess.CompletedProcess(
+            ["git", "diff", "--cached", "--name-only", "-z"], 0, "foo.py\0", ""
+        )
+        previous = subprocess.CompletedProcess([], 0, "README.md\0", "")
+        with mock.patch.object(
+            subprocess, "run", side_effect=[root, staged, previous]
+        ) as run_mock:
+            result = self._commit_gate(
+                "git commit --amend --no-edit", entries=[self._user()]
+            )
+        self.assertIn("writing-python", self._reason(result))
+        self.assertEqual(run_mock.call_count, 3)
+        run_mock.assert_has_calls(
+            [
+                mock.call(
+                    ["git", "rev-parse", "--show-toplevel"],
+                    cwd=self.REPO,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                ),
+                mock.call(
+                    ["git", "diff", "--cached", "--name-only", "-z"],
+                    cwd=self.REPO,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                ),
+                mock.call(
+                    ["git", "show", "--pretty=", "--name-only", "-z", "HEAD"],
+                    cwd=self.REPO,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                ),
+            ]
+        )
+
+    def test_commit_gate_amend_always_includes_head_paths(self):
+        from unittest import mock
+
+        root = subprocess.CompletedProcess([], 0, self.REPO + "\n", "")
+        staged = subprocess.CompletedProcess([], 0, "", "")
+        previous = subprocess.CompletedProcess([], 0, "foo.py\0", "")
+        with mock.patch.object(
+            subprocess, "run", side_effect=[root, staged, previous]
+        ) as run_mock:
+            result = self._commit_gate(
+                "git commit --fixup HEAD", entries=[self._user()]
+            )
+        self.assertIn("writing-python", self._reason(result))
+        self.assertEqual(run_mock.call_count, 3)
+
+    def test_commit_gate_subprocess_failure_is_fail_closed(self):
+        import io
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        stderr = io.StringIO()
+        failure = subprocess.CalledProcessError(1, ["git", "diff"])
+        with (
+            mock.patch.object(subprocess, "run", side_effect=failure),
+            redirect_stderr(stderr),
+        ):
+            result = self._commit_gate(
+                "git commit --squash HEAD", entries=[self._user()]
+            )
+        self.assertIn("file kind", self._reason(result))
+        self.assertIn("deny", stderr.getvalue())
+
+    def test_commit_gate_git_c_global_option_denies(self):
+        result = self._commit_gate(
+            f"git -C {self.REPO} commit -m change -- foo.py",
+            entries=[self._user()],
+            cwd="/tmp",
+        )
+        reason = self._reason(result)
+        self.assertIn("writing-python", reason)
+        self.assertIn(self.REPO + "/foo.py", reason)
+
+    def test_commit_gate_other_global_options_deny(self):
+        commands = (
+            "git --no-pager commit -m change -- foo.py",
+            "git -c core.pager=cat commit -m change -- foo.py",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                result = self._commit_gate(command, entries=[self._user()])
+                self.assertIn("writing-python", self._reason(result))
+
+    def test_commit_gate_directory_pathspec_expands_staged_files(self):
+        import tempfile
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as repo:
+            hook_dir = os.path.join(repo, "claude_managed-hooks")
+            os.makedirs(hook_dir)
+            path = os.path.join(hook_dir, "guard.py")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("pass\n")
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(
+                ["git", "add", "claude_managed-hooks/guard.py"],
+                cwd=repo,
+                check=True,
+            )
+            with mock.patch.object(subprocess, "run", wraps=subprocess.run) as run_mock:
+                result = self._commit_gate(
+                    "git commit -m change -- claude_managed-hooks",
+                    entries=[self._user()],
+                    cwd=repo,
+                )
+            for call in run_mock.call_args_list:
+                self.assertEqual(call.kwargs.get("timeout"), 5)
+        reason = self._reason(result)
+        self.assertIn("guard.py", reason)
+        self.assertIn("writing-skills", reason)
+
+    def test_commit_gate_ignores_git_commit_in_heredoc_body(self):
+        command = "cat > howto.md <<'EOF'\ngit commit -m msg -- foo.py\nEOF"
+        self.assertIsNone(self._commit_gate(command, entries=[self._user()]))
+        self.assertIsNone(
+            self._commit_gate(
+                "git commit -m docs -- notes.txt && echo foo.py",
+                entries=[self._user()],
+            )
+        )
+
+    def test_commit_gate_worktree_only_directory_pathspec_denies(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as repo:
+            relative = "claude_managed-hooks/guard.py"
+            self._init_repo(repo, {relative: "pass\n"})
+            with open(os.path.join(repo, relative), "a", encoding="utf-8") as f:
+                f.write("changed = True\n")
+            result = self._commit_gate(
+                "git commit -m change -- claude_managed-hooks",
+                entries=[self._user()],
+                cwd=repo,
+            )
+        self.assertIn("writing-skills", self._reason(result))
+
+    def test_commit_gate_partially_staged_directory_pathspec_denies(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as repo:
+            hook = "claude_managed-hooks/guard.py"
+            note = "claude_managed-hooks/notes.txt"
+            self._init_repo(repo, {hook: "pass\n", note: "old\n"})
+            with open(os.path.join(repo, hook), "a", encoding="utf-8") as f:
+                f.write("changed = True\n")
+            with open(os.path.join(repo, note), "a", encoding="utf-8") as f:
+                f.write("staged\n")
+            subprocess.run(["git", "add", note], cwd=repo, check=True)
+            result = self._commit_gate(
+                "git commit -m change -- claude_managed-hooks",
+                entries=[self._user()],
+                cwd=repo,
+            )
+        self.assertIn("writing-skills", self._reason(result))
+
+    def test_commit_gate_quoted_commit_token_is_out_of_scope(self):
+        commands = (
+            "git 'commit' -m change -- foo.py",
+            'git "commit" -m change -- foo.py',
+            "git com'mit' -m change -- foo.py",
+            "git \\commit -m change -- foo.py",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertIsNone(self._commit_gate(command, entries=[self._user()]))
+
+    def test_commit_gate_comment_apostrophe_keeps_deny(self):
+        for comment in ("Bob's request", "don't"):
+            command = f"git commit -m change -- foo.py # {comment}"
+            with self.subTest(command=command):
+                result = self._commit_gate(command, entries=[self._user()])
+                self.assertIn("writing-python", self._reason(result))
+
+    def test_commit_gate_checks_every_commit_line(self):
+        result = self._commit_gate(
+            "git commit -m docs -- notes.txt\ngit commit -m code -- foo.py",
+            entries=[self._user()],
+        )
+        self.assertIn("writing-python", self._reason(result))
+
+        result = self._commit_gate(
+            "git commit -m code -- foo.py\ngit commit -m policy -- SKILL.md",
+            entries=[
+                self._user(),
+                self._skill("writing-code"),
+                self._skill("writing-python"),
+            ],
+        )
+        self.assertIn("writing-skills", self._reason(result))
+
+    def test_commit_gate_skips_leading_comment_lines(self):
+        comment = "# git commit -m decoy -- foo.py"
+        self.assertIsNone(self._commit_gate(comment, entries=[self._user()]))
+        result = self._commit_gate(
+            f"{comment}\ngit commit -m code -- SKILL.md",
+            entries=[self._user()],
+        )
+        reason = self._reason(result)
+        self.assertIn("writing-skills", reason)
+        self.assertNotIn("foo.py", reason)
+
+    def test_commit_gate_unbalanced_pathless_command_does_not_blanket_deny(self):
+        self.assertIsNone(
+            self._commit_gate("git commit -m 'broken", entries=[self._user()])
+        )
+
+    def test_commit_gate_strips_line_prefix_wrappers(self):
+        commands = (
+            "timeout 5 git commit -m change -- foo.py",
+            "xargs git commit -m change -- foo.py",
+            "(git commit -m change -- foo.py)",
+            "GIT_EDITOR=true git commit -m change -- foo.py",
+            "env FOO=1 git commit -m change -- foo.py",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                result = self._commit_gate(command, entries=[self._user()])
+                self.assertIn("writing-python", self._reason(result))
+
+    def test_commit_gate_documents_unsupported_indirection(self):
+        commands = (
+            "bash -c 'git commit -m nested -- foo.py'",
+            'G="git"; $G commit -m variable -- foo.py',
+            "git $(echo commit) -m expanded -- foo.py",
+            "git -c alias.ci=commit ci -m alias -- foo.py",
+            'python3 -c \'subprocess.run(["git", "commit"])\'',
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertIsNone(self._commit_gate(command, entries=[self._user()]))
+
+    def test_commit_gate_extensionless_shebang_and_plain_file(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as repo:
+            script = "files/run_python"
+            plain = "files/plain_data"
+            self._init_repo(
+                repo,
+                {script: "#!/usr/bin/env python3\n", plain: "plain\n"},
+            )
+            for relative in (script, plain):
+                with open(os.path.join(repo, relative), "a", encoding="utf-8") as f:
+                    f.write("changed\n")
+                subprocess.run(["git", "add", relative], cwd=repo, check=True)
+            denied = self._commit_gate(
+                f"git commit -m change -- {script}",
+                entries=[self._user()],
+                cwd=repo,
+            )
+            allowed = self._commit_gate(
+                f"git commit -m change -- {plain}",
+                entries=[self._user()],
+                cwd=repo,
+            )
+        self.assertIn("writing-python", self._reason(denied))
+        self.assertIsNone(allowed)
+
+    def test_commit_gate_amend_all_with_partial_stage_checks_worktree(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as repo:
+            self._init_repo(repo, {"doc.md": "old\n", "files/foo.py": "old = 1\n"})
+            with open(os.path.join(repo, "doc.md"), "a", encoding="utf-8") as f:
+                f.write("staged\n")
+            with open(os.path.join(repo, "files/foo.py"), "a", encoding="utf-8") as f:
+                f.write("new = 2\n")
+            subprocess.run(["git", "add", "doc.md"], cwd=repo, check=True)
+            result = self._commit_gate(
+                "git commit -a --amend --no-edit",
+                entries=[self._user()],
+                cwd=repo,
+            )
+        self.assertIn("writing-python", self._reason(result))
+
+    def test_commit_gate_non_ascii_paths_use_nul_output(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as repo:
+            relative = "files/日本語.py"
+            self._init_repo(repo, {relative: "old = 1\n"})
+            with open(os.path.join(repo, relative), "a", encoding="utf-8") as f:
+                f.write("new = 2\n")
+            subprocess.run(["git", "add", relative], cwd=repo, check=True)
+            for pathspec in ("files", relative):
+                with self.subTest(pathspec=pathspec):
+                    result = self._commit_gate(
+                        f"git commit -m change -- {pathspec}",
+                        entries=[self._user()],
+                        cwd=repo,
+                    )
+                    self.assertIn("日本語.py", self._reason(result))
+
+    def test_commit_gate_checks_transcript_older_than_freshness_limit(self):
+        result = self._commit_gate(
+            "git commit -m change -- foo.py",
+            entries=[self._user(), self._text(time.time() - 130)],
+        )
+        self.assertIn("writing-python", self._reason(result))
+
+    def test_commit_gate_checks_stale_transcript_with_agent_id(self):
+        # transcript の staleness と agent_id のどちらでも早期 return しない。
+        result = self._commit_gate(
+            "git commit -m change -- foo.py",
+            entries=[self._user(), self._text(time.time() - 720)],
+            agent_id="agent-1",
+        )
+        self.assertIn("writing-python", self._reason(result))
+
+    def test_commit_gate_accepts_skill_from_earlier_in_same_turn(self):
+        old = time.time() - 400
+        self.assertIsNone(
+            self._commit_gate(
+                "git commit -m change -- foo.py",
+                entries=[
+                    self._user(),
+                    self._skill("writing-code", old),
+                    self._skill("writing-python", old),
+                    self._text(time.time()),
+                ],
+            )
+        )
+
+    def test_commit_gate_declare_else_cannot_bypass_extensioned(self):
+        import tempfile
+        from unittest import mock
+
+        state = tempfile.mkdtemp()
+        path = self.REPO + "/generated.py"
+        with (
+            mock.patch.object(sys.modules[__name__], "STATE_DIR", state),
+            mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "s1"}),
+        ):
+            self.assertEqual(self._declare_quiet([path, "else"]), 0)
+            reason = self._reason(
+                self._commit_gate(
+                    "git commit -m change -- generated.py", entries=[self._user()]
+                )
+            )
+        self.assertIn("writing-python", reason)
+
+    def test_commit_gate_declared_else_allows_extensionless(self):
+        import tempfile
+        from unittest import mock
+
+        with (
+            tempfile.TemporaryDirectory() as repo,
+            tempfile.TemporaryDirectory() as state,
+        ):
+            relative = "files/run_python"
+            path = os.path.join(repo, relative)
+            self._init_repo(repo, {relative: "#!/usr/bin/env python3\n"})
+            with open(path, "a", encoding="utf-8") as f:
+                f.write("changed\n")
+            subprocess.run(["git", "add", relative], cwd=repo, check=True)
+            with (
+                mock.patch.object(sys.modules[__name__], "STATE_DIR", state),
+                mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "s1"}),
+            ):
+                before = self._commit_gate(
+                    f"git commit -m change -- {relative}",
+                    entries=[self._user()],
+                    cwd=repo,
+                )
+                self.assertEqual(self._declare_quiet([path, "else"]), 0)
+                after = self._commit_gate(
+                    f"git commit -m change -- {relative}",
+                    entries=[self._user()],
+                    cwd=repo,
+                )
+        self.assertIn("writing-python", self._reason(before))
+        self.assertIsNone(after)
+
+    def test_commit_gate_denies_unresolved_extensionless_pathspec(self):
+        import io
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        stderr = io.StringIO()
+        failure = subprocess.CalledProcessError(128, ["git", "rev-parse"])
+        with (
+            mock.patch.object(subprocess, "run", side_effect=failure),
+            redirect_stderr(stderr),
+        ):
+            result = self._commit_gate(
+                "git commit -m change -- claude_managed-hooks",
+                entries=[self._user()],
+            )
+        reason = self._reason(result)
+        self.assertIn("pathspec", reason)
+        self.assertIn("file kind", reason)
+        self.assertIn("commit 対象を明示", reason)
+
+    def test_commit_gate_denies_any_unresolved_pathspec(self):
+        import io
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        failure = subprocess.CalledProcessError(128, ["git", "rev-parse"])
+        with (
+            mock.patch.object(subprocess, "run", side_effect=failure),
+            redirect_stderr(io.StringIO()),
+        ):
+            result = self._commit_gate(
+                "git commit -m change -- foo.py", entries=[self._user()]
+            )
+        self.assertIn("foo.py", self._reason(result))
+
+    def test_commit_gate_missing_or_non_string_cwd_does_not_use_process_cwd(self):
+        import io
+        from contextlib import redirect_stdout
+
+        for cwd in (None, 123):
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {"command": "git commit -m change -- foo.py"},
+                "cwd": cwd,
+                "transcript_path": self._transcript([self._user()]),
+            }
+            output = io.StringIO()
+            with redirect_stdout(output):
+                cmd_commit_gate(payload)
+            self.assertEqual(output.getvalue(), "")
+
+    def test_commit_gate_timeout_is_fail_closed(self):
+        import io
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        stderr = io.StringIO()
+        failure = subprocess.TimeoutExpired(["git", "diff"], 5)
+        with (
+            mock.patch.object(subprocess, "run", side_effect=failure),
+            redirect_stderr(stderr),
+        ):
+            result = self._commit_gate(
+                "git commit --amend --no-edit", entries=[self._user()]
+            )
+        self.assertIn("file kind", self._reason(result))
+        self.assertIn("deny", stderr.getvalue())
 
 
 if __name__ == "__main__":
