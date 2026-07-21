@@ -32,6 +32,7 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
 
 - **effort は難易度推定で選び、過剰にしない**: 発注前に仕事の難易度を 1 拍推定して companion `task --effort` を決める。目安 = 機械的作業（定数 bump・rename・既存パターンの写経）は minimal/low、通常実装は未指定（config 既定に委ねる）、正しさクリティカル（golden 突合・並行性・migration）や設計判断を含む実装のみ high。xhigh は例外用途に留める
 - **resume は元 thread の sandbox を引き継ぐ**: read-only で始まった thread は `--write --resume-last` でも書けない。companion status の `write: True` 表示は起動意図であって実効権限ではない（表示でなく probe file で検証する）。write 化は fresh thread でやり直す（read-only 34 分空走 + resume 不達の実例 2026-07-11）
+- **`--resume-last` は「自分の thread」でなく workspace 内で最後に走った thread に解決される**: write 実装 thread の fix round であっても、間に read-only のレビュー task を挟むと resume 先がそちらへすり替わり、read-only sandbox のまま起動して 1 file も書けずに完了する（fix round 1・2 は write を維持できたのに、read-only レビューを挟んだ fix round 3 で発生・2026-07-22）。resume で write 発注する前に、job state の直近 entry の `write` を確認する。read-only task を挟んだ後は `--fresh` を使う
 - **`backgrounded pid N` は task の起動登録を証明しない**: shell が背景化しただけでも表示され、redirect が `/readme-launch.out: Permission denied` で失敗して task が未起動のまま `backgrounded pid 3905669` と表示された（2026-07-15）
 - **完了 monitor は当該 task の起動登録確認後に張る**: probe file の出現または companion `status --json` の running[] に当該 task の新 id が現れるまで待つ。未登録のまま監視だけが成立した実例がある（2026-07-15）
 - **running[]-empty 型 monitor を使わない**: 直前の task が終了済みで running[] が元から空だったため、起動前の空を完了と誤認して即時 false-fire した（2026-07-15）。当該 task id が running[] に現れてから消える遷移を待つ
