@@ -32,7 +32,34 @@ Exit Criteria:
 
 Work file: `last-session-handoff.md` の「memory surface 改善実装」 section
 
+### codex 委譲規律の deploy 同期と memory 退役
+
+Goal: 本 session で統合した `codex-delegation` skill と commit-time skill gate を deploy 先へ反映し、skill が完全 cover した codex 系 memory 3 本を退役させる。
+
+Exit Criteria:
+- [x] codex 系 memory 4 本の教訓 15 件を `codex-delegation` skill へ統合 — commit 8834f36 / 62f4dc6。opus 4 レンズ + 検証 + codex cross-model の 3 巡で blocker 5 件を閉塞
+- [x] commit 時に規約 skill の invoke を強制する gate を実装 — commit 43e7bdd。過去 transcript 由来 4793 件の実 git コマンドを corpus 化し ground truth を git 自身から取得 (commit 判定 成功 85 / 取りこぼし 0 / 誤検知 1 / 宣言済み境界 9)
+- [ ] deploy 先へ反映 — `/etc/claude-code/skills/codex-delegation/SKILL.md` と `/etc/claude-code/hooks/skill_reminder_gate.py`、および hook 登録 (`claude_managed-extensions.json`)。sudo が要るため user 実行
+- [ ] deploy 後に commit-gate の正発火を実運用で 1 回確認する
+- [ ] `codex-delegation` に追記: wrapper が報告する task id は実作業の task とは限らない (1 起動で複数 task 登録の実例 2026-07-21)。完了判定は heartbeat が更新される running task を拠り所にする
+- [ ] cover 完了後に memory 3 本を退役 — `feedback_codex_bg_launch_registration_confirm` / `feedback_codex_bg_task_stall_heartbeat_monitor` / `feedback_codex_delegation_worktree_isolation` を OLD-MEMORY.md へ移し、MEMORY.md の 3 行削除 + FTS `--delete`。worktree entry の Provenance にある「user skill ゆえ退役対象外」は事実誤認なので訂正する
+
+Work file: `last-session-handoff.md` の「codex 委譲規律の deploy 同期と memory 退役」 section
+
 ## Medium
+
+### codex write 委譲の worktree 隔離 gate
+
+Goal: `codex-companion.mjs task --write` を主 checkout で起動したら deny する PreToolUse hook を入れ、共有ツリーへの委譲で並行セッションの変更が混在する事故を防ぐ。
+
+Exit Criteria:
+- [x] 判定方法を実測で確定 — `git rev-parse --absolute-git-dir` の親ディレクトリ名が `worktrees` なら linked worktree。worktree の subdir でも同値、非 repo は非ゼロ exit (2026-07-21 実測)
+- [x] 発注書作成 — `drafts/codex-worktree-gate-order.md`
+- [ ] hook 実装 + 登録 + test (temp repo で実 git を使った worktree 判定、resume 系も対象、`CODEX_SHARED_TREE_OK=1` の escape hatch)
+- [ ] `Agent` を `isolation: "worktree"` で起動したとき subagent の Bash payload の `cwd` が worktree を指すか確認 — 成立しないと hook が常に deny 側へ倒れる
+- [ ] deploy 反映
+
+Work file: `drafts/codex-worktree-gate-order.md`
 
 ### skill_reminder_gate の恒久策: PostToolUse Skill 記録方式 (要相談)
 
