@@ -35,6 +35,7 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
 - **`backgrounded pid N` は task の起動登録を証明しない**: shell が背景化しただけでも表示され、redirect が `/readme-launch.out: Permission denied` で失敗して task が未起動のまま `backgrounded pid 3905669` と表示された（2026-07-15）
 - **完了 monitor は当該 task の起動登録確認後に張る**: probe file の出現または companion `status --json` の running[] に当該 task の新 id が現れるまで待つ。未登録のまま監視だけが成立した実例がある（2026-07-15）
 - **running[]-empty 型 monitor を使わない**: 直前の task が終了済みで running[] が元から空だったため、起動前の空を完了と誤認して即時 false-fire した（2026-07-15）。当該 task id が running[] に現れてから消える遷移を待つ
+- **wrapper が報告する task id を監視対象にしない**: 1 回の起動で task が複数登録されることがあり、wrapper 報告の id が即終了した短命 task で、実作業は別 id という実例がある（2026-07-21）。`status --json` で heartbeat が更新され続けている running task を監視対象にする
 - **完了は成果物で裏取りする**: `git diff`、対象 file の mtime、companion `latestFinished` の id 変化のいずれかを確認する。`git diff README.md` が空で初めて非起動に気づいた実例があり、成果物ゼロは非起動または未着手と扱う（2026-07-15）。probe file は起動登録の確認に使い、完了の証拠にはしない
 - **wrapper return / timeout ≠ 完了**: wrapper は起動直後 return または実行途中で切断する。codex 本体はサーバー側 thread として走り続け、切断報告後も 40 分以上書き続けた実例がある
 - **ツリー静穏は必要条件であって十分条件ではない**: source 書き込みが止まっても検証フェーズ（build / check / test）は継続し得る（静穏 25 分後も cargo check 継続の実例）。task 終了は companion status で確認する
