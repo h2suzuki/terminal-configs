@@ -45,7 +45,7 @@ Exit Criteria:
 - [ ] `cd -- <path>` を解する — 残る唯一の実挙動の穴。`cd -- <primary> && node ... task --write` が存在しない path を組み立てて `FileNotFoundError` → fail-open で allow する (2026-07-22 実測)。`segment[1] == "--"` なら `segment[2]` を採るだけで塞がる。相対 `cd` の連鎖 (`cd .. && cd ..`) と絶対 `cd` の連鎖は既に deny 済み。**`avoid_cd.py` は allow + advisory で block しないことを実測**したので到達可能
 - [x] 委譲用 worktree `<repo>/.claude/worktrees/codex-gate` を削除 — 2026-07-22 に `git worktree remove --force` + `prune` 実行、`worktree list` が主 checkout のみ・`.claude/worktrees/` が空であることを確認
 - [x] 委譲時の worktree の作り方を確定 — `Agent` の `isolation: "worktree"` は**使わない**。harness が agent 終了時に unchanged な worktree を自動削除するため、agent より長生きする codex の作業ツリーが走行中に消える (2026-07-21 実測: codex が「requested worktree does not exist / filesystem is read-only」で何も書けずに完了)。発注側が `git worktree add --detach` で作り、codex の `--cwd` に渡す。`--background` を付けなければ同期実行なので Bash job の終了が真の完了シグナルになる
-- [ ] deploy 反映 — `/etc/claude-code/hooks/` は root 所有かつ `no_new_privs` で sudo 不可のため H.S. 実行。`copy_dir claude_managed-hooks/` が dir 丸ごと配るので per-file の copy 行は不要 (追加しかけたが冗長と判明し削除済み)
+- [x] deploy 反映 — 2026-07-22 H.S. 実行。deploy 先 3 file が canonical と `diff` 一致、hook は mode 755、`extensions.json:28` に登録を確認。**PreToolUse チェーン経由の live 発火も確認**: 共有 checkout から `node .../codex-companion.mjs task --write` を実行して deny を取得 (セッション再起動を待たず反映)。`/etc/claude-code/` は root 所有かつ `no_new_privs` で sudo 不可のため deploy は H.S. 実行が必要。`copy_dir claude_managed-hooks/` が dir 丸ごと配るので per-file の copy 行は不要
 
 Work file: `drafts/codex-worktree-gate-order.md`
 
