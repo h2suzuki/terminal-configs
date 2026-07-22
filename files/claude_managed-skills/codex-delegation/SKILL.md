@@ -13,6 +13,9 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
 1. **発注書を書く**: 依頼は chat 文でなく発注書 file（作業 dir の drafts/ 等）に固定する。含める: スコープ（触ってよい path / 触らない path）、仕様の優先順位（受け入れ修正節が本文に優先する等の明文）、完了条件（fmt / clippy / test の実行と **結果ログの file 保存**）、「コミットはしない（受け入れレビュー後に発注側が行う）」の明記
    - 対象 file kind の規約 skill（`writing-code` / `writing-bash` / `writing-skills` 等）を発注側で invoke し、その規約を発注書に転記する。skill gate は subagent と codex の書き込みには効かないため、規約は発注書経由でしか届かない
    - `fuser -k` / `pkill` 等の kill-by-port を禁止し、port が塞がっていれば別 port を使い（この場合も excludedCommands 登録 launcher または `!` によるホスト側起動に限定する）、止められない process は放置して報告することも含める。subagent が port 5273 を `fuser -k` で掃除した直後にホスト側の vite が落ちた（2026-07-15）
+   - **「適用される既存裁定」節を必須で置く**: 発注対象の scope を制約する user の既存決定（機能やデータ範囲の凍結・自動/手動の区別・スコープ境界等）を発注書へ転記する。裁定を運ばない発注は、実装者が裁定違反の default を選んでも止まらない（データ再同期の是正発注が過去データ取得凍結の裁定を欠き、空状態 fallback が無依頼の大規模バックフィルとして実装されレビュー 2 巡も通過した実例 2026-07-23）
+   - **「作業量上限（worst-case bound）」節を必須で置く**: 外部取得・大量計算・一括変換など作業量が対象規模に比例する発注は、「初回・空状態で 1 実行が最大何を行うか」を上限として明文化し、上限をテストで pin させる。レビュー発注（受け入れ・cross-model・敵対レビュー等）にも同じ blast-radius 上限の観点を必須で含める（レビュー発注に空状態の upper bound が無く、無依頼の大規模データ取得がレビュー 2 巡を通過した実例 2026-07-23）
+   - **所要見積もりバンドと調査発動しきい値（目安 = 見積もり 2 倍）を発注時に宣言する**: 規模 × build 状態（cold/warm）× テスト範囲から見積もる。見積もりを持たない監視は生存確認にとどまる（2026-07-23 の user 指摘）
 2. **起動**: codex rescue 系 command で発注書 path を渡す。**実装発注は `task --write` 必須（既定 = read-only sandbox）**。発注 prompt の第一動作に write probe file 作成を入れ、起動 1-2 分後に実在を確認する（数十分の空走を早期検知）。既存 thread の続き（fix round 等）は resume、新規作業は fresh。wrapper が「background job 起動」とだけ返すのは正常で、完了報告ではない
    - background 起動の出力 redirect 先は変数展開に頼らず、既知 writable な絶対 path に固定する
    - 実装委譲では、起動後は companion `status` の workspaceRoot が隔離 worktree を指すことを確認し、以降の probe 確認・静穏 find・`git diff`・成果物確認・受け入れレビュー・commit はこの workspaceRoot を唯一の作業 root とし、全 path をその絶対 path で扱う
@@ -42,6 +45,7 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
 - **ツリー静穏は必要条件であって十分条件ではない**: source 書き込みが止まっても検証フェーズ（build / check / test）は継続し得る（静穏 25 分後も cargo check 継続の実例）。task 終了は companion status で確認する
 - **running[] 消滅や静穏の待機だけでは hang を捕捉できない**: high effort の敵対レビュー task は起動 2 分後に stall しても 73 分間 running[] に残り、完了イベント待ちでは検知できなかった（2026-07-15）
 - **stall は heartbeat の鮮度で判定する**: companion `status --json` の running entry の `updatedAt` または job log file の mtime を定期 poll し、`now - updatedAt` が 7 分を超えた凍結を stall とする。73 分間 log 無音かつ updatedAt 凍結の実例がある（2026-07-15）。ただし作業ツリー / build dir の mtime が更新中、または job log 末尾が build / test 実行中を示す場合は生存として re-arm する
+- **監視は生存確認に加えて見積もり乖離を検知する**: 再アーム時に累積 elapsed を発注時見積もりと突き合わせ、しきい値（目安 = 見積もり 2 倍）を超えたら re-arm を反射的に繰り返すのをやめ、job log の**実際の作業内容**を発注書のスコープと突き合わせて調査に入る（re-arm か cancel かの生存判定自体は「stall は heartbeat の鮮度で判定する」と「監視は完了・stall・生存の 3 分岐で exit する」の各 rule に従う）。発注していない規模・範囲の活動を見たら、正当化の前に「どの発注・どの既存裁定に基づくか」を裏取りする。委譲成果物の実行検証を含む長時間処理も、起動前に期待所要を宣言し乖離時は同様に調査へ入る（発注外の年次データ書込を目視しながら「正当な初回処理」と誤正当化し、user の障害報告まで検知が遅れた実例 2026-07-23）
 - **監視は完了・stall・生存の 3 分岐で exit する**: 成果物出現または当該 id の running[] 消滅は完了候補にとどめ、静穏 5-10 分と running[] 消滅の 2 条件 AND を満たしてから成果物を裏取りして受け入れレビューへ進む。cancel した task や異常終了した task の running[] 消滅は完了ではなく、cancel / 異常終了後は必ず fresh thread で再発注する。heartbeat 凍結 7 分超・ツリー静穏・job log が build / test 実行中を示していない、の 3 条件 AND で cancel し、いずれか欠ければ生存として re-arm する（2026-07-15）
 - **sandbox から codex プロセスは見えない**: PID namespace 隔離のため pgrep 不可。プロセス監視でなくツリー観測 + companion status を使う
 - **stall 停止は kill でなく companion の cancel を使う**: sandbox から PID は見えないため codex plugin の `scripts/codex-companion.mjs` を `node` で起動して `cancel <job-id> --json` を渡し、`status: cancelled` を確認する。cancel 成功を実証済みで、resume は read-only sandbox を引き継ぐため fresh thread で再発注する（2026-07-15）
