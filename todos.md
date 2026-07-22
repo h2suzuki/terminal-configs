@@ -49,19 +49,6 @@ Exit Criteria:
 
 Work file: `drafts/codex-worktree-gate-order.md`
 
-### advisory hook の信号価値回復 (avoid_cd 限定 deny + segment 警告のノイズ削減)
-
-Goal: 無視され続けている 2 つの advisory を、実害のある形だけ確実に止める / 実害のある時だけ鳴る形に直す。H.S. が両案とも実施を承認済み (2026-07-22)。
-
-計測値 (2026-07-22 の 1 session、transcript 実測・再導出不要): `avoid_cd` の advisory が **8 回**、除外コマンドの `non-leading compound segment` 警告が **78 回** 発火し、いずれも `allow` + advisory ゆえ LLM が全て読み飛ばした。同 session 内で「以降は `git -C` を裸で先頭に置く」と 2 度宣言して 2 度とも破っており、規律では止まらないことが実証されている。実害も 1 件観測: `cd` が後続 turn に残り `git commit -- <path>` の pathspec が壊れた。
-
-Exit Criteria:
-- [x] 案 1: `avoid_cd.py` を限定 deny 化 — commit 5dd9a32。複合コマンド先頭の `cd` のみ JSON `permissionDecision: deny` (exit は常に 0)、単独 `cd` は advisory・`pushd` / `popd` は無音のまま。判定は mask 後の文字列に対して行う (HEREDOC ループ → QUOTED → balanced `$(` / `${` → escape 無効化 → COMMENT)。読み切れない構文 (未終端の引用符 / heredoc) は **allow 側に倒す** — deny 方向に外すと全 session の正当な作業を止めるため。codex 1 巡 + fix 3 巡、opus 敵対レビュー 3 巡 (24 + 11 + 6 提起 → 独立反証を生き延びた 10 件を全て修正)。**受け入れ時に司令塔が 40 payload を自ら実行し全件期待通り**を確認 (行継続 / `${}` / 入れ子 `$( )` / 未終端 heredoc / コメント内演算子 / quote 内演算子 は allow、`cd;ls` と `cd&&ls` を含む複合は deny)
-- [x] 案 2: 除外コマンドの segment 警告のノイズ削減 — commit 92d938b。**実 sandbox 実行は検出不能**と確定 (PreToolUse payload に sandbox 実行を示す field が無いことを公式 doc で確認、`sandbox.enabled` 系も hook は未参照、判定は command 文字列の静的字句判定) のため、todos 規定どおり頻度を絞る側を採用。session × reason 単位の latch で同一 reason は 1 session に 1 回だけ発火し、その旨を警告文に明示。block 判定は不変、latch の永続化に失敗したら警告する側へ fail-open。実プロセス間で live 検証済 (2 回目無音 / reason 違い再発火 / session 違い再発火 / session_id 無しは毎回発火 / block は exit 2 のまま / cache.json と別 file)
-- [x] deploy 反映 + 実運用で発火頻度が下がったことの確認 — 2026-07-22 H.S. 実行。deploy 先 2 file が canonical と `diff` 一致・mode 755 を確認。**セッション再起動を待たず live 発火も確認**: `cd /tmp && pwd` が deny 文面付きで拒否され、単独 `cd` は advisory のまま。除外コマンドの segment 警告は 1 回目に「同一セッション中その種別につき 1 回だけ」の一文付きで発火し、2 回目 (別コマンド・同 reason) は無音だった
-
-Work file: `last-session-handoff.md` の「advisory hook の信号価値回復」 section
-
 ### commit gate の射程: 非敵対的な commit 生成経路のカバー
 
 Goal: `git commit` 文字列を含まないが実際に commit を作る経路のうち、迂回意図なく普通に踏むものを gate 対象に加える。敵対的回避経路は対象外とする。
