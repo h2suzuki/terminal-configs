@@ -82,6 +82,8 @@ Combined Stop hook for org-managed Claude Code:
     stderr に加え、 memory-surface と同じ additionalContext 経由で model にも届ける
     (単独 stderr は exit 0 では model 非可視のため)。 memory-surface reason と同 turn なら
     1 payload に結合 (reason が先)。 stop_hook_active gate + .wt latch で turn 内 1 回。
+    射程: 本線は refs/heads/main / master のみ (他 trunk の repo では無音)、
+    入れ子 worktree の子は候補外。 いずれも鳴らない側の限界。
 
   turn-marker (bonus, exit 0 only):
     enforcement が pass した turn 終了時のみ、 per-turn marker (時刻 / Turn #N / context
