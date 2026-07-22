@@ -60,6 +60,8 @@ Exit Criteria:
 - [ ] 案 2: 除外コマンドの segment 警告のノイズ削減 — 78 回の発火に対し、実際に sandbox 側で実行されて害が出た事例は 1 件も観測されていない。「可能性があります」という推測ベースで毎回鳴るため信号価値を失っている。実 sandbox 実行を検出できた時のみ鳴らす、または頻度を絞る。警告元は `files/claude_managed-hooks/sandbox_exclusion_guard.py` (2026-07-22 に grep で特定)。どちらを採るかは実装前に当該 hook を読んで判断する
 - [ ] deploy 反映 + 実運用で発火頻度が下がったことの確認
 
+Work file: `last-session-handoff.md` の「advisory hook の信号価値回復」 section
+
 ### commit gate の射程: 非敵対的な commit 生成経路のカバー
 
 Goal: `git commit` 文字列を含まないが実際に commit を作る経路のうち、迂回意図なく普通に踏むものを gate 対象に加える。敵対的回避経路は対象外とする。
