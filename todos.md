@@ -49,6 +49,17 @@ Exit Criteria:
 
 Work file: `drafts/codex-worktree-gate-order.md`
 
+### advisory hook の信号価値回復 (avoid_cd 限定 deny + segment 警告のノイズ削減)
+
+Goal: 無視され続けている 2 つの advisory を、実害のある形だけ確実に止める / 実害のある時だけ鳴る形に直す。H.S. が両案とも実施を承認済み (2026-07-22)。
+
+計測値 (2026-07-22 の 1 session、transcript 実測・再導出不要): `avoid_cd` の advisory が **8 回**、除外コマンドの `non-leading compound segment` 警告が **78 回** 発火し、いずれも `allow` + advisory ゆえ LLM が全て読み飛ばした。同 session 内で「以降は `git -C` を裸で先頭に置く」と 2 度宣言して 2 度とも破っており、規律では止まらないことが実証されている。実害も 1 件観測: `cd` が後続 turn に残り `git commit -- <path>` の pathspec が壊れた。
+
+Exit Criteria:
+- [ ] 案 1: `avoid_cd.py` を限定 deny 化 — 複合コマンドの**先頭**に `cd` が来る形 (cwd が後続 turn へ漏れる唯一の形) だけを deny にする。`pushd` / `popd` と単独 `cd` は現状の advisory のまま。test で「先頭 `cd` + `&&` → deny」「単独 `cd` → allow」「`pushd` → allow」を pin する
+- [ ] 案 2: 除外コマンドの segment 警告のノイズ削減 — 78 回の発火に対し、実際に sandbox 側で実行されて害が出た事例は 1 件も観測されていない。「可能性があります」という推測ベースで毎回鳴るため信号価値を失っている。実 sandbox 実行を検出できた時のみ鳴らす、または頻度を絞る。警告元は `files/claude_managed-hooks/sandbox_exclusion_guard.py` (2026-07-22 に grep で特定)。どちらを採るかは実装前に当該 hook を読んで判断する
+- [ ] deploy 反映 + 実運用で発火頻度が下がったことの確認
+
 ### commit gate の射程: 非敵対的な commit 生成経路のカバー
 
 Goal: `git commit` 文字列を含まないが実際に commit を作る経路のうち、迂回意図なく普通に踏むものを gate 対象に加える。敵対的回避経路は対象外とする。
