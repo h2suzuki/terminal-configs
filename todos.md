@@ -64,27 +64,6 @@ Exit Criteria:
 - [ ] PostToolUse:Skill が subagent 含む全成功経路で発火することの live probe
 - [ ] 実装・deploy・commit し、subagent skip を撤去して enforcement 回復
 
-### Task 管理ツール (TaskCreate 系 / TodoWrite) が model gate で使用不可
-
-Goal: 最新 3 モデル (Opus 4.8 / Sonnet 5 / Fable 5) で TaskCreate/TaskGet/TaskList/TaskUpdate と旧 TodoWrite がサーバー側 feature-flag gate で無効化される問題を、原因確定の上で対処方針を H.S. と合意する。これが本質であり、hook 誤発火等は下流被害。
-
-Exit Criteria:
-- [x] 原因の確定 — 2026-07-13 に model gate `tengu_vellum_ash` と特定 (下記「確定済み背景」、実機裏取り済)
-- [x] 対処方針を確定・実装 — hook gate エミュレーション + /my-tasks 代替 skill + court-guard + DISABLE_GROWTHBOOK ad-hoc、全 deploy 済 (9eac0bc/02e3054)。env-check (DISABLE_GROWTHBOOK 迂回) は H.S. が 2 度不採用・再提起しない (2026-07-13)
-- [x] 上流 gate (tengu_vellum_ash) の watch — 2026-07-23 H.S. 指示により **watch 自体を不要と決定**。代替 (hook gate エミュレーション + /my-tasks skill) が deploy 済で機能しており、上流解除を待つ動機が無い。同日の probe でも `TodoWrite` / `TaskCreate` は deferred 一覧に不在で gate は継続中
-
-確定済み背景 (2026-07-13・再導出不要):
-- **問題定義**: Opus 4.8 セッションで TaskCreate/TaskGet/TaskList/TaskUpdate と旧 TodoWrite が完全に不在 (tool 一覧にも ToolSearch deferred にも出ない)。background-agent 系の TaskStop/TaskOutput のみ残る。
-- **メカニズム**: 各 Task 系 tool の isEnabled() が `JI() && !VY()` (TodoWrite は `!JI() && !VY()`) を評価。JI() (CLAUDE_CODE_ENABLE_TASKS gate) は満たされ、ブロック元は VY()。VY() は GrowthBook feature flag `tengu_vellum_ash` を走行 model id で substring 照合する。実機 ~/.claude.json の cachedGrowthBookFeatures.tengu_vellum_ash = ["claude-opus-4-8","claude-sonnet-5","claude-fable-5"] で、現 model id が claude-opus-4-8 に部分一致し VY()=true → isEnabled()=false。env・settings・再起動と独立した server 側 model 別 kill-list。**2026-07-13 自機 binary 2.1.207 を grep し gate 関数を一次確認**: `DX(){ let e=Qe("tengu_vellum_ash",[]); if(!Array.isArray(e)||!e.length)return false; let t=Ti(); return e.some(r=>r.length>0&&t.includes(r)) }` (issue #76076 の VY() に相当)。ただしローカル cache は解決済み値のみで experiment metadata (source/hashAttribute/inExperiment) を持たない。裏付け = issue #76076 / #75577。
-- **sandbox は無関係**: filesystem 権限と tool 提供有無は直交。~/.claude/tasks を sandbox write allowlist に追加する deploy (managed-settings の allowWrite、2026-07-13 実施) を行っても tool は復活しない。tasks dir が read-only だったことは gate の原因ではなく、無関係な別事象。
-- **こうなっている理由 (推論・2026-07-13 workflow で更新)**: 公式 CHANGELOG (2.1.100-207)・自機 binary いずれにも rationale 文字列は無く理由は非公開 (tengu_ flag は意味を隠す randomized 2 単語命名の内部 kill-switch 群)。当初の「バグ由来の緊急 kill」より **意図的な per-account A/B 実験 / 段階ロールアウト (holdback)** 説が有力: third-party の 2.1.207 eval-response capture が source="experiment" / hashAttribute=accountUUID / 別アカウントは [] (=ツール有) を示す (issue #75577)。ただし**自機 cache に experiment metadata は無く、A/B は third-party 依存の推定**に留まる。動機仮説 (相関のみ) = 最新モデルの tool-calling 破綻 (malformed tool_use 等) 回避 (#63583 / #64129, Ronacher blog)。deprecation 説は否定 (Task* と TodoWrite 両方を false 化する swap でない挙動)。
-- **回避策**: (1) kill-list 外の model (Opus 4.7 / Haiku 4.5) へ切替で即復活 (issue #76076 repro)。(2) **env `DISABLE_GROWTHBOOK=1` を export して起動 — 2026-07-13 自機検証で Opus 4.8 のまま Task 系ツール復活を確認** (TaskCreate/TaskUpdate/TaskList/TaskGet が deferred に出現、TaskCreate 実行成功)。cache に 3-model 値が残存していても有効 = 当初の「cache 値で無効化され効かない」仮説は誤りと判明。全 GrowthBook flag を無効化する副作用があり**恒久策にはしない**方針。維持で追跡のみ要るなら todos.md 代替。
-
-関連 — GrowthBook flag が local 設定を上書きする同型事例 (2026-07-13 調査。tengu_vellum_ash とは別 flag だが同機構):
-- Qiita「defaultMode が勝手に戻る」 https://qiita.com/yurukusa/items/98f044fe42f25c4459ba — flag `tengu_quill_harbor` / `tengu_permission_friction` が ~9 分ごとの server sync で settings.json を上書きし defaultMode を bypassPermissions→acceptEdits に戻す。**GrowthBook flag が periodic sync で local を上書きする機構を実証** = 上記回避策の懸念「cache 手編集は再 fetch で消える」の裏付け。
-- 裏取り issue: #62205 (OPEN, root cause = 上記 2 flag が ~9 分 sync で override) / #61415・#61436 (症状クラスタ = Desktop が Accept Edits に戻る、#61436 は closed) / #63015 (別件・auto-compact 不発、参考)。
-- cc-safe-setup (npm, 記事著者): flag drift 監視 hook 群 (growthbook-flag-monitor / compact-dispatch-watchdog / permission-mode-drift-guard) を導入する緩和ツール。npm ページは 403 で本文未取得、記述は記事準拠。
-
 ### court バグ guard (command + stop_checks/skill 配線)
 
 Goal: stray token (court/count/câu… と揺れる) + 行頭 invoke-leak を厳密パターンで捕捉し、court バグ汚染 (#76912 / #64108) を早期検知する。
