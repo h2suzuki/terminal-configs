@@ -57,7 +57,8 @@ Exit Criteria:
 - [x] 実装 + test — commit c89f502 (`stop_checks.py` に warning-only family 追加、74 test green、ruff/ty exit 0)。発火条件は「作業ツリーが clean **かつ** HEAD が本線の祖先」の AND で、`status --porcelain --ignored --untracked-files=normal` を使うため gitignore 下の成果物・untracked も dirty 扱いになる。本線 ref は `refs/heads/main` / `refs/heads/master` に pin (tag の DWIM 誤判定を防ぐ)。自セッションの worktree と入れ子 worktree は候補から除外。latch は `.wt` 名前空間で memory surface (`.surf`) と分離
 - [x] **SessionEnd の自動削除 (layer 2) は設計判断として不採用** — 実装まで進めたが撤去した。理由: (1) 層 1 は repo 内でセッションが走れば全 linked worktree を列挙するので、クラッシュしたセッションの残骸も次セッションで報告され「検知」の目的は満たせる (2) SessionEnd は LLM に何も返せず削除が完全に不可視 (3) ignored file は git object でないため reflog にも index にも残らず復元不能。無人の破壊的操作という形態自体を採らない
 - [x] 実 runtime での発火確認 — 同一 worktree で 4 状態を実測: clean+merged → 警告 / gitignore 下に成果物 → 無音 / untracked file → 無音 / 除去して復元 → 警告
-- [ ] deploy 反映 (`/etc/claude-code/hooks/stop_checks.py`。root 所有ゆえ H.S. 実行)
+- [x] 出力チャネルの修正 — 当初は stderr + exit 0 で出しており、`docs/SKILL-HOOK-CONTRACT.md:440` の規定どおり model に届いていなかった (deploy 後の live 確認で判明)。`_run` の戻り値に警告を含め、`main()` で memory surface の reason と結合して 1 つの `hookSpecificOutput.additionalContext` に載せる形へ変更。stderr 出力は house pattern ゆえ維持。副次的に、警告のみの Stop では `.turns` が作られず `.wt` latch が新規セッション初回で無効化される問題も判明し、`stop_hook_active` を主 gate に据えて解消
+- [x] deploy 反映 + live 発火の確証 — 2026-07-22 H.S. 実行。deploy 先は canonical と `diff` 一致。**実セッションの Stop で警告が additionalContext として司令塔に到達**し、指示どおり `git worktree remove` を実行、その後 hook が無音に戻ることまで確認 (検知 → 通知 → 削除 → 沈黙の閉ループ成立)
 
 判明した事実 (再導出不要): 素の `git status --porcelain` は gitignore 下を 1 件も報告せず、`git worktree remove` は `--force` 無しでも ignored file を削除する。この repo の委譲ワークフローは発注書・レポート・test log を gitignore 下の `drafts/` に置くため、素の判定式は成果物一式を「空」と誤判定する。同型の事故は `codex-delegation/SKILL.md:48` に記録済み。
 
