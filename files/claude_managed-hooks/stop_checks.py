@@ -2435,6 +2435,60 @@ class WorktreeCleanupTest(unittest.TestCase):
         self.assertEqual(warnings, [])
         self.assertIn("timed out", stderr.getvalue())
 
+    @staticmethod
+    def _fail_git_call(match, returncode=1, stderr="boom"):
+        """Patch subprocess.run so a git call matching match(args) fails with returncode; other calls (incl. setUp's _git) run for real."""
+        from unittest import mock
+
+        real_run = subprocess.run
+
+        def fake_run(args, **kwargs):
+            if args[:1] == ["git"] and match(args[1:]):
+                return subprocess.CompletedProcess(
+                    args, returncode, stdout="", stderr=stderr
+                )
+            return real_run(args, **kwargs)
+
+        return mock.patch.object(subprocess, "run", side_effect=fake_run)
+
+    def test_git_command_returns_none_on_nonzero_exit(self):
+        # unit-level pin: _git_command itself must fail-safe (None), not surface the CompletedProcess.
+        with self._fail_git_call(lambda a: True):
+            self.assertIsNone(_git_command(["status", "--porcelain"]))
+
+    def test_failing_git_status_keeps_candidate_silent(self):
+        # git status crashing must not be misread as "clean" -> no false removal warning.
+        repo = self._repo()
+        self._linked(repo)
+        self._advance_main(repo)
+
+        with self._fail_git_call(lambda a: "status" in a):
+            code, warnings, blocking = self._check_repo(repo)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(blocking, [])
+        self.assertEqual(warnings, [])
+
+    def test_failing_merge_base_keeps_candidate_silent(self):
+        repo = self._repo()
+        self._linked(repo)
+        self._advance_main(repo)
+
+        with self._fail_git_call(lambda a: "merge-base" in a, returncode=128):
+            _code, warnings, _blocking = self._check_repo(repo)
+
+        self.assertEqual(warnings, [])
+
+    def test_failing_worktree_list_keeps_all_silent(self):
+        repo = self._repo()
+        self._linked(repo)
+        self._advance_main(repo)
+
+        with self._fail_git_call(lambda a: "worktree" in a and "list" in a):
+            _code, warnings, _blocking = self._check_repo(repo)
+
+        self.assertEqual(warnings, [])
+
 
 if __name__ == "__main__":
     sys.exit(main())
