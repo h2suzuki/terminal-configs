@@ -16,11 +16,14 @@ Always exits 0 on any unexpected error (fail-open).
 from __future__ import annotations
 
 import glob
+import hashlib
 import json
 import os
 import re
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 SYSTEM_SETTINGS = "/etc/claude-code/managed-settings.json"
 SYSTEM_SETTINGS_GLOB = "/etc/claude-code/managed-settings.d/*.json"
@@ -29,6 +32,7 @@ STATE_DIR = os.path.join(
     os.path.expanduser("~"), ".claude", "hooks", "state", "sandbox_exclusion_guard"
 )
 CACHE_PATH = os.path.join(STATE_DIR, "cache.json")
+WARN_STATE_PREFIX = "warn-"
 ASSIGNMENT = re.compile(r"^\w+=\S*$")
 SEPARATOR = re.compile(r"&&|\|\||[;|&\n]")  # top-level 制御演算子のみ
 COMMENT = re.compile(r"#.*$", re.MULTILINE)
@@ -107,6 +111,61 @@ def _glob_match(value: str, pattern: str) -> bool:
     return re.fullmatch(translated, value, re.DOTALL) is not None
 
 
+def _latch_key(payload: dict) -> str | None:
+    """Return the session identity used for warning latches."""
+    session_id = payload.get("session_id")
+    if isinstance(session_id, str) and session_id:
+        return f"session_id:{session_id}"
+    transcript_path = payload.get("transcript_path")
+    if isinstance(transcript_path, str) and transcript_path:
+        return f"transcript_path:{transcript_path}"
+    return None
+
+
+def _warn_state_path(latch_key: str) -> str:
+    """Return the sanitized state path for a session latch key."""
+    digest = hashlib.sha256(latch_key.encode("utf-8")).hexdigest()
+    return os.path.join(STATE_DIR, f"{WARN_STATE_PREFIX}{digest}.json")
+
+
+def _should_warn(payload: dict, reason: str) -> bool:
+    """Return whether this warning reason should be emitted for this session."""
+    latch_key = _latch_key(payload)
+    if latch_key is None:
+        return True
+    try:
+        state_path = _warn_state_path(latch_key)
+        reasons: set[str] = set()
+        try:
+            with open(state_path, encoding="utf-8") as f:
+                state = json.load(f)
+            values = state.get("reasons", [])
+            if not isinstance(values, list):
+                raise ValueError("warning state reasons is not a list")
+            reasons = {value for value in values if isinstance(value, str)}
+        except (OSError, ValueError, AttributeError, TypeError):
+            pass
+        if reason in reasons:
+            return False
+        reasons.add(reason)
+        os.makedirs(STATE_DIR, exist_ok=True)
+        fd, temp_path = tempfile.mkstemp(
+            prefix=f".{WARN_STATE_PREFIX}", suffix=".tmp", dir=STATE_DIR
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump({"reasons": sorted(reasons)}, f, ensure_ascii=False)
+            os.replace(temp_path, state_path)
+        finally:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+    except Exception:
+        return True
+    return True
+
+
 def _classify(cmd: str, patterns: list[str]) -> tuple[str, str, str]:
     """Return block/warn/pass, the excluded invocation, and its reason."""
     scanned = HEREDOC.sub(_strip_heredoc, cmd)
@@ -178,11 +237,14 @@ def _run(payload: object, patterns: list[str] | None = None) -> int:
     if decision == "pass":
         return 0
     if decision == "warn":
+        if not _should_warn(payload, reason):
+            return 0
         message = (
             f"除外コマンド `{normalized}` のこの呼び出し方 ({reason}) は sandbox 内実行に"
             "なる可能性があります。除外コマンドは path/env/wrapper を付けず、裸名で先頭に"
             "置くと確実に host 実行されます。"
         )
+        message += "この警告は同一セッション中、その種別につき 1 回だけ表示されます。"
         if reason == "sudo with options":
             message += " sudo は sandbox 内で権限昇格できず失敗します。"
         _emit(message)
@@ -255,12 +317,30 @@ class GateTest(unittest.TestCase):
         "# deploy\ngit push",
     )
 
+    def setUp(self):
+        self.state_dir = tempfile.TemporaryDirectory()
+        self.state_patch = mock.patch.object(
+            sys.modules[__name__], "STATE_DIR", self.state_dir.name
+        )
+        self.state_patch.start()
+        self.addCleanup(self.state_patch.stop)
+        self.addCleanup(self.state_dir.cleanup)
+
     @staticmethod
-    def _result(cmd: str, patterns: list[str]) -> tuple[int, str, str]:
+    def _result(
+        cmd: str,
+        patterns: list[str],
+        session_id: str | None = None,
+        transcript_path: str | None = None,
+    ) -> tuple[int, str, str]:
         import io
         from contextlib import redirect_stderr, redirect_stdout
 
         payload = {"tool_name": "Bash", "tool_input": {"command": cmd}}
+        if session_id is not None:
+            payload["session_id"] = session_id
+        if transcript_path is not None:
+            payload["transcript_path"] = transcript_path
         stdout = io.StringIO()
         stderr = io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -289,6 +369,27 @@ class GateTest(unittest.TestCase):
             if cmd.startswith("sudo"):
                 self.assertIn("権限昇格できず失敗", output["additionalContext"], cmd)
 
+        first = self._result("VAR=val git push", self.PATTERNS, session_id="same")
+        second = self._result("FOO=1 git push", self.PATTERNS, session_id="same")
+        self.assertNotEqual(first[1], "")
+        self.assertEqual(second, (0, "", ""))
+
+        first = self._result(
+            "cd app && git push", self.PATTERNS, session_id="different-reason"
+        )
+        second = self._result(
+            "sudo -u deploy git push",
+            self.PATTERNS,
+            session_id="different-reason",
+        )
+        self.assertNotEqual(first[1], "")
+        self.assertNotEqual(second[1], "")
+
+        first = self._result("VAR=val git push", self.PATTERNS, session_id="one")
+        second = self._result("VAR=val git push", self.PATTERNS, session_id="two")
+        self.assertNotEqual(first[1], "")
+        self.assertNotEqual(second[1], "")
+
     def test_passes_host_and_nonmatching_invocations_silently(self):
         for cmd in self.PASS:
             result, stdout, stderr = self._result(cmd, self.PATTERNS)
@@ -299,10 +400,33 @@ class GateTest(unittest.TestCase):
     def test_empty_patterns_allow_everything(self):
         self.assertEqual(self._result("cd app && git push", []), (0, "", ""))
 
+    def test_warns_every_time_without_a_latch_key(self):
+        first = self._result("VAR=val git push", self.PATTERNS)
+        second = self._result("VAR=val git push", self.PATTERNS)
+        self.assertNotEqual(first[1], "")
+        self.assertNotEqual(second[1], "")
+
+    def test_transcript_path_is_a_latch_key_fallback(self):
+        first = self._result(
+            "VAR=val git push", self.PATTERNS, transcript_path="/tmp/transcript"
+        )
+        second = self._result(
+            "VAR=val git push", self.PATTERNS, transcript_path="/tmp/transcript"
+        )
+        self.assertNotEqual(first[1], "")
+        self.assertEqual(second, (0, "", ""))
+
+    def test_warns_when_latch_state_cannot_be_written(self):
+        with mock.patch.object(os, "replace", side_effect=OSError):
+            result, stdout, stderr = self._result(
+                "VAR=val git push", self.PATTERNS, session_id="unwritable"
+            )
+        self.assertEqual(result, 0)
+        self.assertNotEqual(stdout, "")
+        self.assertEqual(stderr, "")
+
     def test_mtime_cache_recomputes(self):
-        import tempfile
         import time
-        from unittest import mock
 
         with tempfile.TemporaryDirectory() as tmp:
             config = os.path.join(tmp, "settings.json")
