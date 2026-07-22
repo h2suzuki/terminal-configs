@@ -60,7 +60,7 @@ Exit Criteria:
 - [x] 出力チャネルの修正 — 当初は stderr + exit 0 で出しており、`docs/SKILL-HOOK-CONTRACT.md:440` の規定どおり model に届いていなかった (deploy 後の live 確認で判明)。`_run` の戻り値に警告を含め、`main()` で memory surface の reason と結合して 1 つの `hookSpecificOutput.additionalContext` に載せる形へ変更。stderr 出力は house pattern ゆえ維持。副次的に、警告のみの Stop では `.turns` が作られず `.wt` latch が新規セッション初回で無効化される問題も判明し、`stop_hook_active` を主 gate に据えて解消
 - [x] deploy 反映 + live 発火の確証 — 2026-07-22 H.S. 実行。deploy 先は canonical と `diff` 一致。**実セッションの Stop で警告が additionalContext として司令塔に到達**し、指示どおり `git worktree remove` を実行、その後 hook が無音に戻ることまで確認 (検知 → 通知 → 削除 → 沈黙の閉ループ成立)
 
-- [ ] git 失敗経路を test で pin する — mutation 10 (`_git_command` の非ゼロ終了時 `return None` を外す) が生存しており、git 失敗時に fail-dangerous 化しても 78 test が素通りする。これは「鳴らないはずの状況で鳴る」方向すなわち誤警告に直結する。status が失敗する worktree を候補に出さないことを assert する test が要る (chmod 000 等に依存するため実現方法の検討も含む)
+- [x] git 失敗経路を test で pin する — 2026-07-22、78 → 82 test。`subprocess.run` を patch して特定の git 呼び出しだけ非ゼロ終了させる helper を追加し、`git status` / `merge-base` / `worktree list` の各失敗で警告が出ないことを family レベルで assert。`chmod 000` に依存しない。**変異を司令塔自身が当てて red 化を確認** (`_git_command` の returncode 非ゼロ分岐を `return None` → `return result`、`test_failing_git_status_keeps_candidate_silent` と `test_git_command_returns_none_on_nonzero_exit` の 2 件が落ちる)。変異版では失敗した `git status` の空出力を「変更なし」と読み、削除コマンド付きの警告を実際に出すため、誤警告が実削除につながる経路そのものを pin できている。deploy 済み
 
 判明した事実 (再導出不要): 素の `git status --porcelain` は gitignore 下を 1 件も報告せず、`git worktree remove` は `--force` 無しでも ignored file を削除する。この repo の委譲ワークフローは発注書・レポート・test log を gitignore 下の `drafts/` に置くため、素の判定式は成果物一式を「空」と誤判定する。同型の事故は `codex-delegation/SKILL.md:48` に記録済み。
 
