@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""Deny shared-tree write-capable codex tasks from a PreToolUse Bash hook.
+"""この hook は発注経路の固定と、書き込み先ツリーの隔離の 2 つを担う。
+共有 checkout への write-capable codex task は PreToolUse Bash hook で拒否する。
 
 この hook は token 列の走査であり shell interpreter ではない。``cd`` は追跡
 するが、変数展開・コマンド置換・``cd -``・``popd``・裸の ``pushd``・
 ``pushd -n`` は確定できない。``&``・pipeline の subshell 内 cd や条件付き非実行
 (``false && cd ...``)、``bash -c``・``eval`` も静的には解さない。``$'...'`` 内の
 escape sequence は解さず、``--cwd`` の変数展開・コマンド置換はせず literal として扱う。
+
+経路判定は ``agent_id`` が subagent 経由でのみ payload に入る現行仕様に依存する。
+通常 session にも ``agent_id`` が渡るようになれば、経路 deny は静かに効かなくなる。
 
 この gate が防ぐ脅威は、発注側自身の不注意で共有 checkout へ write 委譲する事故である。
 迂回主体は agent 自身なので敵対的な bypass は脅威に数えず、任意 bash の静的解析で網羅を目指さない。
@@ -30,10 +34,12 @@ from unittest import mock
 
 GIT_TIMEOUT_SECONDS = 2
 CODEX_SCRIPT = "codex-companion.mjs"
-WRITE_FLAGS = {"--write", "--resume-last", "--resume"}
 SHELL_PUNCTUATION = frozenset(";&|()")
 LEXER_PUNCTUATION = ";&|()`"
 ESCAPE_HATCH = "CODEX_SHARED_TREE_OK=1"
+ROUTE_ESCAPE_HATCH = "CODEX_ROUTE_OK=1"
+WRITE_FLAGS = {"--write", "--resume-last", "--resume"}
+TASK_SUBCOMMANDS = {"task", "task-worker"}
 ASSIGNMENT = re.compile(r"^\w+=\S*$")
 CD_OPTIONS = {"-P", "-L", "-e", "-@"}
 COMMAND_PREFIXES = {
@@ -67,6 +73,13 @@ DENY_REASON = (
     "意図的に共有ツリーへ書く場合は、codex を起動するセグメントの先頭に CODEX_SHARED_TREE_OK=1 を付けてください。"
     "この hook 自身は file を変更しません。"
 )
+ROUTE_DENY_REASON = (
+    "codex-route-gate: 本 session の Bash から codex の task を直接起動しました。"
+    "正規経路は codex:codex-rescue subagent 経由で、発注書 path を渡す形です。"
+    "status / cancel / result は本 session の Bash から直接起動して構いません。"
+    "意図的に直接起動する場合は、セグメント先頭に CODEX_ROUTE_OK=1 を置いてください。"
+    "この hook 自身は file を変更しません。"
+)
 ESCAPE_CONTEXT = (
     "共有ツリーへの codex 書き込みを明示許可で通過。"
     "並行セッションの変更が混在する可能性がある。"
@@ -95,6 +108,9 @@ def _fail_open(reason: str) -> None:
 
 
 class _ShellToken(str):
+    raw: str
+    unquoted_markers: frozenset[str]
+
     def __new__(
         cls, value: str, raw: str, unquoted_markers: frozenset[str]
     ) -> _ShellToken:
@@ -246,15 +262,6 @@ def _token_raw(token: str) -> str:
 
 def _token_markers(token: str) -> frozenset[str]:
     return getattr(token, "unquoted_markers", frozenset())
-
-
-def _substitution_end(arguments: list[str], start: int, closing: str) -> int | None:
-    for index in range(start + 1, len(arguments)):
-        if arguments[index] == closing and not (
-            _token_markers(arguments[index]) - {closing}
-        ):
-            return index
-    return None
 
 
 def _resolve_path_operand(
@@ -415,7 +422,7 @@ def _scan_segment(
     effective_cwd: str | None,
     payload_cwd: str | None,
     uncertain_cd: str | None,
-    matches: list[tuple[list[str], int, str | None, str | None]],
+    matches: list[tuple[list[str], int, str | None, str | None, bool]],
 ) -> tuple[str | None, str | None]:
     new_cwd, new_uncertain = _cd_path(segment, effective_cwd, payload_cwd)
     segment_cwd = new_cwd if _has_env_chdir(segment) else effective_cwd
@@ -425,12 +432,14 @@ def _scan_segment(
             continue
         arguments = segment[index + 1 :]
         words = _argument_words(arguments)
-        has_task = _subcommand(arguments) == "task"
+        has_task = _subcommand(arguments) in TASK_SUBCOMMANDS
         has_write_flag = any(
             argument.split("=", 1)[0] in WRITE_FLAGS for argument in words
         )
-        if has_task and has_write_flag:
-            matches.append((segment.copy(), index, segment_cwd, segment_uncertain))
+        if has_task:
+            matches.append(
+                (segment.copy(), index, segment_cwd, segment_uncertain, has_write_flag)
+            )
     if _has_env_chdir(segment):
         return effective_cwd, uncertain_cd
     if _command_prefix(segment)[1] in {"cd", "pushd", "popd"}:
@@ -441,9 +450,9 @@ def _scan_segment(
 def _find_codex_write_segment(
     command: str,
     payload_cwd: str | None = None,
-) -> list[tuple[list[str], int, str | None, str | None]]:
+) -> list[tuple[list[str], int, str | None, str | None, bool]]:
     segment: list[str] = []
-    matches: list[tuple[list[str], int, str | None, str | None]] = []
+    matches: list[tuple[list[str], int, str | None, str | None, bool]] = []
     effective_cwd = os.path.abspath(payload_cwd) if payload_cwd else None
     uncertain_cd: str | None = None
     segment_start_cwd = effective_cwd
@@ -743,18 +752,39 @@ def _gate(payload: object) -> None:
     command = tool_input.get("command")
     if not isinstance(command, str):
         return
+    agent_id = payload.get("agent_id")
+    is_subagent = isinstance(agent_id, str) and bool(agent_id)
     cwd = payload.get("cwd")
     payload_cwd = cwd if isinstance(cwd, str) and cwd else None
     matches = _find_codex_write_segment(command, payload_cwd)
     if not matches:
         return
-    needs_cwd = any(segment[0] != ESCAPE_HATCH for segment, _, _, _ in matches)
+    escaped = False
+    for segment, _, _, _, _ in matches:
+        prefix_index, _ = _command_prefix(segment)
+        prefix = set(segment[:prefix_index])
+        route_escaped = ROUTE_ESCAPE_HATCH in prefix
+        if not is_subagent and not route_escaped:
+            _emit(
+                {
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": ROUTE_DENY_REASON,
+                }
+            )
+            return
+    tree_matches = [match for match in matches if match[4]]
+    if not tree_matches:
+        return
+    needs_cwd = any(
+        ESCAPE_HATCH not in set(segment[: _command_prefix(segment)[0]])
+        for segment, _, _, _, _ in tree_matches
+    )
     if payload_cwd is None and needs_cwd:
         _fail_open("payload cwd is missing")
         return
-    escaped = False
-    for segment, script_index, effective_cwd, uncertain_cd in matches:
-        if segment and segment[0] == ESCAPE_HATCH:
+    for segment, script_index, effective_cwd, uncertain_cd, _ in tree_matches:
+        prefix_index, _ = _command_prefix(segment)
+        if ESCAPE_HATCH in set(segment[:prefix_index]):
             escaped = True
             continue
         effective_cwd = _resolve_command_cwd(
@@ -909,6 +939,9 @@ class CodexWorktreeGateTest(unittest.TestCase):
     def _payload(command: str, cwd: Path | None = None, **extra: object) -> dict:
         tool_input: dict[str, object] = {"command": command}
         payload = {"tool_name": "Bash", "tool_input": tool_input, **extra}
+        agent_id = payload.setdefault("agent_id", "test-agent")
+        if agent_id is None:
+            payload.pop("agent_id")
         if cwd is not None:
             payload["cwd"] = str(cwd)
         return payload
@@ -957,10 +990,117 @@ class CodexWorktreeGateTest(unittest.TestCase):
             )
         )
 
-    def test_primary_read_only_task_allows(self):
+    def test_primary_read_only_task_allows_after_subagent_route(self):
         self._allow(
             self._payload("node /opt/codex-companion.mjs task", self.git.primary)
         )
+
+    def test_session_task_without_agent_id_denies_route(self):
+        reason = self._deny(
+            self._payload(
+                f"node /opt/codex-companion.mjs task --write --cwd {self.git.linked}",
+                self.git.linked,
+                agent_id=None,
+            )
+        )
+        self.assertIn("本 session の Bash から codex の task を直接起動", reason)
+        self.assertIn("codex-rescue subagent", reason)
+        self.assertIn("発注書 path", reason)
+        self.assertIn("status / cancel / result", reason)
+        self.assertIn("CODEX_ROUTE_OK=1", reason)
+        self.assertIn("hook 自身は file を変更しません", reason)
+
+    def test_session_task_without_write_flag_denies_route(self):
+        self._deny(
+            self._payload(
+                'node /opt/codex-companion.mjs task "調査して"',
+                self.git.linked,
+                agent_id=None,
+            )
+        )
+
+    def test_session_task_worker_denies_route(self):
+        self._deny(
+            self._payload(
+                "node /opt/codex-companion.mjs task-worker --job-id j1",
+                self.git.linked,
+                agent_id=None,
+            )
+        )
+
+    def test_session_non_task_commands_are_silent(self):
+        for command in (
+            "node /opt/codex-companion.mjs status",
+            "node /opt/codex-companion.mjs cancel id --json",
+            "node /opt/codex-companion.mjs result id",
+        ):
+            with self.subTest(command=command):
+                self._allow(self._payload(command, self.git.primary, agent_id=None))
+
+    def test_route_escape_allows_linked_task_from_session(self):
+        self._allow(
+            self._payload(
+                f"CODEX_ROUTE_OK=1 node /opt/codex-companion.mjs task --write --cwd {self.git.linked}",
+                self.git.linked,
+                agent_id=None,
+            )
+        )
+
+    def test_both_escape_hatches_are_order_independent(self):
+        for prefix in (
+            "CODEX_ROUTE_OK=1 CODEX_SHARED_TREE_OK=1",
+            "CODEX_SHARED_TREE_OK=1 CODEX_ROUTE_OK=1",
+            "env CODEX_ROUTE_OK=1 CODEX_SHARED_TREE_OK=1",
+            "env CODEX_SHARED_TREE_OK=1 CODEX_ROUTE_OK=1",
+        ):
+            with self.subTest(prefix=prefix):
+                exit_code, output, stderr = _invoke(
+                    self._payload(
+                        f"{prefix} node /opt/codex-companion.mjs task --write",
+                        self.git.primary,
+                        agent_id=None,
+                    )
+                )
+                self.assertEqual(exit_code, 0)
+                self.assertEqual(stderr, "")
+                self.assertIsNotNone(output)
+                assert output is not None
+                self.assertEqual(
+                    output["hookSpecificOutput"]["hookEventName"], "PreToolUse"
+                )
+                self.assertEqual(
+                    output["hookSpecificOutput"]["additionalContext"], ESCAPE_CONTEXT
+                )
+
+    def test_route_escape_still_checks_primary_tree(self):
+        reason = self._deny(
+            self._payload(
+                "CODEX_ROUTE_OK=1 node /opt/codex-companion.mjs task --write",
+                self.git.primary,
+                agent_id=None,
+            )
+        )
+        self.assertIn("git worktree add", reason)
+
+    def test_subagent_task_on_primary_uses_tree_reason(self):
+        reason = self._deny(
+            self._payload(
+                "node /opt/codex-companion.mjs task --write",
+                self.git.primary,
+                agent_id="agent-123",
+            )
+        )
+        self.assertIn("git worktree add", reason)
+
+    def test_subagent_task_worker_on_primary_uses_tree_reason(self):
+        reason = self._deny(
+            self._payload(
+                "node /opt/codex-companion.mjs task-worker --job-id j1 --write",
+                self.git.primary,
+                agent_id="agent-123",
+            )
+        )
+        self.assertIn("git worktree add", reason)
 
     def test_primary_directory_named_worktrees_still_denies(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -1248,6 +1388,13 @@ class CodexWorktreeGateTest(unittest.TestCase):
         self._allow(
             self._payload(
                 "echo codex-companion.mjs task ; node /opt/other.mjs --write",
+                self.git.primary,
+            )
+        )
+
+        self._allow(
+            self._payload(
+                "node /opt/codex-companion.mjs task && echo --write",
                 self.git.primary,
             )
         )
