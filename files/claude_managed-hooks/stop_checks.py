@@ -79,6 +79,9 @@ Combined Stop hook for org-managed Claude Code:
   worktree-cleanup (warning-only, exit 0):
     payload の cwd に属する linked worktree が clean かつ本線の祖先なら、削除候補と
     実行可能な git worktree remove コマンドを知らせる。判定不能時は fail-open。
+    stderr に加え、 memory-surface と同じ additionalContext 経由で model にも届ける
+    (単独 stderr は exit 0 では model 非可視のため)。 memory-surface reason と同 turn なら
+    1 payload に結合 (reason が先)。 stop_hook_active gate + .wt latch で turn 内 1 回。
 
   turn-marker (bonus, exit 0 only):
     enforcement が pass した turn 終了時のみ、 per-turn marker (時刻 / Turn #N / context
@@ -1058,24 +1061,25 @@ def _check(
     return exit_code, warnings, blocking
 
 
-def _run(payload: dict) -> tuple[int, float | None, str]:
-    # Returns (exit_code, prompt_epoch, text); text feeds Stop memory surfacing.
+def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
+    # Returns (exit_code, prompt_epoch, text, worktree_warnings); main() feeds text/warnings onward.
     if not isinstance(payload, dict):
-        return 0, None, ""
+        return 0, None, "", []
     worktree_warnings = _worktree_cleanup_warnings(payload.get("cwd"))
     if worktree_warnings:
-        if _stop_latched(payload, ".wt"):
+        # mirrors memory-surface's stop_hook_active gate: .wt latch alone is inert pre-.turns.
+        if payload.get("stop_hook_active") or _stop_latched(payload, ".wt"):
             worktree_warnings = []
         else:
             _stop_latch_set(payload, ".wt")
     transcript_path = payload.get("transcript_path")
     if not isinstance(transcript_path, str) or not transcript_path:
         _emit_worktree_warnings(worktree_warnings)
-        return 0, None, ""
+        return 0, None, "", worktree_warnings
     entries = _load_tail(transcript_path, turns=2)
     if not entries:
         _emit_worktree_warnings(worktree_warnings)
-        return 0, None, ""
+        return 0, None, "", worktree_warnings
     (
         text,
         final_text,
@@ -1096,7 +1100,7 @@ def _run(payload: dict) -> tuple[int, float | None, str]:
         final_text = last_msg
     if not text:
         _emit_worktree_warnings(worktree_warnings)
-        return 0, prompt_epoch, ""
+        return 0, prompt_epoch, "", worktree_warnings
     declare_active = _declare_proceed_active(entries, time.time())
     exit_code, warnings, blocking = _check(
         text,
@@ -1117,10 +1121,10 @@ def _run(payload: dict) -> tuple[int, float | None, str]:
             sys.stderr.write("advise-once (block demoted to pass): " + line + "\n")
         for line in warnings:
             sys.stderr.write(line + "\n")
-        return 0, prompt_epoch, text
+        return 0, prompt_epoch, text, worktree_warnings
     for line in warnings + blocking:
         sys.stderr.write(line + "\n")
-    return exit_code, prompt_epoch, text
+    return exit_code, prompt_epoch, text, worktree_warnings
 
 
 def _stop_latch_key(payload: dict, suffix: str = ".surf") -> tuple[str, str] | None:
@@ -1299,10 +1303,10 @@ def main() -> int:
     except Exception:
         return 0
     try:
-        exit_code, prompt_epoch, text = _run(payload)
+        exit_code, prompt_epoch, text, worktree_warnings = _run(payload)
     except Exception:
         # fail-open: an enforcement glitch never blocks the turn.
-        exit_code, prompt_epoch, text = 0, None, ""
+        exit_code, prompt_epoch, text, worktree_warnings = 0, None, "", []
     if exit_code != 0:
         return exit_code  # regex enforcement blocked — unchanged path, no marker/memory
     # regex passed: surface one memory entry for the assistant's own output (if any) and
@@ -1311,15 +1315,18 @@ def main() -> int:
         reason = _memory_surface_at_stop(payload, text)
     except Exception:
         reason = None
-    if reason:
+    # worktree warnings ride the same additionalContext channel so the model actually sees them.
+    wt_text = "\n\n".join(worktree_warnings)
+    combined = "\n\n".join(p for p in (reason, wt_text) if p)
+    if combined:
         print(
             json.dumps(
                 {
                     "hookSpecificOutput": {
                         "hookEventName": "Stop",
-                        "additionalContext": reason,
+                        "additionalContext": combined,
                     },
-                    "systemMessage": reason,
+                    "systemMessage": combined,
                 },
                 ensure_ascii=False,
             )
@@ -1473,8 +1480,8 @@ class TurnMarkerTest(unittest.TestCase):
                 _run({"transcript_path": clean, "stop_hook_active": False})[0], 0
             )
         # _run tolerates non-dict input via its isinstance guard; verify it.
-        self.assertEqual(_run("nope"), (0, None, ""))  # ty: ignore[invalid-argument-type]
-        self.assertEqual(_run({}), (0, None, ""))
+        self.assertEqual(_run("nope"), (0, None, "", []))  # ty: ignore[invalid-argument-type]
+        self.assertEqual(_run({}), (0, None, "", []))
 
 
 class EnforcementFamilyTest(unittest.TestCase):
@@ -1900,7 +1907,22 @@ class StopMemorySurfaceTest(unittest.TestCase):
         from unittest import mock
 
         with (
-            mock.patch.object(self.M, "_run", lambda p: (2, None, "txt")),
+            mock.patch.object(self.M, "_run", lambda p: (2, None, "txt", [])),
+            mock.patch.object(self.M, "_memory_surface_at_stop") as ms,
+            mock.patch.object(self.M, "_emit_turn_marker") as mk,
+            mock.patch.object(sys, "stdin", io.StringIO("{}")),
+        ):
+            self.assertEqual(main(), 2)
+            ms.assert_not_called()
+            mk.assert_not_called()
+
+    def test_main_blocking_exit_skips_additionalcontext_even_with_worktree(self):
+        # non-zero exit from _run must stay exactly as before, even if worktree warnings exist.
+        import io
+        from unittest import mock
+
+        with (
+            mock.patch.object(self.M, "_run", lambda p: (2, None, "txt", ["WT-WARN"])),
             mock.patch.object(self.M, "_memory_surface_at_stop") as ms,
             mock.patch.object(self.M, "_emit_turn_marker") as mk,
             mock.patch.object(sys, "stdin", io.StringIO("{}")),
@@ -1910,7 +1932,7 @@ class StopMemorySurfaceTest(unittest.TestCase):
             mk.assert_not_called()
 
     def test_main_regex_pass_with_memory_injects_additionalcontext(self):
-        code, marker, out = self._main_out((0, 1.0, "txt"), "REASON-TEXT")
+        code, marker, out = self._main_out((0, 1.0, "txt", []), "REASON-TEXT")
         self.assertEqual(code, 0)
         payload = json.loads(out)
         self.assertEqual(payload["hookSpecificOutput"]["hookEventName"], "Stop")
@@ -1920,8 +1942,25 @@ class StopMemorySurfaceTest(unittest.TestCase):
         self.assertEqual(payload["systemMessage"], "REASON-TEXT")
         marker.assert_not_called()
 
+    def test_main_worktree_only_injects_additionalcontext(self):
+        code, marker, out = self._main_out((0, 1.0, "txt", ["WT-WARN"]), None)
+        self.assertEqual(code, 0)
+        payload = json.loads(out)
+        self.assertEqual(payload["hookSpecificOutput"]["additionalContext"], "WT-WARN")
+        self.assertEqual(payload["systemMessage"], "WT-WARN")
+        marker.assert_not_called()
+
+    def test_main_combines_memory_and_worktree_reason_first(self):
+        code, marker, out = self._main_out((0, 1.0, "txt", ["WT-WARN"]), "REASON-TEXT")
+        self.assertEqual(code, 0)
+        payload = json.loads(out)
+        combined = payload["hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(combined, "REASON-TEXT\n\nWT-WARN")
+        self.assertEqual(payload["systemMessage"], combined)
+        marker.assert_not_called()
+
     def test_main_regex_pass_no_memory_emits_marker(self):
-        code, marker, out = self._main_out((0, 1.0, "txt"), None)
+        code, marker, out = self._main_out((0, 1.0, "txt", []), None)
         self.assertEqual(code, 0)
         marker.assert_called_once()
         self.assertEqual(out, "")
@@ -2136,12 +2175,13 @@ class WorktreeCleanupTest(unittest.TestCase):
         )
         stderr = io.StringIO()
         with redirect_stderr(stderr):
-            code, _prompt_epoch, _text = _run(
+            code, _prompt_epoch, _text, warnings = _run(
                 {"cwd": str(repo), "transcript_path": str(transcript)}
             )
 
         self.assertEqual(code, 0)
         self.assertIn(str(linked), stderr.getvalue())
+        self.assertIn(str(linked), warnings[0])
 
     def test_run_warns_without_transcript_text(self):
         import io
@@ -2151,10 +2191,11 @@ class WorktreeCleanupTest(unittest.TestCase):
         linked = self._linked(repo)
         stderr = io.StringIO()
         with redirect_stderr(stderr):
-            code, _prompt_epoch, _text = _run({"cwd": str(repo)})
+            code, _prompt_epoch, _text, warnings = _run({"cwd": str(repo)})
 
         self.assertEqual(code, 0)
         self.assertIn(str(linked), stderr.getvalue())
+        self.assertIn(str(linked), warnings[0])
 
     def test_dirty_linked_worktree_is_silent(self):
         repo = self._repo()
@@ -2273,15 +2314,40 @@ class WorktreeCleanupTest(unittest.TestCase):
 
         first_stderr = io.StringIO()
         with redirect_stderr(first_stderr):
-            first_code, _epoch, _text = _run(payload)
+            first_code, _epoch, _text, first_wt = _run(payload)
         second_stderr = io.StringIO()
         with redirect_stderr(second_stderr):
-            second_code, _epoch, _text = _run(payload)
+            second_code, _epoch, _text, second_wt = _run(payload)
 
         self.assertEqual(first_code, 0)
         self.assertEqual(second_code, 0)
         self.assertIn(str(linked), first_stderr.getvalue())
         self.assertEqual(second_stderr.getvalue(), "")
+        self.assertIn(str(linked), first_wt[0])
+        self.assertEqual(second_wt, [])  # same-turn latch suppresses the repeat
+
+    def test_stop_hook_active_retry_suppresses_before_turns_file_exists(self):
+        # Fresh session: no .turns file yet, so the .wt latch alone is inert;
+        # stop_hook_active must suppress the retry regardless (mirrors memory-surface).
+        import io
+        from contextlib import redirect_stderr
+
+        repo = self._repo()
+        linked = self._linked(repo)
+        self._advance_main(repo)
+
+        with redirect_stderr(io.StringIO()):
+            first_code, _e1, _t1, first_wt = _run(
+                {"cwd": str(repo), "stop_hook_active": False}
+            )
+            second_code, _e2, _t2, second_wt = _run(
+                {"cwd": str(repo), "stop_hook_active": True}
+            )
+
+        self.assertEqual(first_code, 0)
+        self.assertIn(str(linked), first_wt[0])
+        self.assertEqual(second_code, 0)
+        self.assertEqual(second_wt, [])
 
     def test_prunable_worktree_is_silent_but_other_candidates_continue(self):
         import io
