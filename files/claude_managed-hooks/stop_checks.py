@@ -85,6 +85,12 @@ Combined Stop hook for org-managed Claude Code:
     射程: 本線は refs/heads/main / master のみ (他 trunk の repo では無音)、
     入れ子 worktree の子は候補外。 いずれも鳴らない側の限界。
 
+  codex-shared-write (warning-only, exit 0):
+    job state を照合し、共有 checkout で write task が実行された事後検知を知らせる。
+    state / JSON / git の異常は fail-open、job id 単位の latch で重複通知を抑える。
+    job record の field 名 (write / workspaceRoot / sessionId) と status 語彙
+    (queued / running を停止可能とみなす) に依存し、変われば静かに劣化する。
+
   turn-marker (bonus, exit 0 only):
     enforcement が pass した turn 終了時のみ、 per-turn marker (時刻 / Turn #N / context
     size / User Prompt からの経過) を JSON `systemMessage` で USER に表示 (Claude には非可視)。
@@ -315,6 +321,152 @@ def _worktree_cleanup_warnings(cwd: str | None) -> list[str]:
                 "同じ状態を放置しないでください。"
             )
     return warnings
+
+
+_CODEX_STATE_ROOT = "~/.claude/plugins/data/codex-openai-codex/state"
+_CODEX_LATCH_SUFFIX = ".codex-shared-write"
+_CODEX_JOB_LATCH_SUFFIX = _CODEX_LATCH_SUFFIX + ".jobs"
+
+
+def _codex_is_linked_worktree(path: str) -> bool | None:
+    if not os.path.isdir(path):
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--absolute-git-dir", "--git-common-dir"],
+            cwd=path,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=_GIT_COMMAND_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    lines = result.stdout.splitlines()
+    if len(lines) != 2 or not all(lines):
+        return None
+    git_dir, common_dir = (
+        os.path.realpath(
+            os.path.abspath(
+                value if os.path.isabs(value) else os.path.join(path, value)
+            )
+        )
+        for value in lines
+    )
+    return git_dir != common_dir
+
+
+def _codex_job_records(session_id: str) -> list[dict]:
+    records: list[dict] = []
+    try:
+        state_root = os.path.expanduser(_CODEX_STATE_ROOT)
+        with os.scandir(state_root) as workspaces:
+            for workspace in workspaces:
+                if not workspace.is_dir():
+                    continue
+                jobs = os.path.join(workspace.path, "jobs")
+                try:
+                    entries = os.scandir(jobs)
+                except OSError:
+                    continue
+                with entries:
+                    for entry in entries:
+                        if not entry.is_file() or not entry.name.endswith(".json"):
+                            continue
+                        try:
+                            with open(entry.path, encoding="utf-8") as stream:
+                                record = json.load(stream)
+                        except (OSError, ValueError):
+                            continue
+                        if (
+                            isinstance(record, dict)
+                            and record.get("sessionId") == session_id
+                        ):
+                            records.append(record)
+    except OSError:
+        return []
+    return records
+
+
+def _codex_job_sort_key(record: dict) -> tuple[bool, float]:
+    timestamp = record.get("updatedAt", record.get("startedAt"))
+    if isinstance(timestamp, (int, float)):
+        epoch = float(timestamp)
+    else:
+        parsed = _parse_ts(timestamp)
+        epoch = parsed if parsed is not None else float("-inf")
+    return record.get("status") in ("queued", "running"), epoch
+
+
+def _codex_shared_write_warnings(payload: dict) -> list[str]:
+    session_id = payload.get("session_id")
+    if not isinstance(session_id, str) or not session_id:
+        return []
+    try:
+        jobs = []
+        linked_memo: dict[str, bool | None] = {}
+        for record in _codex_job_records(session_id):
+            path = record.get("workspaceRoot")
+            if (
+                record.get("write") is True
+                and isinstance(record.get("id"), str)
+                and isinstance(path, str)
+                and os.path.isabs(path)
+                and os.path.isdir(path)
+            ):
+                if path not in linked_memo:
+                    linked_memo[path] = _codex_is_linked_worktree(path)
+                if linked_memo[path] is False:
+                    jobs.append(record)
+        latch = _stop_latch_key(payload, _CODEX_JOB_LATCH_SUFFIX)
+        if latch is None:
+            counter = _counter_path(payload)
+            if not counter:
+                return []
+            latch_path = counter + _CODEX_JOB_LATCH_SUFFIX
+        else:
+            _key, latch_path = latch
+        seen: set[str] = set()
+        try:
+            with open(latch_path, encoding="utf-8") as stream:
+                seen = set(stream.read().splitlines())
+        except OSError:
+            pass
+        fresh = [job for job in jobs if job["id"] not in seen]
+        if not fresh:
+            return []
+        try:
+            os.makedirs(os.path.dirname(latch_path), exist_ok=True)
+            with open(latch_path, "w", encoding="utf-8") as stream:
+                stream.write("\n".join(sorted(seen | {job["id"] for job in fresh})))
+                stream.write("\n")
+        except OSError:
+            return []
+        lines = []
+        fresh.sort(key=_codex_job_sort_key, reverse=True)
+        for job in fresh[:3]:
+            status = job.get("status", "unknown")
+            action = (
+                f"{status} のため cancel {job['id']} で止めてください"
+                if status in ("running", "queued")
+                else "git status で混入を確認してください"
+            )
+            lines.append(
+                f"codex-shared-write: 共有 checkout で write を伴う codex task が"
+                f"走った (走っている) ことを検知しました。job {job['id']}、"
+                f"workspaceRoot={job['workspaceRoot']}、status={status}。{action}。"
+                "job 記録に基づく検知なので、コマンドの書き方に依存しません。"
+            )
+        extra = len(fresh) - 3
+        if extra > 0:
+            lines.append(
+                f"codex-shared-write: 追加で {extra} 件の該当 job があります。"
+            )
+        return lines
+    except Exception:
+        return []
 
 
 def _emit_worktree_warnings(warnings: list[str]) -> None:
@@ -1074,6 +1226,14 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
             worktree_warnings = []
         else:
             _stop_latch_set(payload, ".wt")
+    codex_warnings = []
+    if not payload.get("stop_hook_active") and not _stop_latched(
+        payload, _CODEX_LATCH_SUFFIX
+    ):
+        codex_warnings = _codex_shared_write_warnings(payload)
+        if codex_warnings:
+            _stop_latch_set(payload, _CODEX_LATCH_SUFFIX)
+    worktree_warnings += codex_warnings
     transcript_path = payload.get("transcript_path")
     if not isinstance(transcript_path, str) or not transcript_path:
         _emit_worktree_warnings(worktree_warnings)
@@ -2030,14 +2190,12 @@ class StopMemorySurfaceTest(unittest.TestCase):
         assert third is not None  # new turn -> surfaces again
 
 
-class WorktreeCleanupTest(unittest.TestCase):
-    """Worktree warning claims. Run: python3 -m unittest stop_checks"""
-
+class WorktreeFixtureMixin:
     def setUp(self):
         import tempfile
 
         self.tmp = tempfile.TemporaryDirectory(prefix="stop-worktree-")
-        self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(self.tmp.cleanup)  # ty: ignore[unresolved-attribute]
         self.env = os.environ.copy()
         self.env.update(
             {
@@ -2111,6 +2269,10 @@ class WorktreeCleanupTest(unittest.TestCase):
 
     def _check_repo(self, repo):
         return self._check_cwd(repo)
+
+
+class WorktreeCleanupTest(WorktreeFixtureMixin, unittest.TestCase):
+    """Worktree warning claims. Run: python3 -m unittest stop_checks"""
 
     def test_clean_merged_linked_worktree_warns(self):
         repo = self._repo()
@@ -2490,6 +2652,201 @@ class WorktreeCleanupTest(unittest.TestCase):
             _code, warnings, _blocking = self._check_repo(repo)
 
         self.assertEqual(warnings, [])
+
+
+class CodexSharedWriteTest(WorktreeFixtureMixin, unittest.TestCase):
+    """Codex job-state warning claims. Run: python3 -m unittest stop_checks"""
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+
+        self.home_patch = mock.patch.dict(os.environ, {"HOME": self.env["HOME"]})
+        self.home_patch.start()
+        self.addCleanup(self.home_patch.stop)
+
+    def _job(
+        self,
+        root,
+        job_id,
+        session="session",
+        write=True,
+        status="completed",
+        updated_at=None,
+    ):
+        path = os.path.join(
+            self.env["HOME"], ".claude/plugins/data/codex-openai-codex/state/test/jobs"
+        )
+        os.makedirs(path, exist_ok=True)
+        with open(
+            os.path.join(path, job_id + ".json"), "w", encoding="utf-8"
+        ) as stream:
+            record = {
+                "id": job_id,
+                "sessionId": session,
+                "write": write,
+                "workspaceRoot": str(root),
+                "status": status,
+            }
+            if updated_at is not None:
+                record["updatedAt"] = updated_at
+            json.dump(record, stream)
+
+    def _payload(self):
+        return {
+            "session_id": "session",
+            "transcript_path": os.path.join(self.tmp.name, "turn.jsonl"),
+        }
+
+    def test_primary_write_warns_and_latches_by_job(self):
+        repo = self._repo()
+        self._job(repo, "job-1", status="running")
+        first = _codex_shared_write_warnings(self._payload())
+        second = _codex_shared_write_warnings(self._payload())
+        self.assertEqual(len(first), 1)
+        self.assertIn("job-1", first[0])
+        self.assertIn(str(repo), first[0])
+        self.assertIn("cancel job-1", first[0])
+        self.assertEqual(second, [])
+
+    def test_symlinked_primary_warns_but_symlinked_linked_is_silent(self):
+        repo = self._repo()
+        main_alias = os.path.join(self.tmp.name, "repo-alias")
+        linked = self._linked(repo)
+        linked_alias = os.path.join(self.tmp.name, "linked-alias")
+        os.symlink(repo, main_alias)
+        os.symlink(linked, linked_alias)
+        self._job(main_alias, "job-main-alias")
+        self._job(linked_alias, "job-linked-alias")
+
+        warnings = _codex_shared_write_warnings(self._payload())
+
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("job-main-alias", warnings[0])
+        self.assertIn(f"workspaceRoot={main_alias}", warnings[0])
+        self.assertNotIn("job-linked-alias", warnings[0])
+
+    def test_queued_write_warns_with_cancel_action(self):
+        repo = self._repo()
+        self._job(repo, "job-queued", status="queued")
+
+        warnings = _codex_shared_write_warnings(self._payload())
+
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("status=queued", warnings[0])
+        self.assertIn("cancel job-queued", warnings[0])
+        self.assertNotIn("完了済み", warnings[0])
+
+    def test_new_job_warns_and_nonmatching_jobs_are_silent(self):
+        repo = self._repo()
+        self._job(self._linked(repo), "job-linked")
+        self._job(repo, "job-read", write=False)
+        self._job(repo, "job-other", session="other")
+        self.assertEqual(_codex_shared_write_warnings(self._payload()), [])
+        self._job(repo, "job-2")
+        self.assertEqual(len(_codex_shared_write_warnings(self._payload())), 1)
+
+    def test_missing_and_broken_state_are_fail_open_and_valid_job_survives(self):
+        payload = self._payload()
+        self.assertEqual(_codex_shared_write_warnings(payload), [])
+        repo = self._repo()
+        jobs = os.path.join(
+            self.env["HOME"], ".claude/plugins/data/codex-openai-codex/state/test/jobs"
+        )
+        os.makedirs(jobs, exist_ok=True)
+        with open(os.path.join(jobs, "broken.json"), "w", encoding="utf-8") as stream:
+            stream.write("{")
+        self._job(repo, "job-valid")
+        self.assertEqual(len(_codex_shared_write_warnings(payload)), 1)
+
+    def test_four_jobs_list_three_and_count_extra(self):
+        repo = self._repo()
+        self._job(repo, "job-completed-new", updated_at="2026-07-23T04:00:00Z")
+        self._job(
+            repo,
+            "job-queued-old",
+            status="queued",
+            updated_at="2026-07-23T01:00:00Z",
+        )
+        self._job(
+            repo,
+            "job-running-new",
+            status="running",
+            updated_at="2026-07-23T03:00:00Z",
+        )
+        self._job(
+            repo,
+            "job-queued-new",
+            status="queued",
+            updated_at="2026-07-23T02:00:00Z",
+        )
+        warnings = _codex_shared_write_warnings(self._payload())
+        self.assertEqual(len(warnings), 4)
+        self.assertEqual(sum("workspaceRoot=" in warning for warning in warnings), 3)
+        self.assertIn("job-running-new", warnings[0])
+        self.assertIn("job-queued-new", warnings[1])
+        self.assertIn("job-queued-old", warnings[2])
+        self.assertNotIn("job-completed-new", warnings[:3])
+        self.assertIn("追加で 1 件", warnings[-1])
+
+    def test_turn_latches_are_independent_with_turns(self):
+        import io
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        repo = self._repo()
+        self._job(repo, "job-1")
+        transcript = os.path.join(self.tmp.name, "turn.jsonl")
+        with open(transcript, "w", encoding="utf-8") as stream:
+            stream.write("{}\n")
+        with open(transcript[:-6] + ".turns", "w", encoding="utf-8") as stream:
+            stream.write("1 1000\n")
+        payload = {
+            "session_id": "session",
+            "transcript_path": transcript,
+            "stop_hook_active": False,
+        }
+        with (
+            mock.patch(
+                f"{__name__}._worktree_cleanup_warnings",
+                side_effect=[["wt"], [], ["wt2"]],
+            ),
+            redirect_stderr(io.StringIO()),
+        ):
+            _code, _epoch, _text, first = _run(payload)
+            _code, _epoch, _text, second = _run(payload)
+            self._job(repo, "job-2")
+            with open(transcript[:-6] + ".turns", "w", encoding="utf-8") as stream:
+                stream.write("2 1000\n")
+            _code, _epoch, _text, third = _run(payload)
+
+        self.assertEqual(len(first), 2)
+        self.assertIn("wt", first[0])
+        self.assertIn("job-1", first[1])
+        self.assertEqual(second, [])
+        self.assertEqual(len(third), 2)
+        self.assertIn("wt2", third[0])
+        self.assertIn("job-2", third[1])
+
+    def test_stop_hook_active_suppresses_both_checks(self):
+        import io
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        payload = {
+            "transcript_path": self._payload()["transcript_path"],
+            "stop_hook_active": True,
+        }
+        with (
+            mock.patch(f"{__name__}._worktree_cleanup_warnings", return_value=["wt"]),
+            mock.patch(
+                f"{__name__}._codex_shared_write_warnings", return_value=["codex"]
+            ) as codex_check,
+            redirect_stderr(io.StringIO()),
+        ):
+            _code, _epoch, _text, warnings = _run(payload)
+        self.assertEqual(warnings, [])
+        codex_check.assert_not_called()
 
 
 if __name__ == "__main__":
