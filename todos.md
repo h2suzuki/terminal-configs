@@ -71,7 +71,7 @@ Goal: 最新 3 モデル (Opus 4.8 / Sonnet 5 / Fable 5) で TaskCreate/TaskGet/
 Exit Criteria:
 - [x] 原因の確定 — 2026-07-13 に model gate `tengu_vellum_ash` と特定 (下記「確定済み背景」、実機裏取り済)
 - [x] 対処方針を確定・実装 — hook gate エミュレーション + /my-tasks 代替 skill + court-guard + DISABLE_GROWTHBOOK ad-hoc、全 deploy 済 (9eac0bc/02e3054)。env-check (DISABLE_GROWTHBOOK 迂回) は H.S. が 2 度不採用・再提起しない (2026-07-13)
-- [ ] 上流 gate (tengu_vellum_ash) の解除を watch (opportunistic)
+- [x] 上流 gate (tengu_vellum_ash) の watch — 2026-07-23 H.S. 指示により **watch 自体を不要と決定**。代替 (hook gate エミュレーション + /my-tasks skill) が deploy 済で機能しており、上流解除を待つ動機が無い。同日の probe でも `TodoWrite` / `TaskCreate` は deferred 一覧に不在で gate は継続中
 
 確定済み背景 (2026-07-13・再導出不要):
 - **問題定義**: Opus 4.8 セッションで TaskCreate/TaskGet/TaskList/TaskUpdate と旧 TodoWrite が完全に不在 (tool 一覧にも ToolSearch deferred にも出ない)。background-agent 系の TaskStop/TaskOutput のみ残る。
