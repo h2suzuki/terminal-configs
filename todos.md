@@ -46,17 +46,6 @@ Exit Criteria:
 - [ ] 実運用で court 汚染の live 検出を確認 (opportunistic)
 - 既知 finding (低 pri): stop_checks の court チェックは生 `text` 対象で、fence 内に court パターンを書く session は理論上 FP。`stripped` 化は要検討 (実 corpus では 0 FP)
 
-### memory surface の閾値をモデル別に変えられるか調査
-
-Goal: Opus セッション向け調整の memory surface (UserPromptSubmit `memory_surface.py` / Stop `stop_checks.py` の RAG surface) が Fable 5 では過剰という H.S. の体感に対し、走行モデルを hook 側から検出してモデル別に閾値・頻度を変える実装の可否と方針を確定する。
-
-Exit Criteria:
-- [x] hook から走行モデルを検出する手段の有無を実測で確定 — 2026-07-21 workflow で 4 チャネル並列 probe。**transcript JSONL の `.message.model` (type=="assistant") のみ可**、他は不可。全 hook event に共通して渡る payload field は `{session_id, transcript_path, cwd, prompt_id, permission_mode, agent_id, agent_type, effort}` で model は無く、`model` を持つのは `SessionStart` のみ (2026-07-21 に導入済み binary v2.1.216 を走査して確認)。**依存が壊れる条件**: transcript の assistant record が `message.model` を持たなくなれば transcript tail 方式は成立しなくなるため、実装時は取得失敗を現行挙動への fallback として扱う。`~/.claude.json` の `lastModelUsage` は 3 model が recency 順序なく同居し現行 model を取れず、`~/.claude/sessions/<pid>.json` は model field 自体が無い。transcript は 12.8MB でも tail 抽出 0.009s、assistant message 単位 stamp ゆえ mid-session `/model` 切替に追随する
-- [x] 対象 hook の surface 閾値・頻度パラメータの所在を特定 — 計 9 個 / 2 file。`memory_surface.py`: `THROTTLE_SECONDS` / `BM25_SURFACE_FLOOR` / `BM25_STRONG_FLOOR` / `HYBRID_FLOOR` / `HYBRID_STRONG_FLOOR` / `DENSE_RESCUE_FLOOR` / `BM25_CANDIDATES` / `max_emit`(UPS=2)、`stop_checks.py`: `max_emit`(Stop=1)。体感頻度に効く第一段は 4 個 (`max_emit`(UPS) / `THROTTLE_SECONDS` / `HYBRID_FLOOR` / `HYBRID_STRONG_FLOOR`)、残る BM25_* は embedding 不在時の legacy path 用。9 個中 7 個が module-level 定数で chain は model 引数を持たないため分類は**改造 (surgical)**
-調査フェーズは 2026-07-21 で完了・打ち切り。H.S. 指示により方針決定は別途検討とし、当時の session scope 外とした。上記 2 項目は一次実測済みゆえ**再調査は不要**で、再開時は下記の推奨をそのまま合意の議題にすればよい。
-
-- [x] 可否の結論とモデル別チューニング方針 (やらない選択肢含む) を H.S. と合意 (2026-07-23 決定: やらない・現状維持。global 閾値のまま Fable 5 の surface 過剰を許容) — 当時の推奨は transcript tail 方式 + `main()` 入口で profile を解決し module global を rebind する `_apply_model_profile(model)` 1 関数 (chain 全段への plumbing 不要)。SessionStart の `model` は `/model` 切替後も恒久 stale ゆえ不採用。global 引き下げ案は Opus 側の recall を確実に落とすため却下。**未 probe**: env var チャネルは probe が placeholder を返し未検証 — ただし launch 時静的ゆえ SessionStart と同じ恒久 stale 欠陥を持ち、結論は変わらない
-
 ### SKILL-HOOK-CONTRACT.md パターン集
 
 Goal: repo 直下 `SKILL-HOOK-CONTRACT.md` を 4 部構成で完成 — (A) event 別 hook 利用カタログ (H.S. の番号フロー形式) / (B) Skills フォーマット規約 / (C) 応用編 = CLAUDE.md→skill/hook 化の概要 (Big Picture) / (D) 実装 contract (技術者向け再利用規約)。 一貫性担保が目的 (2026-05-30 起案・A/B 記入は 2026-06-07 前 session で H.S. が依頼したが court バグでセッション腐敗→リセット、 本 session で再開。 「今 session の新指示」ではない)。
