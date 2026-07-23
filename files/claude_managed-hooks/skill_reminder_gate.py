@@ -18,8 +18,7 @@ mechanism
           PreToolUse(Bash) hook。commit 対象 file の関連 skill が active かを gate。
           commit の実行主体が、その turn 内に対象 kind の規約 skill を invoke 済み
           であることを要求する。
-          `git ... commit` 形のみを対象とし、commit-tree、merge、cherry-pick、revert、
-          rebase --continue、stash 等の別経路は射程外。
+          `git ... commit` 形のみを対象とし、merge、cherry-pick、revert、rebase --continue、stash 等の別経路は射程外 (commit-tree は regex 部分一致で deny_compound_git_commit.py 等が fail-safe deny — 別経路ではない)。
           改行で区切られた直接可視の commit は全行検査する。
           bash -c、変数 command、展開 subcommand、git alias、別言語 process 内は検出対象外。
           pathless / -a の commit は deny-broad-git-commit が deny するため到達しない。
