@@ -32,8 +32,8 @@ Goal: transcript 依存を排し、PostToolUse `^Skill$` で invoke を session/
 
 Exit Criteria:
 - [x] 方針合意 (H.S. 2026-07-23 承認・案 2 PostToolUse Skill 記録方式で概ね合意。実装は次セッション。実装規模 1.5-3 日 + managed-settings.d/extensions.json への hook 配線追加。診断 = `drafts/subagent-gate-diagnosis.md` 案 2/5 参照)
-- [ ] PostToolUse:Skill が subagent 含む全成功経路で発火することの live probe
-- [ ] 実装・deploy・commit し、subagent skip を撤去して enforcement 回復
+- [x] PostToolUse:Skill が subagent 含む全成功経路で発火することの live probe (2026-07-23 live 検証: main.json + subagent 固有 agent-bucket `a059…json` 生成・shape 正・prompt_id 非 null で uncertain #7 解消)
+- [x] 実装・deploy・commit し、subagent skip を撤去して enforcement 回復 (2026-07-23 deploy 完了・deploy 先 == canonical (mode 755/644)・fresh subagent の skill 無し .py Write が DENY されることを live 確認)
 
 進捗 (2026-07-23 本 session、deploy 直前・host 実行待ちで中断):
 - 実装 (codex) → cross-model 敵対 review (opus, 7 findings 検出) → 修正 → 再 review clean → gates green (62 tests / ruff / ty、私が独立再実行) → **commit `fef5a2c` を main へ merge 済**。canonical source は deploy-ready
