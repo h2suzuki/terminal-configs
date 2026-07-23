@@ -47,6 +47,10 @@
     ],
     "PostToolUse": [
       {
+        "matcher": "^Skill$",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/skill_reminder_gate.py record-skill" } ]
+      },
+      {
         "matcher": "^(Read|Write|Edit|MultiEdit)$",
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/read_before_edit.py record" } ]
       },

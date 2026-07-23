@@ -11,7 +11,7 @@ skill invoke → 編集、 へ誘導する。
 
 mechanism
 =========
-3 mode (argv[1] で dispatch):
+4 mode (argv[1] で dispatch):
 
   gate    PreToolUse(^(Edit|Write|MultiEdit)$) hook。下記 flow で allow/deny。
   commit-gate
@@ -23,6 +23,8 @@ mechanism
           bash -c、変数 command、展開 subcommand、git alias、別言語 process 内は検出対象外。
           pathless / -a の commit は deny-broad-git-commit が deny するため到達しない。
           commit 対象の取得に失敗した場合は file kind を判定できないため deny。
+  record-skill
+          PostToolUse:Skill hook。成功した Skill invoke を session/agent state に記録。
   declare model が Bash で実行する CLI:
             skill_reminder_gate.py declare <ABS-path> <kind>[,<kind>...]
           拡張子なし file の kind 真実源を session state に記録。sid は env
@@ -32,7 +34,7 @@ mechanism
           同じ絶対 path を後続 Edit でも使う。
 
 gate flow:
-  agent_id あり (subagent) → ALLOW
+  session/agent state の同 turn Skill invoke を参照 (subagent も enforcement 対象)
   declared(sid, path) あり:
       拡張子あり → required = relevant_skills(path) ∪ ∪(宣言 kind の skill)
                    (declare は **追加のみ**。 auto-detect を下回れない —
@@ -44,9 +46,9 @@ gate flow:
         (Write は新 content の 1 行目 — 全置換ゆえ disk より優先。 Edit は既存 file)
       shebang 無し/未知 interp → DENY「kind を declare せよ」; return
   required が空            → ALLOW (skill-less file。transcript 非読込)
-  active = 現 turn かつ直近 5 分以内の Skill invoke 集合 (現 turn を後方 1 つ読み ts で drop)
+  active = session/agent state の現 turn かつ直近 5 分以内の Skill invoke 集合
   active 判定不能 (corrupted) → ALLOW (fail-open)
-  transcript stale (newest entry ts < now-120s) → ALLOW (fail-open; resume/subagent)
+  state missing → DENY; corrupt/unreadable → ALLOW (fail-open)
   required ⊆ active        → ALLOW
   else                    → DENY「<missing> を invoke してから編集」
 
@@ -62,45 +64,24 @@ kind 語彙 → skill (additive。else 必須):
 
 gate mode の skill-active 窓 (現 turn かつ直近 5 分以内) の根拠
 ================================================================
-現 turn を後方 1 つだけ読み (_load_tail、boundary は positional ゆえ ts 単調性に
-非依存で sound)、その中で直近 5 分以内に invoke された skill のみ active とみなす
-(5 分以上前は drop)。5 分は長い作業中の再 invoke friction 抑制と、無関係に古い
-invoke が通るリスク回避の折衷。現 turn のみ読むため cross-turn の recency は無い。
+record-skill が session/agent state に記録した Skill invoke のうち、prompt_id が
+一致し、直近 5 分以内のものだけ active とみなす。5 分は長い作業中の再 invoke
+friction 抑制と、無関係に古い invoke が通るリスク回避の折衷。
 
 運用症状 (再調査不要)
 =====================
-長い turn で skill invoke 後に診断 Bash/Read 等を挟むと invoke が窓から脱落し、
-Edit が「<missing> を invoke せよ」で連続 deny する (required の抜けが skill 別に
-rotate して見える)。sandbox 阻害ではない — hook は非 sandbox 実行で transcript/
-state I/O は正常 (read_before_edit の WAL state 書込も成功)。回復: required skill を
-fresh に invoke して即 Edit (間に Bash/Read を挟まない)。
-
-turn boundary 判定 (load-bearing — 変更時は false-allow/deny を再発させる)
-=========================================================================
-直近の human-input user entry を boundary とする。boundary 判定:
-  - isMeta==True の user entry は除外 (Skill invoke 後の skill 展開 injection。
-    boundary 扱いすると Skill invoke を turn から弾いて誤 deny)
-  - content が str → boundary (典型 human prompt)
-  - content が list で **非 tool_result block を 1 つ以上含む** → boundary
-    (画像+テキスト / steering 等の list 形 human prompt。取りこぼすと前 turn の
-     skill が active に leak して誤 allow)
-  - content が list で全 tool_result → 継続 (boundary でない)
-boundary 不在の corrupted transcript では None → fail-open ALLOW。
+長い turn で skill invoke から 5 分以上経つと invoke が窓から脱落し、Edit が
+「<missing> を invoke せよ」で deny する。回復: required skill を fresh に invoke
+して即 Edit (間に Bash/Read を挟まない)。
 
 deny 方式・fail-open
 ====================
 deny は JSON permissionDecision: "deny" (exit 0) — hook bug が誤って tool を
 block しない。全例外を握り潰し exit 0 (fail-open)。transcript が読めない /
-boundary 不在のときも ALLOW に倒す。
+state が corrupt/unreadable のときも ALLOW に倒す。missing state は DENY とする。
 commit-gate は commit 対象取得失敗時のみ判定不能を ALLOW にせず DENY に倒し、
 理由と再実行条件を表示する。
-以下の stale transcript valve は gate mode のみに適用し、commit-gate には適用しない。
-Stale transcript (newest entry ts older than TRANSCRIPT_FRESH_SECONDS) also falls
-to ALLOW: resumed-session bg-notification turns (2026-07-09) and subagents
-(2026-07-06) were observed handing the gate transcript content missing the
-just-made Skill invoke, turning every legit invoke->edit into a false deny.
-A stale transcript proves nothing about invoke absence, so the gate must not
-deny from it.
+gate/commit-gate は transcript_path を読まず、record-skill の state だけを参照する。
 
 residual (閉じない・既知)
 =========================
@@ -122,12 +103,14 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass
+import fcntl
 import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 
@@ -135,9 +118,6 @@ HOME = os.path.expanduser("~")
 STATE_DIR = os.path.join(HOME, ".claude", "hooks", "state", "skill_reminder")
 DECL_STALE_SECONDS = 7 * 24 * 3600  # 放置宣言 session dir の自己掃除閾値
 SKILL_WINDOW_SECONDS = 300  # skill-active 窓 = 現 turn かつ直近 5 分以内
-TRANSCRIPT_FRESH_SECONDS = (
-    120  # newest-entry age beyond this = stale transcript -> fail-open
-)
 GATE_TOOLS = ("Edit", "Write", "MultiEdit")
 
 GIT_COMMIT_RE = re.compile(r"\bgit\b(?:\s+-{1,2}\S+(?:[ =]\S+)?)*\s+commit\b(?![\w.])")
@@ -422,123 +402,106 @@ def _prune_old_sessions() -> None:
             pass
 
 
-# --- current-turn skill scan ---
+def _active_path(session_id: str, agent_key: str) -> str:
+    return os.path.join(STATE_DIR, "active", session_id, agent_key + ".json")
 
 
-_TAIL_BUFSIZE = 128 * 1024  # 後方読みブロック。実測 turn mean≈110KB を 1 read で覆う
-
-
-def _load_tail(path: str, turns: int = 1, bufsize: int = _TAIL_BUFSIZE) -> list[dict]:
-    """末尾から turn boundary を turns 個含むまで後方読みで返す; boundary が turns 未満なら全件。"""
+def _load_active_state(session_id: str, agent_key: str) -> dict | None:
     try:
-        with open(path, "rb") as f:
-            pos = f.seek(0, os.SEEK_END)
-            pending = b""  # 行頭が手前ブロックにある途中行 (次の読みで結合)
-            tail: list[dict] = []  # newest-first
-            seen = 0
-            while pos > 0:
-                step = min(bufsize, pos)
-                pos -= step
-                f.seek(pos)
-                parts = (f.read(step) + pending).split(b"\n")
-                pending = parts.pop(0)
-                for raw in reversed(parts):
-                    line = raw.strip()
-                    if not line:
-                        continue
-                    try:
-                        obj = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    tail.append(obj)
-                    if _is_turn_boundary(obj):
-                        seen += 1
-                        if seen >= turns:
-                            tail.reverse()
-                            return tail
-            line = pending.strip()  # BOF: 先頭断片は完全な 1 行
-            if line:
-                try:
-                    tail.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-            tail.reverse()
-            return tail  # boundary < turns: 集めた全件
+        with open(_active_path(session_id, agent_key), encoding="utf-8") as f:
+            state = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError):
+        return None
+    return state if isinstance(state, dict) else None
+
+
+def _atomic_write_json(path: str, value: dict) -> None:
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=directory, prefix=".active-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(value, f, ensure_ascii=False, separators=(",", ":"))
+            f.flush()
+        os.replace(temporary, path)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
+def _upsert_active_skill(
+    session_id: str, agent_key: str, skill_name: str, now: float, prompt_id
+) -> None:
+    active_path = _active_path(session_id, agent_key)
+    lock_path = active_path + ".lock"
+
+    def write() -> None:
+        state = _load_active_state(session_id, agent_key) or {}
+        state[skill_name] = {"ts": now, "prompt_id": prompt_id}
+        _atomic_write_json(active_path, state)
+
+    try:
+        os.makedirs(os.path.dirname(active_path), exist_ok=True)
+        with open(lock_path, "a+", encoding="utf-8") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                write()
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    except Exception:
+        try:
+            write()
+        except Exception:
+            pass
+
+
+def _prune_old_active_sessions() -> None:
+    root = os.path.join(STATE_DIR, "active")
+    cutoff = time.time() - DECL_STALE_SECONDS
+    try:
+        names = os.listdir(root)
     except OSError:
-        return []
+        return
+    for name in names:
+        directory = os.path.join(root, name)
+        try:
+            if os.path.getmtime(directory) < cutoff:
+                for filename in os.listdir(directory):
+                    try:
+                        os.remove(os.path.join(directory, filename))
+                    except OSError:
+                        pass
+                os.rmdir(directory)
+        except OSError:
+            pass
 
 
-def _is_turn_boundary(obj: dict) -> bool:
-    """human-input turn の起点か。isMeta(skill 展開) と tool_result 継続は起点でない。"""
-    # isSidechain entry が現 format に出現すると通常 entry として数え、turn 判定がずれうる。
-    if obj.get("type") != "user" or obj.get("isMeta"):
-        return False
-    msg = obj.get("message", {})
-    content = msg.get("content") if isinstance(msg, dict) else None
-    if isinstance(content, str):
-        return True
-    if isinstance(content, list):
-        return any(
-            isinstance(b, dict) and b.get("type") != "tool_result" for b in content
-        )
-    return False
-
-
-def _parse_ts(ts) -> float | None:
-    """Transcript entry timestamp (ISO8601, trailing 'Z') -> epoch sec, else None."""
-    if not isinstance(ts, str) or not ts:
-        return None
-    try:
-        return datetime.datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
-
-
-def _transcript_stale(entries: list[dict], now: float, fresh_s: int) -> bool:
-    """True iff newest parsed entry ts is older than now - fresh_s (no ts at all -> False)."""
-    newest = None
-    for obj in entries:
-        ep = _parse_ts(obj.get("timestamp"))
-        if ep is not None and (newest is None or ep > newest):
-            newest = ep
-    return newest is not None and newest < now - fresh_s
-
-
-def _active_skills(
-    entries: list[dict], now: float, window_s: int | None
+def _active_skills_from_state(
+    session_id: str,
+    agent_key: str,
+    now: float,
+    window_s: int | None,
+    prompt_id,
 ) -> set[str] | None:
-    """現 turn の invoke 済 skill。window_s=None は時刻で絞らない。"""
-    start_idx = -1
-    for i in range(len(entries) - 1, -1, -1):
-        if _is_turn_boundary(entries[i]):
-            start_idx = i + 1
-            break
-    if start_idx == -1:
+    state = _load_active_state(session_id, agent_key)
+    if state is None:
         return None
-
-    cutoff = now - window_s if window_s is not None else None
     active: set[str] = set()
-    for idx, obj in enumerate(entries):
-        if obj.get("type") != "assistant":
+    for skill, rec in state.items():
+        if not isinstance(skill, str) or not isinstance(rec, dict):
             continue
-        if idx < start_idx:
-            continue  # 現 turn 外
-        ep = _parse_ts(obj.get("timestamp"))
-        if cutoff is not None and ep is not None and ep < cutoff:
-            continue  # 現 turn 内でも 300 秒以上前は drop
-        msg = obj.get("message", {})
-        content = msg.get("content") if isinstance(msg, dict) else None
-        if not isinstance(content, list):
+        # prompt_id の一致だけを turn identity として扱う。
+        if prompt_id is not None and rec.get("prompt_id") != prompt_id:
             continue
-        for block in content:
-            if not isinstance(block, dict) or block.get("type") != "tool_use":
-                continue
-            if block.get("name") != "Skill":
-                continue
-            inp = block.get("input") or {}
-            name = inp.get("skill") if isinstance(inp, dict) else None
-            if isinstance(name, str) and name:
-                active.add(name)
+        timestamp = rec.get("ts", 0)
+        if window_s is not None and now - timestamp > window_s:
+            continue
+        active.add(skill)
     return active
 
 
@@ -834,11 +797,44 @@ def _deny_unresolved_pathspec(pathspecs: list[str]) -> None:
 # --- modes ---
 
 
-def cmd_gate(payload: dict) -> None:
-    if not isinstance(payload, dict):
+def _skill_succeeded(tool_response) -> bool:
+    """案2 §3.2: record unless the PostToolUse response clearly signals failure."""
+    if isinstance(tool_response, dict):
+        if tool_response.get("is_error") or tool_response.get("error"):
+            return False
+        if tool_response.get("success") is False:
+            return False
+        status = tool_response.get("status")
+        if isinstance(status, str) and status.lower() in {"error", "failed", "failure"}:
+            return False
+    return True
+
+
+def cmd_record_skill(payload: dict) -> None:
+    """案2 §3.2: record successful Skill invokes in session/agent state."""
+    try:
+        if not isinstance(payload, dict):
+            return
+        session_id = payload.get("session_id")
+        if not session_id:
+            return
+        agent_key = payload.get("agent_id") or "main"
+        prompt_id = payload.get("prompt_id")
+        inp = payload.get("tool_input") or {}
+        skill_name = inp.get("skill") if isinstance(inp, dict) else None
+        if not isinstance(skill_name, str) or not skill_name:
+            return
+        if not _skill_succeeded(payload.get("tool_response")):
+            return
+        _upsert_active_skill(session_id, agent_key, skill_name, time.time(), prompt_id)
+        _prune_old_active_sessions()
+    except Exception:
         return
-    # subagent には自身の invoke 履歴が渡るとは限らず判定できないため fail-open
-    if payload.get("agent_id"):
+
+
+def cmd_gate(payload: dict) -> None:
+    """案2 §3.4: enforce subagents through per-agent state, without transcript reads."""
+    if not isinstance(payload, dict):
         return
     if payload.get("tool_name") not in GATE_TOOLS:
         return
@@ -875,20 +871,17 @@ def cmd_gate(payload: dict) -> None:
     if not required:
         return  # skill-less file。transcript 非読込。
 
-    transcript_path = payload.get("transcript_path")
-    if not isinstance(transcript_path, str) or not transcript_path:
-        return  # fail-open: enforce 不能なら止めない
+    session_id = payload.get("session_id")
+    if not session_id:
+        return
+    agent_key = payload.get("agent_id") or "main"
+    prompt_id = payload.get("prompt_id")
     now = time.time()
-    entries = _load_tail(
-        transcript_path, 1
-    )  # 現 turn のみ (drop は _active_skills が ts で実施)
-    if not entries:
-        return  # fail-open
-    if _transcript_stale(entries, now, TRANSCRIPT_FRESH_SECONDS):
-        return  # fail-open: stale transcript (resume/subagent) cannot prove invoke absence
-    active = _active_skills(entries, now, SKILL_WINDOW_SECONDS)
+    active = _active_skills_from_state(
+        session_id, agent_key, now, SKILL_WINDOW_SECONDS, prompt_id
+    )
     if active is None:
-        return  # fail-open: boundary 不在
+        return
 
     missing = required - active
     if missing:
@@ -896,6 +889,7 @@ def cmd_gate(payload: dict) -> None:
 
 
 def cmd_commit_gate(payload: dict) -> None:
+    """案2 §3.4: gate commits from the acting agent's unbounded same-turn state."""
     if not isinstance(payload, dict) or payload.get("tool_name") != "Bash":
         return
     inp = payload.get("tool_input") or {}
@@ -943,18 +937,16 @@ def cmd_commit_gate(payload: dict) -> None:
                 required_by_path.setdefault(path, set()).update(required)
     if not required_by_path:
         return
-    transcript_path = payload.get("transcript_path")
-    if not isinstance(transcript_path, str) or not transcript_path:
+    session_id = payload.get("session_id")
+    if not session_id:
         return
-    entries = _load_tail(transcript_path, 1)
-    if not entries:
-        return
-    # commit は編集から時間が空くため、wall-clock の鮮度窓は規約確認の尺度にしない。
-    # transcript の更新遅延だけで allow すると enforcement の穴になるため staleness も使わない。
-    active = _active_skills(entries, time.time(), None)
+    agent_key = payload.get("agent_id") or "main"
+    prompt_id = payload.get("prompt_id")
+    active = _active_skills_from_state(
+        session_id, agent_key, time.time(), None, prompt_id
+    )
     if active is None:
         return
-    # commit の実行主体が同 turn に規約 skill を invoke 済みかを判定し、agent_id では分岐しない。
     missing_by_path = {
         path: required - active
         for path, required in required_by_path.items()
@@ -1034,6 +1026,16 @@ def main() -> int:
         except Exception:
             pass  # fail-open: hook bug が tool を block しない
         return 0
+    if sub == "record-skill":
+        try:
+            payload = json.loads(sys.stdin.read() or "{}")
+        except json.JSONDecodeError:
+            return 0
+        try:
+            cmd_record_skill(payload)
+        except Exception:
+            pass  # fail-open: hook bug が tool を block しない
+        return 0
     return 0
 
 
@@ -1050,6 +1052,20 @@ class GateTest(unittest.TestCase):
         cls._repo_temp = tempfile.TemporaryDirectory()
         cls.REPO = cls._repo_temp.name
         cls._init_repo(cls.REPO, {"README.md": "initial\n"})
+
+    def setUp(self):
+        import tempfile
+        from unittest import mock
+
+        self._state_temp = tempfile.TemporaryDirectory()
+        self._state_patch = mock.patch.object(
+            sys.modules[__name__], "STATE_DIR", self._state_temp.name
+        )
+        self._state_patch.start()
+
+    def tearDown(self):
+        self._state_patch.stop()
+        self._state_temp.cleanup()
 
     @classmethod
     def tearDownClass(cls):
@@ -1088,22 +1104,42 @@ class GateTest(unittest.TestCase):
         }
 
     @staticmethod
-    def _transcript(entries):
-        import tempfile
-
-        p = os.path.join(tempfile.mkdtemp(), "t.jsonl")
-        with open(p, "w", encoding="utf-8") as f:
-            for e in entries:
-                f.write(json.dumps(e) + "\n")
-        return p
-
-    @staticmethod
     def _declare_quiet(argv):
         import io
         from contextlib import redirect_stderr
 
         with redirect_stderr(io.StringIO()):
             return cmd_declare(argv)
+
+    def _seed_state(self, sid, entries, agent_id=None, prompt_id="p1"):
+        state = {}
+        for entry in entries:
+            message = entry.get("message", {})
+            content = message.get("content") if isinstance(message, dict) else None
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict) or block.get("name") != "Skill":
+                    continue
+                inp = block.get("input") or {}
+                name = inp.get("skill") if isinstance(inp, dict) else None
+                if not isinstance(name, str) or not name:
+                    continue
+                timestamp = entry.get("timestamp")
+                if isinstance(timestamp, str):
+                    try:
+                        timestamp = datetime.datetime.fromisoformat(
+                            timestamp.replace("Z", "+00:00")
+                        ).timestamp()
+                    except ValueError:
+                        timestamp = None
+                else:
+                    timestamp = None
+                state[name] = {
+                    "ts": timestamp if timestamp is not None else time.time(),
+                    "prompt_id": prompt_id,
+                }
+        _atomic_write_json(_active_path(sid, agent_id or "main"), state)
 
     def _gate(
         self,
@@ -1113,6 +1149,9 @@ class GateTest(unittest.TestCase):
         tool="Edit",
         transcript=True,
         content=None,
+        agent_id=None,
+        prompt_id="p1",
+        state_prompt_id=None,
     ):
         import io
         from contextlib import redirect_stdout
@@ -1122,11 +1161,16 @@ class GateTest(unittest.TestCase):
             "tool_input": {"file_path": file_path},
             "cwd": "/tmp",
             "session_id": sid,
+            "prompt_id": prompt_id,
         }
+        if agent_id is not None:
+            payload["agent_id"] = agent_id
         if content is not None:
             payload["tool_input"]["content"] = content
+        if entries:
+            self._seed_state(sid, entries, agent_id, state_prompt_id or prompt_id)
         if transcript:
-            payload["transcript_path"] = self._transcript(entries or [])
+            payload["transcript_path"] = "/ignored/transcript.jsonl"
         buf = io.StringIO()
         with redirect_stdout(buf):
             cmd_gate(payload)
@@ -1140,6 +1184,8 @@ class GateTest(unittest.TestCase):
         transcript=True,
         agent_id=None,
         cwd=None,
+        prompt_id="p1",
+        state_prompt_id=None,
     ):
         import io
         from contextlib import redirect_stdout
@@ -1149,9 +1195,12 @@ class GateTest(unittest.TestCase):
             "tool_input": {"command": command},
             "cwd": cwd if cwd is not None else self.REPO,
             "session_id": "s1",
+            "prompt_id": prompt_id,
         }
+        if entries:
+            self._seed_state("s1", entries, agent_id, state_prompt_id or prompt_id)
         if transcript:
-            payload["transcript_path"] = self._transcript(entries or [])
+            payload["transcript_path"] = "/wrong/stale/transcript.jsonl"
         if agent_id is not None:
             payload["agent_id"] = agent_id
         buf = io.StringIO()
@@ -1189,6 +1238,143 @@ class GateTest(unittest.TestCase):
         hso = result["hookSpecificOutput"]
         self.assertEqual(hso["permissionDecision"], "deny")
         return hso["permissionDecisionReason"]
+
+    def test_record_skill_main_agent_shape_and_upsert(self):
+        cmd_record_skill(
+            {
+                "session_id": "s1",
+                "prompt_id": "p1",
+                "tool_input": {"skill": "writing-code"},
+                "tool_response": {"is_error": False},
+            }
+        )
+        cmd_record_skill(
+            {
+                "session_id": "s1",
+                "agent_id": "agent-1",
+                "prompt_id": "p1",
+                "tool_input": {"skill": "writing-python"},
+                "tool_response": {"status": "success"},
+            }
+        )
+        cmd_record_skill(
+            {
+                "session_id": "s1",
+                "prompt_id": "p1",
+                "tool_input": {"skill": "writing-tests"},
+            }
+        )
+        main_state = _load_active_state("s1", "main")
+        agent_state = _load_active_state("s1", "agent-1")
+        assert main_state is not None
+        assert agent_state is not None
+        self.assertEqual(set(main_state), {"writing-code", "writing-tests"})
+        self.assertEqual(set(agent_state), {"writing-python"})
+        self.assertEqual(main_state["writing-code"]["prompt_id"], "p1")
+        self.assertIsInstance(main_state["writing-code"]["ts"], float)
+
+    def test_record_skill_success_gate(self):
+        """案2 fix#5: explicit Skill failure responses must not become active state."""
+        cmd_record_skill(
+            {
+                "session_id": "s1",
+                "tool_input": {"skill": "writing-code"},
+                "tool_response": {"result": "ok"},
+            }
+        )
+        state = _load_active_state("s1", "main")
+        assert state is not None
+        self.assertIn("writing-code", state)
+        failures = (
+            {"is_error": True, "error": "boom"},
+            {"success": False},
+            {"status": "error"},
+            {"status": "failed"},
+            {"status": "failure"},
+        )
+        for index, response in enumerate(failures):
+            skill = f"failed-skill-{index}"
+            cmd_record_skill(
+                {
+                    "session_id": "s1",
+                    "tool_input": {"skill": skill},
+                    "tool_response": response,
+                }
+            )
+            state = _load_active_state("s1", "main")
+            assert state is not None
+            self.assertNotIn(skill, state)
+
+    def test_record_skill_atomic_target_stays_parseable(self):
+        import json as json_module
+        from unittest import mock
+
+        cmd_record_skill(
+            {
+                "session_id": "s1",
+                "tool_input": {"skill": "writing-code"},
+            }
+        )
+        original_replace = os.replace
+        observed = []
+
+        def checked_replace(source, destination):
+            with open(destination, encoding="utf-8") as f:
+                observed.append(json_module.load(f))
+            original_replace(source, destination)
+
+        with mock.patch.object(os, "replace", side_effect=checked_replace):
+            cmd_record_skill(
+                {
+                    "session_id": "s1",
+                    "tool_input": {"skill": "writing-python"},
+                }
+            )
+        self.assertEqual(observed[0]["writing-code"]["prompt_id"], None)
+        state = _load_active_state("s1", "main")
+        assert state is not None
+        self.assertEqual(set(state), {"writing-code", "writing-python"})
+
+    def test_record_skill_concurrent_upserts_preserve_both_skills(self):
+        """案2 fix#2: concurrent upserts to one bucket must not lose either record."""
+        import threading
+
+        barrier = threading.Barrier(2)
+
+        def upsert(skill, prompt_id):
+            barrier.wait()
+            _upsert_active_skill("s1", "main", skill, time.time(), prompt_id)
+
+        threads = [
+            threading.Thread(target=upsert, args=("writing-code", "p1")),
+            threading.Thread(target=upsert, args=("writing-python", "p2")),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        state = _load_active_state("s1", "main")
+        assert state is not None
+        self.assertEqual(set(state), {"writing-code", "writing-python"})
+
+    def test_record_skill_empty_state_creates_one_file_and_prunes_once(self):
+        from unittest import mock
+
+        with mock.patch.object(
+            sys.modules[__name__], "_prune_old_active_sessions"
+        ) as prune:
+            cmd_record_skill(
+                {
+                    "session_id": "s1",
+                    "tool_input": {"skill": "writing-code"},
+                }
+            )
+        prune.assert_called_once_with()
+        self.assertEqual(
+            set(os.listdir(os.path.join(STATE_DIR, "active", "s1"))),
+            {"main.json", "main.json.lock"},
+        )
 
     # --- C1: extensioned auto-detect (relevant_skills) ---
     def test_relevant_skills_by_extension(self):
@@ -1243,37 +1429,26 @@ class GateTest(unittest.TestCase):
         self.assertIsNone(_shebang_kind(os.path.join(d, "does-not-exist")))
         self.assertIsNone(_shebang_kind_text(None))
 
-    # --- C5: active = current turn AND within 5 min ---
-    def test_active_skills_window_and_turn(self):
+    def test_active_skills_from_state_window_turn_and_boundary(self):
         now, w = 1_000_000.0, SKILL_WINDOW_SECONDS
-        u = self._user()
+        _atomic_write_json(
+            _active_path("s1", "agent-1"),
+            {
+                "writing-code": {"ts": now - w, "prompt_id": "p1"},
+                "writing-python": {"ts": now - w - 1, "prompt_id": "p1"},
+                "writing-tests": {"ts": now - 1, "prompt_id": "old"},
+            },
+        )
         self.assertEqual(
-            _active_skills([u, self._skill("writing-code", now - 60)], now, w),
+            _active_skills_from_state("s1", "agent-1", now, w, "p1"),
             {"writing-code"},
         )
-        self.assertEqual(  # same turn but older than window -> dropped
-            _active_skills([u, self._skill("writing-code", now - 600)], now, w), set()
+        self.assertEqual(
+            _active_skills_from_state("s1", "agent-1", now, None, "p1"),
+            {"writing-code", "writing-python"},
         )
-        self.assertEqual(  # prior-turn skill excluded (boundary = last user)
-            _active_skills(
-                [u, self._skill("writing-code", now - 10), self._user()], now, w
-            ),
-            set(),
-        )
-        meta = {"type": "user", "isMeta": True, "message": {"content": "expand"}}
-        self.assertEqual(  # isMeta is not a turn boundary
-            _active_skills([u, self._skill("writing-code", now - 10), meta], now, w),
-            {"writing-code"},
-        )
-        self.assertEqual(  # exactly at window edge -> kept (cutoff is strict <)
-            _active_skills([u, self._skill("writing-code", now - w)], now, w),
-            {"writing-code"},
-        )
-        self.assertEqual(  # no timestamp -> not dropped (counts as active)
-            _active_skills([u, self._skill("writing-code")], now, w), {"writing-code"}
-        )
-        self.assertIsNone(  # boundary absent -> fail-open signal
-            _active_skills([self._skill("writing-code")], now, w)
+        self.assertEqual(
+            _active_skills_from_state("missing", "main", now, w, "p1"), set()
         )
 
     # --- C8: declare CLI round-trip ---
@@ -1310,38 +1485,57 @@ class GateTest(unittest.TestCase):
         self.assertIn("writing-code", r)
         self.assertIn("writing-python", r)
 
-    def test_gate_allows_subagent_without_skill(self):
-        # Fresh transcript w/ boundary but no skill invoke -> would DENY without agent_id skip.
-        self.assertEqual(
-            self._raw(
-                {
-                    "agent_id": "agent-1",
-                    "tool_name": "Edit",
-                    "tool_input": {"file_path": "/tmp/foo.py"},
-                    "cwd": "/tmp",
-                    "session_id": "s1",
-                    "transcript_path": self._transcript(
-                        [self._user(), self._text(time.time())]
-                    ),
-                }
-            ),
-            "",
+    def test_gate_denies_subagent_without_skill(self):
+        # 案2 §3.4: subagent enforced via per-agent state.
+        reason = self._reason(
+            self._gate(
+                "/tmp/foo.py",
+                entries=[self._user()],
+                agent_id="agent-1",
+            )
         )
+        self.assertIn("writing-code", reason)
 
     def test_gate_denies_same_fresh_payload_without_agent_id(self):
+        self._seed_state("s1", [self._user()])
         result = self._raw(
             {
                 "tool_name": "Edit",
                 "tool_input": {"file_path": "/tmp/foo.py"},
                 "cwd": "/tmp",
                 "session_id": "s1",
-                "transcript_path": self._transcript(
-                    [self._user(), self._text(time.time())]
-                ),
+                "prompt_id": "p1",
             }
         )
         self.assertNotEqual(result, "")
         self._reason(json.loads(result))
+
+    def test_gate_allows_subagent_skill_same_prompt(self):
+        self.assertIsNone(
+            self._gate(
+                "/tmp/foo.py",
+                entries=[
+                    self._user(),
+                    self._skill("writing-code"),
+                    self._skill("writing-python"),
+                ],
+                agent_id="agent-1",
+            )
+        )
+
+    def test_gate_denies_skill_from_different_prompt(self):
+        reason = self._reason(
+            self._gate(
+                "/tmp/foo.py",
+                entries=[
+                    self._user(),
+                    self._skill("writing-code"),
+                    self._skill("writing-python"),
+                ],
+                state_prompt_id="old-turn",
+            )
+        )
+        self.assertIn("writing-code", reason)
 
     def test_gate_allows_code_file_with_skills_active(self):
         self.assertIsNone(
@@ -1395,13 +1589,20 @@ class GateTest(unittest.TestCase):
 
     def test_gate_failopen(self):
         self.assertIsNone(self._gate("/tmp/foo.py", tool="Read"))  # non-gate tool
-        self.assertIsNone(  # no transcript -> enforce 不能で素通り
-            self._gate("/tmp/foo.py", entries=[self._user()], transcript=False)
+        self.assertEqual(
+            self._raw(
+                {
+                    "tool_name": "Edit",
+                    "tool_input": {"file_path": "/tmp/foo.py"},
+                }
+            ),
+            "",
         )
-        self.assertIsNone(  # boundary absent -> fail-open
-            self._gate("/tmp/foo.py", entries=[self._skill("writing-code")])
-        )
-        self.assertIsNone(self._gate("/tmp/foo.py", entries=[]))  # empty transcript
+        corrupt = _active_path("s1", "main")
+        os.makedirs(os.path.dirname(corrupt), exist_ok=True)
+        with open(corrupt, "w", encoding="utf-8") as f:
+            f.write("{")
+        self.assertIsNone(self._gate("/tmp/foo.py"))  # corrupt state -> fail-open
         self.assertEqual(self._raw("nope"), "")  # non-dict payload
         self.assertEqual(  # non-dict tool_input
             self._raw({"tool_name": "Edit", "tool_input": None}), ""
@@ -1409,6 +1610,12 @@ class GateTest(unittest.TestCase):
         self.assertEqual(  # empty file_path
             self._raw({"tool_name": "Edit", "tool_input": {"file_path": ""}}), ""
         )
+
+    def test_gate_missing_state_denies_fresh_session(self):
+        """案2 fix#1: a fresh session with no recorded Skill must be denied."""
+        reason = self._reason(self._gate("/tmp/fresh-session.py", sid="fresh-session"))
+        self.assertIn("writing-code", reason)
+        self.assertIn("writing-python", reason)
 
     @staticmethod
     def _raw(payload):
@@ -1438,22 +1645,10 @@ class GateTest(unittest.TestCase):
         )
         self.assertIn("writing-code", r)
 
-    def test_transcript_stale(self):
-        now, f = 1_000_000.0, TRANSCRIPT_FRESH_SECONDS
-        self.assertFalse(_transcript_stale([self._user(), self._text(now - 5)], now, f))
-        self.assertTrue(
-            _transcript_stale([self._user(), self._text(now - f - 1)], now, f)
-        )
-        self.assertFalse(
-            _transcript_stale([self._user()], now, f)
-        )  # no ts: undecidable
-
-    def test_gate_failopen_on_stale_transcript(self):
-        # Stale transcript (resume/subagent) proves nothing -> allow, never deny.
-        old = 1_000_000  # epoch far before real time.time()
-        self.assertIsNone(
-            self._gate("/tmp/foo.py", entries=[self._user(), self._text(old)])
-        )
+    def test_gate_state_only_denies_missing_skill_with_transcript_path(self):
+        """案2 fix#4: decision is state-only and missing required state denies."""
+        reason = self._reason(self._gate("/tmp/foo.py", entries=[self._user()]))
+        self.assertIn("writing-code", reason)
 
     def test_gate_shebang_extensionless(self):
         # C2 end-to-end: undeclared extensionless file, kind from shebang.
@@ -1576,7 +1771,7 @@ class GateTest(unittest.TestCase):
             )
 
     def test_main_failopen_on_exception(self):
-        # 全例外を握り潰し exit 0 (fail-open): _load_tail raising must not deny.
+        # 全例外を握り潰し exit 0 (fail-open): state reader raising must not deny.
         import io
         from contextlib import redirect_stdout
         from unittest import mock
@@ -1587,7 +1782,6 @@ class GateTest(unittest.TestCase):
                 "tool_input": {"file_path": "/tmp/foo.py"},
                 "cwd": "/tmp",
                 "session_id": "s1",
-                "transcript_path": "/x",
             }
         )
         buf = io.StringIO()
@@ -1595,43 +1789,15 @@ class GateTest(unittest.TestCase):
             mock.patch.object(sys, "stdin", io.StringIO(payload)),
             mock.patch.object(sys, "argv", ["x", "gate"]),
             mock.patch.object(
-                sys.modules[__name__], "_load_tail", side_effect=RuntimeError("boom")
+                sys.modules[__name__],
+                "_active_skills_from_state",
+                side_effect=RuntimeError("boom"),
             ),
             redirect_stdout(buf),
         ):
             rc = main()
         self.assertEqual(rc, 0)
         self.assertEqual(buf.getvalue().strip(), "")  # no deny emitted
-
-    def test_is_turn_boundary(self):
-        self.assertTrue(
-            _is_turn_boundary({"type": "user", "message": {"content": "hi"}})
-        )
-        self.assertFalse(  # isMeta (skill expansion) is not a boundary
-            _is_turn_boundary(
-                {"type": "user", "isMeta": True, "message": {"content": "x"}}
-            )
-        )
-        self.assertFalse(_is_turn_boundary({"type": "assistant", "message": {}}))
-        self.assertFalse(  # list of only tool_result -> continuation
-            _is_turn_boundary(
-                {"type": "user", "message": {"content": [{"type": "tool_result"}]}}
-            )
-        )
-        self.assertTrue(  # list with a non-tool_result block -> boundary
-            _is_turn_boundary(
-                {
-                    "type": "user",
-                    "message": {"content": [{"type": "tool_result"}, {"type": "text"}]},
-                }
-            )
-        )
-        self.assertFalse(_is_turn_boundary({"type": "user", "message": {}}))
-
-    def test_parse_ts(self):
-        self.assertIsNotNone(_parse_ts("2026-06-02T04:45:24.945Z"))
-        for bad in (None, "", "not-a-date", 123):
-            self.assertIsNone(_parse_ts(bad))
 
     # --- commit-gate: commit path requirements ---
     def test_commit_gate_explicit_path_allows_active_and_denies_missing(self):
@@ -1651,6 +1817,20 @@ class GateTest(unittest.TestCase):
         self.assertIn("commit を実行する主体自身", reason)
         self.assertNotIn("発注側", reason)
         self.assertIn("hook 自身は file を変更しません", reason)
+
+    def test_commit_gate_different_prompt_denies(self):
+        reason = self._reason(
+            self._commit_gate(
+                "git commit -m change -- foo.py",
+                entries=[
+                    self._user(),
+                    self._skill("writing-code"),
+                    self._skill("writing-python"),
+                ],
+                state_prompt_id="old-turn",
+            )
+        )
+        self.assertIn("writing-code", reason)
 
     def test_commit_gate_allows_skill_less_path(self):
         self.assertIsNone(
@@ -1981,15 +2161,15 @@ class GateTest(unittest.TestCase):
                     )
                     self.assertIn("日本語.py", self._reason(result))
 
-    def test_commit_gate_checks_transcript_older_than_freshness_limit(self):
+    def test_commit_gate_uses_state_when_old_transcript_path_is_present(self):
         result = self._commit_gate(
             "git commit -m change -- foo.py",
             entries=[self._user(), self._text(time.time() - 130)],
         )
         self.assertIn("writing-python", self._reason(result))
 
-    def test_commit_gate_checks_stale_transcript_with_agent_id(self):
-        # transcript の staleness と agent_id のどちらでも早期 return しない。
+    def test_commit_gate_enforces_agent_state_with_stale_transcript_path(self):
+        # transcript_path と agent_id で早期 return しない。
         result = self._commit_gate(
             "git commit -m change -- foo.py",
             entries=[self._user(), self._text(time.time() - 720)],
@@ -2105,7 +2285,7 @@ class GateTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {"command": "git commit -m change -- foo.py"},
                 "cwd": cwd,
-                "transcript_path": self._transcript([self._user()]),
+                "session_id": "s1",
             }
             output = io.StringIO()
             with redirect_stdout(output):
