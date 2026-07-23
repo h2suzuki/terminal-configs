@@ -111,7 +111,7 @@ run git lfs install --skip-repo
 
 
 # Node.js
-nodejs_clean_installer
+run nodejs_clean_installer
 . $HOME/.nvm/nvm.sh   # installer ran as a child; source so the root-shell npm calls below resolve
 
 
@@ -120,16 +120,16 @@ npm uninstall -g @anthropic-ai/claude-code || true  # Old one
 rm -rf ~/.local/bin/claude ~/.local/share/claude
 
 run install --mode 0755 --directory ~/.claude
-install /etc/claude-code/skel/CLAUDE.md         ~/.claude/CLAUDE.md
-install /etc/claude-code/skel/settings.json     ~/.claude/settings.json
+run install --mode 0644 /etc/claude-code/skel/CLAUDE.md         ~/.claude/CLAUDE.md
+run install --mode 0644 /etc/claude-code/skel/settings.json     ~/.claude/settings.json
 
 run uv tool install --force claude-monitor
 
-install_claude_extensions
+run install_claude_extensions
 
 
 # Stop terminal bell
-install /etc/skel/.inputrc  ~/.inputrc
+run install --mode 0644 /etc/skel/.inputrc  ~/.inputrc
 
 # Sandbox seccomp helper: enables Unix-domain-socket blocking in the Bash sandbox
 run npm install -g @anthropic-ai/sandbox-runtime
