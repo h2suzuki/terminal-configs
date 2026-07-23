@@ -35,6 +35,15 @@ Exit Criteria:
 - [ ] PostToolUse:Skill が subagent 含む全成功経路で発火することの live probe
 - [ ] 実装・deploy・commit し、subagent skip を撤去して enforcement 回復
 
+進捗 (2026-07-23 本 session、deploy 直前・host 実行待ちで中断):
+- 実装 (codex) → cross-model 敵対 review (opus, 7 findings 検出) → 修正 → 再 review clean → gates green (62 tests / ruff / ty、私が独立再実行) → **commit `fef5a2c` を main へ merge 済**。canonical source は deploy-ready
+- H.S. 裁定 (2026-07-23): state file 欠損 → **DENY (fail-closed)**、corrupt/例外のみ fail-open。並行 upsert は flock 直列化、dead transcript 機構 (`_load_tail`/`_active_skills`/`_transcript_stale`/`_is_turn_boundary`) 除去。`agent_id` 早期 return skip は撤去済 (bucketing `agent_id or "main"` のみ)
+- **残 = host deploy のみ** (sandbox は sudo 不可 = `no_new_privs` + `/etc`・`~/.claude` read-only mount で実測不可、H.S. の host shell 必須):
+  1. probe 先行 (user-level, sudo 不要): `drafts/skill_probe.py` を `~/.claude/hooks/` へ cp + chmod +x + `claude_user_settings inject` で matcher `Skill` の PostToolUse 配線 → Claude が trigger (main/subagent/無効 skill) を回し `~/.claude/skill-probe.log` で recorder 発火・`agent_id` 混入・`prompt_id` turn 安定性 (uncertain #7) を確認
+  2. production (sudo): `sudo cp files/claude_managed-hooks/skill_reminder_gate.py /etc/claude-code/hooks/` + `sudo cp files/claude_managed-extensions.json /etc/claude-code/managed-settings.d/extensions.json`
+  3. deploy 先 == canonical の diff + mode 755 確認 → 上記 2 criteria flip → block 削除
+- fail-closed ゆえ probe 先行推奨 (recorder 未発火だと false-deny、revert 可)。work file: 発注書 `drafts/skill-gate-order.md` / fix 発注 `drafts/skill-gate-fix1.md` / probe `drafts/skill_probe.py`
+
 ### court バグ guard (command + stop_checks/skill 配線)
 
 Goal: stray token (court/count/câu… と揺れる) + 行頭 invoke-leak を厳密パターンで捕捉し、court バグ汚染 (#76912 / #64108) を早期検知する。
