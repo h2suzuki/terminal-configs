@@ -55,7 +55,7 @@ Exit Criteria:
 - [x] 対象 hook の surface 閾値・頻度パラメータの所在を特定 — 計 9 個 / 2 file。`memory_surface.py`: `THROTTLE_SECONDS` / `BM25_SURFACE_FLOOR` / `BM25_STRONG_FLOOR` / `HYBRID_FLOOR` / `HYBRID_STRONG_FLOOR` / `DENSE_RESCUE_FLOOR` / `BM25_CANDIDATES` / `max_emit`(UPS=2)、`stop_checks.py`: `max_emit`(Stop=1)。体感頻度に効く第一段は 4 個 (`max_emit`(UPS) / `THROTTLE_SECONDS` / `HYBRID_FLOOR` / `HYBRID_STRONG_FLOOR`)、残る BM25_* は embedding 不在時の legacy path 用。9 個中 7 個が module-level 定数で chain は model 引数を持たないため分類は**改造 (surgical)**
 調査フェーズは 2026-07-21 で完了・打ち切り。H.S. 指示により方針決定は別途検討とし、当時の session scope 外とした。上記 2 項目は一次実測済みゆえ**再調査は不要**で、再開時は下記の推奨をそのまま合意の議題にすればよい。
 
-- [ ] 可否の結論とモデル別チューニング方針 (やらない選択肢含む) を H.S. と合意 — 推奨は transcript tail 方式 + `main()` 入口で profile を解決し module global を rebind する `_apply_model_profile(model)` 1 関数 (chain 全段への plumbing 不要)。SessionStart の `model` は `/model` 切替後も恒久 stale ゆえ不採用。global 引き下げ案は Opus 側の recall を確実に落とすため却下。**未 probe**: env var チャネルは probe が placeholder を返し未検証 — ただし launch 時静的ゆえ SessionStart と同じ恒久 stale 欠陥を持ち、結論は変わらない
+- [x] 可否の結論とモデル別チューニング方針 (やらない選択肢含む) を H.S. と合意 (2026-07-23 決定: やらない・現状維持。global 閾値のまま Fable 5 の surface 過剰を許容) — 当時の推奨は transcript tail 方式 + `main()` 入口で profile を解決し module global を rebind する `_apply_model_profile(model)` 1 関数 (chain 全段への plumbing 不要)。SessionStart の `model` は `/model` 切替後も恒久 stale ゆえ不採用。global 引き下げ案は Opus 側の recall を確実に落とすため却下。**未 probe**: env var チャネルは probe が placeholder を返し未検証 — ただし launch 時静的ゆえ SessionStart と同じ恒久 stale 欠陥を持ち、結論は変わらない
 
 ### SKILL-HOOK-CONTRACT.md パターン集
 
