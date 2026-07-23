@@ -159,7 +159,7 @@ run claude mcp add mytask --scope user -- claude_mytask_mcp
 
 # Vercel CLI + plugin (MCP comes from the plugin)
 run npm install -g @vercel/vc-native
-run CI=1 npx -y plugins add vercel/vercel-plugin --yes
+run CI=1 npx -y plugins add vercel/vercel-plugin --yes --target claude-code
 run claude plugin update vercel@claude-plugins-official
 
 
