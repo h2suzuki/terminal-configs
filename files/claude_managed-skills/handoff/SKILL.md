@@ -32,7 +32,7 @@ session 終了時に作業が完結し次 session 再開不要なら、 該当 t
 
 ### 2. Project-specific extension (optional)
 
-`ls .claude/skills/handoff-extension/SKILL.md` で存在確認、 あれば Skill tool で invoke、 project-specific pre-check (spec / style guide / chapter index sync) を実行させる。
+.claude/skills/handoff-extension/SKILL.md があれば Skill tool で invoke、 project-specific pre-check (spec / style guide / chapter index sync) を実行させる。
 
 ### 3. Write the document
 
