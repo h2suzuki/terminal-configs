@@ -16,6 +16,7 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
    - **「適用される既存裁定」節を必須で置く**: 発注対象の scope を制約する user の既存決定（機能やデータ範囲の凍結・自動/手動の区別・スコープ境界等）を発注書へ転記する。裁定を運ばない発注は、実装者が裁定違反の default を選んでも止まらない（データ再同期の是正発注が過去データ取得凍結の裁定を欠き、空状態 fallback が無依頼の大規模バックフィルとして実装されレビュー 2 巡も通過した実例 2026-07-23）
    - **「作業量上限（worst-case bound）」節を必須で置く**: 外部取得・大量計算・一括変換など作業量が対象規模に比例する発注は、「初回・空状態で 1 実行が最大何を行うか」を上限として明文化し、上限をテストで pin させる。レビュー発注（受け入れ・cross-model・敵対レビュー等）にも同じ blast-radius 上限の観点を必須で含める（レビュー発注に空状態の upper bound が無く、無依頼の大規模データ取得がレビュー 2 巡を通過した実例 2026-07-23）
    - **所要見積もりバンドと調査発動しきい値（目安 = 見積もり 2 倍）を発注時に宣言する**: 規模 × build 状態（cold/warm）× テスト範囲から見積もる。見積もりを持たない監視は生存確認にとどまる（2026-07-23 の user 指摘）
+   - **報告書の終端トークンを義務付ける**: 「報告書の最終行は `REPORT_COMPLETE` の 1 行で終える」を発注書に明記する。監視の完了判定が「report file の存在」だと書きかけと完成を機械的に区別できない（user 提案 2026-07-29）。「報告書を書いたら即座に最終出力して終了する（報告後の追加調査禁止）」も併記する
 2. **起動**: codex rescue 系 command で発注書 path を渡す。**実装発注は `task --write` 必須（既定 = read-only sandbox）**。発注 prompt の第一動作に write probe file 作成を入れ、起動 1-2 分後に実在を確認する（数十分の空走を早期検知）。既存 thread の続き（fix round 等）は resume、新規作業は fresh。wrapper が「background job 起動」とだけ返すのは正常で、完了報告ではない
    - background 起動の出力 redirect 先は変数展開に頼らず、既知 writable な絶対 path に固定する
    - 実装委譲では、起動後は companion `status` の workspaceRoot が隔離 worktree を指すことを確認し、以降の probe 確認・静穏 find・`git diff`・成果物確認・受け入れレビュー・commit はこの workspaceRoot を唯一の作業 root とし、全 path をその絶対 path で扱う
@@ -54,6 +55,9 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
 - **長寿命 listener の起動を codex task に委譲しない**: detached process は task 終了時に破棄され、`/var/tmp` も read-only である。`nohup ... &` が started を返しても listener と log が残らなかったため、検証 server は excludedCommands 登録 launcher でホスト側起動する（2026-07-07）。登録 launcher が無ければユーザーに `!` プレフィックスでのホスト起動を依頼する（provide-user-instructions）
 - **workflow script 内に codex 生成ステップを入れない**: 静穏待ちができないため。生成は workflow 外、レビューのみ workflow 化する
 - **静穏 find の exit を握り潰さない**: `2>/dev/null` + exit 非チェックは「常に 0 件 = 静穏」の偽陰性を生む（Invalid timestamp が不可視化された実例）
+
+- **完了後 hang（DONE_HUNG_RUNNER）を成果物で検出する**: 報告書が終端トークンまで完成 ∧ job log 凍結 5 分超 ∧ ツリー静穏 は「作業完了・runner の deregister 失敗」であり stall と別分岐 — running[] 消滅を待たず成果物検証（gates ログ + 発注側の build/test 再実行 + ツリー照合）へ進み、runner は companion cancel で回収する。監視は完了・完了後 hang・stall・生存の 4 分岐になる（報告書完成後 31 分 running[] 残存の実例 2026-07-29）
+- **監視 loop は登録確認直後に独立で張る**: forwarder subagent の Bash 完了通知に依存しない — hang した companion コマンドを待つ Bash からは通知が永遠に来ない（監視対象と通知チャネルが同一障害点を共有した実例 2026-07-29）
 
 ## Related
 
