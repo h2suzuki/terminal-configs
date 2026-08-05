@@ -13,6 +13,17 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 
 ## High
 
+### memory surface モデルタグ機構の deploy と残作業
+
+Goal: models: タグ機構 (commit 96a0bda / 4342345 / 0861b58 / b6253b1 / 75a9cd8) を deploy して実 session で有効化し、実装中に発見した既知課題を解消する。
+
+Exit Criteria:
+- [ ] 4 file の deploy をユーザーが実行 (user hook = ~/.claude/hooks + /etc/claude-code/skel/hooks、managed hook 2 本 = /etc/claude-code/hooks、SKILL.md = /etc/claude-code/skills/memory-routing。sandbox write deny を 2026-08-06 確認済み)
+- [ ] deploy 後の実 session で mute (無タグ entry が fable-5 で surface されない) + inject_log の kind='mismatch' 記録を確認 (repo script 直接実行での事前検証は 2026-08-06 済: mute/emit/mismatch とも期待どおり)
+- [ ] memory-surface-analyzer skill の backtest に model パラメータを追加 (model filter 導入で replay 結果が実行 model に依存するようになったため)
+- [ ] writing-python skill の ruff 記載を実態に pin (`--isolated --select E4,E7,E9,F --extend-select ...`) — 「base default = E4/E7/E9/F」は ruff 0.16 の default 拡大で陳腐化 (2026-08-06 実測: I001/BLE001/UP031/FURB188 等が素で発火)
+- [ ] reminder:/keywords: 行の `\s*` regex も models: と同じ「改行を跨ぎ次行を値と誤認する」latent bug を持つ (gate と memory_surface._parse_entry の両方)。models: は 4342345 で `[ \t]*` 修正済み、reminder/keywords は挙動変更を伴うため別対応
+
 ## Medium
 
 ### court バグ guard (command + stop_checks/skill 配線)
