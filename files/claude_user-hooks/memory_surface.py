@@ -349,7 +349,8 @@ def _parse_entry(file_path: str) -> tuple[str, str, str, str] | None:
     reminder = m.group(1).strip() if m else ""
     mk = re.search(r"^keywords:\s*(.+)$", body, flags=re.MULTILINE)
     keywords = mk.group(1).strip() if mk else ""
-    mm = re.search(r"^models:\s*(.+)$", body, flags=re.MULTILINE)
+    # [ \t]*: \s は改行を跨ぎ次行を値と誤認する (gate 側と同契約)
+    mm = re.search(r"^models:[ \t]*(.+)$", body, flags=re.MULTILINE)
     models = (
         " ".join(_normalize_model(t) for t in re.split(r"[\s,・]+", mm.group(1)) if t)
         if mm
@@ -1389,6 +1390,11 @@ class ModelTagTest(unittest.TestCase):
         parsed = _parse_entry(p)
         assert parsed is not None
         self.assertEqual(parsed[3], "")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("reminder: r\nkeywords: k\nmodels:   \n\nbody\n")
+        parsed = _parse_entry(p)
+        assert parsed is not None
+        self.assertEqual(parsed[3], "")  # 空 models: 行が次行 body を値に拾わない
 
     def test_statusline_model_reads_cache(self):
         import tempfile
