@@ -5,6 +5,7 @@ when_to_use: TRIGGER when about to Edit / Write a persistent artifact, or write 
 argument-hint: <file-path> <edit-intent>
 arguments: file edit_intent
 context: fork
+background: false
 agent: general-purpose
 ---
 
