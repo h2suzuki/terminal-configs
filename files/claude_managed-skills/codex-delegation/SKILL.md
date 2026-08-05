@@ -12,6 +12,7 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
 
 1. **発注書を書く**: 依頼は chat 文でなく発注書 file（作業 dir の drafts/ 等）に固定する。含める: スコープ（触ってよい path / 触らない path）、仕様の優先順位（受け入れ修正節が本文に優先する等の明文）、完了条件（fmt / clippy / test の実行と **結果ログの file 保存**）、「コミットはしない（受け入れレビュー後に発注側が行う）」の明記
    - 対象 file kind の規約 skill（`writing-code` / `writing-bash` / `writing-skills` 等）を発注側で invoke し、その規約を発注書に転記する。skill gate は subagent と codex の書き込みには効かないため、規約は発注書経由でしか届かない
+   - **「出力言語規約」節を必須で置く**: 納品物（code comment / CLI 出力 / log message / doc）の言語は対象 project / file の既存言語規約に従い、1 文書内で言語を混在させない。発注書自体の言語（日本語）を納品物へ持ち込まないことを明記する（日本語発注書からの leak で英語文書・CLI 出力に日本語が混入し、敵対レビューも素通しした実例。user 報告 2026-08-06）
    - `fuser -k` / `pkill` 等の kill-by-port を禁止し、port が塞がっていれば別 port を使い（この場合も excludedCommands 登録 launcher または `!` によるホスト側起動に限定する）、止められない process は放置して報告することも含める。subagent が port 5273 を `fuser -k` で掃除した直後にホスト側の vite が落ちた（2026-07-15）
    - **「適用される既存裁定」節を必須で置く**: 発注対象の scope を制約する user の既存決定（機能やデータ範囲の凍結・自動/手動の区別・スコープ境界等）を発注書へ転記する。裁定を運ばない発注は、実装者が裁定違反の default を選んでも止まらない（データ再同期の是正発注が過去データ取得凍結の裁定を欠き、空状態 fallback が無依頼の大規模バックフィルとして実装されレビュー 2 巡も通過した実例 2026-07-23）
    - **「作業量上限（worst-case bound）」節を必須で置く**: 外部取得・大量計算・一括変換など作業量が対象規模に比例する発注は、「初回・空状態で 1 実行が最大何を行うか」を上限として明文化し、上限をテストで pin させる。レビュー発注（受け入れ・cross-model・敵対レビュー等）にも同じ blast-radius 上限の観点を必須で含める（レビュー発注に空状態の upper bound が無く、無依頼の大規模データ取得がレビュー 2 巡を通過した実例 2026-07-23）
@@ -29,6 +30,8 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
      - 監視は background script 内で 170 秒 × 3 回等で poll し、exit 時に re-arm して約 5-8.5 分 cadence を保つ。単発待機は bash tool の timeout 上限 600 秒以内にする
 4. **走行中の並行作業規則**: 同一ツリーへの inline 編集をしない（moving-target）。同一 build dir を共有する build / test / lint を並行実行しない（ロック競合で双方が停滞）。別 path（例: backend 委譲中の frontend/、doc、発注書の次 round 準備）は並行してよい
 5. **受け入れレビュー**: 完了判定後に開始。gates 結果は codex の自己申告でなくログ file / 再実行で確認する。仕様の根拠行（契約・実データの key 文字列等）はコードと突き合わせ、判断が乗る主張は spot-check する。高リスク変更（auth / data-loss / race / rollback）は独立 cross-model レビューを追加する
+   - **表層品質 pass を別回で行う**: 内容の正誤と別に、読者体験で diff を見る — 英語文書内の日本語文 / CLI 出力・log 文字列の言語 / comment 言語と file 規約の一致 / tone・命名の一貫性。抽象的な「自然に見えるか」だけでは素通しするため、観点を列挙してレビューする。cross-model レビューを発注する場合も本観点を発注書に含める
+   - **`claude_lang_lint` を worktree diff に必須実行する**: `claude_lang_lint --repo <workspaceRoot>` が ASCII baseline file への CJK 追加を機械検出する（日本語が正の file は baseline 判定で自動除外、新規の意図的日本語 file は `--allow` で指定）。fail は fix round 行き。LLM レビューの注意力に依存しない決定的 gate
    - server を抱えた run では、codex 側の残存検査 (Rules の hang-proof 節) と別に、司令塔側でも workspaceRoot で scope した `pgrep -af <workspaceRoot>` を打ち、残存 process ゼロを確認する（二重の網）
    - 通過後は隔離 worktree 側で commit して本線へ取り込む
 6. **fix round**: 所見を番号付きで発注書または追記 file にまとめ、同一 thread の resume で発注する。発注側が既に直した箇所（trivial fix）は「re-add しない」と明記する

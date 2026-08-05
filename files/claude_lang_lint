@@ -1,0 +1,238 @@
+#!/usr/bin/env python3
+"""Flag CJK characters added to ASCII-baseline files in a git worktree (言語混在の機械検出).
+
+用途: codex 等の委譲納品物の受け入れ gate。 base (default HEAD) との diff 追加行と
+untracked file を走査し、 baseline (base 時点の内容) に CJK を含まない file への
+CJK 追加を fail とする。 日本語が正の file は baseline 判定で自動除外、 新規 file は
+--allow glob で明示除外する。
+
+Usage:
+  claude_lang_lint [--repo DIR] [--base REF] [--allow GLOB]...
+  claude_lang_lint --selftest
+
+Exit: 0 clean / 1 findings / 2 git error。
+"""
+
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import unittest
+
+CJK_RE = re.compile(
+    "["
+    "　-〿"  # CJK punctuation (、。「」等)
+    "぀-ヿ"  # hiragana / katakana
+    "㐀-䶿"  # CJK ext A
+    "一-鿿"  # CJK unified
+    "豈-﫿"  # CJK compat
+    "！-｠"  # fullwidth forms
+    "ｦ-ﾟ"  # halfwidth katakana
+    "]"
+)
+
+MAX_UNTRACKED_BYTES = 2 * 1024 * 1024
+
+
+def _git(repo: str, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", repo, *args],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        check=False,
+    )
+
+
+def _added_lines(
+    repo: str, base: str
+) -> tuple[dict[str, list[tuple[int, str]]], str | None]:
+    """{path: [(new lineno, content)]} of diff-added lines; error message on git failure."""
+    r = _git(repo, "diff", "--no-color", "--unified=0", base, "--", ".")
+    if r.returncode != 0:
+        return {}, r.stderr.strip() or f"git diff exited {r.returncode}"
+    added: dict[str, list[tuple[int, str]]] = {}
+    path: str | None = None
+    lineno = 0
+    for line in r.stdout.splitlines():
+        if line.startswith("+++ "):
+            target = line[4:].strip()
+            path = None if target == "/dev/null" else target.removeprefix("b/")
+        elif line.startswith("@@"):
+            m = re.search(r"\+(\d+)", line)
+            lineno = int(m.group(1)) if m else 1
+        elif line.startswith("+") and path is not None:
+            added.setdefault(path, []).append((lineno, line[1:]))
+            lineno += 1
+    return added, None
+
+
+def _untracked_files(repo: str) -> tuple[list[str], str | None]:
+    r = _git(repo, "status", "--porcelain")
+    if r.returncode != 0:
+        return [], r.stderr.strip() or f"git status exited {r.returncode}"
+    files: list[str] = []
+    for line in r.stdout.splitlines():
+        if not line.startswith("?? "):
+            continue
+        entry = line[3:]
+        if not entry.endswith("/"):
+            files.append(entry)
+            continue
+        for root, _dirs, names in os.walk(os.path.join(repo, entry)):
+            rel = os.path.relpath(root, repo)
+            files.extend(os.path.join(rel, n) for n in names)
+    return files, None
+
+
+def _baseline_has_cjk(repo: str, base: str, path: str) -> bool:
+    r = _git(repo, "show", f"{base}:{path}")
+    return r.returncode == 0 and bool(CJK_RE.search(r.stdout))
+
+
+def scan(repo: str, base: str, allow: list[str]) -> tuple[list[str], list[str]]:
+    """(findings `path:line: content`, git errors)."""
+    findings: list[str] = []
+    errors: list[str] = []
+
+    def allowed(path: str) -> bool:
+        return any(fnmatch.fnmatch(path, g) for g in allow)
+
+    added, err = _added_lines(repo, base)
+    if err:
+        errors.append(err)
+    for path, lines in added.items():
+        if allowed(path) or _baseline_has_cjk(repo, base, path):
+            continue
+        findings.extend(
+            f"{path}:{n}: {t.strip()}" for n, t in lines if CJK_RE.search(t)
+        )
+
+    untracked, err = _untracked_files(repo)
+    if err:
+        errors.append(err)
+    for path in untracked:
+        if allowed(path):
+            continue
+        try:
+            with open(os.path.join(repo, path), encoding="utf-8") as f:
+                content = f.read(MAX_UNTRACKED_BYTES)
+        except (OSError, UnicodeDecodeError):
+            continue  # unreadable / binary
+        findings.extend(
+            f"{path}:{n}: {t.strip()}"
+            for n, t in enumerate(content.splitlines(), 1)
+            if CJK_RE.search(t)
+        )
+    return findings, errors
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--repo", default=".", help="git worktree root (default: .)")
+    parser.add_argument("--base", default="HEAD", help="baseline ref (default: HEAD)")
+    parser.add_argument(
+        "--allow",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="repo-relative glob to exempt (repeatable)",
+    )
+    parser.add_argument("--selftest", action="store_true", help="run embedded tests")
+    args = parser.parse_args(argv)
+    if args.selftest:
+        suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
+        result = unittest.TextTestRunner().run(suite)
+        return 0 if result.wasSuccessful() else 1
+    findings, errors = scan(args.repo, args.base, args.allow)
+    for e in errors:
+        print(f"error: {e}", file=sys.stderr)
+    for f in findings:
+        print(f)
+    if errors:
+        return 2
+    if findings:
+        print(f"NG: {len(findings)} CJK addition(s) in ASCII-baseline files")
+        return 1
+    print("OK: no CJK additions in ASCII-baseline files")
+    return 0
+
+
+class CjkReTest(unittest.TestCase):
+    """CJK 検出域: かな/漢字/全角記号は hit、 ASCII は miss。"""
+
+    def test_hits(self):
+        for s in ("ひらがな", "カタカナ", "漢字", "、", "。", "Ｇｏ", "ｱｲｳ"):
+            self.assertTrue(CJK_RE.search(s), s)
+
+    def test_misses(self):
+        for s in ("ascii only", "config.json", "e-mail: a@b", "100%"):
+            self.assertFalse(CJK_RE.search(s), s)
+
+
+class ScanTest(unittest.TestCase):
+    """実 git repo での baseline 判定 / 追加行検出 / untracked / allow glob。"""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.repo = tmp.name
+        for args in (
+            ("init", "-q"),
+            ("config", "user.email", "t@example.com"),
+            ("config", "user.name", "t"),
+        ):
+            self.assertEqual(_git(self.repo, *args).returncode, 0)
+        self._write("doc.md", "English doc.\n")
+        self._write("ja.md", "日本語が正の file。\n")
+        self.assertEqual(_git(self.repo, "add", "-A").returncode, 0)
+        self.assertEqual(_git(self.repo, "commit", "-q", "-m", "base").returncode, 0)
+
+    def _write(self, rel: str, content: str) -> None:
+        path = os.path.join(self.repo, rel)
+        os.makedirs(os.path.dirname(path) or self.repo, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+    def _scan(self, allow: list[str] | None = None):
+        return scan(self.repo, "HEAD", allow or [])
+
+    def test_cjk_added_to_ascii_baseline_flagged(self):
+        self._write("doc.md", "English doc.\nこれは日本語です。\n")
+        findings, errors = self._scan()
+        self.assertEqual(errors, [])
+        self.assertEqual(findings, ["doc.md:2: これは日本語です。"])
+
+    def test_japanese_baseline_file_exempt(self):
+        self._write("ja.md", "日本語が正の file。\n追記も日本語。\n")
+        findings, errors = self._scan()
+        self.assertEqual((findings, errors), ([], []))
+
+    def test_untracked_file_with_cjk_flagged(self):
+        self._write("new/cli.rs", 'println!("処理を開始します");\n')
+        findings, errors = self._scan()
+        self.assertEqual(errors, [])
+        self.assertEqual(findings, ['new/cli.rs:1: println!("処理を開始します");'])
+
+    def test_allow_glob_exempts(self):
+        self._write("docs/README.ja.md", "意図的な日本語 doc。\n")
+        findings, _errors = self._scan(allow=["docs/*.ja.md"])
+        self.assertEqual(findings, [])
+
+    def test_clean_ascii_changes_pass(self):
+        self._write("doc.md", "English doc.\nMore English.\n")
+        self._write("new.txt", "plain ascii\n")
+        self.assertEqual(self._scan(), ([], []))
+
+    def test_bad_base_reports_error(self):
+        _findings, errors = scan(self.repo, "no-such-ref", [])
+        self.assertTrue(errors)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
