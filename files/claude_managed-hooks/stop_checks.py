@@ -44,6 +44,12 @@ Combined Stop hook for org-managed Claude Code:
     作業遂行宣言 (「やります」「実施します」「修正します」等) を、同 turn 内に TaskCreate/TaskUpdate/TodoWrite が無ければ block。
     全作業項目を Task で追跡する org rule (CLAUDE.md §計画と遂行) の機械 proxy。speech-act 動詞 (確認/説明/報告/共有/提案) は除外し FP 抑制。deferral (warn) の deny 版。
 
+  open-tasks-at-wind-down (enforcement, exit 2):
+    user prompt が wind-down phrase (check_uncommitted_at_handoff と同一 regex) で、
+    session の Task store (native ~/.claude/tasks/<sid>/ + mytask drafts/tasks/<sid>.json)
+    に open 項目が残っていれば block。 持ち越しは todos.md へ転記し全 open Task を close
+    させる (handoff skill Task 残処理の deny 版。 同 sibling hook の inject が案内層)。
+
   deferral (warning-only, exit 0):
     「後で対処」「別タスクに切り出」等 は、 同 turn 内に TaskCreate/TaskUpdate/
     TodoWrite が無ければ warn。
@@ -487,6 +493,13 @@ try:
 except Exception:
     _memory_surface_mod = None
 
+# Wind-down regex + open-task readers live in the sibling UserPromptSubmit hook
+# (single source, same deployed dir; absent/broken hook → this gate off).
+try:
+    import check_uncommitted_at_handoff as _handoff_mod
+except Exception:
+    _handoff_mod = None  # ty: ignore[invalid-assignment] — fail-open sentinel, guarded by `is not None`
+
 # --- Pattern: meta-announce-silence (block on hit, no pairing) ---
 # 不実施宣言系 — rule 遵守を発話で能動的に話題化する pattern。
 META_ANNOUNCE_PATTERNS: list[str] = [
@@ -523,6 +536,11 @@ HOLLOW_CLAIM_PATTERNS: list[str] = [
     # Learning / memorization
     r"学習し(た|ました)",
     r"勉強になっ(た|ました)",
+    # 名詞「学び」の claim 形。 修飾用法 (学びのある/学びを深める) は非対象。
+    r"学びが(あった|あり(ました|ます))",
+    r"学びで(す|した)",
+    r"学びを得(た|ました)",
+    r"学びました",
     r"脳に刻ん(だ|でます|でいます)",
     # 記銘宣言「記憶します」系。 記述的「X を記憶します」(hook 等が主語) を弾くため
     # を の直後を除外 (negative lookbehind)。
@@ -537,6 +555,8 @@ HOLLOW_CLAIM_PATTERNS: list[str] = [
     r"今後(は)?気をつけ",
     r"もう間違え(ない|ません)",
     r"もう繰り返しません",
+    r"もう(し|いた|致し)ません",
+    r"二度と(し|やり|繰り返し)ません",
     # Reflection / retrospection
     r"反省し(た|ました|て(い|ます)|ています)",
     r"振り返(り|って)(ます|ました|みます|みました)",
@@ -831,6 +851,14 @@ def _load_tail(path: str, turns: int = 1, bufsize: int = _TAIL_BUFSIZE) -> list[
         return []
 
 
+def _last_prompt_text(entries: list[dict]) -> str:
+    """Text of the newest human prompt entry, else ''."""
+    for obj in reversed(entries):
+        if _is_prompt(obj):
+            return str(obj.get("message", {}).get("content", ""))
+    return ""
+
+
 def _parse_ts(ts) -> float | None:
     """Transcript entry timestamp (ISO8601, trailing 'Z') -> epoch sec, else None."""
     if not isinstance(ts, str) or not ts:
@@ -1007,6 +1035,7 @@ def _check(
     model: str | None = None,
     cwd: str | None = None,
     worktree_warnings: list[str] | None = None,
+    wind_down_open_tasks: list[str] | None = None,
 ) -> tuple[int, list[str], list[str]]:
     """Return (exit_code, warnings, blocking)."""
     warnings: list[str] = []
@@ -1126,6 +1155,18 @@ def _check(
                 f" System §計画と遂行: 全作業項目を大小に関わらず Task で計画・追跡。"
                 f" TaskCreate で作業を登録 (または既存タスクを TaskUpdate) してから再出力してください。"
             )
+
+    # open-tasks-at-wind-down (block if a wind-down prompt leaves open tasks)
+    if wind_down_open_tasks:
+        listed = ", ".join(wind_down_open_tasks[:10])
+        blocking.append(
+            f"open-tasks-at-wind-down: セッション終了示唆の prompt に対し open な Task が "
+            f"{len(wind_down_open_tasks)} 件残っています ({listed})。 セッション終了で "
+            f"Task list は死蔵され、 次 session からは見えません。 handoff skill の "
+            f"Task 残処理に従い、 次 session へ持ち越す項目は todos.md の parent block へ "
+            f"転記 (詳細があれば handoff doc も更新) し、 全 open Task を close してから "
+            f"再出力してください。"
+        )
 
     # deferral (warning-only)
     m = DEFERRAL_RE.search(text)
@@ -1264,6 +1305,13 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
         _emit_worktree_warnings(worktree_warnings)
         return 0, prompt_epoch, "", worktree_warnings
     declare_active = _declare_proceed_active(entries, time.time())
+    wind_down_tasks: list[str] = []
+    if _handoff_mod is not None:
+        ptext = _last_prompt_text(entries)
+        if ptext and _handoff_mod.HANDOFF_RE.search(ptext):
+            wind_down_tasks = _handoff_mod.open_tasks(
+                str(payload.get("session_id") or ""), str(payload.get("cwd") or "")
+            )
     exit_code, warnings, blocking = _check(
         text,
         final_text,
@@ -1276,6 +1324,7 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
         model,
         cwd=payload.get("cwd"),
         worktree_warnings=worktree_warnings,
+        wind_down_open_tasks=wind_down_tasks,
     )
     # advise-once: a stop_hook_active retry never re-blocks — demote to pass (see docstring turn-marker / Exit).
     if exit_code == 2 and payload.get("stop_hook_active"):
@@ -1965,6 +2014,88 @@ class EnforcementFamilyTest(unittest.TestCase):
         self.assertTrue(
             any("known-possible" in b for b in self._blk("autosquash はできない"))
         )
+
+    def test_hollow_manabi_and_moushimasen_fire(self):
+        for t in (
+            "大きな学びがあった",
+            "良い学びです",
+            "多くを学びました",
+            "今後もうしません",
+            "二度としません",
+        ):
+            self.assertEqual(self._c(t)[0], 2, t)
+        for t in ("学びのある記事", "学びを深める設計"):
+            self.assertEqual(self._c(t)[0], 0, t)
+
+
+class OpenTasksAtWindDownTest(unittest.TestCase):
+    """open-tasks-at-wind-down: wind-down prompt で open Task 残があれば block。"""
+
+    @staticmethod
+    def _c(tasks):
+        return _check(
+            "done",
+            "done",
+            set(),
+            [],
+            [],
+            [],
+            False,
+            False,
+            None,
+            wind_down_open_tasks=tasks,
+        )
+
+    def test_open_tasks_block(self):
+        code, _w, blk = self._c(["#1 a", "#2 b"])
+        self.assertEqual(code, 2)
+        self.assertTrue(any("open-tasks-at-wind-down" in b for b in blk))
+        self.assertTrue(any("2 件" in b for b in blk))
+
+    def test_empty_tasks_pass(self):
+        code, _w, blk = self._c([])
+        self.assertEqual(code, 0)
+        self.assertFalse(blk)
+
+    def test_last_prompt_text_picks_newest_human_prompt(self):
+        entries = [
+            {"type": "user", "message": {"content": "older"}},
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "x"}]},
+            },
+            {"type": "user", "message": {"content": [{"type": "tool_result"}]}},
+            {"type": "user", "message": {"content": "お疲れさまでした"}},
+        ]
+        self.assertEqual(_last_prompt_text(entries), "お疲れさまでした")
+        self.assertEqual(_last_prompt_text([]), "")
+
+    def _run_with(self, prompt, tasks):
+        import io
+        import types
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        p = TurnMarkerTest._transcript(
+            [TurnMarkerTest._user(content=prompt), TurnMarkerTest._asst("done.")]
+        )
+        fake = types.SimpleNamespace(
+            HANDOFF_RE=re.compile("お疲れさま"), open_tasks=lambda sid, cwd: tasks
+        )
+        with (
+            mock.patch.object(sys.modules[__name__], "_handoff_mod", fake),
+            redirect_stderr(io.StringIO()),
+        ):
+            return _run({"transcript_path": p, "stop_hook_active": False})[0]
+
+    def test_run_blocks_on_wind_down_with_tasks(self):
+        self.assertEqual(self._run_with("お疲れさまでした", ["#1 a"]), 2)
+
+    def test_run_passes_without_wind_down(self):
+        self.assertEqual(self._run_with("続けてください", ["#1 a"]), 0)
+
+    def test_run_passes_with_clean_tasks(self):
+        self.assertEqual(self._run_with("お疲れさまでした", []), 0)
 
 
 class CourtWarningTest(unittest.TestCase):
