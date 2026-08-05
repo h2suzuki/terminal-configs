@@ -46,6 +46,7 @@ PreToolUse `^(Edit|Write|MultiEdit)$` → guard:
     - body に非空の `reminder:` 行が無い (^reminder:\s*(.+)$ MULTILINE)。
     - body に非空の `keywords:` 行が無い。
     - keywords が FTS token を 1 つも産まない / 一般語 (STOPWORDS) のみ = 無効/広すぎ。
+    - body に非空の `models:` 行が無い / tag 書式不正 (観測 model の tag、例 fable-5)。
 
 PostToolUse `^Write$` → sync:
   entry の Write 成功後に memory_surface.py --upsert <abspath> [project_id] を
@@ -243,6 +244,20 @@ def _content_problem(content: str) -> str | None:
             "keywords が FTS で match しません (3+ 字 CJK / 4+ 字 ASCII の "
             "固有語が無い、 または一般語のみ)。 tool 名・path・error code・"
             "固有名詞など選択的な語を入れてください。"
+        )
+    # [ \t]*: \s は改行を跨ぎ次行を値と誤認するため (空 models: 行の検出に必須)
+    mm = re.search(r"^models:[ \t]*(.+)$", body, flags=re.MULTILINE)
+    if not (mm and mm.group(1).strip()):
+        return (
+            "本文に models: 行 (この教訓を観測した model の tag) が必要です。 "
+            "実行中の自分の model を短形式で記入してください (例 models: fable-5、 "
+            "複数は space 区切り)。 /memory-routing の書式に従ってください。"
+        )
+    tags = [t for t in re.split(r"[\s,・]+", mm.group(1).strip()) if t]
+    if not all(re.fullmatch(r"[a-z][a-z0-9.-]+", t) for t in tags):
+        return (
+            "models: の tag 書式が不正です (小文字英数と . - のみ、 例 opus-4.8 / "
+            "fable-5)。 モデル ID 全体 (claude-fable-5) でも可 (index 時に正規化)。"
         )
     return None
 
