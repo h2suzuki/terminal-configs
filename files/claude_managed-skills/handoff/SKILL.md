@@ -26,9 +26,10 @@ session 終了時に作業が完結し次 session 再開不要なら、 該当 t
 
 1. **作業途中判定**: 次 session で再開が必要か? 完了済なら handoff section 不要、 todos.md と commit log で充分
 2. `git status` で working tree clean か確認、 未 commit は `commit-discipline` skill で処理
-3. `todos.md` の Critical / High / Medium に対応 parent task block が登録済か確認 (`writing-todos` skill format: Goal + Exit Criteria + `Work file:`)。 task block が無いまま handoff section だけ書くのは禁止 (lifecycle 紐付けが切れる)
-4. 本 session で触れた canonical doc (`.claude/CLAUDE.md` / `~/.claude/CLAUDE.md` / `/etc/claude-code/CLAUDE.md`) に新規 rule が反映済か確認 — rule 追加分は当該 file に書き、 handoff には pointer のみ
-5. 該当 task block の `Work file:` フィールドに handoff doc path が記載されているか確認、 無ければ追加
+3. **Task 残処理**: TaskList (Task tool が gate off の session は mytask MCP) で open 項目を列挙し、 ゼロにする — 次 session へ持ち越す項目は todos.md parent task block へ移してから close、 持ち越さない項目はその場で close。 session 終了で Task list は死蔵され次 session から見えない。 open Task を残した wind-down は stop_checks hook (open-tasks-at-wind-down) が block する
+4. `todos.md` の Critical / High / Medium に対応 parent task block が登録済か確認 (`writing-todos` skill format: Goal + Exit Criteria + `Work file:`)。 task block が無いまま handoff section だけ書くのは禁止 (lifecycle 紐付けが切れる)
+5. 本 session で触れた canonical doc (`.claude/CLAUDE.md` / `~/.claude/CLAUDE.md` / `/etc/claude-code/CLAUDE.md`) に新規 rule が反映済か確認 — rule 追加分は当該 file に書き、 handoff には pointer のみ
+6. 該当 task block の `Work file:` フィールドに handoff doc path が記載されているか確認、 無ければ追加
 
 ### 2. Project-specific extension (optional)
 
@@ -77,11 +78,20 @@ handoff を書いた後 1 拍 verbalize:
 - **削った情報は本当に作業再開に不要か?** 「念のため」 で膨らませていないか?
 - 対応する todos.md task block の `Work file:` が本 doc を指しているか? section header が task name と一致しているか?
 
-### 5. Next-me readback (session 開始時)
+### 5. Cross-check readback (執筆側)
+
+self-audit 後、 メイン context を持たない fresh subagent に next-me を模擬させ、 収束まで反復する:
+
+1. Agent tool で fresh subagent を spawn する (`context: fork` は会話 context を継承するため next-me の模擬にならない)。 prompt は本 skill dir の `crosscheck-prompt.md` を Read し、 placeholder を実値に置換して渡す
+2. 返ってきた blocking questions への回答は chat でなく **handoff 本文へ反映** する (subagent への返答は次 session に届かない)
+3. 修正後は **新しい fresh subagent** で再 review する (前 round の記憶を持つ agent は next-me の忠実な模擬でない)
+4. blocking questions 0 件で収束。 上限 3 round、 未収束の question は該当 section の Caveat に「未解決」と明記する
+
+### 6. Next-me readback (session 開始時)
 
 next-me は handoff の該当 section を read 後 1 拍 verbalize する: Status / 次の action と why / 読むべき前提 file / 動かせない Caveat。 答えられない項目があれば section 自体に gap があるので、 user に質問する前に handoff を update する。
 
-### 6. Consume cleanup (task 完了時)
+### 7. Consume cleanup (task 完了時)
 
 `writing-todos` の block-level deletion (commit B、 parent task block 削除) と **同じ commit** で、 handoff の対応 section も削除する。 file が空になれば file ごと削除可。 lifecycle が todos.md task block と handoff section で同期する。
 
@@ -100,6 +110,8 @@ next-me は handoff の該当 section を read 後 1 拍 verbalize する: Statu
 ## Output
 
 - `last-session-handoff.md` または `drafts/<task-slug>-handoff.md` に新 section を append または既存 section を overwrite (作業途中で再開必要な場合のみ、 そうでなければ skip)
+- open Task 0 件 (持ち越しは todos.md へ転記済み・全 Task close 済み)
+- cross-check readback を最低 1 round 実施 (blocking questions 0 件、 または残 question を Caveat に明記)
 - `todos.md` 対応 parent task block の `Work file:` フィールドに handoff doc path を記載・維持
 - session 内の commit 完了 (`commit-discipline`)
 - handoff 実施時は session-end message 冒頭に resume マーカー行 (`~~~~ … Handoff (sid) ~~~~`) を出力 (次 session の resume trim anchor)
