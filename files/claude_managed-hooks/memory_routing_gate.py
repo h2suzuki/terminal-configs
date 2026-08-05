@@ -43,7 +43,7 @@ PreToolUse `^(Edit|Write|MultiEdit)$` → guard:
   内容不備の判定 (memory_surface._parse_entry / _build_query と同契約):
     - content が MAX_ENTRY_SIZE 超 → memory_surface が index しない。
     - body に `oneline_summary:` (廃止形式) を含む。
-    - body に非空の `reminder:` 行が無い (^reminder:\s*(.+)$ MULTILINE)。
+    - body に非空の `reminder:` 行が無い (^reminder:[ \t]*(.+)$ MULTILINE)。
     - body に非空の `keywords:` 行が無い。
     - keywords が FTS token を 1 つも産まない / 一般語 (STOPWORDS) のみ = 無効/広すぎ。
     - body に非空の `models:` 行が無い / tag 書式不正 (観測 model の tag、例 fable-5)。
@@ -217,7 +217,8 @@ def _content_problem(content: str) -> str | None:
             "oneline_summary: は廃止形式 (read されません)。 reminder: と "
             "keywords: の 2 行に置き換えてください。"
         )
-    m = re.search(r"^reminder:\s*(.+)$", body, flags=re.MULTILINE)
+    # [ \t]*: \s は改行を跨ぎ次行を値と誤認する (memory_surface._parse_entry と同契約)
+    m = re.search(r"^reminder:[ \t]*(.+)$", body, flags=re.MULTILINE)
     if not (m and m.group(1).strip()):
         return (
             "本文先頭に reminder: 行 (1 文の是正指示) が必要です。 "
@@ -230,7 +231,7 @@ def _content_problem(content: str) -> str | None:
             "behavioral nudge に効かないので避け、 一般的な是正指示 1 文に縮めて "
             "ください (個別事案・事例は entry 本文に書く)。"
         )
-    mk = re.search(r"^keywords:\s*(.+)$", body, flags=re.MULTILINE)
+    mk = re.search(r"^keywords:[ \t]*(.+)$", body, flags=re.MULTILINE)
     if not (mk and mk.group(1).strip()):
         return (
             "本文に keywords: 行 (選択的な match 語) が必要です。 "
@@ -245,7 +246,6 @@ def _content_problem(content: str) -> str | None:
             "固有語が無い、 または一般語のみ)。 tool 名・path・error code・"
             "固有名詞など選択的な語を入れてください。"
         )
-    # [ \t]*: \s は改行を跨ぎ次行を値と誤認するため (空 models: 行の検出に必須)
     mm = re.search(r"^models:[ \t]*(.+)$", body, flags=re.MULTILINE)
     if not (mm and mm.group(1).strip()):
         return (
