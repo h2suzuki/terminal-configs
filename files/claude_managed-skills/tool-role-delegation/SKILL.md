@@ -6,7 +6,7 @@ when_to_use: TRIGGER when about to search / explore code, write or edit non-triv
 
 # Tool Role Delegation
 
-codegraph / codex が使える環境での役割分担 (managed CLAUDE.md「ツールに役割委譲」の運用)。 codex の駆動法詳細は plugin 同梱 skill (codex-cli-runtime / codex-result-handling / gpt-5-4-prompting) が持つので、 本 skill は役割の振り分けと往復手順に絞る。
+codegraph / codex が使える環境での役割分担 (managed CLAUDE.md「ツールに役割委譲」の運用)。 codex の駆動法詳細は plugin 同梱 skill (codex-cli-runtime など) が持つので、 本 skill は役割の振り分けと往復手順に絞る。
 
 ## Process
 
