@@ -15,6 +15,17 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 
 ## Medium
 
+### Handoff 強化 + 言語 lint 機構の deploy と実運用確認
+
+Goal: wind-down open-task 機構 (inject + block)・handoff cross-check step・session_resume_context pointer 化・claude_lang_lint を deploy し、実運用での駆動を確認する。
+
+Exit Criteria:
+- [ ] 追補 deploy (hooks 3 本 0755 / handoff・codex-delegation skill / crosscheck-prompt.md / /usr/local/bin/claude_lang_lint) を canonical と `diff -q` 一致で検証
+- [ ] 実 session で open Task を残した wind-down に inject + block が発火し、todos.md 転記 + close で通過することを確認 (opportunistic)
+- [ ] handoff 実施 session で cross-check readback (fresh subagent) が blocking questions を出し、handoff 更新で収束することを確認 (opportunistic)
+- [ ] 中断 session (marker 無し ∧ open Task 残) の pointer 注入を実機で 1 回観測 (opportunistic、意図的再現でも可)
+- [ ] codex 委譲 1 回で「出力言語規約」節 + claude_lang_lint を実運用し、検出またはクリーン通過の実績を得る (opportunistic)
+
 ### court バグ guard (command + stop_checks/skill 配線)
 
 Goal: stray token (court/count/câu… と揺れる) + 行頭 invoke-leak を厳密パターンで捕捉し、court バグ汚染 (#76912 / #64108) を早期検知する。
