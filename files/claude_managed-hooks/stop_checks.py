@@ -1343,7 +1343,13 @@ def _memory_surface_at_stop(payload: dict, text: str) -> str | None:
         cwd = os.getcwd()
     project_id = _memory_surface_mod._encoded_project_id(cwd)
     try:
-        picks = _memory_surface_mod.surface_for_text(text, session_id, project_id, 1)
+        model = _memory_surface_mod._resolve_model(payload)
+    except Exception:
+        model = None  # 旧 deploy の memory_surface に helper 不在でも fail-open
+    try:
+        picks = _memory_surface_mod.surface_for_text(
+            text, session_id, project_id, 1, model
+        )
     except Exception:
         return None
     if not picks:
