@@ -274,8 +274,8 @@ def cmd_dataset(args: argparse.Namespace) -> int:
     con = sqlite3.connect(snapshot)
     try:
         rows = con.execute(
-            "SELECT id, file_path, project_id, session_id, ts, score, query_excerpt "
-            "FROM inject_log ORDER BY id"
+            "SELECT id, file_path, project_id, session_id, ts, score, "
+            "query_excerpt, model, kind FROM inject_log ORDER BY id"
         ).fetchall()
     finally:
         con.close()
@@ -287,7 +287,7 @@ def cmd_dataset(args: argparse.Namespace) -> int:
             labels[ev["id"]] = ev
     events = []
     n_recon = n_ambig = 0
-    for rid, file_path, project_id, session_id, ts, score, excerpt in rows:
+    for rid, file_path, project_id, session_id, ts, score, excerpt, model, kind in rows:
         if since_epoch is not None and (ts is None or ts < since_epoch):
             continue
         label = labels.get(rid, {})
@@ -320,6 +320,8 @@ def cmd_dataset(args: argparse.Namespace) -> int:
                 "session_id": session_id,
                 "ts": ts,
                 "score_orig": score,
+                "model": model,
+                "kind": kind,
                 "query_excerpt": excerpt,
                 "query": query,
                 "reconstructed": reconstructed,
@@ -378,7 +380,7 @@ def _replace_entry(
     parsed = hook._parse_entry(src_md)
     if parsed is None:
         raise RuntimeError("cannot parse candidate entry: " + src_md)
-    reminder, keywords, body = parsed
+    reminder, keywords, body, models = parsed
     mtime = os.path.getmtime(src_md)
     con.execute(
         "DELETE FROM entries_fts WHERE file_path = ? "
@@ -395,6 +397,17 @@ def _replace_entry(
         "AND coalesce(project_id, '') = coalesce(?, '')",
         (dst_path, project_id),
     )
+    con.execute(
+        "DELETE FROM entry_models WHERE file_path = ? "
+        "AND coalesce(project_id, '') = coalesce(?, '')",
+        (dst_path, project_id),
+    )
+    if models:
+        con.execute(
+            "INSERT INTO entry_models(file_path, project_id, models, "
+            "last_modified) VALUES (?, ?, ?, ?)",
+            (dst_path, project_id, models, mtime),
+        )
     model = hook._model_open()
     if model is not None:
         mcon, dim, max_len = model
@@ -506,8 +519,14 @@ def cmd_rescore(args: argparse.Namespace) -> int:
             project_id = ev.get("project_id") or ""
             now = ev.get("ts") or time.time()
             sid = f"bt-{ev['id']}"
-            picks_base = hook._surface_core(con_base, query, sid, project_id, now, 2)
-            picks_cand = hook._surface_core(con_cand, query, sid, project_id, now, 2)
+            # 記録時の model で replay し live と同じ filter を再現 (旧 event は None = 無 filter)
+            model = ev.get("model")
+            picks_base = hook._surface_core(
+                con_base, query, sid, project_id, now, 2, model
+            )
+            picks_cand = hook._surface_core(
+                con_cand, query, sid, project_id, now, 2, model
+            )
             fp = ev["file_path"]
             base_paths = [p[0] for p in picks_base]
             cand_paths = [p[0] for p in picks_cand]
@@ -611,6 +630,20 @@ def _entry_epoch_near(entries: list[dict], idx: int) -> float | None:
     return None
 
 
+def _entry_model_near(entries: list[dict], idx: int) -> str | None:
+    """Latest assistant model at/before idx (その時点の実行 model を再現)."""
+    for i in range(min(idx, len(entries) - 1), -1, -1):
+        obj = entries[i]
+        if obj.get("type") != "assistant":
+            continue
+        msg = obj.get("message")
+        model = msg.get("model") if isinstance(msg, dict) else None
+        # claude- prefix 必須: alias 行と <synthetic> を除外 (hook 側と同契約)
+        if isinstance(model, str) and model.startswith("claude-"):
+            return model
+    return None
+
+
 def cmd_misses(args: argparse.Namespace) -> int:
     run_dir = _existing_run_dir(args.run)
     with open(os.path.join(run_dir, "manifest.json"), encoding="utf-8") as f:
@@ -646,9 +679,11 @@ def cmd_misses(args: argparse.Namespace) -> int:
                         if ts_ep is None or not (lo <= ts_ep <= hi):
                             continue
                         seq += 1
+                        raw_model = _entry_model_near(entries, idx)
+                        model = hook._normalize_model(raw_model) if raw_model else None
                         # Unique session_id per candidate turn: no throttle carry-over between turns.
                         picks = hook._surface_core(
-                            con, text, f"bt-miss-{i}-{seq}", project_id, ts_ep, 2
+                            con, text, f"bt-miss-{i}-{seq}", project_id, ts_ep, 2, model
                         )
                         if first_trigger is None:
                             first_trigger = {"session": session_id, "text": text[:400]}
@@ -1197,6 +1232,18 @@ class PathSafetyTest(unittest.TestCase):
             digest_before, hashlib.sha256(open(self.fake_live, "rb").read()).hexdigest()
         )
         wcon.close()
+
+
+class EntryModelNearTest(unittest.TestCase):
+    def test_latest_assistant_model_at_or_before_idx(self):
+        entries = [
+            {"type": "assistant", "message": {"model": "claude-opus-4-8"}},
+            {"type": "assistant", "message": {"model": "<synthetic>"}},
+            {"type": "user", "message": {"content": "q"}},
+        ]
+        self.assertEqual(_entry_model_near(entries, 2), "claude-opus-4-8")
+        self.assertEqual(_entry_model_near(entries, 99), "claude-opus-4-8")
+        self.assertIsNone(_entry_model_near([], 0))
 
 
 class ApproxRangeTest(unittest.TestCase):
