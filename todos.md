@@ -13,17 +13,6 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 
 ## High
 
-### memory surface モデルタグ機構の deploy と残作業
-
-Goal: models: タグ機構 (commit 96a0bda / 4342345 / 0861b58 / b6253b1 / 75a9cd8) を deploy して実 session で有効化し、実装中に発見した既知課題を解消する。
-
-Exit Criteria:
-- [x] 追補 deploy をユーザーが実行 — 2026-08-06 完了、全 11 deploy 対象を canonical と diff -q で照合し identical を確認
-- [x] deploy 後の実 session で mute + kind='mismatch' 記録を確認 — 2026-08-06: 実 session が deployed 新 hook を駆動 (turn marker 出力で確認)、deployed 実物 + 実 statusline cache で mute + (fable-5, mismatch) 行を実証。事前の repo script 検証 (mute/emit/mismatch) と合わせ全経路 green
-- [x] memory-surface-analyzer の backtest に model 対応を追加 — 2026-08-06 commit 6ad4919 (per-event model replay + _replace_entry 4 値化追従、35 tests green)
-- [x] writing-python skill の ruff 記載を実態に pin — 2026-08-06 commit 1735b3c (`--isolated --select E4,E7,E9,F` 明示、ruff 0.16 default 拡大の実測を明記)
-- [x] reminder:/keywords: 行の改行跨ぎ latent bug を修正 — 2026-08-06 commit 7f82871 (gate + _parse_entry を `[ \t]*` 統一、機能確認 3/3・28 tests green)
-
 ## Medium
 
 ### court バグ guard (command + stop_checks/skill 配線)
