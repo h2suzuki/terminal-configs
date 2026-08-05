@@ -105,7 +105,7 @@ next-me は handoff の該当 section を read 後 1 拍 verbalize する: Statu
 - **同一 task の並行 session は user 運用で回避**: 同じ task を 2 session で同時進行すると section overwrite で進捗ロスト risk あり。 「1 task 1 active session」 ルールで回避 (skill が race 検出する機構は持たない)
 - **Memory / rule 更新は当該 file に書き handoff には pointer のみ**: `~/.claude/CLAUDE.md` や memory entry に rule 追加した場合は当該 file 本体に書き、 handoff Caveat には「rule X 追加 (@<file>)」 形式の参照だけ
 - **Intent retention は当該 commit / comment / rule file に**: 「なぜそうしたか」 は commit message body / code comment / rule file に残す (Commander's Intent)。 handoff にダブって書かない
-- **resume マーカーを session-end message 冒頭に出す**: handoff を実施する session では、 ユーザーへの最終報告 message の **1 行目** に区切りマーカー `~~~~~~~~ <Weekday>, <YYYY>/<M>/<D> <HH:MM> Handoff (<session-id>) ~~~~~~` を出力する (例: `~~~~~~~~ Monday, 2026/6/8 8:58 Handoff (a1b2c3d4-5e6f-7890-abcd-ef0123456789) ~~~~~~`)。 日時は `date "+%A, %Y/%-m/%-d %H:%M"`、 `<session-id>` は `$CLAUDE_CODE_SESSION_ID` を **省略せず full で**埋める。 次 session 起動時に `session_resume_context` hook が transcript 内の **full sid を含む marker** (複数なら最新) を anchor に resume context を trim する (handoff より前の wind-down を捨て、 handoff 以降だけ引き継ぐ) ため、 file でなく **chat 出力** に出すこと。 full sid 必須なのは、 SKILL.md の例・body 抜粋・過去 session の handoff (いずれも短縮 sid) を本物と区別するため — 逆に同 session 内で marker を本文引用する時は短縮形 (`(sid…)` 等) にして本物の anchor と衝突させない。 handoff を skip する (再開不要) session では出さない
+- **resume マーカーを session-end message 冒頭に出す**: handoff を実施する session では、 ユーザーへの最終報告 message の **1 行目** に区切りマーカー `~~~~~~~~ <Weekday>, <YYYY>/<M>/<D> <HH:MM> Handoff (<session-id>) ~~~~~~` を出力する (例: `~~~~~~~~ Monday, 2026/6/8 8:58 Handoff (a1b2c3d4-5e6f-7890-abcd-ef0123456789) ~~~~~~`)。 日時は `date "+%A, %Y/%-m/%-d %H:%M"`、 `<session-id>` は `$CLAUDE_CODE_SESSION_ID` を **省略せず full で**埋める。 次 session 起動時に `session_resume_context` hook が transcript 内の **full sid を含む marker** を「handoff 済み session」の判定に使う (marker 無し ∧ open Task 残 の session だけを中断候補として pointer 提示する) ため、 file でなく **chat 出力** に出すこと。 full sid 必須なのは、 SKILL.md の例・body 抜粋・過去 session の handoff (いずれも短縮 sid) を本物と区別するため — 逆に同 session 内で marker を本文引用する時は短縮形 (`(sid…)` 等) にして本物の anchor と衝突させない。 handoff を skip する (再開不要) session では出さない
 
 ## Output
 
@@ -114,7 +114,7 @@ next-me は handoff の該当 section を read 後 1 拍 verbalize する: Statu
 - cross-check readback を最低 1 round 実施 (blocking questions 0 件、 または残 question を Caveat に明記)
 - `todos.md` 対応 parent task block の `Work file:` フィールドに handoff doc path を記載・維持
 - session 内の commit 完了 (`commit-discipline`)
-- handoff 実施時は session-end message 冒頭に resume マーカー行 (`~~~~ … Handoff (sid) ~~~~`) を出力 (次 session の resume trim anchor)
+- handoff 実施時は session-end message 冒頭に resume マーカー行 (`~~~~ … Handoff (sid) ~~~~`) を出力 (次 session の handoff 済み判定 anchor)
 
 ## Related
 
