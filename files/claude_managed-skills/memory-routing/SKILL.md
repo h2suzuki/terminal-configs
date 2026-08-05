@@ -1,6 +1,6 @@
 ---
 name: memory-routing
-description: Decide memory entry save location (user vs project-local), generation (MEMORY.md vs OLD-MEMORY.md), save timing, and absolute date format; retire entries to OLD-MEMORY.md when fully covered by a Managed skill / hook / CLAUDE.md rule.
+description: Decide memory entry save location (user vs project-local), generation (MEMORY.md vs OLD-MEMORY.md), save timing, absolute date format, and per-model tags (models: line, cross-model search, tag propagation); retire entries to OLD-MEMORY.md when fully covered by a Managed skill / hook / CLAUDE.md rule.
 when_to_use: TRIGGER when user gives a correction / feedback, about to say "memory に書く / 保存" etc, uncertain about user vs project-local routing, or a feedback entry becomes covered by a new skill / hook / CLAUDE.md rule.
 ---
 
@@ -81,7 +81,7 @@ user CLAUDE.md (`~/.claude/CLAUDE.md`) / project CLAUDE.md (`<repo>/.claude/CLAU
    - [短縮 title](feedback_<name>.md) YYYY-MM-DD OLD移動 (<type>: <cover 元>)
    ```
    `<type>` は `skill` / `hook` / `CLAUDE.md` のいずれか (Managed 限定)
-3. **feedback_*.md 本文末尾に cover 元への言及 1 行を追加** (entry 本体への追記も Edit 不可 → grant を mint してから full content を Write し直す。 step 1・2 の index file 編集は gate 対象外で Edit 可):
+3. **feedback_*.md 本文末尾に cover 元への言及 1 行を追加** (entry 本体への追記も Edit 不可 → grant を mint してから full content を Write し直す。 step 1・2 の index file 編集は gate 対象外で Edit 可)。 gate は `models:` 行を要求するので、 無タグ entry を Write し直す時は元の意味を保つ `models: opus-4.8` を付ける (自モデルで観測した訳ではないのに自 tag を足さない):
    ```
    **Covered by:** <cover 元> — YYYY-MM-DD OLD-MEMORY.md 移動
    ```
@@ -97,9 +97,9 @@ user CLAUDE.md (`~/.claude/CLAUDE.md`) / project CLAUDE.md (`<repo>/.claude/CLAU
 
 未 cover 範囲を Managed skill / hook 化する場合は user と相談しながら段階的に。 完全に Managed cover された時点で Retirement protocol へ。
 
-### reminder + keywords lines in feedback body
+### reminder + keywords + models lines in feedback body
 
-各 feedback entry の本文先頭 (frontmatter 直後) に **2 行** を置く。 UserPromptSubmit の SQLite hook が、 prompt に **keywords** が match した entry の **reminder** 文を inject する。 reminder (表示) と keywords (match) を分離するのは、 表示文を keyword 詰めにして「要約」化させない (= 過去の drift) ため。
+各 feedback entry の本文先頭 (frontmatter 直後) に **3 行** を置く。 UserPromptSubmit の SQLite hook が、 prompt に **keywords** が match した entry の **reminder** 文を inject する。 reminder (表示) と keywords (match) を分離するのは、 表示文を keyword 詰めにして「要約」化させない (= 過去の drift) ため。 **models** はその教訓を観測したモデルの tag で、 surface を model-scope 化する。
 
 ```markdown
 ---
@@ -111,6 +111,7 @@ metadata:
 
 reminder: <同じミスを二度としないための actionable な是正指示。 1 文>
 keywords: <その状況が再発した時の prompt に出る選択的な match 語>
+models: <観測モデルの短形式 tag (例 fable-5)。 複数は space 区切り>
 
 <本文 Why / How>
 ```
@@ -141,6 +142,29 @@ keywords は **ranking ノブ** — entry は keywords 無しでも body だけ�
 
 reminder: 行が無い entry は本文先頭非空行が fallback (劣化、 必ず reminder: を置く)。 旧 `oneline_summary:` は廃止 (read されない)。
 
+**models (model-scope tag。 reminder / keywords とは別行)**:
+
+surface hook (UserPromptSubmit / Stop) は **実行中モデルの tag を持つ entry だけ** を inject する (実行中モデルは statusline cache → transcript から自動判別)。 `models:` 行が無い entry は `opus-4.8` とみなす (tag 導入前世代の既定 = モデル世代交代でいったん mute する意図的 reset)。
+
+- **自分のモデルを書く**: system prompt の model id (例 `claude-fable-5`) の短形式 (`fable-5`) を書く。 フル ID でも可 (index 時に正規化)
+- **複数可**: 同じ教訓を複数モデルで観測したら space 区切りで並べる (例 `models: opus-4.8 fable-5`)
+- **観測ベース**: 「効きそうだから」で tag を盛らない。 そのモデルで実際に観測・再発した時に下記 Tag propagation で追記する
+
+### Tag propagation (新しい学びを得た時)
+
+新しい教訓を entry 化する前に、 モデル横断で過去の教訓を検索し、 同じ教訓なら tag 追記・無ければ新規作成する:
+
+1. **横断検索**: `~/.claude/hooks/memory_surface.py --search "<学びの要旨>" [encoded-cwd]` — model filter / throttle / 記録なしで全 entry を対象に `score<TAB>models<TAB>path<TAB>reminder` を返す。 同じ教訓かは LLM が判断する
+2. **hit (既存 entry が同じ教訓)** → その entry の `models:` に自分のモデル tag を追記し、 grant → full content Write → auto-upsert の通常手順で保存する
+3. **miss** → 新規 entry を作成し `models:` に自分のモデル tag を書く
+4. **mismatch 統計**: model 不一致で mute された would-be hit は inject_log に `kind='mismatch'` で記録される。 集計すると「他モデルの教訓で自モデルにも刺さりそうなもの」が見える (tag 追記候補の定量材料):
+
+   ```bash
+   sqlite3 /var/lib/claude-rag-memory/memory_index.sqlite3 \
+     "SELECT file_path, model, COUNT(*) FROM inject_log \
+      WHERE kind='mismatch' GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 10"
+   ```
+
 ### Write gate: entry を書く前に grant を mint
 
 memory entry (`~/.claude/memory/*.md` ・ `~/.claude/projects/<enc>/memory/*.md`) への書込は managed hook (`memory_routing_gate.py`) が gate する。 **この skill を経由せず直接 Write した entry は deny される** (Edit/MultiEdit も deny → 必ず full content で Write し直す)。 index file (MEMORY.md / OLD-MEMORY.md) は gate 対象外。
@@ -151,7 +175,7 @@ hook を通すには、 entry を Write する **直前に** grant ファイル�
 2. 直後に entry 本体を Write する (grant は hook が消費 = 1 回限り)。
 3. 複数 entry を書くなら各 entry の直前にそれぞれ grant を作る。
 
-内容も hook が検査し、 不備なら deny する (warn は無い → **一発で受理される内容を Write**): 非空の `reminder:` / `keywords:` 行が必須、 `oneline_summary:` 禁止、 keywords は FTS で match する固有語を含む (一般語のみ ・空は不可)。 書式は上記「reminder + keywords」に従う。
+内容も hook が検査し、 不備なら deny する (warn は無い → **一発で受理される内容を Write**): 非空の `reminder:` / `keywords:` / `models:` 行が必須、 `oneline_summary:` 禁止、 keywords は FTS で match する固有語を含む (一般語のみ ・空は不可)、 models は小文字短形式 tag (フル ID も可)。 書式は上記「reminder + keywords + models」に従う。
 
 ### Hook DB sync after entry write or retire
 
