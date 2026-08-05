@@ -9,8 +9,11 @@ Modes:
   vocab table; stdlib-only at query time). Top-1 (plus a 2nd only if it
   clears a strong bar), confidence floor + per-session throttle (15 min
   same-entry suppression). Falls back to BM25-only floors when the embed
-  model DB is absent. Fail-open: any error exits 0 with no output so a hook
-  bug never blocks the prompt.
+  model DB is absent. Entries are model-scoped: only entries whose models:
+  tags include the running model surface (untagged = opus-4.8); would-be
+  picks for other models are logged as kind='mismatch' for tag-propagation
+  stats. Fail-open: any error exits 0 with no output so a hook bug never
+  blocks the prompt.
 
 - `--upsert <abs_path> [project_id]` — replace one entry. Called by
   /memory-routing after writing a feedback file. Exit 1 on error so the
@@ -22,6 +25,10 @@ Modes:
 - `--rebuild [memory_dir [project_id]]` — bulk re-index files referenced by
   `<memory_dir>/MEMORY.md` (initial population / disaster recovery). Defaults
   to user memory.
+
+- `--search <text> [project_id]` — cross-model ranked lookup for
+  /memory-routing (no model filter, no throttle, no inject_log rows).
+  Prints `score<TAB>models<TAB>path<TAB>reminder` per hit.
 
 Besides the CLI modes, `surface_for_text()` is importable so other hooks (e.g. the
 Stop hook) run the same hybrid retrieval against an arbitrary text source, not just
@@ -76,6 +83,10 @@ MIN_ASCII_LEN = 4
 MIN_CJK_RUN = 3
 QUERY_EXCERPT_LEN = 200
 MAX_ENTRY_SIZE = 50_000  # skip absurdly large feedback files
+# タグ無し entry の既定 tag (タグ導入前の全 entry = opus-4.8 世代、 意図的 reset)
+MODELS_DEFAULT = "opus-4.8"
+SEARCH_LIMIT = 8
+TRANSCRIPT_TAIL_BYTES = 65536
 
 # --- hybrid RAG: dense embeddings (model2vec static vectors in SQLite) ---
 MODEL_DB_PATH = _state_path("memory_embed_model.sqlite3")
@@ -197,11 +208,17 @@ def _connect() -> sqlite3.Connection | None:
             "file_path TEXT NOT NULL, project_id TEXT, "
             "vec BLOB NOT NULL, last_modified REAL)"
         )
-        # Idempotent migration for DBs created before session_id column existed.
-        try:
-            con.execute("ALTER TABLE inject_log ADD COLUMN session_id TEXT")
-        except sqlite3.OperationalError:
-            pass
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS entry_models ("
+            "file_path TEXT NOT NULL, project_id TEXT, "
+            "models TEXT NOT NULL, last_modified REAL)"
+        )
+        # Idempotent migrations for DBs created before these columns existed.
+        for column in ("session_id", "model", "kind"):
+            try:
+                con.execute(f"ALTER TABLE inject_log ADD COLUMN {column} TEXT")
+            except sqlite3.OperationalError:
+                pass
         con.execute(
             "CREATE INDEX IF NOT EXISTS inject_log_file_session_ts "
             "ON inject_log(file_path, session_id, ts DESC)"
@@ -218,9 +235,99 @@ def _encoded_project_id(cwd: str) -> str:
     return cwd.replace("/", "-")
 
 
-def _parse_entry(file_path: str) -> tuple[str, str, str] | None:
-    """Return (reminder, keywords, body_for_search); strips YAML frontmatter. FTS5 matches
-    `keywords`; `reminder` is the actionable past-mistake reminder (written to prevent repeat, not a summary) — kept separate so it need not be keyword-stuffed."""
+def _normalize_model(model_id: str) -> str:
+    """claude-opus-4-8 / claude-haiku-4-5-20251001 -> opus-4.8 / haiku-4.5 (idempotent)."""
+    m = model_id.strip().lower().removeprefix("claude-")
+    m = re.sub(r"-\d{8}$", "", m)
+    return re.sub(r"-(\d+)-(\d+)$", r"-\1.\2", m)
+
+
+def _statusline_model(session_id) -> str | None:
+    """Model id from the statusline stdin dump cache (absent in headless runs)."""
+    if not isinstance(session_id, str) or not session_id:
+        return None
+    cache = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    path = os.path.join(cache, "claude-tui-statusline", session_id + ".json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        mid = ((data.get("stdin") or {}).get("model") or {}).get("id")
+    except Exception:
+        return None
+    return mid if isinstance(mid, str) and mid else None
+
+
+def _transcript_model(transcript_path) -> str | None:
+    """Latest assistant-message model from the transcript tail (headless fallback)."""
+    if not isinstance(transcript_path, str) or not transcript_path:
+        return None
+    try:
+        with open(transcript_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - TRANSCRIPT_TAIL_BYTES))
+            tail = f.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    for line in reversed(tail.splitlines()):
+        if '"model"' not in line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue  # the byte cut may truncate the oldest line
+        if not isinstance(obj, dict) or obj.get("type") != "assistant":
+            continue
+        msg = obj.get("message")
+        model = msg.get("model") if isinstance(msg, dict) else None
+        # claude- prefix 必須: alias 行 (sonnet 等) と <synthetic> を除外
+        if isinstance(model, str) and model.startswith("claude-"):
+            return model
+    return None
+
+
+def _resolve_model(payload: dict) -> str | None:
+    """Running model's short id; None -> caller surfaces unfiltered (fail-open)."""
+    raw = _statusline_model(payload.get("session_id")) or _transcript_model(
+        payload.get("transcript_path")
+    )
+    return _normalize_model(raw) if raw else None
+
+
+def _model_pred(con: sqlite3.Connection, project_id: str, model: str):
+    """Predicate: does this entry's tag set (default MODELS_DEFAULT) include model?"""
+    try:
+        rows = con.execute(
+            "SELECT file_path, models FROM entry_models "
+            "WHERE project_id IS NULL OR project_id = ?",
+            (project_id,),
+        ).fetchall()
+    except sqlite3.Error:
+        rows = []
+    tags = {fp: set(m.split()) for fp, m in rows if m}
+
+    def ok(file_path: str) -> bool:
+        return model in tags.get(file_path, {MODELS_DEFAULT})
+
+    return ok
+
+
+def _entry_tags(con: sqlite3.Connection, project_id: str) -> dict[str, str]:
+    """file_path -> space-joined tags for display (--search); missing = default."""
+    try:
+        rows = con.execute(
+            "SELECT file_path, models FROM entry_models "
+            "WHERE project_id IS NULL OR project_id = ?",
+            (project_id,),
+        ).fetchall()
+    except sqlite3.Error:
+        rows = []
+    return {fp: m for fp, m in rows if m}
+
+
+def _parse_entry(file_path: str) -> tuple[str, str, str, str] | None:
+    """Return (reminder, keywords, body_for_search, models); strips YAML frontmatter. FTS5 matches
+    `keywords`; `reminder` is the actionable past-mistake reminder (written to prevent repeat, not a summary) — kept separate so it need not be keyword-stuffed. `models` is the normalized space-joined tag list ('' = untagged -> MODELS_DEFAULT at query time)."""
     try:
         size = os.path.getsize(file_path)
     except OSError:
@@ -242,13 +349,21 @@ def _parse_entry(file_path: str) -> tuple[str, str, str] | None:
     reminder = m.group(1).strip() if m else ""
     mk = re.search(r"^keywords:\s*(.+)$", body, flags=re.MULTILINE)
     keywords = mk.group(1).strip() if mk else ""
+    mm = re.search(r"^models:\s*(.+)$", body, flags=re.MULTILINE)
+    models = (
+        " ".join(_normalize_model(t) for t in re.split(r"[\s,・]+", mm.group(1)) if t)
+        if mm
+        else ""
+    )
     if not reminder:
         for line in body.splitlines():
             stripped = line.strip()
-            if stripped and not stripped.startswith(("reminder:", "keywords:")):
+            if stripped and not stripped.startswith(
+                ("reminder:", "keywords:", "models:")
+            ):
                 reminder = stripped
                 break
-    return reminder, keywords, body
+    return reminder, keywords, body, models
 
 
 def _upsert_entry(
@@ -260,7 +375,7 @@ def _upsert_entry(
     parsed = _parse_entry(file_path)
     if parsed is None:
         return 1
-    reminder, keywords, body = parsed
+    reminder, keywords, body, models = parsed
     try:
         mtime = os.path.getmtime(file_path)
     except OSError:
@@ -282,6 +397,17 @@ def _upsert_entry(
             "AND coalesce(project_id, '') = coalesce(?, '')",
             (file_path, project_id),
         )
+        con.execute(
+            "DELETE FROM entry_models WHERE file_path = ? "
+            "AND coalesce(project_id, '') = coalesce(?, '')",
+            (file_path, project_id),
+        )
+        if models:
+            con.execute(
+                "INSERT INTO entry_models(file_path, project_id, models, "
+                "last_modified) VALUES (?, ?, ?, ?)",
+                (file_path, project_id, models, mtime),
+            )
         model = _model_open()
         if model is not None:
             mcon, dim, max_len = model
@@ -315,6 +441,11 @@ def _delete_entry(
         )
         con.execute(
             "DELETE FROM entries_vec WHERE file_path = ? "
+            "AND coalesce(project_id, '') = coalesce(?, '')",
+            (file_path, project_id),
+        )
+        con.execute(
+            "DELETE FROM entry_models WHERE file_path = ? "
             "AND coalesce(project_id, '') = coalesce(?, '')",
             (file_path, project_id),
         )
@@ -521,11 +652,22 @@ def _record_inject(
     ts: float,
     score: float,
     prompt: str,
+    model: str | None = None,
+    kind: str = "emit",
 ) -> None:
     con.execute(
         "INSERT INTO inject_log(file_path, project_id, session_id, "
-        "ts, score, query_excerpt) VALUES (?, ?, ?, ?, ?, ?)",
-        (file_path, project_id, session_id, ts, score, prompt[:QUERY_EXCERPT_LEN]),
+        "ts, score, query_excerpt, model, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            file_path,
+            project_id,
+            session_id,
+            ts,
+            score,
+            prompt[:QUERY_EXCERPT_LEN],
+            model,
+            kind,
+        ),
     )
     con.commit()
 
@@ -583,6 +725,28 @@ def _turn_marker(payload: dict) -> str | None:
     return " ".join(out)
 
 
+def _bm_candidates(con: sqlite3.Connection, query: str, project_id: str) -> list:
+    return con.execute(
+        f"SELECT file_path, reminder, bm25(entries_fts, 0, 0, 0, 1.0, {BM25_BODY_WEIGHT}, 0) "
+        "FROM entries_fts WHERE entries_fts MATCH ? "
+        "AND (project_id IS NULL OR project_id = ?) "
+        f"ORDER BY bm25(entries_fts, 0, 0, 0, 1.0, {BM25_BODY_WEIGHT}, 0) "
+        f"LIMIT {BM25_CANDIDATES}",
+        (query, project_id),
+    ).fetchall()
+
+
+def _bm25_picks(rows: list) -> list[tuple[str, str, float]]:
+    """Legacy BM25-only floors (embed model DB 不在 / embed 失敗)."""
+    picks: list[tuple[str, str, float]] = []
+    for rank, (file_path, reminder, score) in enumerate(rows[:2]):
+        floor = BM25_SURFACE_FLOOR if rank == 0 else BM25_STRONG_FLOOR
+        if score is None or score > floor:
+            continue
+        picks.append((file_path, reminder, score))
+    return picks
+
+
 def _surface_core(
     con: sqlite3.Connection,
     query_text: str,
@@ -590,46 +754,63 @@ def _surface_core(
     project_id: str,
     now: float,
     max_emit: int,
+    model: str | None = None,
 ) -> list[tuple[str, str, float]]:
-    """Hybrid-retrieve → floor-gate → throttle-dedup → record up to max_emit picks; shared by _memory_surface (UPS) and surface_for_text (Stop). Recording an inject row is what makes the per-(file,session) throttle suppress a repeat — incl. an entry already surfaced this turn at UPS — within THROTTLE_SECONDS."""
+    """Hybrid-retrieve → model-filter → floor-gate → throttle-dedup → record up to max_emit picks; shared by _memory_surface (UPS) and surface_for_text (Stop). Recording an inject row is what makes the per-(file,session) throttle suppress a repeat — incl. an entry already surfaced this turn at UPS — within THROTTLE_SECONDS. Would-be picks whose tags exclude model are logged kind='mismatch' (tag-propagation stats), then selection reruns on the matching subset so a muted top-1 can't shadow a valid lower candidate."""
     query = _build_query(query_text)
     if query is None:
         return []
     try:
-        rows = con.execute(
-            f"SELECT file_path, reminder, bm25(entries_fts, 0, 0, 0, 1.0, {BM25_BODY_WEIGHT}, 0) "
-            "FROM entries_fts WHERE entries_fts MATCH ? "
-            "AND (project_id IS NULL OR project_id = ?) "
-            f"ORDER BY bm25(entries_fts, 0, 0, 0, 1.0, {BM25_BODY_WEIGHT}, 0) "
-            f"LIMIT {BM25_CANDIDATES}",
-            (query, project_id),
-        ).fetchall()
+        rows = _bm_candidates(con, query, project_id)
     except sqlite3.Error:
         return []
     picks = _hybrid_picks(con, query_text, project_id, rows)
     if picks is None:
-        # legacy BM25-only floors (embed model DB 不在 / embed 失敗)
-        picks = []
-        for rank, (file_path, reminder, score) in enumerate(rows[:2]):
-            floor = BM25_SURFACE_FLOOR if rank == 0 else BM25_STRONG_FLOOR
-            if score is None or score > floor:
-                continue
-            picks.append((file_path, reminder, score))
+        picks = _bm25_picks(rows)
+    if model is not None:
+        ok = _model_pred(con, project_id, model)
+        mismatches = [p for p in picks if not ok(p[0])]
+        if mismatches:
+            rows_ok = [r for r in rows if ok(r[0])]
+            picks = _hybrid_picks(con, query_text, project_id, rows_ok, ok)
+            if picks is None:
+                picks = _bm25_picks(rows_ok)
+            picks = [p for p in picks if ok(p[0])]
+            for file_path, _reminder, score in mismatches:
+                if _throttle_check(con, file_path, session_id, now):
+                    continue
+                _record_inject(
+                    con,
+                    file_path,
+                    project_id,
+                    session_id,
+                    now,
+                    score,
+                    query_text,
+                    model,
+                    "mismatch",
+                )
     out: list[tuple[str, str, float]] = []
     for file_path, reminder, score in picks:
         if len(out) >= max_emit:
             break
         if _throttle_check(con, file_path, session_id, now):
             continue
-        _record_inject(con, file_path, project_id, session_id, now, score, query_text)
+        _record_inject(
+            con, file_path, project_id, session_id, now, score, query_text, model
+        )
         out.append((file_path, reminder, score))
     return out
 
 
 def surface_for_text(
-    query_text: str, session_id: str, project_id: str, max_emit: int = 1
+    query_text: str,
+    session_id: str,
+    project_id: str,
+    max_emit: int = 1,
+    model: str | None = None,
 ) -> list[tuple[str, str, float]]:
-    """Importable retrieval for non-UPS callers (e.g. the Stop hook): up to max_emit throttle-deduped (file_path, reminder, score) picks, [] when the DB is unavailable so the caller fails open."""
+    """Importable retrieval for non-UPS callers (e.g. the Stop hook): up to max_emit throttle-deduped (file_path, reminder, score) picks, [] when the DB is unavailable so the caller fails open. `model` accepts a raw id (normalized here); None surfaces unfiltered."""
     if not query_text or not query_text.strip():
         return []
     con = _connect()
@@ -637,13 +818,19 @@ def surface_for_text(
         return []
     try:
         return _surface_core(
-            con, query_text, session_id, project_id, time.time(), max_emit
+            con,
+            query_text,
+            session_id,
+            project_id,
+            time.time(),
+            max_emit,
+            _normalize_model(model) if model else None,
         )
     finally:
         con.close()
 
 
-def _memory_surface(payload: dict) -> str | None:
+def _memory_surface(payload: dict, model: str | None = None) -> str | None:
     # UserPromptSubmit: top hybrid match(es) for the prompt, session-throttled.
     prompt = payload.get("prompt") or ""
     if not isinstance(prompt, str) or not prompt.strip():
@@ -662,7 +849,9 @@ def _memory_surface(payload: dict) -> str | None:
     if con is None:
         return None
     try:
-        picks = _surface_core(con, prompt, session_id, project_id, time.time(), 2)
+        picks = _surface_core(
+            con, prompt, session_id, project_id, time.time(), 2, model
+        )
     finally:
         con.close()
     blocks = [
@@ -672,17 +861,18 @@ def _memory_surface(payload: dict) -> str | None:
     return "\n".join(blocks) if blocks else None
 
 
-def _hybrid_picks(
+def _hybrid_scored(
     con: sqlite3.Connection,
     prompt: str,
     project_id: str,
     bm_rows: list,
-) -> list[tuple[str, str, float]] | None:
-    """Fuse BM25 + cosine into surface picks; None -> caller falls back to BM25-only."""
-    model = _model_open()
-    if model is None:
+    ok=None,
+) -> tuple[dict[str, float], dict[str, float]] | None:
+    """Fused scores + cosines over candidates passing `ok`; None -> BM25-only fallback."""
+    embed_db = _model_open()
+    if embed_db is None:
         return None
-    mcon, dim, max_len = model
+    mcon, dim, max_len = embed_db
     try:
         qvec = _embed(mcon, dim, max_len, prompt)
     except Exception:
@@ -692,7 +882,6 @@ def _hybrid_picks(
     if qvec is None:
         return None
     bm_by_path = {fp: s for fp, _r, s in bm_rows if s is not None}
-    reminders = {fp: r for fp, r, _s in bm_rows}
     try:
         vrows = con.execute(
             "SELECT file_path, vec FROM entries_vec "
@@ -704,6 +893,8 @@ def _hybrid_picks(
     scored: dict[str, float] = {}
     cos_by_path: dict[str, float] = {}
     for fp, blob in vrows:
+        if ok is not None and not ok(fp):
+            continue
         try:
             ev = struct.unpack("<%de" % dim, blob)
         except struct.error:
@@ -711,22 +902,46 @@ def _hybrid_picks(
         cos_by_path[fp] = sum(x * y for x, y in zip(qvec, ev, strict=True))
         scored[fp] = _fuse(bm_by_path.get(fp), cos_by_path[fp])
     for fp, s in bm_by_path.items():
+        if ok is not None and not ok(fp):
+            continue
         scored.setdefault(fp, _fuse(s, 0.0))  # entry without vec: BM25 part only
-    picks: list[tuple[str, str, float]] = []
-    for fp, h in _select_picks(scored, cos_by_path):
-        reminder = reminders.get(fp)
-        if reminder is None:
-            try:
-                row = con.execute(
-                    "SELECT reminder FROM entries_fts WHERE file_path = ? "
-                    "AND (project_id IS NULL OR project_id = ?) LIMIT 1",
-                    (fp, project_id),
-                ).fetchone()
-            except sqlite3.Error:
-                row = None
-            reminder = row[0] if row else ""
-        picks.append((fp, reminder, h))
-    return picks
+    return scored, cos_by_path
+
+
+def _lookup_reminder(
+    con: sqlite3.Connection, project_id: str, fp: str, reminders: dict
+) -> str:
+    reminder = reminders.get(fp)
+    if reminder is not None:
+        return reminder
+    try:
+        row = con.execute(
+            "SELECT reminder FROM entries_fts WHERE file_path = ? "
+            "AND (project_id IS NULL OR project_id = ?) LIMIT 1",
+            (fp, project_id),
+        ).fetchone()
+    except sqlite3.Error:
+        row = None
+    return row[0] if row else ""
+
+
+def _hybrid_picks(
+    con: sqlite3.Connection,
+    prompt: str,
+    project_id: str,
+    bm_rows: list,
+    ok=None,
+) -> list[tuple[str, str, float]] | None:
+    """Fuse BM25 + cosine into surface picks; None -> caller falls back to BM25-only."""
+    both = _hybrid_scored(con, prompt, project_id, bm_rows, ok)
+    if both is None:
+        return None
+    scored, cos_by_path = both
+    reminders = {fp: r for fp, r, _s in bm_rows}
+    return [
+        (fp, _lookup_reminder(con, project_id, fp, reminders), h)
+        for fp, h in _select_picks(scored, cos_by_path)
+    ]
 
 
 def _select_picks(
@@ -751,7 +966,7 @@ def _fuse(bm_score: float | None, cos: float) -> float:
     return HYBRID_ALPHA * bm_part + (1.0 - HYBRID_ALPHA) * cos
 
 
-def _concern_inject(payload: dict) -> str | None:
+def _concern_inject(payload: dict, model: str | None = None) -> str | None:
     # Raise the three prompt-triggered channels (concern/correction/pixel); throttled per channel sentinel.
     prompt = payload.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
@@ -785,7 +1000,7 @@ def _concern_inject(payload: dict) -> str | None:
         for key, reminder in hits:
             if _throttle_check(con, key, session_id, now):
                 continue
-            _record_inject(con, key, None, session_id, now, 0.0, prompt)
+            _record_inject(con, key, None, session_id, now, 0.0, prompt, model)
             out.append(reminder)
         return "\n".join(out) if out else None
     finally:
@@ -803,11 +1018,15 @@ def _main_query() -> int:
     except Exception:
         marker = None
     try:
-        additional = _memory_surface(payload)
+        model = _resolve_model(payload)
+    except Exception:
+        model = None
+    try:
+        additional = _memory_surface(payload, model)
     except Exception:
         additional = None
     try:
-        concern = _concern_inject(payload)
+        concern = _concern_inject(payload, model)
     except Exception:
         concern = None
     out: dict = {}
@@ -823,6 +1042,47 @@ def _main_query() -> int:
         out["systemMessage"] = "\n".join(sys_parts)
     if out:
         sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
+    return 0
+
+
+def _main_search(argv: list[str]) -> int:
+    """Cross-model ranked lookup for /memory-routing: no filter, no throttle, no logging."""
+    if not argv:
+        sys.stderr.write("usage: --search <text> [project_id]\n")
+        return 1
+    text = argv[0]
+    project_id = argv[1] if len(argv) > 1 else ""
+    query = _build_query(text)
+    if query is None:
+        sys.stderr.write("no searchable tokens in text\n")
+        return 1
+    con = _connect()
+    if con is None:
+        return 1
+    try:
+        rows = _bm_candidates(con, query, project_id)
+        both = _hybrid_scored(con, text, project_id, rows)
+        if both is not None:
+            scored = both[0]
+        else:
+            scored = {fp: _fuse(s, 0.0) for fp, _r, s in rows if s is not None}
+        tags = _entry_tags(con, project_id)
+        reminders = {fp: r for fp, r, _s in rows}
+        for fp, score in sorted(scored.items(), key=lambda kv: -kv[1])[:SEARCH_LIMIT]:
+            sys.stdout.write(
+                "%.3f\t%s\t%s\t%s\n"
+                % (
+                    score,
+                    tags.get(fp, MODELS_DEFAULT),
+                    fp,
+                    _lookup_reminder(con, project_id, fp, reminders),
+                )
+            )
+    except sqlite3.Error as e:
+        sys.stderr.write("search failed: %s\n" % e)
+        return 1
+    finally:
+        con.close()
     return 0
 
 
@@ -885,6 +1145,11 @@ def _main_rebuild(argv: list[str]) -> int:
                     "coalesce(?, '')",
                     (project_id,),
                 )
+                con.execute(
+                    "DELETE FROM entry_models WHERE coalesce(project_id, '') = "
+                    "coalesce(?, '')",
+                    (project_id,),
+                )
             except sqlite3.Error:
                 return 1
             errs = 0
@@ -911,6 +1176,8 @@ def main() -> int:
         return _main_delete(argv[1:])
     if cmd == "--rebuild":
         return _main_rebuild(argv[1:])
+    if cmd == "--search":
+        return _main_search(argv[1:])
     sys.stderr.write(f"unknown command: {cmd}\n")
     return 1
 
@@ -1085,6 +1352,191 @@ class SurfaceCoreTest(unittest.TestCase):
             self.assertEqual(surface_for_text("", "s", "proj"), [])
             out = surface_for_text("deploy repo 放置", "s", "proj", 1)
             self.assertEqual([p[0] for p in out], ["/m/a.md"])
+
+
+class ModelTagTest(unittest.TestCase):
+    """Model tag filter / detection / --search. Run: python3 -m unittest memory_surface"""
+
+    @staticmethod
+    def _tmp_db():
+        import tempfile
+
+        return os.path.join(tempfile.mkdtemp(), "idx.sqlite3")
+
+    def test_normalize_model(self):
+        cases = {
+            "claude-opus-4-8": "opus-4.8",
+            "claude-fable-5": "fable-5",
+            "claude-haiku-4-5-20251001": "haiku-4.5",
+            "opus-4.8": "opus-4.8",  # idempotent
+        }
+        for raw, expect in cases.items():
+            self.assertEqual(_normalize_model(raw), expect, raw)
+
+    def test_parse_entry_models_line(self):
+        import tempfile
+
+        p = os.path.join(tempfile.mkdtemp(), "e.md")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(
+                "reminder: r\nkeywords: k\nmodels: claude-fable-5・opus-4-8\n\nbody\n"
+            )
+        parsed = _parse_entry(p)
+        assert parsed is not None
+        self.assertEqual(parsed[3], "fable-5 opus-4.8")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("reminder: r\nkeywords: k\n\nbody\n")
+        parsed = _parse_entry(p)
+        assert parsed is not None
+        self.assertEqual(parsed[3], "")
+
+    def test_statusline_model_reads_cache(self):
+        import tempfile
+        from unittest import mock
+
+        cache = tempfile.mkdtemp()
+        sid = "sess-1"
+        os.makedirs(os.path.join(cache, "claude-tui-statusline"))
+        with open(
+            os.path.join(cache, "claude-tui-statusline", sid + ".json"),
+            "w",
+            encoding="utf-8",
+        ) as f:
+            json.dump({"stdin": {"model": {"id": "claude-fable-5"}}}, f)
+        with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": cache}):
+            self.assertEqual(_statusline_model(sid), "claude-fable-5")
+            self.assertIsNone(_statusline_model("missing-sess"))
+
+    def test_transcript_model_tail(self):
+        import tempfile
+
+        p = os.path.join(tempfile.mkdtemp(), "t.jsonl")
+        lines = [
+            {"type": "user", "message": {"content": "q"}},
+            {"type": "assistant", "message": {"model": "claude-opus-4-8"}},
+            {"type": "assistant", "message": {"model": "<synthetic>"}},
+            {"type": "assistant", "message": {"model": "sonnet"}},
+        ]
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("\n".join(json.dumps(x) for x in lines) + "\n")
+        self.assertEqual(_transcript_model(p), "claude-opus-4-8")
+        self.assertIsNone(_transcript_model(p + ".nope"))
+
+    def _seed_tags(self, con, rows):
+        for fp, models in rows:
+            con.execute(
+                "INSERT INTO entry_models(file_path, project_id, models, "
+                "last_modified) VALUES (?, NULL, ?, 0)",
+                (fp, models),
+            )
+        con.commit()
+
+    def test_filter_emits_match_and_logs_mismatch(self):
+        from unittest import mock
+
+        db = self._tmp_db()
+        picks = [("/m/a.md", "lesson A", -6.0), ("/m/b.md", "lesson B", -4.0)]
+        mod = sys.modules[__name__]
+        with (
+            mock.patch.object(mod, "DB_PATH", db),
+            mock.patch.object(mod, "_hybrid_picks", lambda *a: list(picks)),
+        ):
+            con = _connect()
+            assert con is not None
+            try:
+                self._seed_tags(con, [("/m/a.md", "fable-5")])  # b は未タグ
+                out = _surface_core(
+                    con, "deploy repo 放置", "s1", "proj", 1_000_000.0, 2, "fable-5"
+                )
+                self.assertEqual([p[0] for p in out], ["/m/a.md"])
+                rows = con.execute(
+                    "SELECT file_path, model, kind FROM inject_log ORDER BY file_path"
+                ).fetchall()
+            finally:
+                con.close()
+        self.assertEqual(
+            rows,
+            [("/m/a.md", "fable-5", "emit"), ("/m/b.md", "fable-5", "mismatch")],
+        )
+
+    def test_untagged_defaults_to_opus(self):
+        from unittest import mock
+
+        db = self._tmp_db()
+        picks = [("/m/a.md", "lesson A", -6.0), ("/m/b.md", "lesson B", -4.0)]
+        mod = sys.modules[__name__]
+        with (
+            mock.patch.object(mod, "DB_PATH", db),
+            mock.patch.object(mod, "_hybrid_picks", lambda *a: list(picks)),
+        ):
+            con = _connect()
+            assert con is not None
+            try:
+                out = _surface_core(
+                    con, "deploy repo 放置", "s1", "proj", 1_000_000.0, 2, "opus-4.8"
+                )
+                self.assertEqual([p[0] for p in out], ["/m/a.md", "/m/b.md"])
+                kinds = [
+                    k for (k,) in con.execute("SELECT kind FROM inject_log").fetchall()
+                ]
+            finally:
+                con.close()
+        self.assertEqual(kinds, ["emit", "emit"])
+
+    def test_model_none_surfaces_unfiltered(self):
+        from unittest import mock
+
+        db = self._tmp_db()
+        picks = [("/m/a.md", "lesson A", -6.0)]
+        mod = sys.modules[__name__]
+        with (
+            mock.patch.object(mod, "DB_PATH", db),
+            mock.patch.object(mod, "_hybrid_picks", lambda *a: list(picks)),
+        ):
+            con = _connect()
+            assert con is not None
+            try:
+                self._seed_tags(con, [("/m/a.md", "fable-5")])
+                out = _surface_core(
+                    con, "deploy repo 放置", "s1", "proj", 1_000_000.0, 2
+                )
+                self.assertEqual([p[0] for p in out], ["/m/a.md"])
+            finally:
+                con.close()
+
+    def test_search_prints_without_logging(self):
+        import io
+        import tempfile
+        from unittest import mock
+
+        db = self._tmp_db()
+        entry = os.path.join(tempfile.mkdtemp(), "feedback_x.md")
+        with open(entry, "w", encoding="utf-8") as f:
+            f.write(
+                "reminder: deploy 前に repo を確認せよ\n"
+                "keywords: deploy repo 放置問題\nmodels: fable-5\n\nbody\n"
+            )
+        mod = sys.modules[__name__]
+        with mock.patch.object(mod, "DB_PATH", db):
+            with _write_lock():
+                con = _connect()
+                assert con is not None
+                try:
+                    self.assertEqual(_upsert_entry(con, entry, None), 0)
+                finally:
+                    con.close()
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                self.assertEqual(_main_search(["deploy repo 放置問題"]), 0)
+            self.assertIn(entry, buf.getvalue())
+            self.assertIn("fable-5", buf.getvalue())
+            con = _connect()
+            assert con is not None
+            try:
+                n = con.execute("SELECT COUNT(*) FROM inject_log").fetchone()[0]
+            finally:
+                con.close()
+        self.assertEqual(n, 0)
 
 
 class PixelL4InjectTest(unittest.TestCase):
