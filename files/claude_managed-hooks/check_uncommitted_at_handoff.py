@@ -46,13 +46,48 @@ NATIVE_TASKS_DIR = os.path.expanduser("~/.claude/tasks")
 OPEN_STATUSES = ("pending", "in_progress", "blocked")
 
 
-def _is_mask_stub(path: str) -> bool:
-    """True for the device-node stubs a sandbox binds over write-denied paths (never repo content)."""
+# sandbox が書き込み禁止 path へ被せる stub の実測 roster。 未収載の stub は従来通り報告する
+# (取りこぼしは偽陽性で済むが、 roster 無しの type 判定だけでは実 file を落としうる)。
+MASK_STUB_PATHS = frozenset(
+    {
+        ".bash_profile",
+        ".bashrc",
+        ".claude/agents",
+        ".claude/commands",
+        ".claude/hooks",
+        ".claude/launch.json",
+        ".claude/loop.md",
+        ".claude/output-styles",
+        ".claude/routines",
+        ".claude/scheduled_tasks.json",
+        ".claude/settings.json",
+        ".claude/skills",
+        ".claude/workflows",
+        ".gitconfig",
+        ".gitmodules",
+        ".idea",
+        ".mcp.json",
+        ".profile",
+        ".ripgreprc",
+        ".vscode",
+        ".zprofile",
+        ".zshrc",
+    }
+)
+
+
+def _is_mask_stub(cwd: str, rel: str) -> bool:
+    """True only when known-masked path AND non-regular node AND zero size all hold."""
+    if rel not in MASK_STUB_PATHS:
+        return False
     try:
-        mode = os.lstat(path).st_mode
+        st = os.lstat(os.path.join(cwd, rel))
     except OSError:
         return False  # 消えた path は削除された tracked file — 正当な未コミット変更ゆえ残す
-    return not (stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode))
+    is_node = not (
+        stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode) or stat.S_ISLNK(st.st_mode)
+    )
+    return is_node and st.st_size == 0
 
 
 def _git_uncommitted(cwd: str) -> list[str]:
@@ -79,7 +114,7 @@ def _git_uncommitted(cwd: str) -> list[str]:
         if len(line) < 4:
             continue
         path_part = line[3:].strip()
-        if path_part and not _is_mask_stub(os.path.join(cwd, path_part)):
+        if path_part and not _is_mask_stub(cwd, path_part):
             files.append(path_part)
     return files
 
@@ -264,10 +299,29 @@ class GitUncommittedTest(unittest.TestCase):
         with mock.patch.object(subprocess, "run", lambda *a, **k: completed):
             return _git_uncommitted(self.cwd)
 
-    def test_non_regular_node_dropped(self):
+    def _node(self, rel: str) -> None:
         # chardev の作成には root 権限が要るので FIFO で代替する
-        os.mkfifo(os.path.join(self.cwd, "masked"))
-        self.assertEqual(self._status("?? masked"), [])
+        os.makedirs(os.path.dirname(os.path.join(self.cwd, rel)), exist_ok=True)
+        os.mkfifo(os.path.join(self.cwd, rel))
+
+    def test_masked_path_with_empty_node_dropped(self):
+        self._node(".bashrc")
+        self._node(".claude/settings.json")
+        self.assertEqual(self._status("?? .bashrc", "?? .claude/settings.json"), [])
+
+    def test_unlisted_path_with_empty_node_kept(self):
+        self._node("odd.pipe")
+        self.assertEqual(self._status("?? odd.pipe"), ["odd.pipe"])
+
+    def test_masked_path_with_regular_file_kept(self):
+        open(os.path.join(self.cwd, ".bashrc"), "w").close()
+        self.assertEqual(self._status("?? .bashrc"), [".bashrc"])
+
+    def test_masked_node_with_size_kept(self):
+        self._node(".bashrc")
+        sized = os.stat_result((stat.S_IFCHR | 0o666, 4, 6, 1, 0, 0, 1, 0, 0, 0))
+        with mock.patch.object(os, "lstat", lambda p: sized):
+            self.assertEqual(self._status("?? .bashrc"), [".bashrc"])
 
     def test_regular_dir_and_symlink_kept(self):
         open(os.path.join(self.cwd, "a.py"), "w").close()
