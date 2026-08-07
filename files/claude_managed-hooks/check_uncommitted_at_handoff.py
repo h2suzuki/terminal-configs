@@ -35,7 +35,8 @@ from unittest import mock
 # Case-insensitive for `Handoff` / `Sign Off` etc.
 # `本日はこれで` requires これで to avoid matching neutral `本日は…` (e.g. 本日は晴天なり).
 HANDOFF_RE = re.compile(
-    r"handoff|セッション(終了|リセット)|お疲れさま(でし)?(た)?|終わります|またね|sign\s?off|本日はこれで",
+    r"handoff|セッション(終了|リセット|を?閉じ)|お疲れさま(でし)?(た)?|終わります|またね"
+    r"|sign\s?off|本日はこれで",
     re.IGNORECASE,
 )
 
@@ -372,6 +373,32 @@ class GitUncommittedTest(unittest.TestCase):
         completed = subprocess.CompletedProcess([], 1, stdout="?? a.py", stderr="boom")
         with mock.patch.object(subprocess, "run", lambda *a, **k: completed):
             self.assertEqual(_git_uncommitted(self.cwd), [])
+
+
+class HandoffPhraseTest(unittest.TestCase):
+    """HANDOFF_RE: 終了示唆だけを拾い、 同語の別用途は拾わない。
+    出所: 2026-08-08 実機 — 「セッションを閉じます」が未収載で取りこぼした。"""
+
+    def test_wind_down_phrases_match(self):
+        for text in (
+            "セッションを閉じます",
+            "セッション閉じますね",
+            "セッション終了です",
+            "お疲れさまでした",
+            "これで終わります",
+            "handoff お願いします",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(HANDOFF_RE.search(text))
+
+    def test_closing_something_else_does_not_match(self):
+        for text in (
+            "この項目を閉じます",
+            "issue を閉じました",
+            "次の実装をお願いします",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(HANDOFF_RE.search(text))
 
 
 class WindDownSignalTest(unittest.TestCase):
