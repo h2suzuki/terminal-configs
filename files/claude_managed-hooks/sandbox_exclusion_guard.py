@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Sandbox excluded-command hook, wired on three events.
+Sandbox excluded-command hook for Bash.
 
-SessionStart publishes the live excludedCommands roster so the model never has
-to guess which commands reach the host. PreToolUse(Bash) denies path-prefixed
-and sudo forms and warns on other wrappers, all of which miss the match and fall
-back into the sandbox. PostToolUseFailure(Bash) answers sandbox-looking failures
-with the roster, so a wrong calling form is not misread as a sandbox limit.
+PreToolUse denies path-prefixed and sudo forms and warns on other wrappers, all
+of which miss the match and fall back into the sandbox. PostToolUseFailure
+answers sandbox-looking failures with the live excludedCommands roster, so a
+wrong calling form is not misread as a sandbox limit. A failure on a
+credential-protected path gets a stronger answer: being unable to read one back
+is not evidence of running inside the sandbox.
 
 Claude Code matches each Bash execution segment, so a compound command or a
 direct assignment prefix still reaches the host and is deliberately not flagged.
@@ -32,6 +33,7 @@ import sandbox_exclusions
 from sandbox_exclusions import (
     bare_form,
     claim_once,
+    credential_paths,
     load_patterns,
     roster_text,
     sandbox_restricts_commands,
@@ -156,8 +158,19 @@ def _handle_failure(payload: dict, patterns: list[str], cmd: str) -> int:
     )
     if not output or not SANDBOX_SYMPTOM.search(output):
         return 0
-    mentioned = _indirect_mentions(cmd, patterns)
-    if mentioned:
+    touched = [p for p in credential_paths() if p in cmd or p in output]
+    if touched:
+        if not claim_once(payload, "failure-credential"):
+            return 0
+        message = (
+            f"credential 保護 path (`{touched[0]}`) への操作が失敗しました。 これは "
+            "sandbox の credential 保護による遮断で、 excludedCommands とは別の層です。\n"
+            "**読み書きできないことは「今 sandbox 内で動いている」証拠になりません。** "
+            "書き込んだ値を読み返せない事実から実行環境を推論しないでください。 同じ file "
+            "でも、 一覧にある除外コマンド経由なら読めます (例: 認証情報を直接 cat すると "
+            "拒否されるが、 対応する CLI を裸名で呼べば読める)。"
+        )
+    elif mentioned := _indirect_mentions(cmd, patterns):
         if not claim_once(payload, "failure-indirect"):
             return 0
         message = (
@@ -182,18 +195,10 @@ def _handle_failure(payload: dict, patterns: list[str], cmd: str) -> int:
 def _run(payload: object, patterns: list[str] | None = None) -> int:
     if not isinstance(payload, dict):
         return 0
-    if patterns is None:
-        # 制限の有無が先、roster はその後 — 空の roster は無効化の証拠ではない。
-        if not sandbox_restricts_commands():
-            return 0
-        patterns = load_patterns()
-    event = payload.get("hook_event_name")
-    if event == "SessionStart":
-        if claim_once(payload, "roster"):
-            _emit("SessionStart", roster_text(patterns))
-        return 0
+    patterns = load_patterns() if patterns is None else patterns
     if payload.get("tool_name") != "Bash":
         return 0
+    event = payload.get("hook_event_name")
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         return 0
@@ -231,6 +236,9 @@ def _run(payload: object, patterns: list[str] | None = None) -> int:
 
 def main() -> int:
     try:
+        # 制限が無いなら何も読まず即 no-op — 空の roster は無効化の証拠ではない。
+        if not sandbox_restricts_commands():
+            return 0
         payload = json.loads(sys.stdin.read() or "{}")
         return _run(payload)
     except Exception:
@@ -408,16 +416,27 @@ class GateTest(unittest.TestCase):
         self.assertNotEqual(stdout, "")
         self.assertEqual(stderr, "")
 
-    def test_session_start_publishes_the_live_roster(self):
+    def test_session_start_is_left_alone(self):
         payload = {"hook_event_name": "SessionStart", "session_id": "start"}
-        result, stdout, stderr = self._emit_for(payload)
-        self.assertEqual((result, stderr), (0, ""))
-        output = json.loads(stdout)["hookSpecificOutput"]
-        self.assertEqual(output["hookEventName"], "SessionStart")
-        for pattern in self.PATTERNS:
-            self.assertIn(f"`{pattern}`", output["additionalContext"])
-        self.assertNotIn("permissionDecision", output)
         self.assertEqual(self._emit_for(payload), (0, "", ""))
+
+    def test_failure_rejects_the_credential_store_inference(self):
+        secret = os.path.join(os.path.expanduser("~"), ".config", "gh", "hosts.yml")
+        payload = {
+            "hook_event_name": "PostToolUseFailure",
+            "tool_name": "Bash",
+            "tool_input": {"command": f"cat {secret}"},
+            "tool_response": {"stderr": f"cat: {secret}: Permission denied"},
+            "session_id": "credential",
+        }
+        with mock.patch.object(
+            sys.modules[__name__], "credential_paths", lambda: [secret]
+        ):
+            _, stdout, _ = self._emit_for(payload)
+        context = json.loads(stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("証拠になりません", context)
+        self.assertIn("推論しないでください", context)
+        self.assertNotIn("呼び方が原因", context)
 
     def test_failure_answers_sandbox_symptoms_with_the_roster(self):
         payload = {
@@ -463,17 +482,20 @@ class GateTest(unittest.TestCase):
         self.assertIn("`git *`", first[1])
         self.assertNotIn("`git *`", second[1])
 
-    def test_no_op_when_the_sandbox_is_disabled(self):
+    def test_no_op_returns_before_reading_stdin_when_unrestricted(self):
         import io
         from contextlib import redirect_stderr, redirect_stdout
 
-        payload = {"hook_event_name": "SessionStart", "session_id": "off"}
+        def explode():
+            raise AssertionError("stdin was read after the no-op gate")
+
         stdout, stderr = io.StringIO(), io.StringIO()
         with mock.patch.object(
             sys.modules[__name__], "sandbox_restricts_commands", lambda: False
         ):
-            with redirect_stdout(stdout), redirect_stderr(stderr):
-                result = _run(payload)
+            with mock.patch.object(sys, "stdin", mock.Mock(read=explode)):
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    result = main()
         self.assertEqual((result, stdout.getvalue(), stderr.getvalue()), (0, "", ""))
 
     def test_file_is_executable(self):

@@ -83,6 +83,22 @@ def sandbox_restricts_commands() -> bool:
     return enabled and not unrestricted
 
 
+def credential_paths() -> list[str]:
+    """Return the credential paths the sandbox denies, expanded to absolute."""
+    paths: set[str] = set()
+    for config in config_paths():
+        entries = _sandbox_section(config).get("credentials", {})
+        files = entries.get("files", []) if isinstance(entries, dict) else []
+        if not isinstance(files, list):
+            continue
+        for entry in files:
+            if not isinstance(entry, dict) or entry.get("mode") != "deny":
+                continue
+            if isinstance(path := entry.get("path"), str) and path:
+                paths.add(os.path.expanduser(path))
+    return sorted(paths)
+
+
 def _latch_key(payload: dict) -> str | None:
     """Return the session identity used for once-per-session latches."""
     for field in ("session_id", "transcript_path"):

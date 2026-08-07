@@ -112,9 +112,6 @@ def _run(payload: object, now: float) -> None:
         return
     if not SERVER_RE.search(cmd):
         return
-    # sandbox が無効なら server は host から届く — 助言そのものが誤りになる。
-    if not sandbox_restricts_commands():
-        return
     session_id = payload.get("session_id")
     if not isinstance(session_id, str):
         session_id = ""
@@ -130,6 +127,9 @@ def _run(payload: object, now: float) -> None:
 
 def main() -> int:
     try:
+        # sandbox が無効なら server は host から届く — 助言そのものが誤りになる。
+        if not sandbox_restricts_commands():
+            return 0
         payload = json.loads(sys.stdin.read() or "{}")
         _run(payload, time.time())
     except Exception:
@@ -232,13 +232,17 @@ class GateTest(unittest.TestCase):
         # launcher 名は roster 側で一度だけ列挙する — 本文では重複させない。
         self.assertEqual(out["additionalContext"].count("`dev_launcher *`"), 1)
 
-    def test_silent_when_the_sandbox_is_disabled(self):
+    def test_no_op_returns_before_reading_stdin_when_unrestricted(self):
         from unittest import mock
+
+        def explode():
+            raise AssertionError("stdin was read after the no-op gate")
 
         with mock.patch.object(
             sys.modules[__name__], "sandbox_restricts_commands", lambda: False
         ):
-            self.assertIsNone(self._run("vite"))
+            with mock.patch.object(sys, "stdin", mock.Mock(read=explode)):
+                self.assertEqual(main(), 0)
 
     def test_file_is_executable(self):
         # deploy は mode 保存 cp、hook 配線は直接実行 — 実行 bit 必須
