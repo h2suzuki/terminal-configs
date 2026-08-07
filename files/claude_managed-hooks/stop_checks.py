@@ -702,7 +702,15 @@ INTENT_DECLARE_PATTERNS: list[str] = [
 INTENT_DECLARE_RE = re.compile("|".join(INTENT_DECLARE_PATTERNS), re.IGNORECASE)
 
 # --- Pattern: claim-without-evidence (warning, no block) ---
-CLAIM_RE = re.compile(r"不明|該当なし|存在しません|未確認|わかりません|分かりません")
+# 「無い」系だけでなく「できない / 書かれていない」系も対象 (実測 2026-08-08: 探索範囲を確かめずに
+# 「どのスキルにも書かれていません」、 正規ルート未試行で「権限では実施できません」と誤断定した)。
+CLAIM_PATTERNS: list[str] = [
+    r"不明|該当なし|存在しません|未確認|わかりません|分かりません",
+    r"(書かれて|記載されて|定義されて)(いません|いない)",
+    r"(実施|実行|編集|取得|参照|アクセス|変更|確認|対応)(でき|出来)(ません|ない)",
+    r"見つかりません|見当たりません|ヒットしません",
+]
+CLAIM_RE = re.compile("|".join(CLAIM_PATTERNS))
 
 # --- Pattern: provide-user-instructions (warning, no block) ---
 # MANUAL_EXEC 文脈ありつつ HOST_CMD が strip_fences 後の bare prose に残る時だけ warn (host_cmd は頻出 verb 限定、 ホスト側 は exec 動詞必須 — 裸だと中立語が全 turn 発火)。
@@ -2275,6 +2283,28 @@ class OpenTasksAtWindDownTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(load_tail.call_count, 2)
+
+
+class ClaimRegexTest(unittest.TestCase):
+    """CLAIM_RE: 「無い」系に加え「できない / 書かれていない」系の否定断定も拾う。
+    出所: 2026-08-08 実機 — 下記 2 文がいずれも素通りし、 後に両方とも誤りと判明した。"""
+
+    MATCHING = (
+        "どのスキルにも書かれていません",
+        "memory routing は私の権限では実施できません",
+        "該当する entry は見つかりません",
+        "根拠は不明",
+    )
+
+    def test_negative_claims_match(self):
+        for text in self.MATCHING:
+            with self.subTest(text=text):
+                self.assertTrue(CLAIM_RE.search(text))
+
+    def test_neutral_sentences_do_not_match(self):
+        for text in ("実装を追加しました", "テストは 3 件とも通っています"):
+            with self.subTest(text=text):
+                self.assertIsNone(CLAIM_RE.search(text))
 
 
 class CourtWarningTest(unittest.TestCase):
