@@ -27,7 +27,7 @@ Exit Criteria:
 - [ ] codex 委譲 1 回で「出力言語規約」節 + claude_lang_lint を実運用し、検出またはクリーン通過の実績を得る (opportunistic) — 2026-08-07 発注書まで作成したが codex backend が 401 Unauthorized (未認証) で起動不可。`/codex:setup` 後の次回実発注へ持ち越し。claude_lang_lint 自体は本 session の hook 修正 diff に対し実行しクリーン通過 (`OK: no CJK additions in ASCII-baseline files`)
 - 本 session で修正した 2 欠陥 (deploy 待ち):
   - wind-down block の shadow (40f89e8): harness が user role・str content で差し込む entry (Stop hook feedback / skill 再 invoke 通知 / slash command block) が最新 prompt として読まれ、`open-tasks-at-wind-down` が静かに無効化されていた。実 transcript で skill 通知 1 件による block 不発を再現
-  - 未コミット節の偽陽性 (ac295f4): sandbox が書き込み禁止 path へ被せる mask stub は character device (22/22 実測) で、git は untracked として正しく報告する。regular file / dir / symlink 以外の node を落として決定的に区別。実在しない path (削除) は残す
+  - 未コミット節の偽陽性 (ac295f4 + 3 重化 763a412): sandbox が書き込み禁止 path へ被せる mask stub は character device (22/22 実測) で、git は untracked として正しく報告する。**path roster (実測 22 件) ∧ 非 regular/dir/symlink ∧ size 0** の 3 条件 AND でのみ落とす。roster 未収載の stub は従来通り報告 (取りこぼしは偽陽性で済み、実 file を落とさない側に倒す)。実在しない path (削除) は残す
 - 既知 finding (本 session 発見・未修正・低 pri): `stop_checks.WorktreeCleanupTest.test_non_repo_fails_open_with_diagnostic` は git の stderr が 1 行である前提。temp dir が repo と別 filesystem だと git が `Stopping at filesystem boundary` を足して 2 行になり fail する (HEAD 8bf7291 でも再現 = 本 session の変更と無関係)
 
 ### court バグ guard (command + stop_checks/skill 配線)
