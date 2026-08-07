@@ -13,6 +13,18 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 
 ## High
 
+### Chrome インストールの dpkg 導入済み skip
+
+Goal: `debian12.sh` / `ubuntu2404-wsl.sh` の Chrome ブロックを「`google-chrome-stable` が dpkg 導入済みなら download も `apt install` も行わない」形に変え、stale な `/tmp/google-chrome.deb` を掴んで downgrade 失敗する事象を解消する。
+
+Exit Criteria:
+- [x] 両 .sh の Chrome ブロックを `dpkg-query -W -f='${db:Status-Status}'` ガードへ置換し、`[ -s /tmp/google-chrome.deb ]` cache ガードを撤去 (2026-08-07、Edit 成功で置換確認)
+- [x] `shellcheck --enable=deprecate-which debian12.sh ubuntu2404-wsl.sh` 実行 — 指摘 12 件は変更前後で同一 (git stash 比較) ゆえ本変更由来の新規ゼロ。`bash -n` 両ファイル通過。実機 `dpkg-query -W -f='${db:Status-Status}'` が installed / 未知 pkg (空文字) / config-files の 3 状態で期待通り分岐することを確認
+- [x] 変更を commit — 881046f (両 .sh 同一内容)
+- [ ] git-delta の `[ -s /tmp/git-delta.deb ]` ガードを同族の stale 掴みとして扱うか判断 (要相談。version 直書き 0.18.2 かつ apt repo 非登録ゆえ Chrome と解が異なる)
+
+Work file: handoff = `last-session-handoff.md` の「Chrome インストールの dpkg 導入済み skip」 section
+
 ## Medium
 
 ### Handoff 強化 + 言語 lint 機構の deploy と実運用確認
