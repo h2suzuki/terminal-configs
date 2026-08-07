@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
 """
-PreToolUse(Bash) hook: classify sandbox excluded-command invocations.
+Sandbox excluded-command hook, wired on three events.
 
-Claude Code recognizes bare shell command words for sandbox.excludedCommands.
-Path-prefixed and sudo invocations are denied when they would fail inside the
-sandbox; ambiguous env/compound/sudo-option forms receive an advisory.
+SessionStart publishes the live excludedCommands roster so the model never has
+to guess which commands reach the host. PreToolUse(Bash) denies path-prefixed
+and sudo forms and warns on other wrappers, all of which miss the match and fall
+back into the sandbox. PostToolUseFailure(Bash) answers sandbox-looking failures
+with the roster, so a wrong calling form is not misread as a sandbox limit.
+
+Claude Code matches each Bash execution segment, so a compound command or a
+direct assignment prefix still reaches the host and is deliberately not flagged.
 
 Exit:
-  0: pass, or warn with hookSpecificOutput.additionalContext
-  2: a path-prefixed or bare-sudo excluded command is blocked
+  0: pass, or advise with hookSpecificOutput.additionalContext
+  2: a path-prefixed or sudo-wrapped excluded command is blocked
 
 Always exits 0 on any unexpected error (fail-open).
 """
 
 from __future__ import annotations
 
-import glob
-import hashlib
 import json
 import os
 import re
@@ -25,15 +28,25 @@ import tempfile
 import unittest
 from unittest import mock
 
-SYSTEM_SETTINGS = "/etc/claude-code/managed-settings.json"
-SYSTEM_SETTINGS_GLOB = "/etc/claude-code/managed-settings.d/*.json"
-USER_SETTINGS = os.path.join(os.path.expanduser("~"), ".claude", "settings.json")
-STATE_DIR = os.path.join(
-    os.path.expanduser("~"), ".claude", "hooks", "state", "sandbox_exclusion_guard"
+import sandbox_exclusions
+from sandbox_exclusions import (
+    bare_form,
+    claim_once,
+    load_patterns,
+    roster_text,
+    sandbox_restricts_commands,
 )
-CACHE_PATH = os.path.join(STATE_DIR, "cache.json")
-WARN_STATE_PREFIX = "warn-"
+
+# sandbox 制限と見分けがつかない失敗症状 — 誤帰属が起きるのはここ。
+SANDBOX_SYMPTOM = re.compile(
+    r"Permission denied|Operation not permitted|Read-only file system|"
+    r"Could not resolve host|Network is unreachable|Connection timed out|"
+    r"Temporary failure in name resolution|\bEACCES\b|\bEPERM\b",
+    re.IGNORECASE,
+)
 ASSIGNMENT = re.compile(r"^\w+=\S*$")
+# 照合前に剥がされない wrapper — 内側が除外コマンドでも sandbox に落ちる。
+WRAPPERS = frozenset({"sudo", "env", "npx", "bunx", "uvx", "nohup", "xargs"})
 SEPARATOR = re.compile(r"&&|\|\||[;|&\n]")  # top-level 制御演算子のみ
 COMMENT = re.compile(r"#.*$", re.MULTILINE)
 # $(...)/`...` は host 化不能ゆえマスクして segment 対象外にする (F1)。
@@ -50,120 +63,23 @@ def _strip_heredoc(m: re.Match) -> str:
     return "_" + m.group(2)
 
 
-def _config_paths() -> list[str]:
-    """Return the existing excludedCommands config files."""
-    candidates = [SYSTEM_SETTINGS, *glob.glob(SYSTEM_SETTINGS_GLOB), USER_SETTINGS]
-    project = os.environ.get("CLAUDE_PROJECT_DIR")
-    if project:
-        candidates.extend(
-            [
-                os.path.join(project, ".claude", "settings.json"),
-                os.path.join(project, ".claude", "settings.local.json"),
-            ]
-        )
-    return sorted({path for path in candidates if os.path.isfile(path)})
-
-
-def _cache_key(paths: list[str]) -> list[list[str | int]]:
-    """Build a sorted path/mtime_ns key, skipping files that cannot be statted."""
-    key: list[list[str | int]] = []
-    for path in paths:
-        try:
-            key.append([path, os.stat(path).st_mtime_ns])
-        except OSError:
-            pass
-    return sorted(key)
-
-
-def _load_patterns() -> list[str]:
-    """Load the union of excludedCommands, reusing an mtime-keyed cache."""
-    paths = _config_paths()
-    key = _cache_key(paths)
-    try:
-        with open(CACHE_PATH, encoding="utf-8") as f:
-            cached = json.load(f)
-        if cached.get("key") == key and isinstance(cached.get("patterns"), list):
-            return [p for p in cached["patterns"] if isinstance(p, str)]
-    except (OSError, ValueError, AttributeError):
-        pass
-    patterns = set()
-    for entry in key:
-        path = str(entry[0])
-        try:
-            with open(path, encoding="utf-8") as f:
-                values = json.load(f).get("sandbox", {}).get("excludedCommands", [])
-            patterns.update(p for p in values if isinstance(p, str))
-        except (OSError, ValueError, AttributeError):
-            pass
-    result = sorted(patterns)
-    try:
-        os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
-        with open(CACHE_PATH, "w", encoding="utf-8") as f:
-            json.dump({"key": key, "patterns": result}, f)
-    except OSError:
-        pass
-    return result
-
-
 def _glob_match(value: str, pattern: str) -> bool:
     """Match a Claude excludedCommands star glob with full-string anchors."""
     translated = re.escape(pattern).replace(r"\*", ".*")
+    if translated.endswith(r"\ .*") and pattern.count("*") == 1:
+        translated = translated[:-4] + r"(\ .*)?"
     return re.fullmatch(translated, value, re.DOTALL) is not None
 
 
-def _latch_key(payload: dict) -> str | None:
-    """Return the session identity used for warning latches."""
-    session_id = payload.get("session_id")
-    if isinstance(session_id, str) and session_id:
-        return f"session_id:{session_id}"
-    transcript_path = payload.get("transcript_path")
-    if isinstance(transcript_path, str) and transcript_path:
-        return f"transcript_path:{transcript_path}"
-    return None
-
-
-def _warn_state_path(latch_key: str) -> str:
-    """Return the sanitized state path for a session latch key."""
-    digest = hashlib.sha256(latch_key.encode("utf-8")).hexdigest()
-    return os.path.join(STATE_DIR, f"{WARN_STATE_PREFIX}{digest}.json")
-
-
-def _should_warn(payload: dict, reason: str) -> bool:
-    """Return whether this warning reason should be emitted for this session."""
-    latch_key = _latch_key(payload)
-    if latch_key is None:
-        return True
-    try:
-        state_path = _warn_state_path(latch_key)
-        reasons: set[str] = set()
-        try:
-            with open(state_path, encoding="utf-8") as f:
-                state = json.load(f)
-            values = state.get("reasons", [])
-            if not isinstance(values, list):
-                raise ValueError("warning state reasons is not a list")
-            reasons = {value for value in values if isinstance(value, str)}
-        except (OSError, ValueError, AttributeError, TypeError):
-            pass
-        if reason in reasons:
-            return False
-        reasons.add(reason)
-        os.makedirs(STATE_DIR, exist_ok=True)
-        fd, temp_path = tempfile.mkstemp(
-            prefix=f".{WARN_STATE_PREFIX}", suffix=".tmp", dir=STATE_DIR
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump({"reasons": sorted(reasons)}, f, ensure_ascii=False)
-            os.replace(temp_path, state_path)
-        finally:
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
-    except Exception:
-        return True
-    return True
+def _wrapped_command(tokens: list[str], patterns: list[str]) -> str:
+    """Return the excluded command a wrapper runs, past the wrapper's own options."""
+    for position, token in enumerate(tokens):
+        if token.startswith("-") or ASSIGNMENT.match(token) or "/" in token:
+            continue
+        candidate = " ".join(tokens[position:])
+        if any(_glob_match(candidate, pattern) for pattern in patterns):
+            return candidate
+    return ""
 
 
 def _classify(cmd: str, patterns: list[str]) -> tuple[str, str, str]:
@@ -172,59 +88,111 @@ def _classify(cmd: str, patterns: list[str]) -> tuple[str, str, str]:
     scanned = QUOTED.sub("_", scanned)
     scanned = SUBST.sub("_", scanned)
     scanned = COMMENT.sub("", scanned)
-    segments = [s for s in SEPARATOR.split(scanned) if s.strip()]
     warning: tuple[str, str, str] | None = None
-    for index, segment in enumerate(segments):
+    for segment in SEPARATOR.split(scanned):
         tokens = segment.strip().split()
-        if not tokens:
-            continue
-        had_env = False
+        # 先頭の直接代入は照合前に剥がされる — `FOO=1 gh ...` は一致し host で走る。
         while tokens and ASSIGNMENT.match(tokens[0]):
-            had_env = True
             tokens.pop(0)
         if not tokens:
             continue
         program = tokens[0]
         basename = os.path.basename(program)
-        if basename == "sudo":
-            for position, candidate in enumerate(tokens[1:], start=1):
-                if "/" in candidate or candidate.startswith("-"):
-                    continue
-                normalized = " ".join(tokens[position:])
-                if not any(_glob_match(normalized, pattern) for pattern in patterns):
-                    continue
-                if position == 1:
-                    return "block", normalized, "bare sudo"
+        if basename in WRAPPERS:
+            nested = _wrapped_command(tokens[1:], patterns)
+            if nested:
+                if basename == "sudo":
+                    return "block", nested, "sudo"
                 if warning is None:
-                    warning = "warn", normalized, "sudo with options"
-                break
+                    warning = "warn", nested, basename
             continue
         normalized = " ".join([basename, *tokens[1:]])
         if not any(_glob_match(normalized, pattern) for pattern in patterns):
-            # Non-sudo wrappers are intentionally not traversed; path forms behind them are a known gap.
             continue
         if "/" in program:
             return "block", normalized, "path prefix"
-        if had_env and warning is None:
-            warning = "warn", normalized, "environment prefix"
-        elif index > 0 and warning is None:
-            warning = "warn", normalized, "non-leading compound segment"
     return warning or ("pass", "", "")
 
 
-def _emit(msg: str) -> None:
-    payload = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "additionalContext": msg,
-        }
-    }
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+def _emit(event: str, msg: str) -> None:
+    output: dict[str, str] = {"hookEventName": event, "additionalContext": msg}
+    if event == "PreToolUse":
+        output["permissionDecision"] = "allow"
+    sys.stdout.write(
+        json.dumps({"hookSpecificOutput": output}, ensure_ascii=False) + "\n"
+    )
+
+
+def _roster_suffix(payload: dict, patterns: list[str]) -> str:
+    """Append the roster only when this session has not been shown it yet."""
+    if not claim_once(payload, "roster"):
+        return ""
+    return "\n" + roster_text(patterns)
+
+
+def _indirect_mentions(cmd: str, patterns: list[str]) -> list[str]:
+    """Return excluded commands named somewhere other than a segment's head."""
+    heads = {bare_form(p).split()[0] for p in patterns if bare_form(p)}
+    scanned = QUOTED.sub(" ", SUBST.sub(" ", HEREDOC.sub(_strip_heredoc, cmd)))
+    found: list[str] = []
+    for segment in SEPARATOR.split(COMMENT.sub("", scanned)):
+        tokens = segment.split()
+        for position, token in enumerate(tokens):
+            name = os.path.basename(token)
+            if name in heads and position > 0 and name not in found:
+                found.append(name)
+    return found
+
+
+def _handle_failure(payload: dict, patterns: list[str], cmd: str) -> int:
+    """Answer a sandbox-looking Bash failure with the roster before misattribution."""
+    response = payload.get("tool_response") or {}
+    if not isinstance(response, dict):
+        return 0
+    output = "\n".join(
+        value
+        for key in ("output", "stdout", "stderr", "error", "message", "tool_result")
+        if isinstance(value := response.get(key), str)
+    )
+    if not output or not SANDBOX_SYMPTOM.search(output):
+        return 0
+    mentioned = _indirect_mentions(cmd, patterns)
+    if mentioned:
+        if not claim_once(payload, "failure-indirect"):
+            return 0
+        message = (
+            f"失敗した command は除外コマンド {', '.join(f'`{m}`' for m in mentioned)} を "
+            "segment 先頭以外で呼んでいます。 この形は除外に一致せず sandbox 内で走るため、"
+            "この失敗は sandbox の制限ではなく呼び方が原因の可能性が高いです。"
+        )
+    else:
+        if not claim_once(payload, "failure-generic"):
+            return 0
+        message = (
+            "sandbox 制限と区別できない症状で Bash が失敗しました。 sandbox のせいと"
+            "結論づける前に、 同じ作業を除外コマンドで行えないかを確認してください。"
+        )
+    _emit(
+        payload.get("hook_event_name") or "PostToolUseFailure",
+        message + _roster_suffix(payload, patterns),
+    )
+    return 0
 
 
 def _run(payload: object, patterns: list[str] | None = None) -> int:
-    if not isinstance(payload, dict) or payload.get("tool_name") != "Bash":
+    if not isinstance(payload, dict):
+        return 0
+    if patterns is None:
+        # 制限の有無が先、roster はその後 — 空の roster は無効化の証拠ではない。
+        if not sandbox_restricts_commands():
+            return 0
+        patterns = load_patterns()
+    event = payload.get("hook_event_name")
+    if event == "SessionStart":
+        if claim_once(payload, "roster"):
+            _emit("SessionStart", roster_text(patterns))
+        return 0
+    if payload.get("tool_name") != "Bash":
         return 0
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):
@@ -232,32 +200,31 @@ def _run(payload: object, patterns: list[str] | None = None) -> int:
     cmd = tool_input.get("command") or ""
     if not isinstance(cmd, str):
         return 0
-    patterns = _load_patterns() if patterns is None else patterns
+    if event == "PostToolUseFailure":
+        return _handle_failure(payload, patterns, cmd)
     decision, normalized, reason = _classify(cmd, patterns)
     if decision == "pass":
         return 0
     if decision == "warn":
-        if not _should_warn(payload, reason):
+        if not claim_once(payload, reason):
             return 0
         message = (
-            f"除外コマンド `{normalized}` のこの呼び出し方 ({reason}) は sandbox 内実行に"
-            "なる可能性があります。除外コマンドは path/env/wrapper を付けず、裸名で先頭に"
-            "置くと確実に host 実行されます。"
+            f"`{reason}` 経由で除外コマンド `{normalized}` を呼んでいます。 wrapper は "
+            "照合前に剥がされないため、この形は除外に一致せず sandbox 内で走ります。 "
+            f"`{normalized}` を segment 先頭に置いて直接呼んでください。"
+            "この警告は同一セッション中、その種別につき 1 回だけ表示されます。"
         )
-        message += "この警告は同一セッション中、その種別につき 1 回だけ表示されます。"
-        if reason == "sudo with options":
-            message += " sudo は sandbox 内で権限昇格できず失敗します。"
-        _emit(message)
+        _emit("PreToolUse", message + _roster_suffix(payload, patterns))
         return 0
-    if reason == "bare sudo":
-        detail = "sudo は sandbox 内で権限昇格できず失敗します"
+    if reason == "sudo":
+        detail = "`sudo` 前置は除外に一致せず、sandbox 内では権限昇格もできません"
     else:
-        detail = "path 前置では除外対象にならず sandbox 内実行に落ちるため失敗します"
+        detail = "path 前置は除外に一致せず sandbox 内実行に落ちます"
     sys.stderr.write(
         f"sandbox-exclusion-guard: excluded command `{normalized}` を block しました。"
         f"{detail}。\n\n"
-        "Retry: path や sudo を付けず、除外コマンドを裸名で command の先頭に置いて"
-        "呼び出してください。これにより確実に host 実行されます。\n"
+        f"Retry: `{normalized}` を segment 先頭に裸名で置いてください。 "
+        "`cd x && <裸名> ...` や `FOO=1 <裸名> ...` は一致するので、そのまま使えます。\n"
     )
     return 2
 
@@ -286,24 +253,30 @@ class GateTest(unittest.TestCase):
         "cd x && /usr/bin/git push",
         "sudo git push",
         "sudo dsa_launcher restart db",
+        "sudo -u deploy git push",
         "VAR=x git push && /usr/bin/git push",
     )
     WARN = (
-        "VAR=val git push",
-        "FOO=1 BAR=2 dsa foo",
-        "cd app && git push",
-        "echo hi ; cargo test x",
-        "sudo -u deploy git push",
+        "env git push",
+        "env FOO=1 dsa foo",
+        "npx dsa foo",
+        "cd app && nohup git push",
+        "env -i git push",
     )
+    # 実装は segment 単位照合で、直接代入と一部 wrapper を剥がしてから照合する。
     PASS = (
         "git push",
         "dsa_launcher restart db",
         "cargo test foo",
+        "VAR=val git push",
+        "FOO=1 BAR=2 dsa foo",
+        "cd app && git push",
+        "echo hi ; cargo test x",
+        "git",
         "git push && echo done",
         "git log | head",
         "timeout 5 git push",
         "nice -n 10 cargo test x",
-        "env -i git push",
         "VERSION=$(git describe)",
         "x=$(dsa foo)",
         "cargo build",
@@ -319,8 +292,9 @@ class GateTest(unittest.TestCase):
 
     def setUp(self):
         self.state_dir = tempfile.TemporaryDirectory()
+        # latch state は共有 module 側 — patch 先を誤ると実 state を汚す。
         self.state_patch = mock.patch.object(
-            sys.modules[__name__], "STATE_DIR", self.state_dir.name
+            sandbox_exclusions, "STATE_DIR", self.state_dir.name
         )
         self.state_patch.start()
         self.addCleanup(self.state_patch.stop)
@@ -347,13 +321,24 @@ class GateTest(unittest.TestCase):
             result = _run(payload, patterns)
         return result, stdout.getvalue(), stderr.getvalue()
 
+    @classmethod
+    def _emit_for(cls, payload: dict) -> tuple[int, str, str]:
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            result = _run(payload, cls.PATTERNS)
+        return result, stdout.getvalue(), stderr.getvalue()
+
     def test_blocks_path_and_bare_sudo_invocations(self):
         for cmd in self.BLOCK:
             result, stdout, stderr = self._result(cmd, self.PATTERNS)
             self.assertEqual(result, 2, cmd)
             self.assertEqual(stdout, "", cmd)
             self.assertIn("excluded command", stderr, cmd)
-            self.assertIn("裸名", stderr, cmd)
+            self.assertIn("segment 先頭", stderr, cmd)
 
     def test_warns_without_blocking_ambiguous_invocations(self):
         for cmd in self.WARN:
@@ -363,30 +348,28 @@ class GateTest(unittest.TestCase):
             output = json.loads(stdout)["hookSpecificOutput"]
             self.assertEqual(output["hookEventName"], "PreToolUse", cmd)
             self.assertEqual(output["permissionDecision"], "allow", cmd)
-            self.assertIn(
-                "sandbox 内実行になる可能性", output["additionalContext"], cmd
-            )
+            self.assertIn("sandbox 内で走ります", output["additionalContext"], cmd)
             if cmd.startswith("sudo"):
                 self.assertIn("権限昇格できず失敗", output["additionalContext"], cmd)
 
-        first = self._result("VAR=val git push", self.PATTERNS, session_id="same")
-        second = self._result("FOO=1 git push", self.PATTERNS, session_id="same")
+        first = self._result("env git push", self.PATTERNS, session_id="same")
+        second = self._result("env dsa foo", self.PATTERNS, session_id="same")
         self.assertNotEqual(first[1], "")
         self.assertEqual(second, (0, "", ""))
 
         first = self._result(
-            "cd app && git push", self.PATTERNS, session_id="different-reason"
+            "npx dsa foo", self.PATTERNS, session_id="different-reason"
         )
         second = self._result(
-            "sudo -u deploy git push",
+            "env git push",
             self.PATTERNS,
             session_id="different-reason",
         )
         self.assertNotEqual(first[1], "")
         self.assertNotEqual(second[1], "")
 
-        first = self._result("VAR=val git push", self.PATTERNS, session_id="one")
-        second = self._result("VAR=val git push", self.PATTERNS, session_id="two")
+        first = self._result("env git push", self.PATTERNS, session_id="one")
+        second = self._result("env git push", self.PATTERNS, session_id="two")
         self.assertNotEqual(first[1], "")
         self.assertNotEqual(second[1], "")
 
@@ -398,20 +381,20 @@ class GateTest(unittest.TestCase):
             self.assertEqual(stderr, "", cmd)
 
     def test_empty_patterns_allow_everything(self):
-        self.assertEqual(self._result("cd app && git push", []), (0, "", ""))
+        self.assertEqual(self._result("env git push", []), (0, "", ""))
 
     def test_warns_every_time_without_a_latch_key(self):
-        first = self._result("VAR=val git push", self.PATTERNS)
-        second = self._result("VAR=val git push", self.PATTERNS)
+        first = self._result("env git push", self.PATTERNS)
+        second = self._result("env git push", self.PATTERNS)
         self.assertNotEqual(first[1], "")
         self.assertNotEqual(second[1], "")
 
     def test_transcript_path_is_a_latch_key_fallback(self):
         first = self._result(
-            "VAR=val git push", self.PATTERNS, transcript_path="/tmp/transcript"
+            "env git push", self.PATTERNS, transcript_path="/tmp/transcript"
         )
         second = self._result(
-            "VAR=val git push", self.PATTERNS, transcript_path="/tmp/transcript"
+            "env git push", self.PATTERNS, transcript_path="/tmp/transcript"
         )
         self.assertNotEqual(first[1], "")
         self.assertEqual(second, (0, "", ""))
@@ -419,44 +402,79 @@ class GateTest(unittest.TestCase):
     def test_warns_when_latch_state_cannot_be_written(self):
         with mock.patch.object(os, "replace", side_effect=OSError):
             result, stdout, stderr = self._result(
-                "VAR=val git push", self.PATTERNS, session_id="unwritable"
+                "env git push", self.PATTERNS, session_id="unwritable"
             )
         self.assertEqual(result, 0)
         self.assertNotEqual(stdout, "")
         self.assertEqual(stderr, "")
 
-    def test_mtime_cache_recomputes(self):
-        import time
+    def test_session_start_publishes_the_live_roster(self):
+        payload = {"hook_event_name": "SessionStart", "session_id": "start"}
+        result, stdout, stderr = self._emit_for(payload)
+        self.assertEqual((result, stderr), (0, ""))
+        output = json.loads(stdout)["hookSpecificOutput"]
+        self.assertEqual(output["hookEventName"], "SessionStart")
+        for pattern in self.PATTERNS:
+            self.assertIn(f"`{pattern}`", output["additionalContext"])
+        self.assertNotIn("permissionDecision", output)
+        self.assertEqual(self._emit_for(payload), (0, "", ""))
 
-        with tempfile.TemporaryDirectory() as tmp:
-            config = os.path.join(tmp, "settings.json")
-            cache = os.path.join(tmp, "state", "cache.json")
-            with open(config, "w", encoding="utf-8") as f:
-                json.dump({"sandbox": {"excludedCommands": ["git *"]}}, f)
-            patches = (
-                mock.patch.object(sys.modules[__name__], "SYSTEM_SETTINGS", config),
-                mock.patch.object(
-                    sys.modules[__name__],
-                    "SYSTEM_SETTINGS_GLOB",
-                    os.path.join(tmp, "none", "*.json"),
-                ),
-                mock.patch.object(
-                    sys.modules[__name__],
-                    "USER_SETTINGS",
-                    os.path.join(tmp, "missing.json"),
-                ),
-                mock.patch.object(sys.modules[__name__], "CACHE_PATH", cache),
-                mock.patch.dict(os.environ, {}, clear=True),
-            )
-            with patches[0], patches[1], patches[2], patches[3], patches[4]:
-                self.assertEqual(_load_patterns(), ["git *"])
-                old_mtime = os.stat(config).st_mtime_ns
-                with open(config, "w", encoding="utf-8") as f:
-                    json.dump({"sandbox": {"excludedCommands": ["dsa *"]}}, f)
-                if os.stat(config).st_mtime_ns == old_mtime:
-                    time.sleep(0.002)
-                    os.utime(config, None)
-                self.assertEqual(_load_patterns(), ["dsa *"])
+    def test_failure_answers_sandbox_symptoms_with_the_roster(self):
+        payload = {
+            "hook_event_name": "PostToolUseFailure",
+            "tool_name": "Bash",
+            "tool_input": {"command": "curl https://example.com"},
+            "tool_response": {"stderr": "curl: Connection timed out"},
+            "session_id": "generic",
+        }
+        result, stdout, stderr = self._emit_for(payload)
+        self.assertEqual((result, stderr), (0, ""))
+        context = json.loads(stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("sandbox のせいと", context)
+        self.assertIn("`git *`", context)
+        self.assertEqual(self._emit_for(payload), (0, "", ""))
+
+    def test_failure_names_an_indirectly_called_excluded_command(self):
+        payload = {
+            "hook_event_name": "PostToolUseFailure",
+            "tool_name": "Bash",
+            "tool_input": {"command": "env git push"},
+            "tool_response": {"stderr": "fatal: Permission denied"},
+            "session_id": "indirect",
+        }
+        _, stdout, _ = self._emit_for(payload)
+        context = json.loads(stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("`git`", context)
+        self.assertIn("呼び方が原因", context)
+
+    def test_failure_stays_silent_without_a_sandbox_symptom(self):
+        payload = {
+            "hook_event_name": "PostToolUseFailure",
+            "tool_name": "Bash",
+            "tool_input": {"command": "grep missing file"},
+            "tool_response": {"stderr": "grep: file: No such file or directory"},
+            "session_id": "unrelated",
+        }
+        self.assertEqual(self._emit_for(payload), (0, "", ""))
+
+    def test_roster_is_appended_only_once_per_session(self):
+        first = self._result("env git push", self.PATTERNS, session_id="once")
+        second = self._result("npx dsa foo", self.PATTERNS, session_id="once")
+        self.assertIn("`git *`", first[1])
+        self.assertNotIn("`git *`", second[1])
+
+    def test_no_op_when_the_sandbox_is_disabled(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+
+        payload = {"hook_event_name": "SessionStart", "session_id": "off"}
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with mock.patch.object(
+            sys.modules[__name__], "sandbox_restricts_commands", lambda: False
+        ):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                result = _run(payload)
+        self.assertEqual((result, stdout.getvalue(), stderr.getvalue()), (0, "", ""))
 
     def test_file_is_executable(self):
         self.assertTrue(os.access(os.path.abspath(__file__), os.X_OK))

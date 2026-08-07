@@ -70,7 +70,10 @@
     "PostToolUseFailure": [
       {
         "matcher": "Bash",
-        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/detect_cwd_pollution.py" } ]
+        "hooks": [
+          { "type": "command", "command": "/etc/claude-code/hooks/detect_cwd_pollution.py" },
+          { "type": "command", "command": "/etc/claude-code/hooks/sandbox_exclusion_guard.py" }
+        ]
       }
     ],
     "SubagentStop": [
@@ -80,7 +83,8 @@
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/claude_md_lint.py", "timeout": 120 } ] },
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/feature_findings_build.py", "timeout": 30 } ] },
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/session_resume_context.py" } ] },
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/reap_orphan_helpers.py" } ] }
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/reap_orphan_helpers.py" } ] },
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/sandbox_exclusion_guard.py" } ] }
     ],
     "UserPromptSubmit": [
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/check_uncommitted_at_handoff.py" } ] },

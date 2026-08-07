@@ -26,6 +26,13 @@ import sys
 import time
 import unittest
 
+import sandbox_exclusions
+from sandbox_exclusions import (
+    load_patterns,
+    roster_once,
+    sandbox_restricts_commands,
+)
+
 # command 位置 (行頭 / ; & | ( 後 / $( ` 後) に限定 — echo 引数・quote・comment 内の FP を排除
 _CMD_START = r"(?:^|[;&|(]|\$\(|`)\s*"
 # 右端 \b で部分一致 FP を排除 (developer / devtools / dsa-serverless / runner)。
@@ -75,6 +82,12 @@ def _record_advised(session_id: str, now: float) -> None:
         pass
 
 
+def _roster_suffix(payload: dict) -> str:
+    """Append the shared roster unless another sandbox hook already showed it."""
+    roster = roster_once(payload, load_patterns())
+    return "\n" + roster if roster else ""
+
+
 def _emit(msg: str) -> None:
     payload = {
         "hookSpecificOutput": {
@@ -99,6 +112,9 @@ def _run(payload: object, now: float) -> None:
         return
     if not SERVER_RE.search(cmd):
         return
+    # sandbox が無効なら server は host から届く — 助言そのものが誤りになる。
+    if not sandbox_restricts_commands():
+        return
     session_id = payload.get("session_id")
     if not isinstance(session_id, str):
         session_id = ""
@@ -107,8 +123,8 @@ def _run(payload: object, now: float) -> None:
     _record_advised(session_id, now)
     _emit(
         "検証サーバーの起動コマンドが検出されました。 sandbox からは host browser に "
-        "届きません。 excludedCommands launcher (`dsa_launcher` 等) か `!` での host "
-        "実行を検討してください。"
+        "届きません。 excludedCommands に登録された launcher か `!` での host 実行を"
+        "検討してください。" + _roster_suffix(payload)
     )
 
 
@@ -160,12 +176,34 @@ class GateTest(unittest.TestCase):
         "npm run build",
     )
 
+    PATTERNS = ["dev_launcher *", "git *"]
+
+    def setUp(self):
+        import tempfile
+        from unittest import mock
+
+        module = sys.modules[__name__]
+        overrides = (
+            (module, "STATE_DIR", tempfile.mkdtemp()),
+            (module, "sandbox_restricts_commands", lambda: True),
+            (module, "load_patterns", lambda: list(self.PATTERNS)),
+            (sandbox_exclusions, "STATE_DIR", tempfile.mkdtemp()),
+        )
+        for target, name, value in overrides:
+            patch = mock.patch.object(target, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+
     @staticmethod
     def _run(cmd, sid="s1"):
         import io
         from contextlib import redirect_stdout
 
-        payload = {"tool_name": "Bash", "tool_input": {"command": cmd}, "session_id": sid}
+        payload = {
+            "tool_name": "Bash",
+            "tool_input": {"command": cmd},
+            "session_id": sid,
+        }
         buf = io.StringIO()
         with redirect_stdout(buf):
             _run(payload, time.time())
@@ -173,32 +211,34 @@ class GateTest(unittest.TestCase):
         return json.loads(out)["hookSpecificOutput"] if out else None
 
     def test_fires_on_dev_server_commands(self):
-        import tempfile
-        from unittest import mock
-
-        with mock.patch.object(sys.modules[__name__], "STATE_DIR", tempfile.mkdtemp()):
-            for cmd in self._POSITIVE:
-                out = self._run(cmd, sid=cmd)
-                assert out is not None, cmd
-                self.assertEqual(out["permissionDecision"], "allow")
-                self.assertIn("host browser", out["additionalContext"])
+        for cmd in self._POSITIVE:
+            out = self._run(cmd, sid=cmd)
+            assert out is not None, cmd
+            self.assertEqual(out["permissionDecision"], "allow")
+            self.assertIn("host browser", out["additionalContext"])
 
     def test_no_fire_on_boundary_negatives(self):
-        import tempfile
-        from unittest import mock
-
-        with mock.patch.object(sys.modules[__name__], "STATE_DIR", tempfile.mkdtemp()):
-            for cmd in self._NEGATIVE:
-                self.assertIsNone(self._run(cmd, sid=cmd), cmd)
+        for cmd in self._NEGATIVE:
+            self.assertIsNone(self._run(cmd, sid=cmd), cmd)
 
     def test_advise_once_per_window_per_session(self):
-        import tempfile
+        self.assertIsNotNone(self._run("vite", sid="s1"))  # 窓内 1 回目 -> advise
+        self.assertIsNone(self._run("vite", sid="s1"))  # 窓内 retry -> silent
+        self.assertIsNotNone(self._run("vite", sid="s2"))  # 別 session は独立
+
+    def test_launcher_names_come_from_the_live_roster(self):
+        out = self._run("vite")
+        assert out is not None
+        # launcher 名は roster 側で一度だけ列挙する — 本文では重複させない。
+        self.assertEqual(out["additionalContext"].count("`dev_launcher *`"), 1)
+
+    def test_silent_when_the_sandbox_is_disabled(self):
         from unittest import mock
 
-        with mock.patch.object(sys.modules[__name__], "STATE_DIR", tempfile.mkdtemp()):
-            self.assertIsNotNone(self._run("vite", sid="s1"))  # 窓内 1 回目 -> advise
-            self.assertIsNone(self._run("vite", sid="s1"))  # 窓内 retry -> silent
-            self.assertIsNotNone(self._run("vite", sid="s2"))  # 別 session は独立
+        with mock.patch.object(
+            sys.modules[__name__], "sandbox_restricts_commands", lambda: False
+        ):
+            self.assertIsNone(self._run("vite"))
 
     def test_file_is_executable(self):
         # deploy は mode 保存 cp、hook 配線は直接実行 — 実行 bit 必須
