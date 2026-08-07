@@ -885,11 +885,26 @@ def _load_tail(path: str, turns: int = 1, bufsize: int = _TAIL_BUFSIZE) -> list[
         return []
 
 
+# harness が user role・str content で差し込む非人間 entry (実 transcript で採取した 3 形式のみ)。
+HARNESS_ENTRY_RE = re.compile(
+    r"\A(?:Stop hook feedback:|Skill /\S+ is already loaded above;)"
+    r"|<(?:command-name|local-command-caveat|local-command-stdout)>"
+)
+
+
+def _is_harness_entry(content: str) -> bool:
+    """True for user-role entries the harness injects (hook feedback / skill notice / slash command)."""
+    return bool(HARNESS_ENTRY_RE.search(content))
+
+
 def _last_prompt_text(entries: list[dict]) -> str:
     """Text of the newest human prompt entry, else ''."""
     for obj in reversed(entries):
-        if _is_prompt(obj):
-            return str(obj.get("message", {}).get("content", ""))
+        if not _is_prompt(obj):
+            continue
+        content = str(obj.get("message", {}).get("content", ""))
+        if not _is_harness_entry(content):
+            return content
     return ""
 
 
@@ -2130,6 +2145,49 @@ class OpenTasksAtWindDownTest(unittest.TestCase):
         ]
         self.assertEqual(_last_prompt_text(entries), "お疲れさまでした")
         self.assertEqual(_last_prompt_text([]), "")
+
+    # 出所: 2026-08-07 実機 — skill 再 invoke 通知が最新 user entry になり wind-down block が不発。
+    HARNESS_ENTRIES = (
+        "Stop hook feedback:\n[stop_checks.py]: declare-and-proceed (prose): ...",
+        "Skill /writing-todos is already loaded above; instructions unchanged.",
+        "<command-name>/clear</command-name>\n<command-message>clear</command-message>",
+        "<local-command-caveat>Caveat: The messages below were generated ...",
+    )
+
+    def test_harness_entries_do_not_shadow_human_prompt(self):
+        for injected in self.HARNESS_ENTRIES:
+            with self.subTest(injected=injected[:30]):
+                entries = [
+                    {"type": "user", "message": {"content": "お疲れさまでした"}},
+                    {"type": "user", "message": {"content": injected}},
+                ]
+                self.assertEqual(_last_prompt_text(entries), "お疲れさまでした")
+
+    def test_harness_only_transcript_yields_empty(self):
+        entries = [
+            {"type": "user", "message": {"content": c}} for c in self.HARNESS_ENTRIES
+        ]
+        self.assertEqual(_last_prompt_text(entries), "")
+
+    def test_human_prompt_naming_a_skill_is_not_harness(self):
+        entries = [
+            {
+                "type": "user",
+                "message": {"content": "Skill /handoff を実行してから終わります"},
+            }
+        ]
+        self.assertEqual(
+            _last_prompt_text(entries), "Skill /handoff を実行してから終わります"
+        )
+
+    def test_wind_down_blocks_when_harness_entry_is_newest(self):
+        if _handoff_mod is None:
+            self.skipTest("sibling handoff module unavailable")
+        entries = [
+            {"type": "user", "message": {"content": "お疲れさまでした"}},
+            {"type": "user", "message": {"content": "Stop hook feedback:\n[x]: y"}},
+        ]
+        self.assertTrue(_handoff_mod.HANDOFF_RE.search(_last_prompt_text(entries)))
 
     def _run_with(self, prompt, tasks):
         import io
