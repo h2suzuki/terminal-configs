@@ -13,6 +13,20 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 
 ## High
 
+### memory surface の model tag mute を塞ぐ
+
+Goal: 実行中モデルの tag 判定と「壁と結論する前に引く」導線を直し、過去の教訓が mute されたまま同じ失敗を繰り返す経路を閉じる。
+
+Exit Criteria:
+
+- [ ] deploy 後の実 session で、`opus-5` tag 付き entry が `claude-opus-5[1m]` の session に surface することを観測する
+- [ ] deploy 後に新規蓄積された `kind='mismatch'` が untagged entry 由来のみになっていることを SQL で確認する
+
+- [x] `_normalize_model` が `[1m]` 等の context-window 変種を落とすよう修正 + unit test — 実データで `opus-5[1m]` の mismatch 33 行中 21 行が解消することを確認
+- [x] memory-routing skill に「壁と結論する前 / 2 回失敗した時に引く」 trigger を追加 (既存 Tag propagation 節の入口を拡張、コマンド重複なし)
+- [ ] deploy (ユーザー手動): `files/claude_user-hooks/memory_surface.py` → `~/.claude/hooks/`、`files/claude_managed-skills/memory-routing/SKILL.md` → `/etc/claude-code/skills/memory-routing/` (`~/.claude/skills/` 側と同一 inode)
+- [ ] 壁宣言 Stop probe の要否を deploy 後の mismatch 実績で再判定する — 別 session 提案の `drafts/stop_wall_declaration_probe.py` は単独 hook 化すると (a) `stop_hook_active` gate 不在で再 block loop、(b) stop_checks の turn counter を 1 turn 複数回 bump、(c) 閾値 0.15 が surface floor 0.45 の 1/3 で無関係文にも exit 2、が実測で確認済。採用するなら stop_checks の warning family として組み込む
+
 ## Medium
 
 ### Handoff 強化 + 言語 lint 機構の deploy と実運用確認

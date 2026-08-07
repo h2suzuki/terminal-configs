@@ -1,7 +1,7 @@
 ---
 name: memory-routing
 description: Decide memory entry save location (user vs project-local), generation (MEMORY.md vs OLD-MEMORY.md), save timing, absolute date format, and per-model tags (models: line, cross-model search, tag propagation); retire entries to OLD-MEMORY.md when fully covered by a Managed skill / hook / CLAUDE.md rule.
-when_to_use: TRIGGER when user gives a correction / feedback, about to say "memory に書く / 保存" etc, uncertain about user vs project-local routing, or a feedback entry becomes covered by a new skill / hook / CLAUDE.md rule.
+when_to_use: TRIGGER when user gives a correction / feedback, about to say "memory に書く / 保存" etc, uncertain about user vs project-local routing, a feedback entry becomes covered by a new skill / hook / CLAUDE.md rule, or about to conclude "できない" / "実行不能" / "環境の制約" or hitting a second failure on the same work (pull side, not write).
 ---
 
 # Memory Routing
@@ -150,7 +150,9 @@ surface hook (UserPromptSubmit / Stop) は **実行中モデルの tag を持つ
 - **複数可**: 同じ教訓を複数モデルで観測したら space 区切りで並べる (例 `models: opus-4.8 fable-5`)
 - **観測ベース**: 「効きそうだから」で tag を盛らない。 そのモデルで実際に観測・再発した時に下記 Tag propagation で追記する
 
-### Tag propagation (新しい学びを得た時)
+### Tag propagation (新しい学びを得た時 / 壁と結論する前)
+
+**引く側の trigger**: 「できない」 「実行不能」 「権限がない」 「環境の制約」 と結論しかけた時と、 同じ作業で 2 回失敗した時は、 entry を書く予定が無くても下記 1. の横断検索を先に実行する。 `--search` は model filter を通さないので、 **自分の tag が無くて mute されていた過去の教訓がここで初めて見える**。 今の状況にも当てはまれば 2. で tag を追記し、 当てはまらなければ何もしない (「効きそうだから」 で tag を盛らない)。
 
 新しい教訓を entry 化する前に、 モデル横断で過去の教訓を検索し、 同じ教訓なら tag 追記・無ければ新規作成する:
 

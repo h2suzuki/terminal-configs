@@ -236,8 +236,9 @@ def _encoded_project_id(cwd: str) -> str:
 
 
 def _normalize_model(model_id: str) -> str:
-    """claude-opus-4-8 / claude-haiku-4-5-20251001 -> opus-4.8 / haiku-4.5 (idempotent)."""
+    """claude-opus-4-8 / claude-opus-5[1m] -> opus-4.8 / opus-5 (idempotent)."""
     m = model_id.strip().lower().removeprefix("claude-")
+    m = re.sub(r"\[[^\]]*\]$", "", m)  # [1m] 等の context-window 変種は同一モデル
     m = re.sub(r"-\d{8}$", "", m)
     return re.sub(r"-(\d+)-(\d+)$", r"-\1.\2", m)
 
@@ -1369,6 +1370,8 @@ class ModelTagTest(unittest.TestCase):
             "claude-opus-4-8": "opus-4.8",
             "claude-fable-5": "fable-5",
             "claude-haiku-4-5-20251001": "haiku-4.5",
+            "claude-opus-5[1m]": "opus-5",
+            "claude-opus-4-8[1m]": "opus-4.8",
             "opus-4.8": "opus-4.8",  # idempotent
         }
         for raw, expect in cases.items():
