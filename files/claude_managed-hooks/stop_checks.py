@@ -838,6 +838,7 @@ def strip_fences(text: str) -> str:
 
 
 _TAIL_BUFSIZE = 128 * 1024  # 実測 2545 turn の mean≈110KB / p75≈119KB を 1 read で覆う
+_WIND_DOWN_TAIL_TURNS = 8
 
 
 def _is_prompt(obj: dict) -> bool:
@@ -1362,6 +1363,10 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
     wind_down_tasks: list[str] = []
     if _handoff_mod is not None:
         ptext = _last_prompt_text(entries)
+        if not ptext:
+            ptext = _last_prompt_text(
+                _load_tail(transcript_path, turns=_WIND_DOWN_TAIL_TURNS)
+            )
         if ptext and _handoff_mod.HANDOFF_RE.search(ptext):
             wind_down_tasks = _handoff_mod.open_tasks(
                 str(payload.get("session_id") or ""), str(payload.get("cwd") or "")
@@ -2215,6 +2220,61 @@ class OpenTasksAtWindDownTest(unittest.TestCase):
 
     def test_run_passes_with_clean_tasks(self):
         self.assertEqual(self._run_with("お疲れさまでした", []), 0)
+
+    def _run_with_tails(self, tails):
+        import io
+        import types
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        fake = types.SimpleNamespace(
+            HANDOFF_RE=re.compile("お疲れさま"), open_tasks=lambda sid, cwd: ["#1 a"]
+        )
+        with (
+            mock.patch.object(sys.modules[__name__], "_handoff_mod", fake),
+            mock.patch.object(
+                sys.modules[__name__], "_load_tail", side_effect=tails
+            ) as load_tail,
+            redirect_stderr(io.StringIO()),
+        ):
+            code = _run({"transcript_path": "unused", "stop_hook_active": False})[0]
+        return code, load_tail
+
+    def test_run_widens_once_when_narrow_tail_has_only_harness_entries(self):
+        narrow = [
+            TurnMarkerTest._user(content="Stop hook feedback:\n[x]: y"),
+            TurnMarkerTest._asst("done."),
+        ]
+        wide = [TurnMarkerTest._user(content="お疲れさまでした"), *narrow]
+        code, load_tail = self._run_with_tails([narrow, wide])
+        self.assertEqual(code, 2)
+        self.assertEqual(load_tail.call_count, 2)
+        self.assertEqual(load_tail.call_args_list[1].kwargs["turns"], 8)
+
+    def test_run_does_not_widen_when_narrow_tail_has_human_prompt(self):
+        narrow = [
+            TurnMarkerTest._user(content="お疲れさまでした"),
+            TurnMarkerTest._asst("done."),
+        ]
+        code, load_tail = self._run_with_tails([narrow])
+
+        self.assertEqual(code, 2)
+        load_tail.assert_called_once_with("unused", turns=2)
+
+    def test_run_passes_when_wide_tail_has_only_harness_entries(self):
+        narrow = [
+            TurnMarkerTest._user(content="Stop hook feedback:\n[x]: y"),
+            TurnMarkerTest._asst("done."),
+        ]
+        wide = [
+            TurnMarkerTest._user(content="Skill /handoff is already loaded above;"),
+            *narrow,
+        ]
+
+        code, load_tail = self._run_with_tails([narrow, wide])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(load_tail.call_count, 2)
 
 
 class CourtWarningTest(unittest.TestCase):
