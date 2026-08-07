@@ -35,6 +35,9 @@ Exit Criteria:
   - 未コミット節の偽陽性 (ac295f4 + 3 重化 763a412): sandbox が書き込み禁止 path へ被せる mask stub は character device (22/22 実測) で、git は untracked として正しく報告する。**path roster (実測 22 件) ∧ 非 regular/dir/symlink ∧ size 0** の 3 条件 AND でのみ落とす。roster 未収載の stub は従来通り報告 (取りこぼしは偽陽性で済み、実 file を落とさない側に倒す)。実在しない path (削除) は残す
 - 既知 finding (本 session 発見・未修正・低 pri): `stop_checks.WorktreeCleanupTest.test_non_repo_fails_open_with_diagnostic` は git の stderr が 1 行である前提。temp dir が repo と別 filesystem だと git が `Stopping at filesystem boundary` を足して 2 行になり fail する (HEAD 8bf7291 でも再現 = 本 session の変更と無関係)
 
+- [ ] `skill_reminder_gate` を拡張し、codex-companion を叩く Bash を codex-delegation skill が active でない限り止める — 2026-08-08 に発注〜監視ターンで同 skill を invoke せず、既存規約 (running[]-empty monitor 禁止) を再違反した。CLAUDE.md「ルール違反 = 即 countermeasure」に基づく機構化
+- 環境 finding (2026-08-08 実測・要 root): memory index DB (`/var/lib/claude-rag-memory/memory_index.sqlite3`) が `nobody:nogroup 664` で uid scorer から書けず (`os.access(W_OK)` False)、この user の memory entry は **index に永久に載らない**。`memory_routing_gate.py` の sync は `--upsert` を stdout/stderr とも DEVNULL・`check=False` で呼び、`_upsert_entry` も sqlite エラーを握り潰すため**失敗が完全に不可視**。dir が 0777 ゆえ `-wal`/`-shm` は作れて健全に見える。結果 `--search` は root 由来の 13 件しか返さず、その中に skill と矛盾する reminder (「running[] が空になったら」) が現役で残る
+
 Work file: `last-session-handoff.md` の同名 section
 
 ### court バグ guard (command + stop_checks/skill 配線)
