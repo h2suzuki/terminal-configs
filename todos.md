@@ -21,11 +21,14 @@ Goal: wind-down open-task 機構 (inject + block)・handoff cross-check step・s
 
 Exit Criteria:
 - [x] 追補 deploy (hooks 3 本 0755 / handoff・codex-delegation skill / crosscheck-prompt.md / /usr/local/bin/claude_lang_lint) を canonical と `diff -q` 一致で検証 — 2026-08-06 ユーザー実行、7/7 identical・exec bit 確認・deployed claude_lang_lint --selftest OK (PATH 解決込み)
-- [ ] 実 session で open Task を残した wind-down に inject + block が発火し、todos.md 転記 + close で通過することを確認 (opportunistic)
+- [ ] 実 session で open Task を残した wind-down に inject + block が発火し、todos.md 転記 + close で通過することを確認 (opportunistic) — 2026-08-07 部分確認: inject は実 session payload で発火し実データ (未コミット 2 件 + open Task 3 件) を列挙。block 側は下記 shadow 欠陥を修正済 (40f89e8) で unit test + 実 transcript の関数レベル判定は通過。残るは **deploy 後の live block 観測**
 - [ ] handoff 実施 session で cross-check readback (fresh subagent) が blocking questions を出し、handoff 更新で収束することを確認 (opportunistic)
 - [x] 中断 session (marker 無し ∧ open Task 残) の pointer 注入を実機で 1 回観測 — 2026-08-07 意図的再現。deployed `/etc/claude-code/hooks/session_resume_context.py` (canonical と diff 一致) に startup payload を stdin 投入し、fixture HOME の marker 無し ∧ open Task 残 session で pointer 注入を確認。負 control 3 本 (marker あり / Task closed / source=resume) は全て沈黙
-- [ ] codex 委譲 1 回で「出力言語規約」節 + claude_lang_lint を実運用し、検出またはクリーン通過の実績を得る (opportunistic)
-- 検証上の caveat (2026-08-07 実測): Bash sandbox 内では repo 直下に存在しない HOME dotfile が `stat` に応答するため (`os.path.exists('<repo>/.bashrc')` が True・`listdir` には出ない)、sandbox 内で走らせた `git status --porcelain` は phantom untracked を 22 件返す。`git` は `excludedCommands` 対象で bare 実行時のみ sandbox 外 = clean。∴ git status 依存 hook (check_uncommitted_at_handoff) を Bash 経由で検証すると未コミット節が偽陽性になる — 判定は hook の live 発火で行う
+- [ ] codex 委譲 1 回で「出力言語規約」節 + claude_lang_lint を実運用し、検出またはクリーン通過の実績を得る (opportunistic) — 2026-08-07 発注書まで作成したが codex backend が 401 Unauthorized (未認証) で起動不可。`/codex:setup` 後の次回実発注へ持ち越し。claude_lang_lint 自体は本 session の hook 修正 diff に対し実行しクリーン通過 (`OK: no CJK additions in ASCII-baseline files`)
+- 本 session で修正した 2 欠陥 (deploy 待ち):
+  - wind-down block の shadow (40f89e8): harness が user role・str content で差し込む entry (Stop hook feedback / skill 再 invoke 通知 / slash command block) が最新 prompt として読まれ、`open-tasks-at-wind-down` が静かに無効化されていた。実 transcript で skill 通知 1 件による block 不発を再現
+  - 未コミット節の偽陽性 (ac295f4): sandbox が書き込み禁止 path へ被せる mask stub は character device (22/22 実測) で、git は untracked として正しく報告する。regular file / dir / symlink 以外の node を落として決定的に区別。実在しない path (削除) は残す
+- 既知 finding (本 session 発見・未修正・低 pri): `stop_checks.WorktreeCleanupTest.test_non_repo_fails_open_with_diagnostic` は git の stderr が 1 行である前提。temp dir が repo と別 filesystem だと git が `Stopping at filesystem boundary` を足して 2 行になり fail する (HEAD 8bf7291 でも再現 = 本 session の変更と無関係)
 
 ### court バグ guard (command + stop_checks/skill 配線)
 
