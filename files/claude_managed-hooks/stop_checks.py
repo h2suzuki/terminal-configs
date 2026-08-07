@@ -846,7 +846,6 @@ def strip_fences(text: str) -> str:
 
 
 _TAIL_BUFSIZE = 128 * 1024  # 実測 2545 turn の mean≈110KB / p75≈119KB を 1 read で覆う
-_WIND_DOWN_TAIL_TURNS = 8
 
 
 def _is_prompt(obj: dict) -> bool:
@@ -892,29 +891,6 @@ def _load_tail(path: str, turns: int = 1, bufsize: int = _TAIL_BUFSIZE) -> list[
             return tail  # boundary < turns: 集めた全件
     except OSError:
         return []
-
-
-# harness が user role・str content で差し込む非人間 entry (実 transcript で採取した 3 形式のみ)。
-HARNESS_ENTRY_RE = re.compile(
-    r"\A(?:Stop hook feedback:|Skill /\S+ is already loaded above;)"
-    r"|<(?:command-name|local-command-caveat|local-command-stdout)>"
-)
-
-
-def _is_harness_entry(content: str) -> bool:
-    """True for user-role entries the harness injects (hook feedback / skill notice / slash command)."""
-    return bool(HARNESS_ENTRY_RE.search(content))
-
-
-def _last_prompt_text(entries: list[dict]) -> str:
-    """Text of the newest human prompt entry, else ''."""
-    for obj in reversed(entries):
-        if not _is_prompt(obj):
-            continue
-        content = str(obj.get("message", {}).get("content", ""))
-        if not _is_harness_entry(content):
-            return content
-    return ""
 
 
 def _parse_ts(ts) -> float | None:
@@ -1368,17 +1344,13 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
         _emit_worktree_warnings(worktree_warnings)
         return 0, prompt_epoch, "", worktree_warnings
     declare_active = _declare_proceed_active(entries, time.time())
+    # wind-down 判定は prompt を受け取れる UserPromptSubmit hook が記録済 (transcript は見ない)。
     wind_down_tasks: list[str] = []
-    if _handoff_mod is not None:
-        ptext = _last_prompt_text(entries)
-        if not ptext:
-            ptext = _last_prompt_text(
-                _load_tail(transcript_path, turns=_WIND_DOWN_TAIL_TURNS)
-            )
-        if ptext and _handoff_mod.HANDOFF_RE.search(ptext):
-            wind_down_tasks = _handoff_mod.open_tasks(
-                str(payload.get("session_id") or ""), str(payload.get("cwd") or "")
-            )
+    session_id = str(payload.get("session_id") or "")
+    if _handoff_mod is not None and _handoff_mod.wind_down_signalled(session_id):
+        wind_down_tasks = _handoff_mod.open_tasks(
+            session_id, str(payload.get("cwd") or "")
+        )
     exit_code, warnings, blocking = _check(
         text,
         final_text,
@@ -2146,73 +2118,18 @@ class OpenTasksAtWindDownTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertFalse(blk)
 
-    def test_last_prompt_text_picks_newest_human_prompt(self):
-        entries = [
-            {"type": "user", "message": {"content": "older"}},
-            {
-                "type": "assistant",
-                "message": {"content": [{"type": "text", "text": "x"}]},
-            },
-            {"type": "user", "message": {"content": [{"type": "tool_result"}]}},
-            {"type": "user", "message": {"content": "お疲れさまでした"}},
-        ]
-        self.assertEqual(_last_prompt_text(entries), "お疲れさまでした")
-        self.assertEqual(_last_prompt_text([]), "")
-
-    # 出所: 2026-08-07 実機 — skill 再 invoke 通知が最新 user entry になり wind-down block が不発。
-    HARNESS_ENTRIES = (
-        "Stop hook feedback:\n[stop_checks.py]: declare-and-proceed (prose): ...",
-        "Skill /writing-todos is already loaded above; instructions unchanged.",
-        "<command-name>/clear</command-name>\n<command-message>clear</command-message>",
-        "<local-command-caveat>Caveat: The messages below were generated ...",
-    )
-
-    def test_harness_entries_do_not_shadow_human_prompt(self):
-        for injected in self.HARNESS_ENTRIES:
-            with self.subTest(injected=injected[:30]):
-                entries = [
-                    {"type": "user", "message": {"content": "お疲れさまでした"}},
-                    {"type": "user", "message": {"content": injected}},
-                ]
-                self.assertEqual(_last_prompt_text(entries), "お疲れさまでした")
-
-    def test_harness_only_transcript_yields_empty(self):
-        entries = [
-            {"type": "user", "message": {"content": c}} for c in self.HARNESS_ENTRIES
-        ]
-        self.assertEqual(_last_prompt_text(entries), "")
-
-    def test_human_prompt_naming_a_skill_is_not_harness(self):
-        entries = [
-            {
-                "type": "user",
-                "message": {"content": "Skill /handoff を実行してから終わります"},
-            }
-        ]
-        self.assertEqual(
-            _last_prompt_text(entries), "Skill /handoff を実行してから終わります"
-        )
-
-    def test_wind_down_blocks_when_harness_entry_is_newest(self):
-        if _handoff_mod is None:
-            self.skipTest("sibling handoff module unavailable")
-        entries = [
-            {"type": "user", "message": {"content": "お疲れさまでした"}},
-            {"type": "user", "message": {"content": "Stop hook feedback:\n[x]: y"}},
-        ]
-        self.assertTrue(_handoff_mod.HANDOFF_RE.search(_last_prompt_text(entries)))
-
-    def _run_with(self, prompt, tasks):
+    def _run_with(self, signalled, tasks):
         import io
         import types
         from contextlib import redirect_stderr
         from unittest import mock
 
         p = TurnMarkerTest._transcript(
-            [TurnMarkerTest._user(content=prompt), TurnMarkerTest._asst("done.")]
+            [TurnMarkerTest._user(content="作業して"), TurnMarkerTest._asst("done.")]
         )
         fake = types.SimpleNamespace(
-            HANDOFF_RE=re.compile("お疲れさま"), open_tasks=lambda sid, cwd: tasks
+            wind_down_signalled=lambda sid: signalled,
+            open_tasks=lambda sid, cwd: tasks,
         )
         with (
             mock.patch.object(sys.modules[__name__], "_handoff_mod", fake),
@@ -2220,69 +2137,14 @@ class OpenTasksAtWindDownTest(unittest.TestCase):
         ):
             return _run({"transcript_path": p, "stop_hook_active": False})[0]
 
-    def test_run_blocks_on_wind_down_with_tasks(self):
-        self.assertEqual(self._run_with("お疲れさまでした", ["#1 a"]), 2)
+    def test_run_blocks_when_signal_recorded_with_open_tasks(self):
+        self.assertEqual(self._run_with(True, ["#1 a"]), 2)
 
-    def test_run_passes_without_wind_down(self):
-        self.assertEqual(self._run_with("続けてください", ["#1 a"]), 0)
+    def test_run_passes_without_signal(self):
+        self.assertEqual(self._run_with(False, ["#1 a"]), 0)
 
     def test_run_passes_with_clean_tasks(self):
-        self.assertEqual(self._run_with("お疲れさまでした", []), 0)
-
-    def _run_with_tails(self, tails):
-        import io
-        import types
-        from contextlib import redirect_stderr
-        from unittest import mock
-
-        fake = types.SimpleNamespace(
-            HANDOFF_RE=re.compile("お疲れさま"), open_tasks=lambda sid, cwd: ["#1 a"]
-        )
-        with (
-            mock.patch.object(sys.modules[__name__], "_handoff_mod", fake),
-            mock.patch.object(
-                sys.modules[__name__], "_load_tail", side_effect=tails
-            ) as load_tail,
-            redirect_stderr(io.StringIO()),
-        ):
-            code = _run({"transcript_path": "unused", "stop_hook_active": False})[0]
-        return code, load_tail
-
-    def test_run_widens_once_when_narrow_tail_has_only_harness_entries(self):
-        narrow = [
-            TurnMarkerTest._user(content="Stop hook feedback:\n[x]: y"),
-            TurnMarkerTest._asst("done."),
-        ]
-        wide = [TurnMarkerTest._user(content="お疲れさまでした"), *narrow]
-        code, load_tail = self._run_with_tails([narrow, wide])
-        self.assertEqual(code, 2)
-        self.assertEqual(load_tail.call_count, 2)
-        self.assertEqual(load_tail.call_args_list[1].kwargs["turns"], 8)
-
-    def test_run_does_not_widen_when_narrow_tail_has_human_prompt(self):
-        narrow = [
-            TurnMarkerTest._user(content="お疲れさまでした"),
-            TurnMarkerTest._asst("done."),
-        ]
-        code, load_tail = self._run_with_tails([narrow])
-
-        self.assertEqual(code, 2)
-        load_tail.assert_called_once_with("unused", turns=2)
-
-    def test_run_passes_when_wide_tail_has_only_harness_entries(self):
-        narrow = [
-            TurnMarkerTest._user(content="Stop hook feedback:\n[x]: y"),
-            TurnMarkerTest._asst("done."),
-        ]
-        wide = [
-            TurnMarkerTest._user(content="Skill /handoff is already loaded above;"),
-            *narrow,
-        ]
-
-        code, load_tail = self._run_with_tails([narrow, wide])
-
-        self.assertEqual(code, 0)
-        self.assertEqual(load_tail.call_count, 2)
+        self.assertEqual(self._run_with(True, []), 0)
 
 
 class ClaimRegexTest(unittest.TestCase):

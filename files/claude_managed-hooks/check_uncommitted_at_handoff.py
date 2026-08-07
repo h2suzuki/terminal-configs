@@ -45,6 +45,37 @@ MAX_TASKS_LISTED = 10
 NATIVE_TASKS_DIR = os.path.expanduser("~/.claude/tasks")
 OPEN_STATUSES = ("pending", "in_progress", "blocked")
 
+# Stop payload は prompt を含まないので、 wind-down 判定は prompt を受け取れる本 hook が下し、
+# 結果だけを session 単位で残す (Stop 側が transcript を遡ると harness entry と読取幅に潰される)。
+WIND_DOWN_STATE_DIR = os.path.expanduser("~/.claude/hooks/state/wind_down_signal")
+
+
+def _signal_path(session_id: str) -> str:
+    return os.path.join(WIND_DOWN_STATE_DIR, session_id)
+
+
+def record_wind_down(session_id: str, signalled: bool) -> None:
+    """最新 prompt の wind-down 判定を session state へ上書き記録 (IO 失敗は無視 = fail-open)。"""
+    if not session_id:
+        return
+    try:
+        os.makedirs(WIND_DOWN_STATE_DIR, exist_ok=True)
+        with open(_signal_path(session_id), "w", encoding="utf-8") as f:
+            f.write("1" if signalled else "0")
+    except OSError:
+        pass
+
+
+def wind_down_signalled(session_id: str) -> bool:
+    """直近 prompt が wind-down だったか。 未記録 / 読取不能は False (fail-open)。"""
+    if not session_id:
+        return False
+    try:
+        with open(_signal_path(session_id), encoding="utf-8") as f:
+            return f.read().strip() == "1"
+    except OSError:
+        return False
+
 
 # sandbox が書き込み禁止 path へ被せる stub の実測 roster。 未収載の stub は従来通り報告する
 # (取りこぼしは偽陽性で済むが、 roster 無しの type 判定だけでは実 file を落としうる)。
@@ -182,7 +213,10 @@ def _run(payload: dict) -> int:
     prompt = payload.get("prompt")
     if not isinstance(prompt, str) or not prompt:
         return 0
-    if not HANDOFF_RE.search(prompt):
+    session_id = str(payload.get("session_id") or "")
+    signalled = bool(HANDOFF_RE.search(prompt))
+    record_wind_down(session_id, signalled)  # 毎 prompt 上書き = 最新 turn の判定が残る
+    if not signalled:
         return 0
     cwd = payload.get("cwd")
     if not isinstance(cwd, str) or not cwd:
@@ -196,7 +230,7 @@ def _run(payload: dict) -> int:
             "commit-discipline skill 「session wind-down 時に未コミットを残さない」 "
             "規約に従い、 整理して commit を済ませてください。"
         )
-    tasks = open_tasks(str(payload.get("session_id") or ""), cwd)
+    tasks = open_tasks(session_id, cwd)
     if tasks:
         sections.append(
             f"open な Task が {len(tasks)} 件残っています:\n{_listing(tasks, MAX_TASKS_LISTED)}\n\n"
@@ -338,6 +372,52 @@ class GitUncommittedTest(unittest.TestCase):
         completed = subprocess.CompletedProcess([], 1, stdout="?? a.py", stderr="boom")
         with mock.patch.object(subprocess, "run", lambda *a, **k: completed):
             self.assertEqual(_git_uncommitted(self.cwd), [])
+
+
+class WindDownSignalTest(unittest.TestCase):
+    """wind-down 判定を prompt 受領時に記録し Stop 側へ渡す (transcript を読ませない)。
+    出所: 2026-08-08 実機 — Stop payload に prompt が無く、 transcript 走査は harness entry と
+    読取幅に潰されて block が不発だった。"""
+
+    SID = "sid-signal"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        patcher = mock.patch.object(
+            sys.modules[__name__], "WIND_DOWN_STATE_DIR", tmp.name
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _submit(self, prompt: str) -> None:
+        module = sys.modules[__name__]
+        with (
+            mock.patch.object(module, "_git_uncommitted", lambda cwd: []),
+            mock.patch.object(module, "open_tasks", lambda sid, cwd: []),
+            mock.patch.object(module, "_emit_context", lambda msg: None),
+        ):
+            _run({"prompt": prompt, "cwd": "/tmp", "session_id": self.SID})
+
+    def test_unrecorded_session_is_not_signalled(self):
+        self.assertFalse(wind_down_signalled(self.SID))
+        self.assertFalse(wind_down_signalled(""))
+
+    def test_wind_down_prompt_records_signal(self):
+        self._submit("お疲れさまでした")
+        self.assertTrue(wind_down_signalled(self.SID))
+
+    def test_later_ordinary_prompt_clears_signal(self):
+        self._submit("お疲れさまでした")
+        self._submit("次の実装をお願いします")
+        self.assertFalse(wind_down_signalled(self.SID))
+
+    def test_unwritable_state_dir_fails_open(self):
+        with mock.patch.object(
+            sys.modules[__name__], "WIND_DOWN_STATE_DIR", "/proc/nonexistent/x"
+        ):
+            record_wind_down(self.SID, True)
+            self.assertFalse(wind_down_signalled(self.SID))
 
 
 class RunTest(unittest.TestCase):
