@@ -115,6 +115,14 @@ Combined Stop hook for org-managed Claude Code:
     surface_for_text の throttle が UPS surface と同一 entry の重複を抑止。 import / DB 不在は fail-open で
     surfacing 無効。 surfacing した Stop では counter を bump せず、 clean 終了 (継続後の retry) 側で 1 回 bump。
 
+  muted-memory-at-wall (bonus, exit 0):
+    「できない」 系の断定 / 誤読の自認を検出した turn の first Stop でのみ、 否定の周辺 ±120 字を
+    query に memory_surface.search_unfiltered (model filter を通さない) を引き、 実行中モデルの
+    tag を持たない上位 1 件を additionalContext で inject する。 sibling の memory-surface は
+    model filter 越しなので、 tag の無い entry はこの family でしか見えない。 floor 0.35 は実測
+    (該当局面の top 0.397 / 無関係文の top 0.270) の分離点。 stop_hook_active gate + .muted latch
+    で turn 内 1 回、 import / DB 不在も含め完全 fail-open。
+
 Stop hook input: JSON via stdin with session_id, transcript_path,
 hook_event_name = "Stop".
 
@@ -811,6 +819,23 @@ IMPOSSIBLE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# --- Pattern: muted-memory-at-wall (bonus, exit 0 via additionalContext) ---
+# 「できない」断定と誤読の自認は、 過去の教訓が最も効く局面。 surface hook は model filter を
+# 通すので tag の無い entry はそこに出ず、 この family だけが見せられる。 known-possible-denial
+# が既知可能 op の否定を block する側、 こちらは未知の否定に材料を出す側。
+WALL_DECLARATION_RE = re.compile(
+    r"実行\s?(でき(ない|ません)|不能|不可)"
+    r"|(私|当|この)\s?(の|側の)?\s?session\s?(から|では)[^。\n]{0,20}(でき(ない|ません)|不能)"
+    r"|(他|別)\s?の?\s?(session|セッション)[^。\n]{0,24}(でき|免除|違)"
+    r"|sandbox\s?の?\s?(せい|制約|制限)[^。\n]{0,12}(でき(ない|ません)|落ち|失敗)"
+    r"|hard\s?(wall|limit)"
+    r"|(壁|限界)\s?(だ|です|と(判断|結論))"
+    r"|読み違え(た|まし)|(誤読|勘違い)(し(た|まし)|でし)",
+    re.IGNORECASE,
+)
+MUTED_FLOOR = 0.35  # 実測: 該当局面の top hit 0.397 / 無関係文の top hit 0.270
+_MUTED_LATCH = ".muted"
+
 # --- Persistence path (broader than memory only) ---
 # memory subtree / skill dir / hook dir / CLAUDE.md への Write/Edit が hollow-claims の
 # pairing を満たす。 「claude_managed-skills/」「claude_managed-hooks/」 等の
@@ -1472,6 +1497,50 @@ def _memory_surface_at_stop(payload: dict, text: str) -> str | None:
     )
 
 
+def _situation_window(text: str, match: re.Match[str]) -> str:
+    """否定の周辺文が状況語を持つ — 一致 phrase 単体では検索語が痩せる。"""
+    lo, hi = max(0, match.start() - 120), min(len(text), match.end() + 120)
+    return re.sub(r"\s+", " ", text[lo:hi]).strip()
+
+
+def _muted_memory_at_stop(payload: dict, text: str) -> str | None:
+    """Wall-declaration path: a Stop additionalContext reason naming the top entry the model filter muted, else None; fires at most once/turn and is fully fail-open."""
+    if _memory_surface_mod is None or payload.get("stop_hook_active"):
+        return None
+    stripped = strip_fences(text or "")
+    m = WALL_DECLARATION_RE.search(stripped)
+    if not m or _stop_latched(payload, _MUTED_LATCH):
+        return None
+    cwd = payload.get("cwd")
+    if not isinstance(cwd, str) or not cwd:
+        cwd = os.getcwd()
+    try:
+        model = _memory_surface_mod._resolve_model(payload)
+        hits = _memory_surface_mod.search_unfiltered(
+            _situation_window(stripped, m),
+            _memory_surface_mod._encoded_project_id(cwd),
+        )
+    except Exception:
+        return None  # 旧 deploy の memory_surface に helper 不在でも fail-open
+    if not model or not hits:
+        return None
+    muted = [h for h in hits if h[0] >= MUTED_FLOOR and model not in h[1].split()]
+    if not muted:
+        return None
+    _stop_latch_set(payload, _MUTED_LATCH)
+    _score, models, path, reminder = muted[0]
+    return (
+        "<muted-memory>\n"
+        f"「{m.group(0)}」 と結論していますが、 この状況に一致する過去の教訓が models: に "
+        f"{model} を持たないため surface されていません (models={models}): "
+        f"{reminder or '(reminder 未設定)'} 詳細: {path}\n"
+        "読んでから結論を出し直してください。 今の状況にも当てはまるなら memory-routing skill の "
+        "Tag propagation で models: に自分の tag を追記し、 当てはまらなければそのまま完了して "
+        "構いません (「効きそうだから」 で tag を盛らない)。\n"
+        "</muted-memory>"
+    )
+
+
 # --- Turn marker (bonus, exit 0 only) ---
 # Shown to the USER via systemMessage at turn end, never entering model
 # context. Emitted only on exit 0 (see main): a turn has exactly one exit-0
@@ -1589,9 +1658,13 @@ def main() -> int:
         reason = _memory_surface_at_stop(payload, text)
     except Exception:
         reason = None
+    try:
+        muted = _muted_memory_at_stop(payload, text)
+    except Exception:
+        muted = None
     # worktree warnings ride the same additionalContext channel so the model actually sees them.
     wt_text = "\n\n".join(worktree_warnings)
-    combined = "\n\n".join(p for p in (reason, wt_text) if p)
+    combined = "\n\n".join(p for p in (reason, muted, wt_text) if p)
     if combined:
         print(
             json.dumps(
@@ -2238,6 +2311,16 @@ class StopMemorySurfaceTest(unittest.TestCase):
         m.surface_for_text = lambda *a, **k: list(picks)
         return m
 
+    @staticmethod
+    def _fake_search(hits, model="claude-opus-5[1m]"):
+        from unittest import mock
+
+        m = mock.Mock()
+        m._encoded_project_id = lambda c: c.replace("/", "-")
+        m._resolve_model = lambda p: model.removeprefix("claude-").removesuffix("[1m]")
+        m.search_unfiltered = lambda *a, **k: list(hits)
+        return m
+
     def test_none_when_module_absent(self):
         from unittest import mock
 
@@ -2287,6 +2370,93 @@ class StopMemorySurfaceTest(unittest.TestCase):
             self.assertIsNone(
                 _memory_surface_at_stop({"stop_hook_active": False, "cwd": "/p"}, "out")
             )
+
+    def test_muted_none_when_module_absent(self):
+        from unittest import mock
+
+        with mock.patch.object(self.M, "_memory_surface_mod", None):
+            self.assertIsNone(
+                _muted_memory_at_stop({"stop_hook_active": False}, "実行できません")
+            )
+
+    def test_muted_none_when_stop_hook_active(self):
+        from unittest import mock
+
+        mod = self._fake_search([(0.9, "opus-4.8", "/m/x.md", "lesson X")])
+        with mock.patch.object(self.M, "_memory_surface_mod", mod):
+            self.assertIsNone(
+                _muted_memory_at_stop(
+                    {"stop_hook_active": True, "cwd": "/p"}, "実行できません"
+                )
+            )
+
+    def test_muted_none_without_wall_declaration(self):
+        """壁宣言が無い turn では検索そのものを走らせない。"""
+        from unittest import mock
+
+        mod = self._fake_search([(0.9, "opus-4.8", "/m/x.md", "lesson X")])
+        with mock.patch.object(self.M, "_memory_surface_mod", mod):
+            self.assertIsNone(
+                _muted_memory_at_stop(
+                    {"stop_hook_active": False, "cwd": "/p"}, "テストが通りました。"
+                )
+            )
+
+    def test_muted_none_below_floor(self):
+        """MUTED_FLOOR 未満は無関係語の noise — 実測で無関係文の top hit は 0.270。"""
+        from unittest import mock
+
+        mod = self._fake_search([(MUTED_FLOOR - 0.01, "opus-4.8", "/m/x.md", "lesson")])
+        with mock.patch.object(self.M, "_memory_surface_mod", mod):
+            self.assertIsNone(
+                _muted_memory_at_stop(
+                    {"stop_hook_active": False, "cwd": "/p"}, "実行できません"
+                )
+            )
+
+    def test_muted_none_when_running_model_is_tagged(self):
+        """自 tag を持つ entry は surface hook 側が既に出せる — 本 family の対象外。"""
+        from unittest import mock
+
+        mod = self._fake_search([(0.9, "opus-4.8 opus-5", "/m/x.md", "lesson")])
+        with mock.patch.object(self.M, "_memory_surface_mod", mod):
+            self.assertIsNone(
+                _muted_memory_at_stop(
+                    {"stop_hook_active": False, "cwd": "/p"}, "実行できません"
+                )
+            )
+
+    def test_muted_reason_names_entry_and_retag_step(self):
+        """mute された上位 entry を reminder / path / tag 追記手順つきで返す。"""
+        from unittest import mock
+
+        mod = self._fake_search(
+            [
+                (0.9, "opus-5", "/m/tagged.md", "見えている教訓"),
+                (0.8, "opus-4.8", "/m/muted.md", "mute された教訓"),
+            ]
+        )
+        with mock.patch.object(self.M, "_memory_surface_mod", mod):
+            r = _muted_memory_at_stop(
+                {"stop_hook_active": False, "cwd": "/p"}, "実行できません"
+            )
+        assert r is not None
+        self.assertIn("mute された教訓", r)
+        self.assertIn("/m/muted.md", r)
+        self.assertIn("Tag propagation", r)
+        self.assertNotIn("/m/tagged.md", r)
+
+    def test_wall_regex_conjugations(self):
+        """誤読 / 勘違い は「し」を挟む活用が実際の発話形。「この session だけ」は通常発話で外す。"""
+        for hit in (
+            "誤読しました",
+            "勘違いしました",
+            "読み違えました",
+            "実行できません",
+        ):
+            self.assertTrue(WALL_DECLARATION_RE.search(hit), hit)
+        for miss in ("この session だけで完結させます", "テストが通りました"):
+            self.assertFalse(WALL_DECLARATION_RE.search(miss), miss)
 
     def _main_out(self, run_ret, reason):
         import io

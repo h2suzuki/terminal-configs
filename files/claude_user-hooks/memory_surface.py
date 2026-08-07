@@ -32,7 +32,8 @@ Modes:
 
 Besides the CLI modes, `surface_for_text()` is importable so other hooks (e.g. the
 Stop hook) run the same hybrid retrieval against an arbitrary text source, not just
-the prompt.
+the prompt. `search_unfiltered()` is the same for the `--search` path — the Stop hook
+uses it to report entries the model filter would have muted.
 
 The embed model DB (vocab token -> fp16 vector) is built once by the
 standalone stdlib-only builder CLI that the installer deploys to
@@ -1047,20 +1048,16 @@ def _main_query() -> int:
     return 0
 
 
-def _main_search(argv: list[str]) -> int:
-    """Cross-model ranked lookup for /memory-routing: no filter, no throttle, no logging."""
-    if not argv:
-        sys.stderr.write("usage: --search <text> [project_id]\n")
-        return 1
-    text = argv[0]
-    project_id = argv[1] if len(argv) > 1 else ""
+def search_unfiltered(
+    text: str, project_id: str = ""
+) -> list[tuple[float, str, str, str]] | None:
+    """Cross-model ranked hits (score, models, path, reminder) desc; None = DB 不在, [] = hit ゼロ."""
     query = _build_query(text)
     if query is None:
-        sys.stderr.write("no searchable tokens in text\n")
-        return 1
+        return []
     con = _connect()
     if con is None:
-        return 1
+        return None
     try:
         rows = _bm_candidates(con, query, project_id)
         both = _hybrid_scored(con, text, project_id, rows)
@@ -1070,21 +1067,38 @@ def _main_search(argv: list[str]) -> int:
             scored = {fp: _fuse(s, 0.0) for fp, _r, s in rows if s is not None}
         tags = _entry_tags(con, project_id)
         reminders = {fp: r for fp, r, _s in rows}
-        for fp, score in sorted(scored.items(), key=lambda kv: -kv[1])[:SEARCH_LIMIT]:
-            sys.stdout.write(
-                "%.3f\t%s\t%s\t%s\n"
-                % (
-                    score,
-                    tags.get(fp, MODELS_DEFAULT),
-                    fp,
-                    _lookup_reminder(con, project_id, fp, reminders),
-                )
+        return [
+            (
+                score,
+                tags.get(fp, MODELS_DEFAULT),
+                fp,
+                _lookup_reminder(con, project_id, fp, reminders),
             )
+            for fp, score in sorted(scored.items(), key=lambda kv: -kv[1])[
+                :SEARCH_LIMIT
+            ]
+        ]
+    finally:
+        con.close()
+
+
+def _main_search(argv: list[str]) -> int:
+    """Cross-model ranked lookup for /memory-routing: no filter, no throttle, no logging."""
+    if not argv:
+        sys.stderr.write("usage: --search <text> [project_id]\n")
+        return 1
+    if _build_query(argv[0]) is None:
+        sys.stderr.write("no searchable tokens in text\n")
+        return 1
+    try:
+        hits = search_unfiltered(argv[0], argv[1] if len(argv) > 1 else "")
     except sqlite3.Error as e:
         sys.stderr.write("search failed: %s\n" % e)
         return 1
-    finally:
-        con.close()
+    if hits is None:
+        return 1
+    for row in hits:
+        sys.stdout.write("%.3f\t%s\t%s\t%s\n" % row)
     return 0
 
 
@@ -1552,6 +1566,63 @@ class ModelTagTest(unittest.TestCase):
             finally:
                 con.close()
         self.assertEqual(n, 0)
+
+    def _seed(self, entries):
+        """entries: [(basename, models line, keywords)] -> {basename: abs path}"""
+        import tempfile
+
+        root = tempfile.mkdtemp()
+        paths = {}
+        for name, models, keywords in entries:
+            p = os.path.join(root, name)
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(
+                    f"reminder: {name} の教訓\nkeywords: {keywords}\n"
+                    f"models: {models}\n\nbody\n"
+                )
+            paths[name] = p
+        with _write_lock():
+            con = _connect()
+            assert con is not None
+            try:
+                for p in paths.values():
+                    self.assertEqual(_upsert_entry(con, p, None), 0)
+            finally:
+                con.close()
+        return paths
+
+    def test_search_unfiltered_ranks_and_defaults_untagged(self):
+        """search_unfiltered は (score, models, path, reminder) を降順で返し、models: 無しは MODELS_DEFAULT 表示。"""
+        from unittest import mock
+
+        db = self._tmp_db()
+        with mock.patch.object(sys.modules[__name__], "DB_PATH", db):
+            paths = self._seed(
+                [
+                    ("tagged.md", "fable-5", "deploy repo 放置問題"),
+                    ("untagged.md", "", "deploy repo 放置問題 sandbox 除外設定"),
+                ]
+            )
+            hits = search_unfiltered("deploy repo 放置問題")
+        assert hits is not None
+        self.assertEqual(
+            [h[0] for h in hits], sorted((h[0] for h in hits), reverse=True)
+        )
+        by_path = {h[2]: h for h in hits}
+        self.assertEqual(by_path[paths["tagged.md"]][1], "fable-5")
+        self.assertEqual(by_path[paths["untagged.md"]][1], MODELS_DEFAULT)
+        self.assertIn("tagged.md の教訓", by_path[paths["tagged.md"]][3])
+
+    def test_search_unfiltered_none_when_db_unavailable(self):
+        """DB 不在は None (hit ゼロの [] と区別され、CLI が exit 1 を保てる)。"""
+        from unittest import mock
+
+        with mock.patch.object(sys.modules[__name__], "_connect", lambda: None):
+            self.assertIsNone(search_unfiltered("deploy repo 放置問題"))
+
+    def test_search_unfiltered_empty_on_untokenizable_text(self):
+        """検索語を作れない text は [] (None ではない) — 呼び手が DB 障害と区別できる。"""
+        self.assertEqual(search_unfiltered("   "), [])
 
 
 class PixelL4InjectTest(unittest.TestCase):
