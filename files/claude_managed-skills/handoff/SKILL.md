@@ -111,7 +111,7 @@ next-me は handoff の該当 section を read 後 1 拍 verbalize する: Statu
 
 - `last-session-handoff.md` または `drafts/<task-slug>-handoff.md` に新 section を append または既存 section を overwrite (作業途中で再開必要な場合のみ、 そうでなければ skip)
 - open Task 0 件 (持ち越しは todos.md へ転記済み・全 Task close 済み)
-- cross-check readback を最低 1 round 実施 (blocking questions 0 件、 または残 question を Caveat に明記)
+- cross-check readback を最低 1 round 実施 (section を書いた場合のみ。 blocking questions 0 件、 または残 question を Caveat に明記)
 - `todos.md` 対応 parent task block の `Work file:` フィールドに handoff doc path を記載・維持
 - session 内の commit 完了 (`commit-discipline`)
 - handoff 実施時は session-end message 冒頭に resume マーカー行 (`~~~~ … Handoff (sid) ~~~~`) を出力 (次 session の handoff 済み判定 anchor)
