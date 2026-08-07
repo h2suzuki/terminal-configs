@@ -13,7 +13,7 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
 1. **発注書を書く**: 依頼は chat 文でなく発注書 file（作業 dir の drafts/ 等）に固定する。含める: スコープ（触ってよい path / 触らない path）、仕様の優先順位（受け入れ修正節が本文に優先する等の明文）、完了条件（fmt / clippy / test の実行と **結果ログの file 保存**）、「コミットはしない（受け入れレビュー後に発注側が行う）」の明記
    - 対象 file kind の規約 skill（`writing-code` / `writing-bash` / `writing-skills` 等）を発注側で invoke し、その規約を発注書に転記する。skill gate は subagent と codex の書き込みには効かないため、規約は発注書経由でしか届かない
    - **「出力言語規約」節を必須で置く**: 納品物（code comment / CLI 出力 / log message / doc）の言語は対象 project / file の既存言語規約に従い、1 文書内で言語を混在させない。発注書自体の言語（日本語）を納品物へ持ち込まないことを明記する（日本語発注書からの leak で英語文書・CLI 出力に日本語が混入し、敵対レビューも素通しした実例。user 報告 2026-08-06）
-   - `fuser -k` / `pkill` 等の kill-by-port を禁止し、port が塞がっていれば別 port を使い（この場合も excludedCommands 登録 launcher または `!` によるホスト側起動に限定する）、止められない process は放置して報告することも含める。subagent が port 5273 を `fuser -k` で掃除した直後にホスト側の vite が落ちた（2026-07-15）
+   - `fuser -k` / `pkill` 等の kill-by-port を禁止し、port が塞がっていれば別 port を使い（この場合も excludedCommands 登録 launcher によるホスト側起動に限定する）、止められない process は放置して報告することも含める。subagent が port 5273 を `fuser -k` で掃除した直後にホスト側の vite が落ちた（2026-07-15）
    - **「適用される既存裁定」節を必須で置く**: 発注対象の scope を制約する user の既存決定（機能やデータ範囲の凍結・自動/手動の区別・スコープ境界等）を発注書へ転記する。裁定を運ばない発注は、実装者が裁定違反の default を選んでも止まらない（データ再同期の是正発注が過去データ取得凍結の裁定を欠き、空状態 fallback が無依頼の大規模バックフィルとして実装されレビュー 2 巡も通過した実例 2026-07-23）
    - **「作業量上限（worst-case bound）」節を必須で置く**: 外部取得・大量計算・一括変換など作業量が対象規模に比例する発注は、「初回・空状態で 1 実行が最大何を行うか」を上限として明文化し、上限をテストで pin させる。レビュー発注（受け入れ・cross-model・敵対レビュー等）にも同じ blast-radius 上限の観点を必須で含める（レビュー発注に空状態の upper bound が無く、無依頼の大規模データ取得がレビュー 2 巡を通過した実例 2026-07-23）
    - **所要見積もりバンドと調査発動しきい値（目安 = 見積もり 2 倍）を発注時に宣言する**: 規模 × build 状態（cold/warm）× テスト範囲から見積もる。見積もりを持たない監視は生存確認にとどまる（2026-07-23 の user 指摘）
@@ -57,7 +57,7 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
 - **stall 停止は kill でなく companion の cancel を使う**: sandbox から PID は見えないため codex plugin の `scripts/codex-companion.mjs` を `node` で起動して `cancel <job-id> --json` を渡し、`status: cancelled` を確認する。cancel 成功を実証済みで、resume は read-only sandbox を引き継ぐため fresh thread で再発注する（2026-07-15）
 - **実装委譲は手動 git worktree で起動する**: `task --write` は発注側が `git worktree add`（repo 内 wt-*/ 等・`.git/info/exclude` 登録・ライフサイクルは発注側管理）で作成した worktree を cwd にして起動する。Agent `isolation: "worktree"` は使わない — harness の unchanged 自動掃除が走行中の codex の worktree を削除した実例（probe 書込先 drafts/ が gitignore 下で unchanged 判定・2026-07-21）。監視用 babysitter agent は非隔離で spawn し worktree へ cd して運用する。`--write` なしの read-only review task は隔離しなくてよい。main worktree への委譲で別 session の変更 14 file が堆積し、うち `main.rs` は行レベルで双方の追加行が混在した（2026-07-20）
 - **sandbox で検証不能な gates はホスト側実行 + ログ保存を発注に含める**: network 遮断で依存 fetch やテストが sandbox で走らない場合、codex に「結果全文を file に tee」まで依頼し、そのログを受け入れ根拠にする
-- **長寿命 listener の起動を codex task に委譲しない**: detached process は task 終了時に破棄され、`/var/tmp` も read-only である。`nohup ... &` が started を返しても listener と log が残らなかったため、検証 server は excludedCommands 登録 launcher でホスト側起動する（2026-07-07）。登録 launcher が無ければユーザーに `!` プレフィックスでのホスト起動を依頼する（provide-user-instructions）
+- **長寿命 listener の起動を codex task に委譲しない**: detached process は task 終了時に破棄され、`/var/tmp` も read-only である。`nohup ... &` が started を返しても listener と log が残らなかったため、検証 server は excludedCommands 登録 launcher でホスト側起動する（2026-07-07）。登録 launcher が無ければ、ユーザーに Claude Code の外の terminal での起動を依頼する（provide-user-instructions）。`!` プレフィックスは auto mode の実行許可を与えるだけで sandbox の外には出ないため、ホスト起動の手段にならない
 - **workflow script 内に codex 生成ステップを入れない**: 静穏待ちができないため。生成は workflow 外、レビューのみ workflow 化する
 - **静穏 find の exit を握り潰さない**: `2>/dev/null` + exit 非チェックは「常に 0 件 = 静穏」の偽陰性を生む（Invalid timestamp が不可視化された実例）
 

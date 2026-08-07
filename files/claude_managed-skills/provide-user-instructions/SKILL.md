@@ -17,6 +17,12 @@ user に手動実行を依頼するコマンドは、 毎回そのままコピ�
 - **ファイル path は完全形** で、 user が cd しなくても貼り付けて動くもの。 絶対 path か repo root 相対、 半端な相対 path は避ける
 - **prose 説明は code block の外**、 code block 内に混ぜない
 
+### 実行場所: `!` prefix は sandbox の外ではない
+
+- **`!` prefix を sandbox 回避の手段として案内しない**。 `!` が与えるのは auto mode の実行許可だけで、 コマンド自体は sandbox 内で走る。 「`!` を付けて流してください」 は host 実行の依頼にならない
+- session 内で host 権限が要るなら `sandbox.excludedCommands` に登録済みのコマンドを使う (一覧は設定から確認する。 記憶で判断しない)
+- 一覧に無く host 権限が要る作業 (`/etc` 配下への書き込み・`sudo` を要する deploy 等) は、 **Claude Code の外の terminal** で実行してもらう。 依頼文でもその旨を明示する
+
 ### Trigger context
 
 「user に host 側で実行してもらう」「ホスト側ターミナルから」「ユーザーの手動で」「お手元で」 等の文脈が出たら、 その直後に独立 code block で完全コマンドを置く。

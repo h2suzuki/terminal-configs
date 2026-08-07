@@ -48,7 +48,9 @@ SANDBOX_SYMPTOM = re.compile(
 )
 ASSIGNMENT = re.compile(r"^\w+=\S*$")
 # 照合前に剥がされない wrapper — 内側が除外コマンドでも sandbox に落ちる。
-WRAPPERS = frozenset({"sudo", "env", "npx", "bunx", "uvx", "nohup", "xargs"})
+# timeout / time / nice / nohup / stdbuf / command / builtin / noglob / xargs は
+# 剥がされる側なので、ここに入れると誤検知になる。
+WRAPPERS = frozenset({"sudo", "env", "npx", "bunx", "uvx"})
 SEPARATOR = re.compile(r"&&|\|\||[;|&\n]")  # top-level 制御演算子のみ
 COMMENT = re.compile(r"#.*$", re.MULTILINE)
 # $(...)/`...` は host 化不能ゆえマスクして segment 対象外にする (F1)。
@@ -133,16 +135,25 @@ def _roster_suffix(payload: dict, patterns: list[str]) -> str:
 
 
 def _indirect_mentions(cmd: str, patterns: list[str]) -> list[str]:
-    """Return excluded commands named somewhere other than a segment's head."""
+    """Return excluded commands reached through a form that misses the match."""
     heads = {bare_form(p).split()[0] for p in patterns if bare_form(p)}
     scanned = QUOTED.sub(" ", SUBST.sub(" ", HEREDOC.sub(_strip_heredoc, cmd)))
     found: list[str] = []
     for segment in SEPARATOR.split(COMMENT.sub("", scanned)):
         tokens = segment.split()
-        for position, token in enumerate(tokens):
-            name = os.path.basename(token)
-            if name in heads and position > 0 and name not in found:
-                found.append(name)
+        while tokens and ASSIGNMENT.match(tokens[0]):
+            tokens.pop(0)
+        if not tokens:
+            continue
+        leader = os.path.basename(tokens[0])
+        # 剥がされる wrapper と裸名の先頭呼びは一致する — 誤検知させない。
+        if "/" in tokens[0]:
+            candidates = [leader]
+        elif leader in WRAPPERS:
+            candidates = [os.path.basename(t) for t in tokens[1:]]
+        else:
+            continue
+        found.extend(n for n in candidates if n in heads and n not in found)
     return found
 
 
@@ -268,7 +279,6 @@ class GateTest(unittest.TestCase):
         "env git push",
         "env FOO=1 dsa foo",
         "npx dsa foo",
-        "cd app && nohup git push",
         "env -i git push",
     )
     # 実装は segment 単位照合で、直接代入と一部 wrapper を剥がしてから照合する。
@@ -281,6 +291,9 @@ class GateTest(unittest.TestCase):
         "cd app && git push",
         "echo hi ; cargo test x",
         "git",
+        "timeout 5 git push",
+        "nohup dsa_launcher restart db",
+        "nice -n 10 cargo test x",
         "git push && echo done",
         "git log | head",
         "timeout 5 git push",

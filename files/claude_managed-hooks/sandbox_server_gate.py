@@ -120,8 +120,8 @@ def _run(payload: object, now: float) -> None:
     _record_advised(session_id, now)
     _emit(
         "検証サーバーの起動コマンドが検出されました。 sandbox からは host browser に "
-        "届きません。 excludedCommands に登録された launcher か `!` での host 実行を"
-        "検討してください。" + _roster_suffix(payload)
+        "届きません。 excludedCommands に登録された launcher を使ってください。"
+        + _roster_suffix(payload)
     )
 
 

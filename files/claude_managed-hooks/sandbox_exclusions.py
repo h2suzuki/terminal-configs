@@ -24,6 +24,12 @@ STATE_DIR = os.path.join(
     os.path.expanduser("~"), ".claude", "hooks", "state", "sandbox_exclusion_guard"
 )
 CLAIM_STATE_PREFIX = "warn-"
+# `!` は auto mode の許可を与えるだけ — sandbox の外に出る手段と取り違えない。
+BANG_CAVEAT = (
+    "ユーザーへ `!` prefix での実行を依頼しても sandbox の外には出ません。 `!` が与えるのは "
+    "auto mode の実行許可だけで、 sandbox の許可ではありません。 host 権限が要るなら上の"
+    "一覧を使い、 一覧で足りない作業は Claude Code の外の terminal で実行してもらってください。"
+)
 
 
 def config_paths() -> list[str]:
@@ -160,8 +166,8 @@ def roster_text(patterns: list[str]) -> str:
     """Render the live host-escape roster plus the direct-invocation rule."""
     if not patterns:
         return (
-            "この環境の sandbox.excludedCommands は空です。 host 実行が要る作業は、"
-            "ユーザーに `!` prefix での実行を依頼してください。"
+            "この環境の sandbox.excludedCommands は空です。 session 内から sandbox の外へ"
+            "出る手段はありません。\n" + BANG_CAVEAT
         )
     listed = " / ".join(f"`{p}`" for p in patterns)
     sample = bare_form(patterns[0])
@@ -177,7 +183,7 @@ def roster_text(patterns: list[str]) -> str:
         f"`env {sample} ...` `npx {sample} ...` (wrapper 経由) / quote 内の言及。 "
         "これらは sandbox に落ちるので、失敗しても sandbox の制限が原因ではありません。\n"
         "plugin 由来の CLI も、 一覧にあれば host で走ります。 "
-        "「plugin だから sandbox を出られない」 は誤りです。"
+        "「plugin だから sandbox を出られない」 は誤りです。\n" + BANG_CAVEAT
     )
 
 
@@ -232,6 +238,12 @@ class RosterTest(unittest.TestCase):
 
     def test_roster_corrects_the_plugin_misconception(self):
         self.assertIn("plugin", roster_text(self.PATTERNS))
+
+    def test_roster_denies_that_bang_prefix_escapes_the_sandbox(self):
+        for text in (roster_text(self.PATTERNS), roster_text([])):
+            self.assertIn("`!` prefix での実行を依頼しても sandbox の外には出ません", text)
+            self.assertIn("auto mode の実行許可だけ", text)
+            self.assertIn("Claude Code の外の terminal", text)
 
     def test_roster_handles_an_empty_list(self):
         text = roster_text([])

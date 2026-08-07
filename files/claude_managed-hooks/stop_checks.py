@@ -606,6 +606,40 @@ ORDER_QUESTION_PATTERNS: list[str] = [
 ]
 ORDER_QUESTION_RE = re.compile("|".join(ORDER_QUESTION_PATTERNS), re.IGNORECASE)
 
+# --- Pattern: bang-prefix-host-escape (block on hit, no pairing) ---
+# `!` prefix は auto mode の実行許可を与えるだけで sandbox の外には出ない。 user へ
+# 「`!` で流して」 と依頼しても host 実行にならず、 prose ゆえ tool hook では捕捉不能
+# — Stop が唯一の channel (provide-user-instructions)。
+BANG_HOST_REQUEST_RE = re.compile(
+    r"`?!`?\s*(?:prefix|プレフィックス)?\s*(?:を\s*(?:付けて|つけて)|付きで|で)"
+    r"[^。\n]{0,30}?(?:実行|起動|流)[^。\n]{0,15}?"
+    r"(?:ください|下さい|いただけ|もらえ|ましょう|します)"
+)
+# 同一文が「出ません」等で否定していれば本 rule の説明文なので発火させない。
+BANG_HOST_NEGATION_RE = re.compile(
+    r"出ません|出られません|なりません|ありません|ではない|効きません|限りません"
+)
+
+
+def _bang_host_escape(text: str) -> str | None:
+    """Return a block reason when `!` is offered to the user as a sandbox escape."""
+    # strip_fences は inline backtick span も消すため使えない — `!` 自体が消える。
+    for line in re.split(r"[。\n]", re.sub(r"```.*?```", " ", text, flags=re.DOTALL)):
+        m = BANG_HOST_REQUEST_RE.search(line)
+        if not m or BANG_HOST_NEGATION_RE.search(line):
+            continue
+        return (
+            f"bang-prefix-host-escape: 「{m.group(0).strip()}」 と `!` での実行を user に "
+            "依頼しています。 `!` が与えるのは auto mode の実行許可だけで、 コマンド自体は "
+            "sandbox 内で走ります — sandbox を出る手段ではありません。 host 権限が要るなら "
+            "sandbox.excludedCommands 登録済みのコマンドを使い、 一覧に無い作業 (/etc への "
+            "書き込み・sudo 必須の deploy 等) は 「Claude Code の外の terminal で実行して "
+            "ください」 と明示して依頼してください (provide-user-instructions)。 "
+            "該当文を書き換えてから再出力してください。"
+        )
+    return None
+
+
 # --- Pattern: confirm/routing-to-user (block unless declare-and-proceed invoked this turn) ---
 # 散文の decidable な確認 (「これで良い?」) / routing 二択 (「A するか B するか」) の user 投げを Stop で捕捉。
 # AskUserQuestion 版は declare_and_proceed_gate.py が PreToolUse で deny、 散文は Stop の decision:block が唯一の channel。
@@ -1106,6 +1140,11 @@ def _check(
     denial = _known_possible_denial(text)
     if denial:
         blocking.append(denial)
+
+    # bang-prefix-host-escape (block, no pairing): `!` は sandbox の外に出る手段ではない
+    bang = _bang_host_escape(text)
+    if bang:
+        blocking.append(bang)
 
     # order-question-to-user (block, no pairing): 順序質問の user 投げは judgment 回避
     m = ORDER_QUESTION_RE.search(stripped)
@@ -1743,6 +1782,28 @@ class EnforcementFamilyTest(unittest.TestCase):
         # 影響大きい (形容詞) は除外、 影響大 (label) は発火。
         self.assertFalse(any("evaluative" in b for b in self._blk("影響大きいと思う")))
         self.assertTrue(any("evaluative" in b for b in self._blk("影響大と評価")))
+
+    # --- bang-prefix-host-escape: `!` は sandbox の外に出る手段ではない ---
+    def test_bang_prefix_host_request_blocks(self):
+        for q in (
+            "この 2 行を `!` を付けて流していただけますか?",
+            "! を付けて実行してください",
+            "`!` プレフィックスでホスト起動を依頼します",
+        ):
+            code, _w, blk = self._c(q)
+            self.assertEqual(code, 2, q)
+            self.assertTrue(any("bang-prefix-host-escape" in b for b in blk), q)
+
+    def test_bang_prefix_correction_and_plain_requests_pass(self):
+        for q in (
+            "`!` を付けて流しても host 実行にはなりません",
+            "`!` prefix は auto mode の許可だけで sandbox の外には出ません",
+            "Claude Code の外の terminal で実行してください",
+            "この 2 行を実行していただけますか?",
+        ):
+            self.assertFalse(
+                any("bang-prefix-host-escape" in b for b in self._blk(q)), q
+            )
 
     # --- H4: confirm/routing-to-user prose gate ---
     def test_confirm_prose_blocks_without_skill(self):
