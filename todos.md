@@ -23,8 +23,9 @@ Exit Criteria:
 - [x] 追補 deploy (hooks 3 本 0755 / handoff・codex-delegation skill / crosscheck-prompt.md / /usr/local/bin/claude_lang_lint) を canonical と `diff -q` 一致で検証 — 2026-08-06 ユーザー実行、7/7 identical・exec bit 確認・deployed claude_lang_lint --selftest OK (PATH 解決込み)
 - [ ] 実 session で open Task を残した wind-down に inject + block が発火し、todos.md 転記 + close で通過することを確認 (opportunistic)
 - [ ] handoff 実施 session で cross-check readback (fresh subagent) が blocking questions を出し、handoff 更新で収束することを確認 (opportunistic)
-- [ ] 中断 session (marker 無し ∧ open Task 残) の pointer 注入を実機で 1 回観測 (opportunistic、意図的再現でも可)
+- [x] 中断 session (marker 無し ∧ open Task 残) の pointer 注入を実機で 1 回観測 — 2026-08-07 意図的再現。deployed `/etc/claude-code/hooks/session_resume_context.py` (canonical と diff 一致) に startup payload を stdin 投入し、fixture HOME の marker 無し ∧ open Task 残 session で pointer 注入を確認。負 control 3 本 (marker あり / Task closed / source=resume) は全て沈黙
 - [ ] codex 委譲 1 回で「出力言語規約」節 + claude_lang_lint を実運用し、検出またはクリーン通過の実績を得る (opportunistic)
+- 検証上の caveat (2026-08-07 実測): Bash sandbox 内では repo 直下に存在しない HOME dotfile が `stat` に応答するため (`os.path.exists('<repo>/.bashrc')` が True・`listdir` には出ない)、sandbox 内で走らせた `git status --porcelain` は phantom untracked を 22 件返す。`git` は `excludedCommands` 対象で bare 実行時のみ sandbox 外 = clean。∴ git status 依存 hook (check_uncommitted_at_handoff) を Bash 経由で検証すると未コミット節が偽陽性になる — 判定は hook の live 発火で行う
 
 ### court バグ guard (command + stop_checks/skill 配線)
 
