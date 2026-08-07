@@ -201,11 +201,12 @@ export TY_NO_MODIFY_PATH=1
 run bash /tmp/ty_install.sh
 
 
-# Chrome
-[ -s /tmp/google-chrome.deb ] ||
-run curl -o /tmp/google-chrome.deb \
-  -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-run apt install -y /tmp/google-chrome.deb
+# Chrome; the .deb registers Google's apt repo, so the full-upgrade above keeps it current
+if [ "$(dpkg-query -W -f='${db:Status-Status}' google-chrome-stable 2>/dev/null)" != installed ]; then
+    run curl -o /tmp/google-chrome.deb \
+      -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+    run apt install -y /tmp/google-chrome.deb
+fi
 run apt install -y upower 'fonts-ipafont*' 'fonts-ipaexfont*' 'fonts-noto-color-emoji'
 
 run systemctl enable upower
