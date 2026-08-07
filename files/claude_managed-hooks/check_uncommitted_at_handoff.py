@@ -25,6 +25,7 @@ import glob
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -43,6 +44,15 @@ MAX_TASKS_LISTED = 10
 
 NATIVE_TASKS_DIR = os.path.expanduser("~/.claude/tasks")
 OPEN_STATUSES = ("pending", "in_progress", "blocked")
+
+
+def _is_mask_stub(path: str) -> bool:
+    """True for the device-node stubs a sandbox binds over write-denied paths (never repo content)."""
+    try:
+        mode = os.lstat(path).st_mode
+    except OSError:
+        return False  # 消えた path は削除された tracked file — 正当な未コミット変更ゆえ残す
+    return not (stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode))
 
 
 def _git_uncommitted(cwd: str) -> list[str]:
@@ -69,7 +79,7 @@ def _git_uncommitted(cwd: str) -> list[str]:
         if len(line) < 4:
             continue
         path_part = line[3:].strip()
-        if path_part:
+        if path_part and not _is_mask_stub(os.path.join(cwd, path_part)):
             files.append(path_part)
     return files
 
@@ -235,6 +245,45 @@ class OpenTasksTest(unittest.TestCase):
             f.write("not json")
         self._mytask([{"id": "1", "status": "pending"}, "not a dict"])
         self.assertEqual(open_tasks(self.SID, self.cwd), ["#1"])
+
+
+class GitUncommittedTest(unittest.TestCase):
+    """_git_uncommitted: sandbox mask stub を落とし、 実 path と削除は残す。
+    出所: 2026-08-07 実機 — sandbox 内で走らせると write-deny path の device stub が
+    untracked 22 件として報告された (実在の untracked file は regular と判定)。"""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.cwd = tmp.name
+
+    def _status(self, *lines: str) -> list[str]:
+        completed = subprocess.CompletedProcess(
+            [], 0, stdout="\n".join(lines), stderr=""
+        )
+        with mock.patch.object(subprocess, "run", lambda *a, **k: completed):
+            return _git_uncommitted(self.cwd)
+
+    def test_non_regular_node_dropped(self):
+        # chardev の作成には root 権限が要るので FIFO で代替する
+        os.mkfifo(os.path.join(self.cwd, "masked"))
+        self.assertEqual(self._status("?? masked"), [])
+
+    def test_regular_dir_and_symlink_kept(self):
+        open(os.path.join(self.cwd, "a.py"), "w").close()
+        os.mkdir(os.path.join(self.cwd, "sub"))
+        os.symlink("a.py", os.path.join(self.cwd, "link"))
+        self.assertEqual(
+            self._status("?? a.py", "?? sub", "?? link"), ["a.py", "sub", "link"]
+        )
+
+    def test_deleted_path_kept(self):
+        self.assertEqual(self._status(" D gone.py"), ["gone.py"])
+
+    def test_git_failure_stays_fail_open(self):
+        completed = subprocess.CompletedProcess([], 1, stdout="?? a.py", stderr="boom")
+        with mock.patch.object(subprocess, "run", lambda *a, **k: completed):
+            self.assertEqual(_git_uncommitted(self.cwd), [])
 
 
 class RunTest(unittest.TestCase):
