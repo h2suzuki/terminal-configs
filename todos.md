@@ -24,8 +24,8 @@ Goal: `[ -s /tmp/<artifact> ] ||` cache ガードのうち version を script �
 hazard: script の version を上げても `/tmp` に同名の旧 artifact が残っていれば download を skip し、旧 version を無言で install する。Chrome と違い apt repo 非登録ゆえ以降の `full-upgrade` でも追いつかない。
 
 Exit Criteria:
-- [ ] 方針を決定 (案: cache path に version を含める / cache ガード撤去 / 導入済み version と直書き version を突き合わせ)
-- [ ] 決めた方針を両 .sh へ反映し、shellcheck 新規指摘ゼロを確認して commit
+- [x] 方針を決定 — **現状維持**。 ユーザー判断「apt repo からのインストールでないならそのままでよい」。 live 確認で `/etc/apt/sources.list.d/` に delta / markdown-reader の source は無く (`google-chrome.sources` のみが .deb postinst 由来)、条件に合致
+- [x] 決めた方針を両 .sh へ反映 — 現状維持ゆえ変更ゼロ。 反映すべき差分なし
 
 Note: 残る 7 件の `[ -s /tmp/... ]` ガード (uv / ruff / ty / antigravity の installer script、gpg 鍵 3 件) は version 非固定または内容安定ゆえ対象外。
 
