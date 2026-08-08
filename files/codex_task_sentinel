@@ -258,21 +258,26 @@ def tree_age(root: str | None, now: float) -> float | None:
     return None if newest is None else now - newest
 
 
-def log_silences(log_path: str) -> list[float]:
-    """Gaps between the runner's own log lines — the shape of its quiet spells.
+def longest_silence(log_path: str) -> float | None:
+    """The runner's longest quiet spell in this log; None when it holds no pair of stamps.
 
     Reads the same stamp-ordered view the command pairing uses: a quoted line
     would otherwise open a fake gap and teach the baseline that this workspace
-    routinely goes quiet for as long as that quote is old.
+    routinely goes quiet for as long as that quote is old. Carries one stamp at
+    a time — a completed log is hundreds of thousands of short event lines, and
+    a list per line is the same exhaustion a huge single line was.
     """
-    stamps = []
+    worst = None
+    previous = None
     for line in event_lines(log_lines(log_path)):
         m = LOG_TS.match(line)
-        if m:
-            stamps.append(
-                time.mktime(time.strptime(m.group(1)[:19], "%Y-%m-%dT%H:%M:%S"))
-            )
-    return [b - a for a, b in zip(stamps, stamps[1:], strict=False)]
+        if not m:
+            continue
+        stamp = time.mktime(time.strptime(m.group(1)[:19], "%Y-%m-%dT%H:%M:%S"))
+        if previous is not None and (worst is None or stamp - previous > worst):
+            worst = stamp - previous
+        previous = stamp
+    return worst
 
 
 def baseline_silence(jobs_dir: str, exclude: str) -> float | None:
@@ -288,9 +293,9 @@ def baseline_silence(jobs_dir: str, exclude: str) -> float | None:
         record = job_record(record_path)
         if record is None or record.get("status") != BASELINE_STATUS:
             continue
-        gaps = log_silences(record_path[: -len(".json")] + ".log")
-        if gaps and (worst is None or max(gaps) > worst):
-            worst = max(gaps)
+        quiet = longest_silence(record_path[: -len(".json")] + ".log")
+        if quiet is not None and (worst is None or quiet > worst):
+            worst = quiet
     return worst
 
 
@@ -865,7 +870,9 @@ class WatchTest(unittest.TestCase):
                 "[2026-08-08T00:00:00.000Z] quoted line from yesterday\n"
                 "[2026-08-09T00:01:00.000Z] c\n"
             )
-        self.assertLess(max(log_silences(p)), 120.0)
+        silence = longest_silence(p)
+        assert silence is not None
+        self.assertLess(silence, 120.0)
 
     def test_event_lines_keep_forward_stamps_only(self):
         lines = [
@@ -1026,7 +1033,26 @@ class WatchTest(unittest.TestCase):
                 "2026-08-08T00:03:30",
             ),
         )
-        self.assertEqual(log_silences(log), [30.0, 180.0])
+        self.assertEqual(longest_silence(log), 180.0)
+
+    def test_the_baseline_scan_does_not_grow_with_the_log(self):
+        """完走 log は短い event 行を何十万も持ちうる — 行数分の list を作れば同じ MemoryError に戻る。"""
+        import tracemalloc
+
+        _root, _rec, log = self._state("ws", "task-x", "completed")
+        with open(log, "w", encoding="utf-8") as f:
+            f.writelines(
+                "[2026-08-08T%02d:%02d:%02d.000Z] step\n"
+                % (i // 3600, i // 60 % 60, i % 60)
+                for i in range(80_000)
+            )
+        tracemalloc.start()
+        try:
+            self.assertIsNotNone(longest_silence(log))
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        self.assertLess(peak, 512 * 1024, f"peak {peak} bytes は行数に比例している")
 
     def test_baseline_ignores_the_watched_job_and_live_ones(self):
         """baseline は完走した他 job から取る — 自分の無音を自分の基準にしない。"""
