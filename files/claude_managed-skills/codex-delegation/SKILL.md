@@ -52,8 +52,8 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
   | exit | 意味 | 呼び手の行動 |
   |---|---|---|
   | 0 | 完了 | 成果物を受け入れレビューへ |
-  | 3 | 完了後 hang | 成果物を検証してから cancel |
-  | 4 | stall | log を読み、cancel して fresh 再発注 |
+  | 3 | 完了後 hang (`--trust-log` 時のみ) | 成果物を検証してから cancel |
+  | 4 | stall (`--trust-log` 時のみ) | log を読み、cancel して fresh 再発注 |
   | 5 | 成果物なし完了 | log が何を報告したか読む |
   | 6 | 未登録 | 起動が成立していない。発注し直す |
   | 7 | timeout | 待ち続けるか判断する |
@@ -63,8 +63,9 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
   | 11 | 生存 (`--once`) | re-arm するか調査に入る |
   | 12 | 見積もり 2 倍超 | log を発注書と突き合わせて調査 |
   | 13 | record 破損 | stall と読まない |
-  | 14 | 検証不能 | ツリーを読めない。workspaceRoot を確認 |
+  | 14 | 検証不能 | ツリーを読めない、または既定で log もツリーも静穏。evidence を読んで人が決める |
 
+  **既定は cancel を指示しない**: plugin が message 本文を無加工で append するため、log の同じ bytes が「本文が引用した偽 event」と「真正 event」の両方を表しうる。静穏 log から stall を断定できないので、既定は exit 14 で evidence（成果物 ready / 末尾複数行 / 未完了 command / cancel コマンド）を渡し、判断は呼び手が行う。`--trust-log` を明示した呼び手だけが exit 3 / 4 の断定へ落ちる。下の「3 分岐で exit する」rule の cancel 条件も、機械に委ねてよいのは opt-in した監視だけと読む
   `--once` は 1 cadence だけ評価して返すので、自分で cadence を持つ監視に使う。`--estimate-seconds` を渡すと見積もりの 2 倍で exit 12 に落ち、「乖離したら調査」が機械化される
 - **wrapper が報告する task id を監視対象にしない**: 1 回の起動で task が複数登録されることがあり、wrapper 報告の id が即終了した短命 task で、実作業は別 id という実例がある（2026-07-21）。`status --json` で heartbeat が更新され続けている running task を監視対象にする
 - **完了は成果物で裏取りする**: `git diff`、対象 file の mtime、companion `latestFinished` の id 変化のいずれかを確認する。`git diff README.md` が空で初めて非起動に気づいた実例があり、成果物ゼロは非起動または未着手と扱う（2026-07-15）。probe file は起動登録の確認に使い、完了の証拠にはしない

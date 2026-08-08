@@ -13,7 +13,8 @@ rules from the codex-delegation skill live here as code instead:
 - Every exit is a verdict carrying what it was based on. A verdict that sends
   the reader off to investigate by hand is the failure this tool exists to
   remove, so silence is always reported against this workspace's own history,
-  alongside the tree activity, the last log line, and the cancel command.
+  alongside the tree activity, whether the deliverable is ready, the tail of the
+  log, any command started but never seen to finish, and the cancel command.
 
 Signals are limited to what is observable from inside the sandbox and bindable
 to this job. Process liveness is not: the sandbox runs in its own pid
@@ -28,7 +29,7 @@ Takes a job id plus the deliverable it must produce; --help lists the rest and
 Exit codes, and what the caller does with each:
 
   0  done              the deliverable is this run's and the job completed
-  3  done-hung         deliverable ready, runner still registered — verify, then cancel
+  3  done-hung         --trust-log only: deliverable ready, runner still registered — verify, then cancel
   4  stall             --trust-log only: log and tree quiet — cancel, re-issue fresh
   5  no-deliverable    completed but produced nothing complete — read the log
   6  never-registered  no record in any searched root — the launch did not take
@@ -39,7 +40,7 @@ Exit codes, and what the caller does with each:
   11 alive             --once only: still running; re-arm or investigate
   12 over-estimate     twice --estimate-seconds with no verdict — investigate
   13 corrupt           the record is present but unreadable — do not read it as a stall
-  14 unverifiable      nothing observable settles it — read the tail, then decide
+  14 unverifiable      nothing observable settles it — read the evidence, then decide
 """
 
 from __future__ import annotations
@@ -164,10 +165,9 @@ def log_lines(log_path: str) -> list[str]:
         return []
 
 
-def last_log_line(log_path: str, limit: int = 160) -> str:
-    """The job's last log line — what it was doing when it went quiet."""
-    lines = log_lines(log_path)
-    return lines[-1].strip()[:limit] if lines else ""
+def log_tail(log_path: str, count: int = 6, limit: int = 200) -> list[str]:
+    """The last few raw log lines — one line only ever shows the newest short command, not the context it displaced."""
+    return [ln.strip()[:limit] for ln in log_lines(log_path)[-count:]]
 
 
 def command_text(line: str) -> str:
@@ -196,8 +196,8 @@ def event_lines(lines: list[str]) -> list[str]:
     return kept
 
 
-def command_may_be_running(lines: list[str]) -> bool:
-    """Whether a command might still be in flight — used only to hold a verdict back.
+def pending_commands(lines: list[str]) -> list[str]:
+    """Commands started and never seen to finish, oldest first.
 
     Ends are matched to starts by the command they name; the plugin shortens that
     text to 96 characters, so two long commands can share a key. An end matching
@@ -213,7 +213,12 @@ def command_may_be_running(lines: list[str]) -> bool:
                 if pending[i] == text:
                     del pending[i]
                     break
-    return bool(pending)
+    return pending
+
+
+def command_may_be_running(lines: list[str]) -> bool:
+    """Whether a command might still be in flight — used only to hold a verdict back."""
+    return bool(pending_commands(lines))
 
 
 def tree_age(root: str | None, now: float) -> float | None:
@@ -428,6 +433,8 @@ def evidence(
     tree: float | None,
     threshold: float,
     baseline: float | None,
+    artifact: str | None = None,
+    ready: bool = False,
 ) -> str:
     """Everything the verdict rests on, so no follow-up investigation is needed."""
     root = record.get("workspaceRoot")
@@ -438,11 +445,21 @@ def evidence(
         if baseline and age
         else ""
     )
+    tail = log_tail(log) or ["(なし)"]
+    # exit 14 は ready を verdict へ畳むので、畳んだ値をここで戻さないと成果物あり / なしが読めない。
+    made = f"{'ready' if ready else 'not ready'} {artifact}" if artifact else "指定なし"
     lines = [
         f"  job    : {job_id} status={record.get('status') or '不明'} root={root or '不明'}",
         f"  無音   : {quiet}{versus} / しきい値 {int(threshold)}s",
         f"  ツリー : {'書き込みなし' if tree is None else f'最終書き込み {int(tree)}s 前'}",
-        f"  最終行 : {last_log_line(log) or '(なし)'}",
+        f"  成果物 : {made}",
+        f"  末尾   : {tail[0]}",
+        *(f"           {ln}" for ln in tail[1:]),
+    ]
+    unfinished = pending_commands(log_lines(log))
+    if unfinished:
+        lines.append(f"  未完了 : {' / '.join(unfinished)}")
+    lines += [
         f"  log    : {log}",
         f"  cancel : {cancel_command(job_id, root if isinstance(root, str) else None)}",
     ]
@@ -480,6 +497,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         tree = tree_age((record or {}).get("workspaceRoot"), now)
         # Elapsed runs from the job's own start so re-arming does not reset the clock.
         elapsed = now - (stamp_epoch((record or {}).get("startedAt")) or started)
+        ready = artifact_ready(args.artifact, args.token, run_since(record or {}))
         if not os.path.exists(record_path):
             # The plugin prunes to its newest 50 jobs regardless of status, so a
             # record that was here and is gone is lost history, not a verdict.
@@ -499,7 +517,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 str(record.get("status") or ""),
                 age,
                 tree,
-                artifact_ready(args.artifact, args.token, run_since(record)),
+                ready,
                 threshold,
                 args.hang_seconds,
                 expects_artifact=args.artifact is not None,
@@ -527,7 +545,17 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             code, headline = out
             print(headline)
             print(
-                evidence(args.job_id, record or {}, log, age, tree, threshold, baseline)
+                evidence(
+                    args.job_id,
+                    record or {},
+                    log,
+                    age,
+                    tree,
+                    threshold,
+                    baseline,
+                    args.artifact,
+                    ready,
+                )
             )
             return code
         time.sleep(args.poll_seconds)
@@ -1127,6 +1155,61 @@ class WatchTest(unittest.TestCase):
         )
         for expect in ("task-x", "646s", "147s", "4.4 倍", "/w", "cancel"):
             self.assertIn(expect, text)
+
+    def _evidence(self, log, artifact=None, ready=False):
+        return evidence(
+            "task-x",
+            {"status": "running", "workspaceRoot": "/w"},
+            log,
+            646.0,
+            900.0,
+            420.0,
+            None,
+            artifact,
+            ready,
+        )
+
+    def test_evidence_states_the_deliverable_three_ways(self):
+        """exit 14 は ready を verdict へ畳む — 出力に残さないと成果物あり / なしを人が区別できない。"""
+        _root, _rec, log = self._state("ws", "task-x", "running")
+        ready = self._evidence(log, "/w/r.md", True)
+        missing = self._evidence(log, "/w/r.md", False)
+        self.assertNotEqual(ready, missing)
+        self.assertIn("/w/r.md", ready)
+        self.assertIn("ready", ready)
+        self.assertIn("not ready", missing)
+        self.assertIn("指定なし", self._evidence(log))
+
+    def test_evidence_tail_is_more_than_one_line(self):
+        """1 行では直近の短命 command しか見えず、その前の文脈が落ちる。"""
+        _root, _rec, log = self._state("ws", "task-x", "running")
+        with open(log, "w", encoding="utf-8") as f:
+            f.writelines("[2026-08-08T22:00:0%dZ] step %d\n" % (i, i) for i in range(5))
+        text = self._evidence(log)
+        for i in (2, 3, 4):
+            self.assertIn("step %d" % i, text)
+
+    def test_evidence_names_a_start_the_tail_pushed_out(self):
+        """稼働中 command の start が後続の短命 command に押し出されても消してはいけない。"""
+        _root, _rec, log = self._state("ws", "task-x", "running")
+        with open(log, "w", encoding="utf-8") as f:
+            f.write("[2026-08-08T22:00:00.000Z] Running command: cargo test --all\n")
+            for i in range(1, 7):
+                f.write("[2026-08-08T22:00:%02d.000Z] Running command: true\n" % i)
+                f.write(
+                    "[2026-08-08T22:00:%02d.500Z] Command completed: true (exit 0)\n"
+                    % i
+                )
+        self.assertIn("cargo test --all", self._evidence(log))
+
+    def test_pending_commands_names_the_unfinished_start(self):
+        lines = [
+            "[2026-08-08T22:00:00.000Z] Running command: cargo test",
+            "[2026-08-08T22:00:01.000Z] Running command: true",
+            "[2026-08-08T22:00:02.000Z] Command completed: true (exit 0)",
+        ]
+        self.assertEqual(pending_commands(lines), ["cargo test"])
+        self.assertTrue(command_may_be_running(lines))
 
 
 if __name__ == "__main__":
