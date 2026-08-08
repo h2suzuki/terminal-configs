@@ -50,7 +50,9 @@ Goal: 監視判定が plugin の実挙動と skill の 4 分岐に一致する�
 Exit Criteria:
 
 - [x] 敵対レビューの新規 material 指摘がゼロで安定する — 7 巡目まで実施し、4〜7 巡目は連続で新規ゼロ
-- [ ] 下記の上流依存 1 件が解消し、stall 判定に原理的曖昧さが残らない
+- [x] log 由来の曖昧さが正常 job の cancel を招かない — 既定で cancel 導線 (exit 4/3) を出さず、
+  exit 14 で末尾と cancel コマンドを示して判断を呼び手に渡す (206ce7a)。断定したい呼び手は `--trust-log`
+- [ ] 上流 (plugin) が per-command lifecycle を record に持ち、stall 判定の原理的曖昧さ自体が消える
 
 7 巡の敵対レビュー (gpt-5.6-sol / xhigh) で挙がった 13 + 2 + 3 件はすべて修正済み
 (a746ef5 / b9f32d0 / fabe928 / bb56980 / 7c4d532 / 2607f1d / 890349a / 1f37e46)。
@@ -58,11 +60,12 @@ Exit Criteria:
 
 - [ ] **command lifecycle が log 層でしか観測できない (上流依存)**: plugin の `appendLogBlock` は
   message 本文を無加工で append するため、本文が log 行を引用すると event と区別できない。
-  現状は片方向利用 (抑制のみ、stall は作らない) + stall 文面での明示に留めており、
-  「引用された終了行が実在の開始をちょうど相殺する」低頻度経路だけが残る。
-  閉じるには job record に per-command lifecycle (item id) を永続化する必要があり、
-  それを書けるのは plugin 側だけ (record が持つ `phase` は investigating / editing / running
-  等の粗い活動状態で、command 単位ではない)。plugin 更新時に再評価する
+  11 巡の敵対レビューで「真 event を一切落とさず正しい stall 判定も保つ reader は作れない」と
+  結論が出ている (stamp 単調性 + コマンド名の対応付けで実 corpus の誤検知は 0 だが、
+  本文が未来 stamp を持てば通る)。害の側は 206ce7a で消した。
+  原理的に閉じるには job record に per-command lifecycle (item id) の永続化が要り、
+  書けるのは plugin 側だけ (`phase` は investigating / editing / running 等の粗い活動状態で
+  command 単位ではない)。plugin 更新時に再評価する
 
 ### worktree-cleanup が稼働中の codex worktree を削除候補にする
 
