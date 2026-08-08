@@ -28,6 +28,21 @@ Exit Criteria:
 - [x] 壁宣言 probe を stop_checks の muted-memory-at-wall family として畳み込み — 別 session 提案の中身 (WALL_RE corpus / 否定周辺 ±120 字を query 化 / mute された entry の報告) を採用し、単独 hook 化で懸念した再 block loop と turn counter 二重 bump は exit 0 + additionalContext + `.muted` latch で解消。floor は実測分離点 0.35。`search_unfiltered()` を memory_surface に切り出して CLI と共用。stop_checks 107 tests (新規 7) / memory_surface 31 tests (新規 3)
 - [ ] deploy (ユーザー手動): `files/claude_user-hooks/memory_surface.py` → `~/.claude/hooks/`、`files/claude_managed-hooks/stop_checks.py` → `/etc/claude-code/hooks/`、`files/claude_managed-skills/memory-routing/SKILL.md` → `/etc/claude-code/skills/memory-routing/` (`~/.claude/skills/` 側と同一 inode)
 
+codex (gpt-5.6-sol / xhigh) レビュー指摘の是正。deploy 前に少なくとも最初の 2 つを直す:
+
+- [ ] **発火 0 回の経路**: enforcement block が出た turn は `main()` が muted lookup 前に return し、retry は `stop_hook_active` gate で止まる。壁宣言と謝罪等が同居する典型応答ほど一度も出ない。block 判定と同じ first Stop で lookup し block stderr に併記する
+- [ ] **latch が初回 turn で無効**: `_stop_latch_key()` が `.turns` file の存在に依存し、muted warning を返した Stop は marker/bump に到達しないため fresh session では latch が no-op。`.turns` 不在時も turn key 0 として扱い、check-and-set を atomic 化する
+- [ ] **壁 regex の corpus 総取り替え**: 実測で誤検知 8/8・取りこぼし 8/8。疑問「〜できないか」・否定「〜わけではない」・条件「〜場合」・成功報告「別セッションでも実行できました」が全て発火し、逆に「実行はできません」「権限がないため変更できません」「誤読していました」を落とす。positive/negative 同数以上の table-driven test を先に作る
+- [ ] **floor を backend 別に較正**: `MUTED_FLOOR=0.35` は hybrid 2 点のみが根拠。embed DB 不在時は `_fuse(s, 0.0)` 経由で BM25 <= -7 相当となり、通常 surface の BM25 <= -2 と桁が違う。hybrid / BM25 で定数を分け、labeled corpus で PR を測る
+- [ ] **観測できない**: fail-open が全て無言の `None` で、`search_unfiltered()` は記録もしないため「0 件」が無事故か feature 死かを区別できない。rate-limit した error log と wall 専用 event を残す
+- [ ] **mismatch 行が emit の throttle を食う**: `_throttle_check()` の SQL に `kind` 条件が無く、mute 記録が 15 分の抑止に効く。tag 追記直後の動作確認が空振りする (実測: 60 秒後も空、901 秒後に初めて surface)。`kind='emit'` のみ見るようにする
+- [ ] **model source の一本化**: `_current_turn()` が持つ当該 turn の model を捨て、`_resolve_model()` が statusline cache を transcript より優先して再解決している。壁文と同じ turn の model を muted lookup へ渡す
+- [ ] **検索に時間上限が無い**: 元 probe の subprocess 20 秒 watchdog を失い、同一 process 呼び出しになった。例外 catch は hang に効かないので Stop 全体が止まりうる
+- [ ] **提示が top-1 のみ**: 弱い誤 hit が真の教訓を shadow する。上位 2-3 件を score つきで返すか、margin が小さい時だけ複数出す
+- [ ] **強制力の設計**: warning 化で「読んでから結論を出し直す」は保証でなくなった。同じ壁を繰り返し、かつ提示 path を Read していない 2 回目だけ既存 advise-once に統合して block する案を検討する
+- [ ] **`models:` の役割分離 (設計)**: provenance (どの model で観測したか) と delivery allowlist (どの model に見せるか) を同じ field が兼ねるため、model 更新の度に corpus が cold-start する。`observed_models:` と `applies_to:` に分ける
+- [ ] **「2 回失敗」の機械 trigger**: skill には書いたが hook は tool failure を観測しない。current turn の tool_result 失敗 signature を数え、2 回目で横断検索を起動する
+
 ## Medium
 
 ### Handoff 強化 + 言語 lint 機構の deploy と実運用確認
