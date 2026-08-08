@@ -150,12 +150,34 @@ def heartbeat_age(log_path: str, now: float) -> float | None:
 
 
 def log_lines(log_path: str) -> list[str]:
-    """Non-empty log lines, newest last, left edge intact so events can be anchored."""
+    """The runner's log with message bodies' first lines removed.
+
+    A block is written as a blank line, a titled line, then the body verbatim,
+    while ordinary events carry no leading blank. The line right after a titled
+    block start is therefore body text, whatever it looks like — which is where
+    a quoted log line lands when a message opens by citing one.
+    """
     try:
         with open(log_path, encoding="utf-8", errors="replace") as f:
-            return [ln.rstrip("\n") for ln in f if ln.strip()]
+            raw = [ln.rstrip("\n") for ln in f]
     except OSError:
         return []
+    kept = []
+    after_blank = False
+    body_next = False
+    for line in raw:
+        if not line.strip():
+            after_blank = True
+            continue
+        if body_next:
+            body_next = False
+            after_blank = False
+            continue
+        if after_blank:
+            body_next = True  # this is a block title; the next line is its body
+            after_blank = False
+        kept.append(line)
+    return kept
 
 
 def last_log_line(log_path: str, limit: int = 160) -> str:
@@ -228,18 +250,19 @@ def tree_age(root: str | None, now: float) -> float | None:
 
 
 def log_silences(log_path: str) -> list[float]:
-    """Gaps between timestamped log lines — the shape of this runner's quiet spells."""
+    """Gaps between the runner's own log lines — the shape of its quiet spells.
+
+    Reads the same stamp-ordered view the command pairing uses: a quoted line
+    would otherwise open a fake gap and teach the baseline that this workspace
+    routinely goes quiet for as long as that quote is old.
+    """
     stamps = []
-    try:
-        with open(log_path, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                m = LOG_TS.match(line)
-                if m:
-                    stamps.append(
-                        time.mktime(time.strptime(m.group(1)[:19], "%Y-%m-%dT%H:%M:%S"))
-                    )
-    except OSError:
-        return []
+    for line in event_lines(log_lines(log_path)):
+        m = LOG_TS.match(line)
+        if m:
+            stamps.append(
+                time.mktime(time.strptime(m.group(1)[:19], "%Y-%m-%dT%H:%M:%S"))
+            )
     return [b - a for a, b in zip(stamps, stamps[1:], strict=False)]
 
 
@@ -348,9 +371,12 @@ def verdict(
         # Only the companion's own success status is success; cancel and failure
         # are what this tool exists to catch, deliverable on disk or not.
         if status != BASELINE_STATUS:
+            # Say when a complete deliverable is nonetheless sitting there: the
+            # run is still not a result, but re-issuing blind wastes what exists.
+            left = " — a complete deliverable is present, so read it before re-issuing"
             return EXIT_NOT_COMPLETED, (
                 f"not-completed: job {status} — re-issue on a fresh thread "
-                "(a cancelled or failed run is not a result)"
+                f"(a cancelled or failed run is not a result){left if ready else ''}"
             )
         if not (ready or not expects_artifact):
             return EXIT_ENDED_WITHOUT_ARTIFACT, (
@@ -638,6 +664,15 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(self._code("failed", 1.0, True), EXIT_NOT_COMPLETED)
         self.assertEqual(self._code("cancelled", 1.0, True), EXIT_NOT_COMPLETED)
 
+    def test_a_present_deliverable_is_named_even_when_the_run_failed(self):
+        """完成した成果物があるなら言う — 黙って再発注させると書けたものを捨てる。"""
+        out = verdict("failed", 1.0, None, True, 420, 300)
+        assert out is not None
+        self.assertIn("deliverable is present", out[1])
+        bare = verdict("failed", 1.0, None, False, 420, 300)
+        assert bare is not None
+        self.assertNotIn("deliverable is present", bare[1])
+
     def test_terminal_status_with_deliverable_is_done(self):
         """completed だけでは足りない — skill の完了は status とツリー静穏の AND。"""
         self.assertEqual(self._code("completed", 1.0, True, tree=600.0), EXIT_DONE)
@@ -744,6 +779,38 @@ class WatchTest(unittest.TestCase):
             "[2026-08-09T00:00:01.000Z] Command completed: ls (exit 0)",
         ]
         self.assertTrue(command_may_be_running(lines), "2 回目の ls はまだ走っている")
+
+    def test_block_body_first_line_is_not_read_as_an_event(self):
+        """block は 空行 + title + 本文 で書かれる — title 直後の行は本文と確定できる。"""
+        import tempfile
+
+        p = os.path.join(tempfile.mkdtemp(), "job.log")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(
+                "[2026-08-09T00:00:00.000Z] Running command: sleep 600\n"
+                "\n"
+                "[2026-08-09T00:00:01.000Z] Assistant message\n"
+                "[2026-08-09T00:00:02.000Z] Command completed: sleep 600 (exit 0)\n"
+            )
+        self.assertTrue(
+            command_may_be_running(log_lines(p)), "本文の引用で実行中を消さない"
+        )
+
+    def test_a_quoted_gap_does_not_teach_the_baseline(self):
+        """引用の古い stamp が完走 job の無音記録を水増しすると stall 検出が死ぬ。"""
+        import tempfile
+
+        p = os.path.join(tempfile.mkdtemp(), "job.log")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(
+                "[2026-08-09T00:00:00.000Z] a\n"
+                "[2026-08-09T00:00:30.000Z] b\n"
+                "\n"
+                "[2026-08-09T00:00:31.000Z] Assistant message\n"
+                "[2026-08-08T00:00:00.000Z] quoted line from yesterday\n"
+                "[2026-08-09T00:01:00.000Z] c\n"
+            )
+        self.assertLess(max(log_silences(p)), 120.0)
 
     def test_event_lines_keep_forward_stamps_only(self):
         lines = [
