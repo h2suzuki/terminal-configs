@@ -47,6 +47,7 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
 - **完了 monitor は当該 task の起動登録確認後に張る**: probe file の出現または companion `status --json` の running[] に当該 task の新 id が現れるまで待つ。未登録のまま監視だけが成立した実例がある（2026-07-15）
 - **running[]-empty 型 monitor を使わない**: 直前の task が終了済みで running[] が元から空だったため、起動前の空を完了と誤認して即時 false-fire した（2026-07-15）。当該 task id が running[] に現れてから消える遷移を待つ
 - **監視は集合でなく当該 job の state file を id 直指定で poll する**: `status --json` の running[] は集合ゆえ、起動登録の前後で「空」が二度現れ、待機側からは完了と区別できない。plugin data の `state/<worktree>-<hash>/jobs/<job-id>.json` の `status` が `running` から変わるのを待てば集合の状態に依存しない。running[]-empty 型で 2026-08-08 に再度 false-fire し、実際は実行中の task を「成果物ゼロ = 非起動」と誤報告した
+- **監視 loop を手書きせず `claude_codex_watch <job-id> --artifact <path> [--token <str>]` を使う**: 完了 / 完了後 hang / stall / 成果物なし終了 / 未登録 / timeout の分岐を決定的に実装済で、job の state file を全 workspace から探すため隔離 worktree 起動でも見失わない。exit code で分岐でき (0 完了 / 3 完了後 hang / 4 stall / 5 成果物なし / 6 未登録 / 7 timeout)、`--selftest` で 11 件の判定 test が走る。手書き loop は本節の rule を毎回書き直すことになり、2026-08-08 に 1 session 内で「id を JSON 全体から grep して latestFinished に永久 match」と「本線 workspace から status を引いて隔離 worktree の job を running 0 件と誤読」の 2 通りで壊れた (前者で 4 時間 24 分の空待ち)
 - **wrapper が報告する task id を監視対象にしない**: 1 回の起動で task が複数登録されることがあり、wrapper 報告の id が即終了した短命 task で、実作業は別 id という実例がある（2026-07-21）。`status --json` で heartbeat が更新され続けている running task を監視対象にする
 - **完了は成果物で裏取りする**: `git diff`、対象 file の mtime、companion `latestFinished` の id 変化のいずれかを確認する。`git diff README.md` が空で初めて非起動に気づいた実例があり、成果物ゼロは非起動または未着手と扱う（2026-07-15）。probe file は起動登録の確認に使い、完了の証拠にはしない
 - **wrapper return / timeout ≠ 完了**: wrapper は起動直後 return または実行途中で切断する。codex 本体はサーバー側 thread として走り続け、切断報告後も 40 分以上書き続けた実例がある
@@ -73,3 +74,4 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
 - `tool-role-delegation` — 作業を codex へ「routing する」判断はこちら。本 skill は routing 後の lifecycle 規律
 - `verify-before-claim` — gates 自己申告を鵜呑みにしない受け入れ姿勢の一般則
 - `writing-code` — exit status 確認・convention 準拠などの実装汎用則
+- `claude_codex_watch` (`/usr/local/bin/claude_codex_watch`) — 本 skill の完了 / stall / 完了後 hang 判定を決定的に実装した CLI。監視は手書きせずこれを使う

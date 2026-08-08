@@ -341,6 +341,7 @@ copy toolbox_bigquery_mcp           /usr/local/bin/toolbox_bigquery_mcp
 copy claude_court_guard             /usr/local/bin/claude_court_guard
 copy claude_mytask_mcp              /usr/local/bin/claude_mytask_mcp
 copy claude_lang_lint               /usr/local/bin/claude_lang_lint
+copy claude_codex_watch             /usr/local/bin/claude_codex_watch
 
 # Initialize our RAG memory
 run claude_memory_rag_builder /var/lib/claude-rag-memory
