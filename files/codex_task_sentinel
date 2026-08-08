@@ -96,8 +96,10 @@ EXIT_UNVERIFIABLE = 14
 # fires when a start has no matching end — commands run in parallel, so the tail
 # alone misses one still running behind a neighbour's completion — or when the
 # tail itself starts a command. A quoted start over-suppresses, which costs
-# waiting; the residual gap is a quoted end that exactly offsets a real start,
-# which the evidence block surfaces rather than the verdict hiding.
+# waiting; the residual gap is a quoted end that exactly offsets a real start.
+# Closing that needs a per-command lifecycle in the job record, which only the
+# plugin can write — its own record carries a coarse phase, not command ids — so
+# the stall verdict names the doubt and shows the tail instead of hiding it.
 COMMAND_START = re.compile(r"^\[[^\]]+\]\s+Running command:")
 COMMAND_END = re.compile(r"^\[[^\]]+\]\s+Command \w+:")
 
@@ -354,7 +356,11 @@ def verdict(
             "done-hung: deliverable ready but the runner is still registered — "
             "verify the deliverable, then cancel the job"
         )
-    return EXIT_STALL, "stall: the runner went quiet and the tree stopped changing"
+    return EXIT_STALL, (
+        "stall: the runner went quiet and the tree stopped changing — read the tail "
+        "below first, since a command whose start the log did not attribute cleanly "
+        "can look the same"
+    )
 
 
 def evidence(

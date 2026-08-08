@@ -43,23 +43,26 @@ codex (gpt-5.6-sol / xhigh) レビュー指摘の是正。deploy 前に少なく
 - [ ] **`models:` の役割分離 (設計)**: provenance (どの model で観測したか) と delivery allowlist (どの model に見せるか) を同じ field が兼ねるため、model 更新の度に corpus が cold-start する。`observed_models:` と `applies_to:` に分ける
 - [ ] **「2 回失敗」の機械 trigger**: skill には書いたが hook は tool failure を観測しない。current turn の tool_result 失敗 signature を数え、2 回目で横断検索を起動する
 
-### codex_task_sentinel の残り指摘 (敵対レビュー由来)
+### codex_task_sentinel: 上流依存の残存 1 件
 
 Goal: 監視判定が plugin の実挙動と skill の 4 分岐に一致する状態にする。
 
 Exit Criteria:
 
-- [ ] 下記を解消し、plugin の status 語彙 × 成果物 × heartbeat/tree の table test が全分岐を覆う
+- [x] 敵対レビューの新規 material 指摘がゼロで安定する — 7 巡目まで実施し、4〜7 巡目は連続で新規ゼロ
+- [ ] 下記の上流依存 1 件が解消し、stall 判定に原理的曖昧さが残らない
 
-- [x] failed / cancelled の成功昇格・token の末尾一致・成果物の鮮度・done-hung のツリー条件・NaN duration を修正 (a746ef5、selftest 26 件)
-- [x] 改名で残った旧 file `files/claude_codex_watch` を削除 (b9f32d0。`git mv` 後に commit を `-- <path>` で絞ったため削除側が commit から外れていた)
-- [ ] **生存分岐が無い**: 走行中は内部で最大 55 分 poll し続け、caller に生存を返さない。skill の 4 分岐目 (生存 → re-arm、見積もり 2 倍で調査) が無く、途中の調査導線が消えている。1 cadence 評価の one-shot mode か、一定間隔で alive/elapsed を返す形にする
-- [ ] **`--artifact` 省略時に成功を表現できない**: 省略すると `artifact_ready` が常に False で、正常完了でも exit 5 になる。必須にするか `--git-diff` 等の evidence mode を用意する
-- [ ] **state root 決め打ち**: plugin は `CLAUDE_PLUGIN_DATA`、未設定なら `${TMPDIR}/codex-companion` を使う (`scripts/lib/state.mjs`) が、`~/.claude/plugins/data/...` しか見ていない。同じ規則で解決し `--state-root` も持たせる
-- [ ] **record 消失を誤分類**: plugin は `MAX_JOBS=50` で status を問わず prune し JSON と log を消す。掴んだ後に消えると stall か done-hung、開始前なら never-registered になる。registered 後の消失は独立の非成功 exit にする
-- [ ] **同一 id 重複を黙って先頭固定**: `sorted()` の先頭を選ぶため stale record が live job を乗っ取る。2 件以上なら ambiguous として落とす
-- [ ] **`[1m]` の legacy DB row が migration されない**: `entry_models` に `opus-5[1m]` が入っていると deploy 後も mute が残る。deploy 手順に one-time `--rebuild` を入れるか query 時にも正規化する
-- [ ] **bracket suffix の受理範囲が広すぎる**: `[safety-eval]` 等も無条件に落とし、`haiku-4-5[1m]-20251001` は正規化しきれない。allowlist と単一 regex で固定する
+7 巡の敵対レビュー (gpt-5.6-sol / xhigh) で挙がった 13 + 2 + 3 件はすべて修正済み
+(a746ef5 / b9f32d0 / fabe928 / bb56980 / 7c4d532 / 2607f1d / 890349a / 1f37e46)。
+各巡の報告書は session scratchpad にあり、内容は commit message に要約してある。
+
+- [ ] **command lifecycle が log 層でしか観測できない (上流依存)**: plugin の `appendLogBlock` は
+  message 本文を無加工で append するため、本文が log 行を引用すると event と区別できない。
+  現状は片方向利用 (抑制のみ、stall は作らない) + stall 文面での明示に留めており、
+  「引用された終了行が実在の開始をちょうど相殺する」低頻度経路だけが残る。
+  閉じるには job record に per-command lifecycle (item id) を永続化する必要があり、
+  それを書けるのは plugin 側だけ (record が持つ `phase` は investigating / editing / running
+  等の粗い活動状態で、command 単位ではない)。plugin 更新時に再評価する
 
 ### worktree-cleanup が稼働中の codex worktree を削除候補にする
 
