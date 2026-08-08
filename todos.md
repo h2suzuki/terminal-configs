@@ -30,8 +30,8 @@ Exit Criteria:
 
 codex (gpt-5.6-sol / xhigh) レビュー指摘の是正。deploy 前に少なくとも最初の 2 つを直す:
 
-- [ ] **発火 0 回の経路**: enforcement block が出た turn は `main()` が muted lookup 前に return し、retry は `stop_hook_active` gate で止まる。壁宣言と謝罪等が同居する典型応答ほど一度も出ない。block 判定と同じ first Stop で lookup し block stderr に併記する
-- [ ] **latch が初回 turn で無効**: `_stop_latch_key()` が `.turns` file の存在に依存し、muted warning を返した Stop は marker/bump に到達しないため fresh session では latch が no-op。`.turns` 不在時も turn key 0 として扱い、check-and-set を atomic 化する
+- [x] **発火 0 回の経路**: enforcement block が出た turn は `main()` が muted lookup 前に return し、retry は `stop_hook_active` gate で止まる。壁宣言と謝罪等が同居する典型応答ほど一度も出ない → `_run` の block stderr 出力直後で lookup し併記 (降格 retry は exit 0 で main 経路に戻すため二重に出さない)。test 2 件
+- [x] **latch が初回 turn で無効**: `_stop_latch_key()` が `.turns` file の存在に依存し、muted warning を返した Stop は marker/bump に到達しないため fresh session では latch が no-op → `.turns` 不在を turn key `"0"` とし、`_stop_latched`/`_stop_latch_set` を flock 済み 1 回 RMW の `_stop_latch_claim()` に統合 (.wt / codex / surf / muted の 4 latch 共通)。test 4 件
 - [ ] **壁 regex の corpus 総取り替え**: 実測で誤検知 8/8・取りこぼし 8/8。疑問「〜できないか」・否定「〜わけではない」・条件「〜場合」・成功報告「別セッションでも実行できました」が全て発火し、逆に「実行はできません」「権限がないため変更できません」「誤読していました」を落とす。positive/negative 同数以上の table-driven test を先に作る
 - [ ] **floor を backend 別に較正**: `MUTED_FLOOR=0.35` は hybrid 2 点のみが根拠。embed DB 不在時は `_fuse(s, 0.0)` 経由で BM25 <= -7 相当となり、通常 surface の BM25 <= -2 と桁が違う。hybrid / BM25 で定数を分け、labeled corpus で PR を測る
 - [ ] **観測できない**: fail-open が全て無言の `None` で、`search_unfiltered()` は記録もしないため「0 件」が無事故か feature 死かを区別できない。rate-limit した error log と wall 専用 event を残す

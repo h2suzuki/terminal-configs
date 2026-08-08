@@ -115,13 +115,15 @@ Combined Stop hook for org-managed Claude Code:
     surface_for_text の throttle が UPS surface と同一 entry の重複を抑止。 import / DB 不在は fail-open で
     surfacing 無効。 surfacing した Stop では counter を bump せず、 clean 終了 (継続後の retry) 側で 1 回 bump。
 
-  muted-memory-at-wall (bonus, exit 0):
+  muted-memory-at-wall (bonus, exit 0 / block 併記):
     「できない」 系の断定 / 誤読の自認を検出した turn の first Stop でのみ、 否定の周辺 ±120 字を
     query に memory_surface.search_unfiltered (model filter を通さない) を引き、 実行中モデルの
     tag を持たない上位 1 件を additionalContext で inject する。 sibling の memory-surface は
     model filter 越しなので、 tag の無い entry はこの family でしか見えない。 floor 0.35 は実測
-    (該当局面の top 0.397 / 無関係文の top 0.270) の分離点。 stop_hook_active gate + .muted latch
-    で turn 内 1 回、 import / DB 不在も含め完全 fail-open。
+    (該当局面の top 0.397 / 無関係文の top 0.270) の分離点。 enforcement が block した turn は
+    additionalContext 経路に届かず継続 Stop も stop_hook_active で閉じるため、 block 側は
+    _run が block stderr へ併記する。 stop_hook_active gate + .muted latch で turn 内 1 回、
+    import / DB 不在も含め完全 fail-open。
 
 Stop hook input: JSON via stdin with session_id, transcript_path,
 hook_event_name = "Stop".
@@ -1343,19 +1345,15 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
     if not isinstance(payload, dict):
         return 0, None, "", []
     worktree_warnings = _worktree_cleanup_warnings(payload.get("cwd"))
-    if worktree_warnings:
-        # mirrors memory-surface's stop_hook_active gate: .wt latch alone is inert pre-.turns.
-        if payload.get("stop_hook_active") or _stop_latched(payload, ".wt"):
-            worktree_warnings = []
-        else:
-            _stop_latch_set(payload, ".wt")
+    if worktree_warnings and (
+        payload.get("stop_hook_active") or not _stop_latch_claim(payload, ".wt")
+    ):
+        worktree_warnings = []
     codex_warnings = []
-    if not payload.get("stop_hook_active") and not _stop_latched(
+    if not payload.get("stop_hook_active") and _stop_latch_claim(
         payload, _CODEX_LATCH_SUFFIX
     ):
         codex_warnings = _codex_shared_write_warnings(payload)
-        if codex_warnings:
-            _stop_latch_set(payload, _CODEX_LATCH_SUFFIX)
     worktree_warnings += codex_warnings
     transcript_path = payload.get("transcript_path")
     if not isinstance(transcript_path, str) or not transcript_path:
@@ -1417,6 +1415,14 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
         return 0, prompt_epoch, text, worktree_warnings
     for line in warnings + blocking:
         sys.stderr.write(line + "\n")
+    if exit_code != 0:
+        # block した turn は main() の bonus 経路に届かず継続 Stop も gate される — 出すならここだけ。
+        try:
+            muted = _muted_memory_at_stop(payload, text)
+        except Exception:
+            muted = None
+        if muted:
+            sys.stderr.write(muted + "\n")
     return exit_code, prompt_epoch, text, worktree_warnings
 
 
@@ -1425,37 +1431,36 @@ def _stop_latch_key(payload: dict, suffix: str = ".surf") -> tuple[str, str] | N
     suffix namespaces the latch file per feature-family (worktree-cleanup vs memory-surface no longer share one file)."""
     try:
         path = _counter_path(payload)  # session-id fallback may makedirs -> OSError
-        if not path:
-            return None
+    except OSError:
+        return None
+    if not path:
+        return None
+    try:
         with open(path, encoding="utf-8") as f:
             return f.read().split()[0], path + suffix
     except (OSError, IndexError):
-        return None
+        # .turns は clean な turn 終了で初めて生まれる — 不在を欠測にすると初回 turn の latch が no-op。
+        return "0", path + suffix
 
 
-def _stop_latched(payload: dict, suffix: str = ".surf") -> bool:
-    """True if a Stop memory surface already fired this turn (counter-keyed, independent of stop_hook_active)."""
+def _stop_latch_claim(payload: dict, suffix: str = ".surf") -> bool:
+    """True if this Stop is the turn's first for `suffix`; one locked read-modify-write so two Stops cannot both claim it. 掴めない環境では発火側に倒し stop_hook_active gate に委ねる。"""
     k = _stop_latch_key(payload, suffix)
     if k is None:
-        return False
+        return True
     key, lpath = k
     try:
-        with open(lpath, encoding="utf-8") as f:
-            return f.read().strip() == key
-    except OSError:
-        return False
-
-
-def _stop_latch_set(payload: dict, suffix: str = ".surf") -> None:
-    k = _stop_latch_key(payload, suffix)
-    if k is None:
-        return
-    key, lpath = k
-    try:
-        with open(lpath, "w", encoding="utf-8") as f:
+        fd = os.open(lpath, os.O_RDWR | os.O_CREAT, 0o644)
+        with os.fdopen(fd, "r+") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            if f.read().strip() == key:
+                return False
+            f.seek(0)
+            f.truncate()
             f.write(key)
     except OSError:
-        pass
+        return True
+    return True
 
 
 def _memory_surface_at_stop(payload: dict, text: str) -> str | None:
@@ -1466,7 +1471,7 @@ def _memory_surface_at_stop(payload: dict, text: str) -> str | None:
         return None
     # Turn-scoped latch: guarantee max-once even if the runtime does not set
     # stop_hook_active on the additionalContext continuation (belt to that gate).
-    if _stop_latched(payload):
+    if not _stop_latch_claim(payload):
         return None
     session_id = payload.get("session_id") or ""
     cwd = payload.get("cwd")
@@ -1485,7 +1490,6 @@ def _memory_surface_at_stop(payload: dict, text: str) -> str | None:
         return None
     if not picks:
         return None
-    _stop_latch_set(payload)
     file_path, reminder, _score = picks[0]
     display = reminder or "(reminder 未設定)"
     return (
@@ -1509,7 +1513,7 @@ def _muted_memory_at_stop(payload: dict, text: str) -> str | None:
         return None
     stripped = strip_fences(text or "")
     m = WALL_DECLARATION_RE.search(stripped)
-    if not m or _stop_latched(payload, _MUTED_LATCH):
+    if not m or not _stop_latch_claim(payload, _MUTED_LATCH):
         return None
     cwd = payload.get("cwd")
     if not isinstance(cwd, str) or not cwd:
@@ -1527,7 +1531,6 @@ def _muted_memory_at_stop(payload: dict, text: str) -> str | None:
     muted = [h for h in hits if h[0] >= MUTED_FLOOR and model not in h[1].split()]
     if not muted:
         return None
-    _stop_latch_set(payload, _MUTED_LATCH)
     _score, models, path, reminder = muted[0]
     return (
         "<muted-memory>\n"
@@ -2457,6 +2460,96 @@ class StopMemorySurfaceTest(unittest.TestCase):
             self.assertTrue(WALL_DECLARATION_RE.search(hit), hit)
         for miss in ("この session だけで完結させます", "テストが通りました"):
             self.assertFalse(WALL_DECLARATION_RE.search(miss), miss)
+
+    @staticmethod
+    def _fresh_session_payload():
+        """`.turns` を書かない = clean な turn 終了をまだ迎えていない fresh session。"""
+        import tempfile
+
+        return {
+            "stop_hook_active": False,
+            "cwd": "/p",
+            "transcript_path": os.path.join(tempfile.mkdtemp(), "s.jsonl"),
+        }
+
+    def test_latch_key_treats_missing_turns_as_zero(self):
+        """`.turns` 不在を欠測にすると初回 turn の latch が丸ごと no-op になる。"""
+        payload = self._fresh_session_payload()
+        base = payload["transcript_path"][:-6] + ".turns"
+        self.assertEqual(_stop_latch_key(payload, ".x"), ("0", base + ".x"))
+
+    def test_latch_claim_is_once_per_turn_key(self):
+        """同一 turn key では 1 度だけ掴め、key が進めば再び掴める。"""
+        payload = self._fresh_session_payload()
+        turns = payload["transcript_path"][:-6] + ".turns"
+        self.assertTrue(_stop_latch_claim(payload, ".x"))
+        self.assertFalse(_stop_latch_claim(payload, ".x"))
+        with open(turns, "w", encoding="utf-8") as f:
+            f.write("1 1000\n")
+        self.assertTrue(_stop_latch_claim(payload, ".x"))
+
+    def test_muted_fires_once_in_a_fresh_session(self):
+        """fresh session でも 2 度目の Stop は latch で抑える (旧実装は latch が効かず二重発火)。"""
+        from unittest import mock
+
+        payload = self._fresh_session_payload()
+        mod = self._fake_search([(0.9, "opus-4.8", "/m/muted.md", "mute された教訓")])
+        with mock.patch.object(self.M, "_memory_surface_mod", mod):
+            self.assertIsNotNone(_muted_memory_at_stop(payload, "実行できません"))
+            self.assertIsNone(_muted_memory_at_stop(payload, "実行できません"))
+
+    def test_muted_without_wall_declaration_leaves_latch_free(self):
+        """壁宣言の無い Stop が latch を焼くと、同 turn の後続 Stop が発火できなくなる。"""
+        from unittest import mock
+
+        payload = self._fresh_session_payload()
+        mod = self._fake_search([(0.9, "opus-4.8", "/m/muted.md", "mute された教訓")])
+        with mock.patch.object(self.M, "_memory_surface_mod", mod):
+            self.assertIsNone(_muted_memory_at_stop(payload, "テストが通りました。"))
+            self.assertIsNotNone(_muted_memory_at_stop(payload, "実行できません"))
+
+    def _run_with_block(self, payload):
+        """_check を block 固定にした _run の 1 回実行。 返り値は (exit code, stderr)。"""
+        import io
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        with (
+            mock.patch.object(self.M, "_worktree_cleanup_warnings", lambda c: []),
+            mock.patch.object(self.M, "_load_tail", lambda p, turns=2: [{}]),
+            mock.patch.object(
+                self.M,
+                "_current_turn",
+                lambda e: ("壁", "壁", set(), [], [], [], False, None, "opus-5"),
+            ),
+            mock.patch.object(self.M, "_declare_proceed_active", lambda e, n: False),
+            mock.patch.object(self.M, "_handoff_mod", None),
+            mock.patch.object(
+                self.M, "_check", lambda *a, **k: (2, [], ["BLOCK-LINE"])
+            ),
+            mock.patch.object(
+                self.M, "_muted_memory_at_stop", lambda p, t: "MUTED-TEXT"
+            ),
+        ):
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                code = _run(payload)[0]
+        return code, buf.getvalue()
+
+    def test_run_reports_muted_memory_on_the_blocking_path(self):
+        """block した turn は main() の bonus 経路に届かず継続 Stop も gate される — block stderr に併記する。"""
+        code, err = self._run_with_block({"transcript_path": "/x.jsonl"})
+        self.assertEqual(code, 2)
+        self.assertIn("BLOCK-LINE", err)
+        self.assertIn("MUTED-TEXT", err)
+
+    def test_run_demoted_retry_leaves_muted_to_main(self):
+        """advise-once の降格 Stop は exit 0 で main() 経路に戻る — block stderr 側で二重に出さない。"""
+        code, err = self._run_with_block(
+            {"transcript_path": "/x.jsonl", "stop_hook_active": True}
+        )
+        self.assertEqual(code, 0)
+        self.assertNotIn("MUTED-TEXT", err)
 
     def _main_out(self, run_ret, reason):
         import io
