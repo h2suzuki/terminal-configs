@@ -89,11 +89,12 @@ EXIT_OVER_ESTIMATE = 12
 EXIT_CORRUPT = 13
 EXIT_UNVERIFIABLE = 14
 
-# The plugin writes a command's start and its completion as separate log lines,
-# so a start with no completion after it means a command is still running and
-# the quiet log is the command's, not the runner's.
-COMMAND_START = re.compile(r"\bRunning command:")
-COMMAND_END = re.compile(r"\bCommand completed:")
+# The plugin writes a command's start and its end as separate log lines, and the
+# end word varies with how the command finished (completed / failed / …). Both
+# are anchored to the timestamp: the same words appear inside assistant messages,
+# and counting those unanchored quotes left a finished job looking busy forever.
+COMMAND_START = re.compile(r"^\[[^\]]+\]\s+Running command:")
+COMMAND_END = re.compile(r"^\[[^\]]+\]\s+Command \w+:")
 
 
 def state_roots(explicit: str | None = None) -> list[str]:
@@ -142,10 +143,10 @@ def heartbeat_age(log_path: str, now: float) -> float | None:
 
 
 def log_lines(log_path: str) -> list[str]:
-    """Non-empty log lines, newest last."""
+    """Non-empty log lines, newest last, with the leading indent kept for anchoring."""
     try:
         with open(log_path, encoding="utf-8", errors="replace") as f:
-            return [ln.strip() for ln in f if ln.strip()]
+            return [ln.rstrip("\n") for ln in f if ln.strip()]
     except OSError:
         return []
 
@@ -157,13 +158,14 @@ def last_log_line(log_path: str, limit: int = 160) -> str:
 
 
 def command_in_flight(lines: list[str]) -> bool:
-    """True when a command started and has not completed — its silence is expected."""
-    for line in reversed(lines):
-        if COMMAND_END.search(line):
-            return False
-        if COMMAND_START.search(line):
-            return True
-    return False
+    """True while any started command has not ended — its silence is expected.
+
+    Counts rather than reads the last event: commands run in parallel, so a
+    later completion can belong to a different command than the pending one.
+    """
+    starts = sum(1 for line in lines if COMMAND_START.match(line))
+    ends = sum(1 for line in lines if COMMAND_END.match(line))
+    return starts > ends
 
 
 def tree_age(root: str | None, now: float) -> float | None:
@@ -227,13 +229,26 @@ def stall_threshold(explicit: float | None, baseline: float | None) -> float:
     return max(STALL_FLOOR_SECONDS, baseline * STALL_BASELINE_FACTOR)
 
 
-def started_epoch(record: dict) -> float | None:
-    """When this run began, so a deliverable left by an earlier one can be told apart.
+def run_since(record: dict) -> float | None:
+    """The earliest instant this run could have written anything.
+
+    A queued job has no startedAt yet — the plugin adds it when the worker
+    picks the job up — so fall back to createdAt rather than dropping the
+    freshness floor entirely and accepting an earlier run's deliverable.
+    """
+    for field in ("startedAt", "createdAt"):
+        stamp = stamp_epoch(record.get(field))
+        if stamp is not None:
+            return stamp
+    return None
+
+
+def stamp_epoch(stamp: object) -> float | None:
+    """An ISO UTC stamp as epoch seconds, fraction kept; None when unusable.
 
     Keeps the fraction: truncating to the second lets a file written earlier in
     the same second pass as this run's output.
     """
-    stamp = record.get("startedAt")
     if not isinstance(stamp, str) or len(stamp) < 19:
         return None
     try:  # the record stamps UTC, so read it as UTC rather than through local time
@@ -290,12 +305,21 @@ def verdict(
                 f"not-completed: job {status} — re-issue on a fresh thread "
                 "(a cancelled or failed run is not a result)"
             )
-        if ready or not expects_artifact:
-            return EXIT_DONE, "done: job completed"
-        return EXIT_ENDED_WITHOUT_ARTIFACT, (
-            "ended-without-deliverable: job completed with no complete deliverable — "
-            "the log's tail below is what it reported instead"
-        )
+        if not (ready or not expects_artifact):
+            return EXIT_ENDED_WITHOUT_ARTIFACT, (
+                "ended-without-deliverable: job completed with no complete deliverable — "
+                "the log's tail below is what it reported instead"
+            )
+        # The skill's completion is status AND a settled tree: a task can leave
+        # a detached process still writing after the runner reports completed.
+        if tree is None:
+            return EXIT_UNVERIFIABLE, (
+                "unverifiable: the job reports completed but its tree could not be "
+                "read, so the work cannot be shown to have settled — check workspaceRoot"
+            )
+        if tree < hang_seconds:
+            return None  # still settling; re-check rather than hand over mid-write
+        return EXIT_DONE, "done: job completed and its tree settled"
     if not expects_artifact:
         ready = False  # nothing to be ready; only the tree and the log speak here
     settled = hang_seconds if ready else stall_seconds
@@ -378,7 +402,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         age = heartbeat_age(log, now)
         tree = tree_age((record or {}).get("workspaceRoot"), now)
         # Elapsed runs from the job's own start so re-arming does not reset the clock.
-        elapsed = now - (started_epoch(record or {}) or started)
+        elapsed = now - (stamp_epoch((record or {}).get("startedAt")) or started)
         if not os.path.exists(record_path):
             # The plugin prunes to its newest 50 jobs regardless of status, so a
             # record that was here and is gone is lost history, not a verdict.
@@ -398,7 +422,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 str(record.get("status") or ""),
                 age,
                 tree,
-                artifact_ready(args.artifact, args.token, started_epoch(record)),
+                artifact_ready(args.artifact, args.token, run_since(record)),
                 threshold,
                 args.hang_seconds,
                 expects_artifact=args.artifact is not None,
@@ -558,7 +582,15 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(self._code("cancelled", 1.0, True), EXIT_NOT_COMPLETED)
 
     def test_terminal_status_with_deliverable_is_done(self):
-        self.assertEqual(self._code("completed", 1.0, True), EXIT_DONE)
+        """completed だけでは足りない — skill の完了は status とツリー静穏の AND。"""
+        self.assertEqual(self._code("completed", 1.0, True, tree=600.0), EXIT_DONE)
+
+    def test_completed_with_a_live_tree_keeps_watching(self):
+        """detached process がまだ書いている間に受け入れレビューへ渡さない。"""
+        self.assertIsNone(verdict("completed", 1.0, 1.0, True, 420, 300))
+
+    def test_completed_with_an_unreadable_tree_is_unverifiable(self):
+        self.assertEqual(self._code("completed", 1.0, True), EXIT_UNVERIFIABLE)
 
     def test_completed_without_deliverable_is_reported(self):
         self.assertEqual(
@@ -566,10 +598,56 @@ class WatchTest(unittest.TestCase):
         )
 
     def test_completion_without_an_expected_deliverable_is_done(self):
-        """成果物を指定しない発注では、completed をそのまま成功として表現できる。"""
-        out = verdict("completed", 1.0, None, False, 420, 300, expects_artifact=False)
+        """成果物を指定しない発注では、completed とツリー静穏で成功を表現できる。"""
+        out = verdict("completed", 1.0, 600.0, False, 420, 300, expects_artifact=False)
         assert out is not None
         self.assertEqual(out[0], EXIT_DONE)
+
+    def test_queued_record_still_bounds_artifact_freshness(self):
+        """queued 中は startedAt が無い — createdAt に落とさないと前 run の成果物を通す。"""
+        stamp = "2026-08-08T11:43:06.921Z"
+        self.assertEqual(run_since({"createdAt": stamp}), stamp_epoch(stamp))
+        self.assertEqual(
+            run_since({"createdAt": "2026-08-08T00:00:00Z", "startedAt": stamp}),
+            stamp_epoch(stamp),
+        )
+        self.assertIsNone(run_since({}))
+
+    def test_no_freshness_floor_means_not_ready(self):
+        """下限が読めないなら、今回書かれた成果物だと示せない。"""
+        import tempfile
+
+        p = os.path.join(tempfile.mkdtemp(), "report.md")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("body\nREPORT_COMPLETE\n")
+        self.assertTrue(artifact_ready(p, "REPORT_COMPLETE", since=None))
+        self.assertFalse(artifact_ready(p, "REPORT_COMPLETE", since=time.time() + 60))
+
+    def test_parallel_commands_keep_the_job_alive(self):
+        """並行 command は片方の完了で「全部終わった」にはならない。"""
+        lines = [
+            "[t] Running command: cargo test",
+            "[t] Running command: ls",
+            "[t] Command completed: ls (exit 0)",
+        ]
+        self.assertTrue(command_in_flight(lines))
+
+    def test_failed_command_counts_as_ended(self):
+        """終了語は completed だけではない — failed を数え漏らすと stall を見逃す。"""
+        lines = [
+            "[t] Running command: false",
+            "[t] Command failed: false (exit 1)",
+        ]
+        self.assertFalse(command_in_flight(lines))
+
+    def test_quoted_command_words_are_not_events(self):
+        """assistant message 内の引用は event ではない — 数えると完走 job が永久に busy になる。"""
+        lines = [
+            "[t] Running command: ls",
+            "[t] Command completed: ls (exit 0)",
+            "[t] Assistant message: 次に Running command: を数える実装を直す",
+        ]
+        self.assertFalse(command_in_flight(lines))
 
     def test_running_with_fresh_log_keeps_watching(self):
         """走行中は None — 「id が status 出力に無い」等の間接判定で完了にしない。"""
@@ -656,12 +734,12 @@ class WatchTest(unittest.TestCase):
 
     def test_started_epoch_reads_the_record_as_utc(self):
         """record は UTC 表記 — local 時刻として読むと DST 環境で鮮度判定が狂う。"""
-        self.assertIsNone(started_epoch({}))
-        self.assertIsNone(started_epoch({"startedAt": "nonsense"}))
+        self.assertIsNone(stamp_epoch(None))
+        self.assertIsNone(stamp_epoch("nonsense"))
         stamp = "2026-08-08T11:43:06.921Z"
         whole = float(calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S")))
-        self.assertEqual(started_epoch({"startedAt": stamp}), whole + 0.921)
-        self.assertEqual(started_epoch({"startedAt": "2026-08-08T11:43:06Z"}), whole)
+        self.assertEqual(stamp_epoch(stamp), whole + 0.921)
+        self.assertEqual(stamp_epoch("2026-08-08T11:43:06Z"), whole)
 
     def test_same_second_leftover_is_still_stale(self):
         """秒で切り捨てると、同じ秒に書かれた前 run の成果物を今回の物として受理する。"""
@@ -670,7 +748,7 @@ class WatchTest(unittest.TestCase):
         p = os.path.join(tempfile.mkdtemp(), "report.md")
         with open(p, "w", encoding="utf-8") as f:
             f.write("body\nREPORT_COMPLETE\n")
-        start = started_epoch({"startedAt": "2026-08-08T11:43:06.921Z"})
+        start = stamp_epoch("2026-08-08T11:43:06.921Z")
         assert start is not None
         os.utime(p, (start - 0.5, start - 0.5))
         self.assertFalse(artifact_ready(p, "REPORT_COMPLETE", since=start))
