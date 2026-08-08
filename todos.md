@@ -43,6 +43,16 @@ codex (gpt-5.6-sol / xhigh) レビュー指摘の是正。deploy 前に少なく
 - [ ] **`models:` の役割分離 (設計)**: provenance (どの model で観測したか) と delivery allowlist (どの model に見せるか) を同じ field が兼ねるため、model 更新の度に corpus が cold-start する。`observed_models:` と `applies_to:` に分ける
 - [ ] **「2 回失敗」の機械 trigger**: skill には書いたが hook は tool failure を観測しない。current turn の tool_result 失敗 signature を数え、2 回目で横断検索を起動する
 
+### worktree-cleanup が稼働中の codex worktree を削除候補にする
+
+Goal: 実行中の作業を壊す削除提案を出さないようにする。
+
+Exit Criteria:
+
+- [ ] codex job が走っている worktree に対し、削除候補として提案されないことを実機で確認する
+
+- [ ] `stop_checks.py` の `_worktree_cleanup_warnings()` が「clean かつ本線の祖先」だけを見ており、その worktree を `workspaceRoot` とする codex job が running かどうかを見ていない。2026-08-08 の 2 回とも、codex がレビュー用 worktree で走っている最中に削除コマンドを提示した (成果物を書く前なので clean に見える)。提案どおり実行すると走行中の job の作業 root が消える。`~/.claude/plugins/data/codex-openai-codex/state/*/jobs/*.json` の `status=running` かつ `workspaceRoot` 一致を候補から除外する
+
 ## Medium
 
 ### Handoff 強化 + 言語 lint 機構の deploy と実運用確認
