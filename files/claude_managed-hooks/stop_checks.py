@@ -825,14 +825,23 @@ IMPOSSIBLE_RE = re.compile(
 # 「できない」断定と誤読の自認は、 過去の教訓が最も効く局面。 surface hook は model filter を
 # 通すので tag の無い entry はそこに出ず、 この family だけが見せられる。 known-possible-denial
 # が既知可能 op の否定を block する側、 こちらは未知の否定に材料を出す側。
+# 動詞を並べるのをやめ、 可能形の否定そのものを核にする — 「実行できません」 だけを見ていると
+# 「権限がないため変更できません」 を落とし、 「実行」 に釣られて疑問文まで拾っていた。
+_DENIAL = r"(?:でき|出来)(?:ない|ず|ません|なかった|ませんでした)|不可能|実行不能"
+# 断定だけを残す尾: 文末に来るか、 判断を表明する語が続くか。 「〜ないか」「〜ない場合」
+# 「〜ないわけではない」「〜ないかもしれない」 は同じ核を含むが断定ではないので、 ここで落ちる。
+_ASSERTED = r"(?:\s*(?:と(?:判断|結論)|と考え|です|でした)|\s*[。．.!！?？\n]|$)"
+# 自認だけを拾うため過去形に限る — te 形は 「空行を block と誤読して落とします」 のように
+# プログラムの誤読を叙述する側にも出る (実 transcript で計測)。
+_MISREAD = (
+    r"(?:誤読|勘違い|早とちり|思い込)(?:(?:んで|して|し)い?(?:た|まし)|でし)"
+    r"|読み違え(?:てい)?(?:た|まし)"
+)
 WALL_DECLARATION_RE = re.compile(
-    r"実行\s?(でき(ない|ません)|不能|不可)"
-    r"|(私|当|この)\s?(の|側の)?\s?session\s?(から|では)[^。\n]{0,20}(でき(ない|ません)|不能)"
-    r"|(他|別)\s?の?\s?(session|セッション)[^。\n]{0,24}(でき|免除|違)"
-    r"|sandbox\s?の?\s?(せい|制約|制限)[^。\n]{0,12}(でき(ない|ません)|落ち|失敗)"
-    r"|hard\s?(wall|limit)"
-    r"|(壁|限界)\s?(だ|です|と(判断|結論))"
-    r"|読み違え(た|まし)|(誤読|勘違い)(し(た|まし)|でし)",
+    rf"(?:{_DENIAL}){_ASSERTED}|{_MISREAD}"
+    # 英語側も宣言の枠を要求する — 裸の "hard limit" は語の言及であって断定ではない。
+    r"|(?:is|was|hits?|hit|reached)\s+(?:a\s+)?hard\s?(?:wall|limit)"
+    r"|(?:壁|限界)\s?(?:だ|です|と(?:判断|結論)(?:し(?:た|まし)|です))",
     re.IGNORECASE,
 )
 MUTED_FLOOR = 0.35  # 実測: 該当局面の top hit 0.397 / 無関係文の top hit 0.270
@@ -2449,16 +2458,49 @@ class StopMemorySurfaceTest(unittest.TestCase):
         self.assertIn("Tag propagation", r)
         self.assertNotIn("/m/tagged.md", r)
 
-    def test_wall_regex_conjugations(self):
-        """誤読 / 勘違い は「し」を挟む活用が実際の発話形。「この session だけ」は通常発話で外す。"""
-        for hit in (
-            "誤読しました",
-            "勘違いしました",
-            "読み違えました",
-            "実行できません",
-        ):
+    # 壁宣言 = 「できない」 の断定と誤読の自認。 疑問 / 条件 / 二重否定 / 成功報告は同じ語を
+    # 含むだけで断定ではないので、 両側を同数そろえて regex を pin する。
+    WALL_HITS = (
+        "実行できません",
+        "実行はできません。",
+        "権限がないため変更できません。",
+        "sandbox からは PID を取得できません",
+        "この session では対応できないと判断しました",
+        "そのファイルには書き込みできませんでした。",
+        "並列実行は不可能です。",
+        "ここが限界だと判断しました",
+        "this is a hard wall for the sandbox",
+        "誤読しました",
+        "誤読していました。",
+        "勘違いしていました",
+        "読み違えました",
+        "思い込んでいました。",
+    )
+    WALL_MISSES = (
+        "実行できないか検討します",
+        "実行できないわけではありません。",
+        "実行できない場合は再試行します",
+        "別のセッションでも実行できました。",
+        "この session だけで完結させます",
+        "テストが通りました",
+        "実行できないかもしれません",
+        "権限が無いときは変更できないので確認します",
+        "誤読を防ぐため regex を pin します",
+        "勘違いしやすい箇所にコメントを足しました",
+        "読み違えないよう docstring と assert を突き合わせます",
+        "hard limit の有無を調べます",
+        "書き込みできないという前提を疑います",
+        "取得できないとしたら原因は何かを調べます",
+        # 以下 2 件は実 transcript で新 regex が誤検知した実例。
+        "壁と結論する前に横断検索する導線を足しました",
+        "段落内の空行を次の block と誤読して真の event を落とします",
+    )
+
+    def test_wall_regex_fires_on_assertions_only(self):
+        """断定 14 / 非断定 16 で pin する — 疑問・条件・二重否定・成功報告は同じ語を含むだけ。"""
+        for hit in self.WALL_HITS:
             self.assertTrue(WALL_DECLARATION_RE.search(hit), hit)
-        for miss in ("この session だけで完結させます", "テストが通りました"):
+        for miss in self.WALL_MISSES:
             self.assertFalse(WALL_DECLARATION_RE.search(miss), miss)
 
     @staticmethod
