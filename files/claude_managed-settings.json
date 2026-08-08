@@ -38,7 +38,8 @@
         { "path": "~/.claude/daemon/control.key", "mode": "deny" },
         { "path": "~/.config/google-chrome", "mode": "deny" },
         { "path": "~/.local/share/pki", "mode": "deny" },
-        { "path": "~/.bash_history", "mode": "deny" }
+        { "path": "~/.bash_history", "mode": "deny" },
+        { "path": "/mnt/c/Users", "mode": "deny" }
       ],
       "envVars": [
         { "name": "AWS_ACCESS_KEY_ID", "mode": "deny" },

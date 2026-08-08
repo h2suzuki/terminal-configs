@@ -619,25 +619,43 @@ BANG_HOST_REQUEST_RE = re.compile(
 BANG_HOST_NEGATION_RE = re.compile(
     r"出ません|出られません|なりません|ありません|ではない|効きません|限りません"
 )
+# provide-user-instructions が code block 提示を求めるため、 依頼は fence と散文に割れて
+# inline 文言に一致しない。 fence 冒頭行の `!` と散文側の実行依頼を対で捕捉する。
+BANG_FENCE_BODY_RE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
+BANG_FENCED_HEAD_RE = re.compile(r"\A[ \t]*!\s+\S")
+BANG_EXEC_REQUEST_RE = re.compile(
+    r"(?:実行|起動|流|deploy|デプロイ)[^。\n]{0,20}?"
+    r"(?:ください|下さい|いただけ|もらえ|ましょう|お願い)"
+)
 
 
 def _bang_host_escape(text: str) -> str | None:
     """Return a block reason when `!` is offered to the user as a sandbox escape."""
     # strip_fences は inline backtick span も消すため使えない — `!` 自体が消える。
-    for line in re.split(r"[。\n]", re.sub(r"```.*?```", " ", text, flags=re.DOTALL)):
+    prose = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
+    for line in re.split(r"[。\n]", prose):
         m = BANG_HOST_REQUEST_RE.search(line)
-        if not m or BANG_HOST_NEGATION_RE.search(line):
-            continue
-        return (
-            f"bang-prefix-host-escape: 「{m.group(0).strip()}」 と `!` での実行を user に "
-            "依頼しています。 `!` が与えるのは auto mode の実行許可だけで、 コマンド自体は "
-            "sandbox 内で走ります — sandbox を出る手段ではありません。 host 権限が要るなら "
-            "sandbox.excludedCommands 登録済みのコマンドを使い、 一覧に無い作業 (/etc への "
-            "書き込み・sudo 必須の deploy 等) は 「Claude Code の外の terminal で実行して "
-            "ください」 と明示して依頼してください (provide-user-instructions)。 "
-            "該当文を書き換えてから再出力してください。"
-        )
+        if m and not BANG_HOST_NEGATION_RE.search(line):
+            return _bang_host_reason(m.group(0).strip())
+    if BANG_EXEC_REQUEST_RE.search(prose):
+        for body in BANG_FENCE_BODY_RE.findall(text):
+            head = next((ln for ln in body.splitlines() if ln.strip()), "")
+            if BANG_FENCED_HEAD_RE.match(head):
+                return _bang_host_reason(head.strip())
     return None
+
+
+def _bang_host_reason(quoted: str) -> str:
+    """Render the shared block reason for the inline and fenced request forms."""
+    return (
+        f"bang-prefix-host-escape: 「{quoted}」 と `!` での実行を user に "
+        "依頼しています。 `!` が与えるのは auto mode の実行許可だけで、 コマンド自体は "
+        "sandbox 内で走ります — sandbox を出る手段ではありません。 host 権限が要るなら "
+        "sandbox.excludedCommands 登録済みのコマンドを使い、 一覧に無い作業 (/etc への "
+        "書き込み・sudo 必須の deploy 等) は 「Claude Code の外の terminal で実行して "
+        "ください」 と明示して依頼してください (provide-user-instructions)。 "
+        "該当文を書き換えてから再出力してください。"
+    )
 
 
 # --- Pattern: confirm/routing-to-user (block unless declare-and-proceed invoked this turn) ---
@@ -1800,6 +1818,21 @@ class EnforcementFamilyTest(unittest.TestCase):
             "`!` prefix は auto mode の許可だけで sandbox の外には出ません",
             "Claude Code の外の terminal で実行してください",
             "この 2 行を実行していただけますか?",
+        ):
+            self.assertFalse(
+                any("bang-prefix-host-escape" in b for b in self._blk(q)), q
+            )
+
+    def test_bang_prefix_fenced_command_blocks(self):
+        q = "deploy はこれを実行してください:\n\n```\n! sudo cp /a/b.json /etc/c/b.json\n```"
+        code, _w, blk = self._c(q)
+        self.assertEqual(code, 2, q)
+        self.assertTrue(any("bang-prefix-host-escape" in b for b in blk), q)
+
+    def test_bang_prefix_fenced_without_pairing_passes(self):
+        for q in (
+            "```\n! sudo cp /a/b.json /etc/c/b.json\n```",
+            "外の terminal で実行してください:\n\n```\nsudo cp /a/b.json /etc/c/b.json\n```",
         ):
             self.assertFalse(
                 any("bang-prefix-host-escape" in b for b in self._blk(q)), q
