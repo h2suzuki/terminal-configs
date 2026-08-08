@@ -32,7 +32,13 @@
         { "path": "~/.config/pip", "mode": "deny" },
         { "path": "~/.claude/.credentials.json", "mode": "deny" },
         { "path": "~/.codex/auth.json", "mode": "deny" },
-        { "path": "~/.agent-browser", "mode": "deny" }
+        { "path": "~/.agent-browser", "mode": "deny" },
+        { "path": "~/.local/share/com.vercel.cli", "mode": "deny" },
+        { "path": "~/.config/vercel-plugin", "mode": "deny" },
+        { "path": "~/.claude/daemon/control.key", "mode": "deny" },
+        { "path": "~/.config/google-chrome", "mode": "deny" },
+        { "path": "~/.local/share/pki", "mode": "deny" },
+        { "path": "~/.bash_history", "mode": "deny" }
       ],
       "envVars": [
         { "name": "AWS_ACCESS_KEY_ID", "mode": "deny" },
@@ -40,6 +46,7 @@
         { "name": "AWS_SESSION_TOKEN", "mode": "deny" },
         { "name": "GOOGLE_APPLICATION_CREDENTIALS", "mode": "deny" },
         { "name": "CLOUDSDK_AUTH_ACCESS_TOKEN", "mode": "deny" },
+        { "name": "CLOUDSDK_PROXY_PASSWORD", "mode": "deny" },
         { "name": "GITHUB_TOKEN", "mode": "deny" },
         { "name": "GH_TOKEN", "mode": "deny" },
         { "name": "ANTHROPIC_API_KEY", "mode": "deny" },
