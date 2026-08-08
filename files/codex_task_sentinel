@@ -29,7 +29,7 @@ Exit codes, and what the caller does with each:
 
   0  done              the deliverable is this run's and the job completed
   3  done-hung         deliverable ready, runner still registered — verify, then cancel
-  4  stall             log and tree both quiet — read the log, cancel, re-issue fresh
+  4  stall             --trust-log only: log and tree quiet — cancel, re-issue fresh
   5  no-deliverable    completed but produced nothing complete — read the log
   6  never-registered  no record in any searched root — the launch did not take
   7  timeout           still alive at the deadline — decide whether to keep waiting
@@ -39,7 +39,7 @@ Exit codes, and what the caller does with each:
   11 alive             --once only: still running; re-arm or investigate
   12 over-estimate     twice --estimate-seconds with no verdict — investigate
   13 corrupt           the record is present but unreadable — do not read it as a stall
-  14 unverifiable      quiet log but the tree could not be read — neither call is evidenced
+  14 unverifiable      nothing observable settles it — read the tail, then decide
 """
 
 from __future__ import annotations
@@ -348,6 +348,7 @@ def verdict(
     hang_seconds: float,
     expects_artifact: bool = True,
     command_may_run: bool = False,
+    trust_log: bool = False,
 ) -> tuple[int, str] | None:
     """Terminal (exit code, headline) for one poll, or None to keep watching."""
     alive_status = status in ALIVE_STATUS or not status
@@ -397,6 +398,15 @@ def verdict(
         return EXIT_UNVERIFIABLE, (
             "unverifiable: the log went quiet but this job's tree could not be read, "
             "so neither stall nor progress can be shown — check workspaceRoot below"
+        )
+    if not trust_log:
+        # The same log bytes can spell a real event or a body quoting one, so a
+        # quiet log is handed over with its tail instead of as an order to cancel.
+        return EXIT_UNVERIFIABLE, (
+            "unverifiable: log and tree are both quiet, which is what a hung runner "
+            "and a command the log never attributed both look like — read the tail "
+            "below and cancel with the command shown if it is really hung "
+            "(--trust-log makes this a stall verdict instead)"
         )
     if ready:
         return EXIT_DONE_HUNG, (
@@ -494,6 +504,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 args.hang_seconds,
                 expects_artifact=args.artifact is not None,
                 command_may_run=command_may_be_running(log_lines(log)),
+                trust_log=args.trust_log,
             )
         if (
             out is None
@@ -548,6 +559,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="evaluate one cadence and report alive instead of waiting",
     )
+    p.add_argument(
+        "--trust-log",
+        action="store_true",
+        help="let a quiet log become a stall verdict; off by default because the "
+        "log cannot separate an event from a message quoting one",
+    )
     p.add_argument("--selftest", action="store_true")
     return p
 
@@ -599,8 +616,10 @@ class WatchTest(unittest.TestCase):
         os.utime(log, (time.time() - log_age, time.time() - log_age))
         return root, record, log
 
-    def _code(self, status, age, ready, tree=None, tail=False):
-        out = verdict(status, age, tree, ready, 420, 300, command_may_run=tail)
+    def _code(self, status, age, ready, tree=None, tail=False, trust=True):
+        out = verdict(
+            status, age, tree, ready, 420, 300, command_may_run=tail, trust_log=trust
+        )
         self.assertIsNotNone(out, "terminal verdict を期待した")
         return out[0] if out else None
 
@@ -718,6 +737,17 @@ class WatchTest(unittest.TestCase):
 
     def test_quiet_log_and_quiet_tree_is_stall(self):
         self.assertEqual(self._code("running", 500.0, False, tree=500.0), EXIT_STALL)
+
+    def test_a_quiet_log_does_not_order_a_cancel_by_default(self):
+        """log は event と引用を分けられない — 既定では cancel 導線 (exit 4/3) を出さない。"""
+        self.assertEqual(
+            self._code("running", 600.0, False, tree=600.0, trust=False),
+            EXIT_UNVERIFIABLE,
+        )
+        self.assertEqual(
+            self._code("running", 600.0, True, tree=600.0, trust=False),
+            EXIT_UNVERIFIABLE,
+        )
 
     def test_missing_log_counts_as_frozen(self):
         self.assertEqual(self._code("running", None, False, tree=500.0), EXIT_STALL)
@@ -1026,6 +1056,7 @@ class WatchTest(unittest.TestCase):
             "estimate_seconds": None,
             "state_root": root,
             "once": False,
+            "trust_log": False,
             "selftest": False,
         }
         opts.update(over)
