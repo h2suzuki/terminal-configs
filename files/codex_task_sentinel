@@ -96,10 +96,11 @@ EXIT_UNVERIFIABLE = 14
 # fires when a start has no matching end — commands run in parallel, so the tail
 # alone misses one still running behind a neighbour's completion — or when the
 # tail itself starts a command. A quoted start over-suppresses, which costs
-# waiting; the residual gap is a quoted end that exactly offsets a real start.
-# Closing that needs a per-command lifecycle in the job record, which only the
-# plugin can write — its own record carries a coarse phase, not command ids — so
-# the stall verdict names the doubt and shows the tail instead of hiding it.
+# waiting. A quoted end cannot cancel a running command, because ends are paired
+# to starts by the command they name and an unpaired end is dropped. What is left
+# is narrower: the same command text running again while the log quotes an older
+# end for it. The plugin's own record could settle even that, but it keeps only a
+# coarse phase, not command ids, so the stall verdict names the doubt out loud.
 COMMAND_START = re.compile(r"^\[[^\]]+\]\s+Running command:")
 COMMAND_END = re.compile(r"^\[[^\]]+\]\s+Command \w+:")
 
@@ -164,13 +165,30 @@ def last_log_line(log_path: str, limit: int = 160) -> str:
     return lines[-1].strip()[:limit] if lines else ""
 
 
+def command_text(line: str) -> str:
+    """The command an event line refers to, with the end line's exit suffix removed."""
+    body = re.sub(r"^\[[^\]]+\]\s+(Running command:|Command \w+:)\s*", "", line)
+    return re.sub(r"\s*\(exit -?\d+\)\s*$", "", body).strip()
+
+
 def command_may_be_running(lines: list[str]) -> bool:
-    """Whether a command might still be in flight — used only to hold a verdict back."""
-    if not lines:
-        return False
-    starts = sum(1 for line in lines if COMMAND_START.match(line))
-    ends = sum(1 for line in lines if COMMAND_END.match(line))
-    return starts > ends or bool(COMMAND_START.match(lines[-1]))
+    """Whether a command might still be in flight — used only to hold a verdict back.
+
+    Ends are matched to starts by the command they name. An end that matches
+    nothing pending is a quote of an older line, not this command finishing, so
+    it is dropped rather than allowed to cancel a start that is still running.
+    """
+    pending: list[str] = []
+    for line in lines:
+        if COMMAND_START.match(line):
+            pending.append(command_text(line))
+        elif COMMAND_END.match(line):
+            text = command_text(line)
+            for i in range(len(pending) - 1, -1, -1):
+                if pending[i] == text:
+                    del pending[i]
+                    break
+    return bool(pending)
 
 
 def tree_age(root: str | None, now: float) -> float | None:
@@ -687,6 +705,22 @@ class WatchTest(unittest.TestCase):
             "[t] Command completed: ls (exit 0)",
         ]
         self.assertTrue(command_may_be_running(lines))
+
+    def test_a_quoted_end_cannot_cancel_a_running_command(self):
+        """本文に引用された終了行は対応する開始を持たない — 実行中の command を消させない。"""
+        lines = [
+            "[t1] Running command: rg -n pattern",
+            "[t2] Assistant message",
+            "[t3] Command completed: ls (exit 0)",
+        ]
+        self.assertTrue(command_may_be_running(lines))
+
+    def test_command_text_ignores_the_exit_suffix(self):
+        self.assertEqual(command_text("[t] Running command: ls -la"), "ls -la")
+        self.assertEqual(
+            command_text("[t] Command completed: ls -la (exit 0)"), "ls -la"
+        )
+        self.assertEqual(command_text("[t] Command failed: ls -la (exit 2)"), "ls -la")
 
     def test_all_commands_finished_does_not_suppress(self):
         lines = [
