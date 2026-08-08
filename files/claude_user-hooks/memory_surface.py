@@ -86,6 +86,9 @@ QUERY_EXCERPT_LEN = 200
 MAX_ENTRY_SIZE = 50_000  # skip absurdly large feedback files
 # タグ無し entry の既定 tag (タグ導入前の全 entry = opus-4.8 世代、 意図的 reset)
 MODELS_DEFAULT = "opus-4.8"
+# 1m 等の context-window 表記だけを落とす。 中身を問わず bracket を捨てると、
+# 将来の別 variant (safety-eval 等) まで同じ model へ潰してしまう。
+CONTEXT_WINDOW_SUFFIX = re.compile(r"\[\d+[kmg]\]")
 SEARCH_LIMIT = 8
 TRANSCRIPT_TAIL_BYTES = 65536
 
@@ -239,7 +242,7 @@ def _encoded_project_id(cwd: str) -> str:
 def _normalize_model(model_id: str) -> str:
     """claude-opus-4-8 / claude-opus-5[1m] -> opus-4.8 / opus-5 (idempotent)."""
     m = model_id.strip().lower().removeprefix("claude-")
-    m = re.sub(r"\[[^\]]*\]$", "", m)  # [1m] 等の context-window 変種は同一モデル
+    m = CONTEXT_WINDOW_SUFFIX.sub("", m)  # 同一モデルの context-window 表記違い
     m = re.sub(r"-\d{8}$", "", m)
     return re.sub(r"-(\d+)-(\d+)$", r"-\1.\2", m)
 
@@ -306,7 +309,9 @@ def _model_pred(con: sqlite3.Connection, project_id: str, model: str):
         ).fetchall()
     except sqlite3.Error:
         rows = []
-    tags = {fp: set(m.split()) for fp, m in rows if m}
+    # 保存済み tag も引く側で正規化する — 旧形式 (opus-5[1m] 等) の row は
+    # entry を書き直すまで DB に残るため、query 時に揃えないと mute が続く。
+    tags = {fp: {_normalize_model(t) for t in m.split()} for fp, m in rows if m}
 
     def ok(file_path: str) -> bool:
         return model in tags.get(file_path, {MODELS_DEFAULT})
@@ -324,7 +329,7 @@ def _entry_tags(con: sqlite3.Connection, project_id: str) -> dict[str, str]:
         ).fetchall()
     except sqlite3.Error:
         rows = []
-    return {fp: m for fp, m in rows if m}
+    return {fp: " ".join(_normalize_model(t) for t in m.split()) for fp, m in rows if m}
 
 
 def _parse_entry(file_path: str) -> tuple[str, str, str, str] | None:
@@ -1386,6 +1391,8 @@ class ModelTagTest(unittest.TestCase):
             "claude-haiku-4-5-20251001": "haiku-4.5",
             "claude-opus-5[1m]": "opus-5",
             "claude-opus-4-8[1m]": "opus-4.8",
+            "claude-haiku-4-5[1m]-20251001": "haiku-4.5",  # 順序が逆でも畳む
+            "claude-opus-5[safety-eval]": "opus-5[safety-eval]",  # 別 variant は潰さない
             "opus-4.8": "opus-4.8",  # idempotent
         }
         for raw, expect in cases.items():
@@ -1459,6 +1466,21 @@ class ModelTagTest(unittest.TestCase):
                 (fp, models),
             )
         con.commit()
+
+    def test_legacy_bracket_tag_still_matches(self):
+        """DB に残る旧形式 tag (opus-5[1m]) は entry を書き直さずとも引く側で揃える。"""
+        from unittest import mock
+
+        db = self._tmp_db()
+        with mock.patch.object(sys.modules[__name__], "DB_PATH", db):
+            con = _connect()
+            assert con is not None
+            try:
+                self._seed_tags(con, [("/m/legacy.md", "opus-5[1m]")])
+                self.assertTrue(_model_pred(con, "proj", "opus-5")("/m/legacy.md"))
+                self.assertEqual(_entry_tags(con, "proj")["/m/legacy.md"], "opus-5")
+            finally:
+                con.close()
 
     def test_filter_emits_match_and_logs_mismatch(self):
         from unittest import mock

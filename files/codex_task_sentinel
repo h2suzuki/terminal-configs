@@ -33,6 +33,7 @@ Exit: 0 done, 3 done-hung (deliverable ready, runner not deregistered),
 from __future__ import annotations
 
 import argparse
+import calendar
 import glob
 import json
 import math
@@ -40,10 +41,14 @@ import os
 import re
 import shlex
 import sys
+import tempfile
 import time
 import unittest
 
 STATE_ROOT = os.path.expanduser("~/.claude/plugins/data/codex-openai-codex/state")
+# The plugin resolves its state root from CLAUDE_PLUGIN_DATA and falls back to
+# the temp dir, so watching only the packaged path loses jobs it really started.
+PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA"
 COMPANION = os.path.expanduser(
     "~/.claude/plugins/cache/openai-codex/codex/1.0.5/scripts/codex-companion.mjs"
 )
@@ -65,15 +70,34 @@ EXIT_ENDED_WITHOUT_ARTIFACT = 5
 EXIT_NEVER_REGISTERED = 6
 EXIT_TIMEOUT = 7
 EXIT_NOT_COMPLETED = 8
+EXIT_AMBIGUOUS = 9
+EXIT_VANISHED = 10
+EXIT_ALIVE = 11
+EXIT_OVER_ESTIMATE = 12
 
 
-def job_paths(job_id: str, state_root: str = STATE_ROOT) -> tuple[str, str] | None:
-    """(record, log) for the job in whichever workspace registered it, else None."""
-    for record in sorted(
-        glob.glob(os.path.join(state_root, "*", "jobs", job_id + ".json"))
-    ):
-        return record, record[: -len(".json")] + ".log"
-    return None
+def state_roots(explicit: str | None = None) -> list[str]:
+    """Every root the plugin may have written to, in the order it resolves them."""
+    if explicit:
+        return [explicit]
+    roots = []
+    plugin_data = os.environ.get(PLUGIN_DATA_ENV)
+    if plugin_data:
+        roots.append(os.path.join(plugin_data, "state"))
+    roots.append(os.path.join(tempfile.gettempdir(), "codex-companion"))
+    roots.append(STATE_ROOT)
+    return list(dict.fromkeys(roots))
+
+
+def find_jobs(job_id: str, roots: list[str]) -> list[tuple[str, str]]:
+    """Every (record, log) pair carrying this id — more than one is an ambiguity, not a pick."""
+    found = []
+    for root in roots:
+        for record in sorted(
+            glob.glob(os.path.join(root, "*", "jobs", job_id + ".json"))
+        ):
+            found.append((record, record[: -len(".json")] + ".log"))
+    return found
 
 
 def job_record(record_path: str) -> dict:
@@ -165,10 +189,8 @@ def started_epoch(record: dict) -> float | None:
     stamp = record.get("startedAt")
     if not isinstance(stamp, str) or len(stamp) < 19:
         return None
-    try:
-        return (
-            time.mktime(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
-        )
+    try:  # the record stamps UTC, so read it as UTC rather than through local time
+        return float(calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S")))
     except ValueError:
         return None
 
@@ -205,6 +227,7 @@ def verdict(
     ready: bool,
     stall_seconds: float,
     hang_seconds: float,
+    expects_artifact: bool = True,
 ) -> tuple[int, str] | None:
     """Terminal (exit code, headline) for one poll, or None to keep watching."""
     alive_status = status in ALIVE_STATUS or not status
@@ -218,12 +241,14 @@ def verdict(
                 f"not-completed: job {status} — re-issue on a fresh thread "
                 "(a cancelled or failed run is not a result)"
             )
-        if ready:
-            return EXIT_DONE, "done: deliverable ready, job completed"
+        if ready or not expects_artifact:
+            return EXIT_DONE, "done: job completed"
         return EXIT_ENDED_WITHOUT_ARTIFACT, (
             "ended-without-deliverable: job completed with no complete deliverable — "
             "the log's tail below is what it reported instead"
         )
+    if not expects_artifact:
+        ready = False  # nothing to be ready; only the tree and the log speak here
     if ready and quiet and tree_quiet:
         return EXIT_DONE_HUNG, (
             "done-hung: deliverable ready but the runner is still registered — "
@@ -266,33 +291,66 @@ def evidence(
     return "\n".join(lines)
 
 
-def watch(args: argparse.Namespace, state_root: str = STATE_ROOT) -> int:
+def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
+    roots = roots if roots is not None else state_roots(args.state_root)
     deadline = time.time() + args.timeout_seconds
-    paths = None
-    while paths is None:
-        paths = job_paths(args.job_id, state_root)
-        if paths is not None:
+    started = time.time()
+    found: list[tuple[str, str]] = []
+    while not found:
+        found = find_jobs(args.job_id, roots)
+        if len(found) > 1:
+            print(f"ambiguous: {len(found)} records carry the id {args.job_id}")
+            for record, _log in found:
+                print(f"  {record}")
+            return EXIT_AMBIGUOUS
+        if found:
             break
         if time.time() + args.poll_seconds > deadline:
             print(f"never-registered: no state record for {args.job_id}")
+            print(f"  searched: {', '.join(roots)}")
             return EXIT_NEVER_REGISTERED
         time.sleep(args.poll_seconds)
-    record_path, log = paths
-    baseline = baseline_silence(state_root, args.job_id)
+    record_path, log = found[0]
+    baseline = next(
+        (b for b in (baseline_silence(r, args.job_id) for r in roots) if b), None
+    )
     threshold = stall_threshold(args.stall_seconds, baseline)
     while True:
         now = time.time()
         record = job_record(record_path)
         age = heartbeat_age(log, now)
         tree = tree_age(record.get("workspaceRoot"), now)
-        out = verdict(
-            str(record.get("status") or ""),
-            age,
-            tree,
-            artifact_ready(args.artifact, args.token, started_epoch(record)),
-            threshold,
-            args.hang_seconds,
-        )
+        if not os.path.exists(record_path):
+            # The plugin prunes to its newest 50 jobs regardless of status, so a
+            # record that was here and is gone is lost history, not a verdict.
+            out = (
+                EXIT_VANISHED,
+                "vanished: the state record disappeared after registration — "
+                "the plugin prunes old jobs, so this job's outcome is unknowable here",
+            )
+        else:
+            out = verdict(
+                str(record.get("status") or ""),
+                age,
+                tree,
+                artifact_ready(args.artifact, args.token, started_epoch(record)),
+                threshold,
+                args.hang_seconds,
+                expects_artifact=args.artifact is not None,
+            )
+        elapsed = now - started
+        if (
+            out is None
+            and args.estimate_seconds
+            and elapsed > args.estimate_seconds * 2
+        ):
+            out = (
+                EXIT_OVER_ESTIMATE,
+                f"over-estimate: {int(elapsed)}s elapsed against a {int(args.estimate_seconds)}s "
+                "estimate — read the log against the order before waiting further",
+            )
+        if out is None and args.once:
+            out = (EXIT_ALIVE, f"alive: still running after {int(elapsed)}s")
         if out is None and now >= deadline:
             out = (
                 EXIT_TIMEOUT,
@@ -321,13 +379,30 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--hang-seconds", type=float, default=300.0)
     p.add_argument("--poll-seconds", type=float, default=30.0)
     p.add_argument("--timeout-seconds", type=float, default=3300.0)
+    p.add_argument(
+        "--estimate-seconds",
+        type=float,
+        help="expected run time; twice this without a verdict exits for investigation",
+    )
+    p.add_argument("--state-root", help="override where plugin state is searched")
+    p.add_argument(
+        "--once",
+        action="store_true",
+        help="evaluate one cadence and report alive instead of waiting",
+    )
     p.add_argument("--selftest", action="store_true")
     return p
 
 
 def check_durations(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     """NaN or a negative wait makes every deadline comparison false — refuse it up front."""
-    for name in ("stall_seconds", "hang_seconds", "poll_seconds", "timeout_seconds"):
+    for name in (
+        "stall_seconds",
+        "hang_seconds",
+        "poll_seconds",
+        "timeout_seconds",
+        "estimate_seconds",
+    ):
         value = getattr(args, name)
         if value is not None and not (math.isfinite(value) and value > 0):
             parser.error(f"--{name.replace('_', '-')} must be a positive finite number")
@@ -374,11 +449,33 @@ class WatchTest(unittest.TestCase):
     def test_job_found_in_any_workspace(self):
         """隔離 worktree に登録された job も見つかる (本線 workspace 決め打ちにしない)。"""
         root, record, log = self._state("wt-review-deadbeef", "task-x", "running")
-        self.assertEqual(job_paths("task-x", root), (record, log))
+        self.assertEqual(find_jobs("task-x", [root]), [(record, log)])
 
-    def test_job_absent_returns_none(self):
+    def test_job_absent_returns_nothing(self):
         root, _r, _l = self._state("ws", "task-x", "running")
-        self.assertIsNone(job_paths("task-other", root))
+        self.assertEqual(find_jobs("task-other", [root]), [])
+
+    def test_duplicate_ids_are_all_returned(self):
+        """同一 id が 2 件あるなら選ばずに全部返す — 黙って先頭を掴むと live job を取り違える。"""
+        root, _r, _l = self._state("aaa-old", "task-dup", "cancelled")
+        jobs = os.path.join(root, "zzz-live", "jobs")
+        os.makedirs(jobs)
+        with open(os.path.join(jobs, "task-dup.json"), "w", encoding="utf-8") as f:
+            json.dump({"id": "task-dup", "status": "running"}, f)
+        with open(os.path.join(jobs, "task-dup.log"), "w", encoding="utf-8") as f:
+            f.write("x\n")
+        self.assertEqual(len(find_jobs("task-dup", [root])), 2)
+
+    def test_state_roots_follow_the_plugin_resolver(self):
+        """plugin は CLAUDE_PLUGIN_DATA、無ければ temp dir を使う — 配布 path 決め打ちにしない。"""
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {PLUGIN_DATA_ENV: "/pd"}):
+            roots = state_roots()
+        self.assertEqual(roots[0], os.path.join("/pd", "state"))
+        self.assertIn(os.path.join(tempfile.gettempdir(), "codex-companion"), roots)
+        self.assertIn(STATE_ROOT, roots)
+        self.assertEqual(state_roots("/only"), ["/only"])
 
     def test_queued_counts_as_alive(self):
         """companion の生存語彙は queued / running の 2 つ (source と実データで確認)。"""
@@ -400,6 +497,12 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(
             self._code("completed", 1.0, False), EXIT_ENDED_WITHOUT_ARTIFACT
         )
+
+    def test_completion_without_an_expected_deliverable_is_done(self):
+        """成果物を指定しない発注では、completed をそのまま成功として表現できる。"""
+        out = verdict("completed", 1.0, None, False, 420, 300, expects_artifact=False)
+        assert out is not None
+        self.assertEqual(out[0], EXIT_DONE)
 
     def test_running_with_fresh_log_keeps_watching(self):
         """走行中は None — 「id が status 出力に無い」等の間接判定で完了にしない。"""
@@ -459,11 +562,14 @@ class WatchTest(unittest.TestCase):
         self.assertFalse(artifact_ready(p, "REPORT_COMPLETE", since=time.time() - 60))
         self.assertTrue(artifact_ready(p, "REPORT_COMPLETE", since=old - 60))
 
-    def test_started_epoch_reads_the_record(self):
+    def test_started_epoch_reads_the_record_as_utc(self):
+        """record は UTC 表記 — local 時刻として読むと DST 環境で鮮度判定が狂う。"""
         self.assertIsNone(started_epoch({}))
         self.assertIsNone(started_epoch({"startedAt": "nonsense"}))
-        self.assertIsInstance(
-            started_epoch({"startedAt": "2026-08-08T11:43:06.921Z"}), float
+        stamp = "2026-08-08T11:43:06.921Z"
+        self.assertEqual(
+            started_epoch({"startedAt": stamp}),
+            float(calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))),
         )
 
     def test_durations_must_be_finite_and_positive(self):
