@@ -43,19 +43,22 @@ codex (gpt-5.6-sol / xhigh) レビュー指摘の是正。deploy 前に少なく
 - [ ] **`models:` の役割分離 (設計)**: provenance (どの model で観測したか) と delivery allowlist (どの model に見せるか) を同じ field が兼ねるため、model 更新の度に corpus が cold-start する。`observed_models:` と `applies_to:` に分ける
 - [ ] **「2 回失敗」の機械 trigger**: skill には書いたが hook は tool failure を観測しない。current turn の tool_result 失敗 signature を数え、2 回目で横断検索を起動する
 
-### codex_task_sentinel: 上流依存の残存 1 件
+### codex_task_sentinel: 敵対レビューの収束と上流依存 1 件
 
 Goal: 監視判定が plugin の実挙動と skill の 4 分岐に一致する状態にする。
 
 Exit Criteria:
 
-- [x] 敵対レビューの新規 material 指摘がゼロで安定する — 7 巡目まで実施し、4〜7 巡目は連続で新規ゼロ
+- [ ] 敵対レビューの新規 material 指摘がゼロで安定する — 4〜7 巡目は連続ゼロだったが、
+  exit 14 導入の検証を論点にした 12 巡目で 2 件 (evidence 欠落 / skill の exit 表 stale) が出た。
+  両方を修正済みなので 13 巡目で再判定する
 - [x] log 由来の曖昧さが正常 job の cancel を招かない — 既定で cancel 導線 (exit 4/3) を出さず、
-  exit 14 で末尾と cancel コマンドを示して判断を呼び手に渡す (206ce7a)。断定したい呼び手は `--trust-log`
+  exit 14 で evidence を示して判断を呼び手に渡す (206ce7a)。断定したい呼び手は `--trust-log`。
+  12 巡目が 504 case の直積で「既定の exit 3/4 は 0 件」「`--trust-log` は旧判定と mismatch 0」を実測
 - [ ] 上流 (plugin) が per-command lifecycle を record に持ち、stall 判定の原理的曖昧さ自体が消える
 
-7 巡の敵対レビュー (gpt-5.6-sol / xhigh) で挙がった 13 + 2 + 3 件はすべて修正済み
-(a746ef5 / b9f32d0 / fabe928 / bb56980 / 7c4d532 / 2607f1d / 890349a / 1f37e46)。
+12 巡の敵対レビュー (gpt-5.6-sol / xhigh) の指摘はすべて修正済み
+(a746ef5 / b9f32d0 / fabe928 / bb56980 / 7c4d532 / 2607f1d / 890349a / 1f37e46 / 206ce7a / 直近 1 件)。
 各巡の報告書は session scratchpad にあり、内容は commit message に要約してある。
 
 - [ ] **command lifecycle が log 層でしか観測できない (上流依存)**: plugin の `appendLogBlock` は
