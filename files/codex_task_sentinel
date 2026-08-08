@@ -89,12 +89,12 @@ EXIT_OVER_ESTIMATE = 12
 EXIT_CORRUPT = 13
 EXIT_UNVERIFIABLE = 14
 
-# The plugin writes a command's start and its end as separate log lines, and the
-# end word varies with how the command finished (completed / failed / …). Both
-# are anchored to the timestamp: the same words appear inside assistant messages,
-# and counting those unanchored quotes left a finished job looking busy forever.
-COMMAND_START = re.compile(r"^\[[^\]]+\]\s+Running command:")
-COMMAND_END = re.compile(r"^\[[^\]]+\]\s+Command \w+:")
+# Note on a signal deliberately absent: whether a command is mid-flight cannot
+# be read from the log. The plugin appends message bodies verbatim, so a body
+# quoting a log line is indistinguishable from the event it quotes, in both
+# directions — a quoted start hides a real stall, a quoted end invents one. The
+# skill's second condition covers the same ground with evidence: a job running a
+# long command is writing its tree, and tree quiet is measured, not parsed.
 
 
 def state_roots(explicit: str | None = None) -> list[str]:
@@ -142,30 +142,14 @@ def heartbeat_age(log_path: str, now: float) -> float | None:
         return None
 
 
-def log_lines(log_path: str) -> list[str]:
-    """Non-empty log lines, newest last, with the leading indent kept for anchoring."""
-    try:
-        with open(log_path, encoding="utf-8", errors="replace") as f:
-            return [ln.rstrip("\n") for ln in f if ln.strip()]
-    except OSError:
-        return []
-
-
 def last_log_line(log_path: str, limit: int = 160) -> str:
     """The job's last log line — what it was doing when it went quiet."""
-    lines = log_lines(log_path)
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+    except OSError:
+        return ""
     return lines[-1][:limit] if lines else ""
-
-
-def command_in_flight(lines: list[str]) -> bool:
-    """True while any started command has not ended — its silence is expected.
-
-    Counts rather than reads the last event: commands run in parallel, so a
-    later completion can belong to a different command than the pending one.
-    """
-    starts = sum(1 for line in lines if COMMAND_START.match(line))
-    ends = sum(1 for line in lines if COMMAND_END.match(line))
-    return starts > ends
 
 
 def tree_age(root: str | None, now: float) -> float | None:
@@ -262,13 +246,18 @@ def stamp_epoch(stamp: object) -> float | None:
 def artifact_ready(
     path: str | None, token: str | None, since: float | None = None
 ) -> bool:
-    """A deliverable counts once its final line is exactly the token and this run wrote it."""
-    if not path:
+    """A deliverable counts once its final line is exactly the token and this run wrote it.
+
+    `since` is the earliest instant this run could have written. With no floor
+    there is nothing separating this run's output from an earlier run's, so the
+    answer is no rather than a guess.
+    """
+    if not path or since is None:
         return False
     try:
         with open(path, encoding="utf-8") as f:
             body = f.read()
-        if since is not None and os.path.getmtime(path) < since:
+        if os.path.getmtime(path) < since:
             return False  # a leftover from an earlier run is not this run's output
     except OSError:
         return False
@@ -293,7 +282,6 @@ def verdict(
     stall_seconds: float,
     hang_seconds: float,
     expects_artifact: bool = True,
-    running_command: bool = False,
 ) -> tuple[int, str] | None:
     """Terminal (exit code, headline) for one poll, or None to keep watching."""
     alive_status = status in ALIVE_STATUS or not status
@@ -325,8 +313,6 @@ def verdict(
     settled = hang_seconds if ready else stall_seconds
     if age is not None and age < settled:
         return None
-    if running_command:
-        return None  # a command is mid-flight; the quiet log is its, not the runner's
     if tree is not None and tree < settled:
         return None  # writing files is working, whatever the log says
     if tree is None:
@@ -426,7 +412,6 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 threshold,
                 args.hang_seconds,
                 expects_artifact=args.artifact is not None,
-                running_command=command_in_flight(log_lines(log)),
             )
         if (
             out is None
@@ -620,34 +605,9 @@ class WatchTest(unittest.TestCase):
         p = os.path.join(tempfile.mkdtemp(), "report.md")
         with open(p, "w", encoding="utf-8") as f:
             f.write("body\nREPORT_COMPLETE\n")
-        self.assertTrue(artifact_ready(p, "REPORT_COMPLETE", since=None))
+        self.assertFalse(artifact_ready(p, "REPORT_COMPLETE", since=None))
         self.assertFalse(artifact_ready(p, "REPORT_COMPLETE", since=time.time() + 60))
-
-    def test_parallel_commands_keep_the_job_alive(self):
-        """並行 command は片方の完了で「全部終わった」にはならない。"""
-        lines = [
-            "[t] Running command: cargo test",
-            "[t] Running command: ls",
-            "[t] Command completed: ls (exit 0)",
-        ]
-        self.assertTrue(command_in_flight(lines))
-
-    def test_failed_command_counts_as_ended(self):
-        """終了語は completed だけではない — failed を数え漏らすと stall を見逃す。"""
-        lines = [
-            "[t] Running command: false",
-            "[t] Command failed: false (exit 1)",
-        ]
-        self.assertFalse(command_in_flight(lines))
-
-    def test_quoted_command_words_are_not_events(self):
-        """assistant message 内の引用は event ではない — 数えると完走 job が永久に busy になる。"""
-        lines = [
-            "[t] Running command: ls",
-            "[t] Command completed: ls (exit 0)",
-            "[t] Assistant message: 次に Running command: を数える実装を直す",
-        ]
-        self.assertFalse(command_in_flight(lines))
+        self.assertTrue(artifact_ready(p, "REPORT_COMPLETE", since=time.time() - 60))
 
     def test_running_with_fresh_log_keeps_watching(self):
         """走行中は None — 「id が status 出力に無い」等の間接判定で完了にしない。"""
@@ -676,19 +636,6 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(self._code("running", 500.0, False), EXIT_UNVERIFIABLE)
         self.assertEqual(self._code("running", 500.0, True), EXIT_UNVERIFIABLE)
 
-    def test_running_command_suspends_the_stall_call(self):
-        """plugin は command 完了までの間 log を書かない — その沈黙で cancel させない。"""
-        lines = ["[t] Running command: cargo test --workspace"]
-        self.assertTrue(command_in_flight(lines))
-        self.assertIsNone(
-            verdict("running", 600.0, 600.0, False, 420, 300, running_command=True)
-        )
-
-    def test_finished_command_does_not_suspend_it(self):
-        lines = ["[t] Running command: x", "[t] Command completed: x (exit 0)"]
-        self.assertFalse(command_in_flight(lines))
-        self.assertEqual(self._code("running", 600.0, False, tree=600.0), EXIT_STALL)
-
     def test_corrupt_record_is_not_a_dict(self):
         """壊れた record は None — 空 status として生存扱いにすると stall へ化ける。"""
         import tempfile
@@ -706,19 +653,22 @@ class WatchTest(unittest.TestCase):
         p = os.path.join(tempfile.mkdtemp(), "report.md")
         with open(p, "w", encoding="utf-8") as f:
             f.write("half written\n")
-        self.assertFalse(artifact_ready(p, "REPORT_COMPLETE"))
+        floor = time.time() - 60
+        self.assertFalse(artifact_ready(p, "REPORT_COMPLETE", floor))
         with open(p, "w", encoding="utf-8") as f:
             f.write("prefixREPORT_COMPLETE\n")
         self.assertFalse(
-            artifact_ready(p, "REPORT_COMPLETE"), "token は最終行の完全一致で見る"
+            artifact_ready(p, "REPORT_COMPLETE", floor),
+            "token は最終行の完全一致で見る",
         )
         with open(p, "w", encoding="utf-8") as f:
             f.write("body\nREPORT_COMPLETE\n")
-        self.assertTrue(artifact_ready(p, "REPORT_COMPLETE"))
+        self.assertTrue(artifact_ready(p, "REPORT_COMPLETE", floor))
 
     def test_absent_artifact_is_not_ready(self):
-        self.assertFalse(artifact_ready("/nonexistent/report.md", None))
-        self.assertFalse(artifact_ready(None, None))
+        floor = time.time() - 60
+        self.assertFalse(artifact_ready("/nonexistent/report.md", None, floor))
+        self.assertFalse(artifact_ready(None, None, floor))
 
     def test_leftover_artifact_from_an_earlier_run_is_not_this_run_s(self):
         """前 run が残した完成済み report を、今回の成果物として受理しない。"""
@@ -769,7 +719,11 @@ class WatchTest(unittest.TestCase):
             p = os.path.join(d, f"r{i}.md")
             with open(p, "w", encoding="utf-8") as f:
                 f.write(text)
-            self.assertEqual(artifact_ready(p, "REPORT_COMPLETE"), expect, repr(text))
+            self.assertEqual(
+                artifact_ready(p, "REPORT_COMPLETE", time.time() - 60),
+                expect,
+                repr(text),
+            )
 
     def test_durations_must_be_finite_and_positive(self):
         """NaN は全比較を偽にし、監視を永久 loop にする — 受け付ける前に落とす。"""
