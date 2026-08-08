@@ -92,10 +92,14 @@ EXIT_UNVERIFIABLE = 14
 # The skill's third condition — is a command still running — can only be guessed
 # at. The plugin appends message bodies verbatim, so a body quoting a log line
 # looks exactly like the event it quotes. The guess is therefore used in one
-# direction only: a tail that looks like a command start suppresses a verdict
-# and is reported as such. It can never manufacture one, which is what a quoted
-# end would otherwise do to a job that is working.
-TAIL_COMMAND_START = re.compile(r"^\[[^\]]+\]\s+Running command:")
+# direction only: it can suppress a verdict, never manufacture one. Suppression
+# fires when a start has no matching end — commands run in parallel, so the tail
+# alone misses one still running behind a neighbour's completion — or when the
+# tail itself starts a command. A quoted start over-suppresses, which costs
+# waiting; the residual gap is a quoted end that exactly offsets a real start,
+# which the evidence block surfaces rather than the verdict hiding.
+COMMAND_START = re.compile(r"^\[[^\]]+\]\s+Running command:")
+COMMAND_END = re.compile(r"^\[[^\]]+\]\s+Command \w+:")
 
 
 def state_roots(explicit: str | None = None) -> list[str]:
@@ -143,14 +147,28 @@ def heartbeat_age(log_path: str, now: float) -> float | None:
         return None
 
 
-def last_log_line(log_path: str, limit: int = 160) -> str:
-    """The job's last log line — what it was doing when it went quiet."""
+def log_lines(log_path: str) -> list[str]:
+    """Non-empty log lines, newest last, left edge intact so events can be anchored."""
     try:
         with open(log_path, encoding="utf-8", errors="replace") as f:
-            lines = [ln.strip() for ln in f if ln.strip()]
+            return [ln.rstrip("\n") for ln in f if ln.strip()]
     except OSError:
-        return ""
-    return lines[-1][:limit] if lines else ""
+        return []
+
+
+def last_log_line(log_path: str, limit: int = 160) -> str:
+    """The job's last log line — what it was doing when it went quiet."""
+    lines = log_lines(log_path)
+    return lines[-1].strip()[:limit] if lines else ""
+
+
+def command_may_be_running(lines: list[str]) -> bool:
+    """Whether a command might still be in flight — used only to hold a verdict back."""
+    if not lines:
+        return False
+    starts = sum(1 for line in lines if COMMAND_START.match(line))
+    ends = sum(1 for line in lines if COMMAND_END.match(line))
+    return starts > ends or bool(COMMAND_START.match(lines[-1]))
 
 
 def tree_age(root: str | None, now: float) -> float | None:
@@ -283,7 +301,7 @@ def verdict(
     stall_seconds: float,
     hang_seconds: float,
     expects_artifact: bool = True,
-    tail_starts_command: bool = False,
+    command_may_run: bool = False,
 ) -> tuple[int, str] | None:
     """Terminal (exit code, headline) for one poll, or None to keep watching."""
     alive_status = status in ALIVE_STATUS or not status
@@ -317,13 +335,13 @@ def verdict(
         return None
     if tree is not None and tree < settled:
         return None  # writing files is working, whatever the log says
-    if tail_starts_command:
+    if command_may_run:
         # A read-only command writes nothing, so quiet tree + quiet log is also
         # what a working one looks like. The tail cannot settle it either way.
         return EXIT_UNVERIFIABLE, (
-            "unverifiable: the log's last event starts a command that never "
-            "reported finishing, and a read-only command leaves the tree quiet too — "
-            "read the tail below before cancelling anything"
+            "unverifiable: a command started and was never seen to finish, and a "
+            "read-only one leaves the tree quiet too — read the tail below before "
+            "cancelling anything"
         )
     if tree is None:
         # Both quiet conditions the skill requires must be observed, not assumed.
@@ -422,7 +440,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 threshold,
                 args.hang_seconds,
                 expects_artifact=args.artifact is not None,
-                tail_starts_command=bool(TAIL_COMMAND_START.match(last_log_line(log))),
+                command_may_run=command_may_be_running(log_lines(log)),
             )
         if (
             out is None
@@ -529,7 +547,7 @@ class WatchTest(unittest.TestCase):
         return root, record, log
 
     def _code(self, status, age, ready, tree=None, tail=False):
-        out = verdict(status, age, tree, ready, 420, 300, tail_starts_command=tail)
+        out = verdict(status, age, tree, ready, 420, 300, command_may_run=tail)
         self.assertIsNotNone(out, "terminal verdict を期待した")
         return out[0] if out else None
 
@@ -651,11 +669,39 @@ class WatchTest(unittest.TestCase):
 
     def test_a_quoted_tail_can_only_suppress_never_assert(self):
         """引用と event は区別できない以上、この材料で stall を作らせない (抑制のみ)。"""
-        out = verdict(
-            "running", 600.0, 600.0, False, 420, 300, tail_starts_command=True
-        )
+        out = verdict("running", 600.0, 600.0, False, 420, 300, command_may_run=True)
         assert out is not None
         self.assertNotEqual(out[0], EXIT_STALL)
+
+    def test_parallel_completion_does_not_bury_a_running_command(self):
+        """別 command の完了が末尾に来ても、未完了の開始が残っていれば抑制する。"""
+        lines = [
+            "[t] Running command: rg -n pattern",
+            "[t] Running command: ls",
+            "[t] Command completed: ls (exit 0)",
+        ]
+        self.assertTrue(command_may_be_running(lines))
+
+    def test_all_commands_finished_does_not_suppress(self):
+        lines = [
+            "[t] Running command: ls",
+            "[t] Command failed: ls (exit 2)",
+            "[t] Assistant message",
+        ]
+        self.assertFalse(command_may_be_running(lines))
+
+    def test_real_logs_do_not_look_busy_after_finishing(self):
+        """実ログ全件で、終了済 job が「まだ command 実行中」と読まれないこと。"""
+        busy = []
+        for log in glob.glob(
+            os.path.join(STATE_ROOT, "*", "jobs", "*.log")
+        ):  # 実環境が無ければ空で skip 相当
+            record = job_record(log[: -len(".log")] + ".json") or {}
+            if record.get("status") in ALIVE_STATUS or not record:
+                continue
+            if command_may_be_running(log_lines(log)):
+                busy.append(os.path.basename(log))
+        self.assertEqual(busy, [], "終了済 job が busy 判定された")
 
     def test_unknown_tree_is_not_evidence_of_quiet(self):
         """ツリーを読めないなら stall とも progress とも言えない — 断定せず報告する。"""
