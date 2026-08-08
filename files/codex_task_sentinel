@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import collections
 import glob
 import json
 import math
@@ -57,6 +58,7 @@ import sys
 import tempfile
 import time
 import unittest
+from collections.abc import Iterator
 
 STATE_ROOT = os.path.expanduser("~/.claude/plugins/data/codex-openai-codex/state")
 # The plugin resolves its state root from CLAUDE_PLUGIN_DATA and falls back to
@@ -75,6 +77,9 @@ BASELINE_STATUS = "completed"
 STALL_FLOOR_SECONDS = 420.0  # the skill's 7 min, used when history gives nothing larger
 STALL_BASELINE_FACTOR = 3.0
 LOG_TS = re.compile(r"^\[(\d{4}-\d\d-\d\dT[\d:.]+)Z\]")
+# A log line is an event line plus, at worst, one shortened command; a body that
+# runs longer than this is prose, and reading all of it only risks the verdict.
+MAX_LOG_LINE = 8192
 
 EXIT_DONE = 0
 EXIT_DONE_HUNG = 3
@@ -156,18 +161,35 @@ def heartbeat_age(log_path: str, now: float) -> float | None:
         return None
 
 
-def log_lines(log_path: str) -> list[str]:
-    """Non-empty log lines, newest last, left edge intact so events can be anchored."""
+def log_lines(log_path: str) -> Iterator[str]:
+    """Non-empty log lines, newest last, left edge intact so events can be anchored.
+
+    Streamed, and each line is cut at MAX_LOG_LINE: the plugin appends message
+    bodies with no size limit, so one agent turn can be a single line larger than
+    the memory this tool may use, and a verdict lost to MemoryError helps nobody.
+    """
     try:
         with open(log_path, encoding="utf-8", errors="replace") as f:
-            return [ln.rstrip("\n") for ln in f if ln.strip()]
+            dropping = False
+            while True:
+                chunk = f.readline(MAX_LOG_LINE)
+                if not chunk:
+                    return
+                whole = chunk.endswith("\n")
+                if dropping:  # 長すぎる行の残り — 頭の 1 片だけを 1 行として扱う
+                    dropping = not whole
+                    continue
+                dropping = not whole
+                line = chunk.rstrip("\n")
+                if line.strip():
+                    yield line
     except OSError:
-        return []
+        return
 
 
 def log_tail(log_path: str, count: int = 6, limit: int = 200) -> list[str]:
     """The last few raw log lines — one line only ever shows the newest short command, not the context it displaced."""
-    return [ln.strip()[:limit] for ln in log_lines(log_path)[-count:]]
+    return [ln.strip()[:limit] for ln in collections.deque(log_lines(log_path), count)]
 
 
 def command_text(line: str) -> str:
@@ -176,7 +198,7 @@ def command_text(line: str) -> str:
     return re.sub(r"\s*\(exit -?\d+\)\s*$", "", body).strip()
 
 
-def event_lines(lines: list[str]) -> list[str]:
+def event_lines(lines: Iterator[str] | list[str]) -> Iterator[str]:
     """Log lines the runner itself wrote, in order.
 
     Events are appended, so their stamps never go backwards. A message body that
@@ -184,7 +206,6 @@ def event_lines(lines: list[str]) -> list[str]:
     the quote from the event it otherwise looks exactly like.
     """
     high = ""
-    kept = []
     for line in lines:
         m = LOG_TS.match(line)
         if not m:
@@ -192,11 +213,10 @@ def event_lines(lines: list[str]) -> list[str]:
         if m.group(1) < high:
             continue
         high = m.group(1)
-        kept.append(line)
-    return kept
+        yield line
 
 
-def pending_commands(lines: list[str]) -> list[str]:
+def pending_commands(lines: Iterator[str] | list[str]) -> list[str]:
     """Commands started and never seen to finish, oldest first.
 
     Ends are matched to starts by the command they name; the plugin shortens that
@@ -216,7 +236,7 @@ def pending_commands(lines: list[str]) -> list[str]:
     return pending
 
 
-def command_may_be_running(lines: list[str]) -> bool:
+def command_may_be_running(lines: Iterator[str] | list[str]) -> bool:
     """Whether a command might still be in flight — used only to hold a verdict back."""
     return bool(pending_commands(lines))
 
@@ -435,6 +455,7 @@ def evidence(
     baseline: float | None,
     artifact: str | None = None,
     ready: bool = False,
+    unfinished: list[str] | None = None,
 ) -> str:
     """Everything the verdict rests on, so no follow-up investigation is needed."""
     root = record.get("workspaceRoot")
@@ -456,7 +477,6 @@ def evidence(
         f"  末尾   : {tail[0]}",
         *(f"           {ln}" for ln in tail[1:]),
     ]
-    unfinished = pending_commands(log_lines(log))
     if unfinished:
         lines.append(f"  未完了 : {' / '.join(unfinished)}")
     lines += [
@@ -498,6 +518,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # Elapsed runs from the job's own start so re-arming does not reset the clock.
         elapsed = now - (stamp_epoch((record or {}).get("startedAt")) or started)
         ready = artifact_ready(args.artifact, args.token, run_since(record or {}))
+        # 1 poll 1 走査 — verdict も evidence も同じ結果を使い、log を読み直さない。
+        unfinished = pending_commands(log_lines(log))
         if not os.path.exists(record_path):
             # The plugin prunes to its newest 50 jobs regardless of status, so a
             # record that was here and is gone is lost history, not a verdict.
@@ -521,7 +543,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 threshold,
                 args.hang_seconds,
                 expects_artifact=args.artifact is not None,
-                command_may_run=command_may_be_running(log_lines(log)),
+                command_may_run=bool(unfinished),
                 trust_log=args.trust_log,
             )
         if (
@@ -535,7 +557,13 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 "estimate — read the log against the order before waiting further",
             )
         if out is None and args.once:
-            out = (EXIT_ALIVE, f"alive: still running after {int(elapsed)}s")
+            # completed でもツリーが落ち着くまでは verdict を保留するので、 record の
+            # 語をそのまま出す — 「still running」 と言い切ると status と食い違う。
+            out = (
+                EXIT_ALIVE,
+                f"alive: no terminal verdict yet after {int(elapsed)}s "
+                f"(record says {(record or {}).get('status') or '不明'})",
+            )
         if out is None and now >= deadline:
             out = (
                 EXIT_TIMEOUT,
@@ -555,6 +583,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     baseline,
                     args.artifact,
                     ready,
+                    unfinished,
                 )
             )
             return code
@@ -1167,6 +1196,7 @@ class WatchTest(unittest.TestCase):
             None,
             artifact,
             ready,
+            pending_commands(log_lines(log)),  # watch() と同じ 1 走査の結果を渡す
         )
 
     def test_evidence_states_the_deliverable_three_ways(self):
@@ -1201,6 +1231,55 @@ class WatchTest(unittest.TestCase):
                     % i
                 )
         self.assertIn("cargo test --all", self._evidence(log))
+
+    def test_watch_prints_the_unfinished_start_it_scanned(self):
+        """evidence が引数で受け取る以上、 watch が渡し忘れれば 未完了 行は黙って消える。"""
+        import io
+        from contextlib import redirect_stdout
+
+        root, _rec, log = self._state("ws", "task-live", "running")
+        with open(log, "w", encoding="utf-8") as f:
+            f.write("[2026-08-08T22:00:00.000Z] Running command: cargo test --all\n")
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(
+                watch(self._watch_args(root, "task-live", once=True)), EXIT_ALIVE
+            )
+        self.assertIn("未完了", buf.getvalue())
+        self.assertIn("cargo test --all", buf.getvalue())
+
+    def test_alive_headline_does_not_contradict_the_record(self):
+        """completed でもツリーが落ち着くまでは保留するので、「still running」 と言い切らない。"""
+        import io
+        from contextlib import redirect_stdout
+
+        root, rec, log = self._state("ws", "task-done", "completed", log_age=0.0)
+        tree = os.path.join(root, "tree")  # 直前に書かれたツリー = まだ落ち着いていない
+        os.makedirs(tree)
+        with open(os.path.join(tree, "f"), "w", encoding="utf-8") as f:
+            f.write("x")
+        with open(rec, "w", encoding="utf-8") as f:
+            json.dump(
+                {"id": "task-done", "status": "completed", "workspaceRoot": tree}, f
+            )
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(
+                watch(self._watch_args(root, "task-done", once=True)), EXIT_ALIVE
+            )
+        self.assertIn("completed", buf.getvalue())
+        self.assertNotIn("still running", buf.getvalue())
+
+    def test_a_huge_single_line_log_still_yields_a_verdict(self):
+        """plugin は message 本文を無加工 append する — 1 行が memory を食い潰しても verdict は出す。"""
+        _root, _rec, log = self._state("ws", "task-x", "running")
+        with open(log, "w", encoding="utf-8") as f:
+            f.write("[2026-08-08T22:00:00.000Z] Running command: cargo test --all\n")
+            f.write("x" * (MAX_LOG_LINE * 40) + "\n")
+            f.write("[2026-08-08T22:00:01.000Z] tail line\n")
+        self.assertTrue(all(len(ln) <= MAX_LOG_LINE for ln in log_lines(log)))
+        self.assertEqual(pending_commands(log_lines(log)), ["cargo test --all"])
+        self.assertIn("tail line", self._evidence(log))
 
     def test_pending_commands_names_the_unfinished_start(self):
         lines = [
