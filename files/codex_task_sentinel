@@ -25,9 +25,21 @@ to the job.
 Takes a job id plus the deliverable it must produce; --help lists the rest and
 --selftest runs the rules below as tests.
 
-Exit: 0 done, 3 done-hung (deliverable ready, runner not deregistered),
-4 stall, 5 completed without the deliverable, 6 never registered, 7 timeout,
-8 ended without completing (cancelled or failed — never a success).
+Exit codes, and what the caller does with each:
+
+  0  done              the deliverable is this run's and the job completed
+  3  done-hung         deliverable ready, runner still registered — verify, then cancel
+  4  stall             log and tree both quiet — read the log, cancel, re-issue fresh
+  5  no-deliverable    completed but produced nothing complete — read the log
+  6  never-registered  no record in any searched root — the launch did not take
+  7  timeout           still alive at the deadline — decide whether to keep waiting
+  8  not-completed     cancelled or failed — never a result; re-issue on a fresh thread
+  9  ambiguous         several records carry the id — disambiguate before trusting one
+  10 vanished          the record was pruned after registration — outcome unknowable
+  11 alive             --once only: still running; re-arm or investigate
+  12 over-estimate     twice --estimate-seconds with no verdict — investigate
+  13 corrupt           the record is present but unreadable — do not read it as a stall
+  14 unverifiable      quiet log but the tree could not be read — neither call is evidenced
 """
 
 from __future__ import annotations
@@ -74,6 +86,14 @@ EXIT_AMBIGUOUS = 9
 EXIT_VANISHED = 10
 EXIT_ALIVE = 11
 EXIT_OVER_ESTIMATE = 12
+EXIT_CORRUPT = 13
+EXIT_UNVERIFIABLE = 14
+
+# The plugin writes a command's start and its completion as separate log lines,
+# so a start with no completion after it means a command is still running and
+# the quiet log is the command's, not the runner's.
+COMMAND_START = re.compile(r"\bRunning command:")
+COMMAND_END = re.compile(r"\bCommand completed:")
 
 
 def state_roots(explicit: str | None = None) -> list[str]:
@@ -100,14 +120,17 @@ def find_jobs(job_id: str, roots: list[str]) -> list[tuple[str, str]]:
     return found
 
 
-def job_record(record_path: str) -> dict:
-    """The on-disk record; {} when unreadable, which every caller treats as alive."""
+def job_record(record_path: str) -> dict | None:
+    """The on-disk record, or None when it is there but unreadable — a corrupt
+    record is an unknown outcome, not a quiet job."""
     try:
         with open(record_path, encoding="utf-8") as f:
             loaded = json.load(f)
-    except (OSError, ValueError):
-        return {}
-    return loaded if isinstance(loaded, dict) else {}
+    except OSError:
+        return None
+    except ValueError:
+        return None
+    return loaded if isinstance(loaded, dict) else None
 
 
 def heartbeat_age(log_path: str, now: float) -> float | None:
@@ -118,14 +141,29 @@ def heartbeat_age(log_path: str, now: float) -> float | None:
         return None
 
 
-def last_log_line(log_path: str, limit: int = 160) -> str:
-    """The job's last log line — what it was doing when it went quiet."""
+def log_lines(log_path: str) -> list[str]:
+    """Non-empty log lines, newest last."""
     try:
         with open(log_path, encoding="utf-8", errors="replace") as f:
-            lines = [ln.strip() for ln in f if ln.strip()]
+            return [ln.strip() for ln in f if ln.strip()]
     except OSError:
-        return ""
+        return []
+
+
+def last_log_line(log_path: str, limit: int = 160) -> str:
+    """The job's last log line — what it was doing when it went quiet."""
+    lines = log_lines(log_path)
     return lines[-1][:limit] if lines else ""
+
+
+def command_in_flight(lines: list[str]) -> bool:
+    """True when a command started and has not completed — its silence is expected."""
+    for line in reversed(lines):
+        if COMMAND_END.search(line):
+            return False
+        if COMMAND_START.search(line):
+            return True
+    return False
 
 
 def tree_age(root: str | None, now: float) -> float | None:
@@ -161,13 +199,18 @@ def log_silences(log_path: str) -> list[float]:
     return [b - a for a, b in zip(stamps, stamps[1:], strict=False)]
 
 
-def baseline_silence(state_root: str, exclude: str) -> float | None:
-    """Longest gap a job that completed here ever went quiet for; None with no history."""
+def baseline_silence(jobs_dir: str, exclude: str) -> float | None:
+    """Longest quiet spell among jobs that completed in THIS workspace; None with no history.
+
+    Scoped to one workspace on purpose: a slow job in an unrelated workspace
+    would otherwise raise the threshold here and hide a real stall.
+    """
     worst = None
-    for record_path in glob.glob(os.path.join(state_root, "*", "jobs", "*.json")):
+    for record_path in glob.glob(os.path.join(jobs_dir, "*.json")):
         if os.path.basename(record_path)[: -len(".json")] == exclude:
             continue
-        if job_record(record_path).get("status") != BASELINE_STATUS:
+        record = job_record(record_path)
+        if record is None or record.get("status") != BASELINE_STATUS:
             continue
         gaps = log_silences(record_path[: -len(".json")] + ".log")
         if gaps and (worst is None or max(gaps) > worst):
@@ -185,20 +228,26 @@ def stall_threshold(explicit: float | None, baseline: float | None) -> float:
 
 
 def started_epoch(record: dict) -> float | None:
-    """When this run began, so a deliverable left by an earlier one can be told apart."""
+    """When this run began, so a deliverable left by an earlier one can be told apart.
+
+    Keeps the fraction: truncating to the second lets a file written earlier in
+    the same second pass as this run's output.
+    """
     stamp = record.get("startedAt")
     if not isinstance(stamp, str) or len(stamp) < 19:
         return None
     try:  # the record stamps UTC, so read it as UTC rather than through local time
-        return float(calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S")))
+        whole = float(calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S")))
     except ValueError:
         return None
+    fraction = re.match(r"\.\d+", stamp[19:])
+    return whole + float(fraction.group(0)) if fraction else whole
 
 
 def artifact_ready(
     path: str | None, token: str | None, since: float | None = None
 ) -> bool:
-    """A deliverable counts once its final line is the token and this run wrote it."""
+    """A deliverable counts once its final line is exactly the token and this run wrote it."""
     if not path:
         return False
     try:
@@ -208,10 +257,11 @@ def artifact_ready(
             return False  # a leftover from an earlier run is not this run's output
     except OSError:
         return False
-    lines = body.strip().splitlines()
-    if not lines:
-        return False
-    return lines[-1].strip() == token if token else True
+    if not token:
+        return bool(body.strip())
+    # The order says the final line IS the token: no padding, no trailing blanks.
+    lines = body.splitlines()
+    return bool(lines) and lines[-1] == token
 
 
 def cancel_command(job_id: str, root: str | None) -> str:
@@ -228,11 +278,10 @@ def verdict(
     stall_seconds: float,
     hang_seconds: float,
     expects_artifact: bool = True,
+    running_command: bool = False,
 ) -> tuple[int, str] | None:
     """Terminal (exit code, headline) for one poll, or None to keep watching."""
     alive_status = status in ALIVE_STATUS or not status
-    quiet = age is None or age >= hang_seconds
-    tree_quiet = tree is None or tree >= hang_seconds
     if not alive_status:
         # Only the companion's own success status is success; cancel and failure
         # are what this tool exists to catch, deliverable on disk or not.
@@ -249,16 +298,24 @@ def verdict(
         )
     if not expects_artifact:
         ready = False  # nothing to be ready; only the tree and the log speak here
-    if ready and quiet and tree_quiet:
+    settled = hang_seconds if ready else stall_seconds
+    if age is not None and age < settled:
+        return None
+    if running_command:
+        return None  # a command is mid-flight; the quiet log is its, not the runner's
+    if tree is not None and tree < settled:
+        return None  # writing files is working, whatever the log says
+    if tree is None:
+        # Both quiet conditions the skill requires must be observed, not assumed.
+        return EXIT_UNVERIFIABLE, (
+            "unverifiable: the log went quiet but this job's tree could not be read, "
+            "so neither stall nor progress can be shown — check workspaceRoot below"
+        )
+    if ready:
         return EXIT_DONE_HUNG, (
             "done-hung: deliverable ready but the runner is still registered — "
             "verify the deliverable, then cancel the job"
         )
-    if age is not None and age < stall_seconds:
-        return None
-    # The skill cancels only when the tree is quiet too: a job writing files is working.
-    if tree is not None and tree < stall_seconds:
-        return None
     return EXIT_STALL, "stall: the runner went quiet and the tree stopped changing"
 
 
@@ -311,15 +368,17 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             return EXIT_NEVER_REGISTERED
         time.sleep(args.poll_seconds)
     record_path, log = found[0]
-    baseline = next(
-        (b for b in (baseline_silence(r, args.job_id) for r in roots) if b), None
-    )
+    # Scope the baseline to this job's own workspace: a slow neighbour must not
+    # raise the bar here (a foreign 3600s gap once hid a two-hour stall).
+    baseline = baseline_silence(os.path.dirname(record_path), args.job_id)
     threshold = stall_threshold(args.stall_seconds, baseline)
     while True:
         now = time.time()
         record = job_record(record_path)
         age = heartbeat_age(log, now)
-        tree = tree_age(record.get("workspaceRoot"), now)
+        tree = tree_age((record or {}).get("workspaceRoot"), now)
+        # Elapsed runs from the job's own start so re-arming does not reset the clock.
+        elapsed = now - (started_epoch(record or {}) or started)
         if not os.path.exists(record_path):
             # The plugin prunes to its newest 50 jobs regardless of status, so a
             # record that was here and is gone is lost history, not a verdict.
@@ -327,6 +386,12 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 EXIT_VANISHED,
                 "vanished: the state record disappeared after registration — "
                 "the plugin prunes old jobs, so this job's outcome is unknowable here",
+            )
+        elif record is None:
+            out = (
+                EXIT_CORRUPT,
+                "corrupt: the state record is present but unreadable — the job's "
+                "outcome cannot be read from it, so do not treat this as a stall",
             )
         else:
             out = verdict(
@@ -337,8 +402,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 threshold,
                 args.hang_seconds,
                 expects_artifact=args.artifact is not None,
+                running_command=command_in_flight(log_lines(log)),
             )
-        elapsed = now - started
         if (
             out is None
             and args.estimate_seconds
@@ -359,7 +424,9 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         if out is not None:
             code, headline = out
             print(headline)
-            print(evidence(args.job_id, record, log, age, tree, threshold, baseline))
+            print(
+                evidence(args.job_id, record or {}, log, age, tree, threshold, baseline)
+            )
             return code
         time.sleep(args.poll_seconds)
 
@@ -524,10 +591,35 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(self._code("running", 500.0, False, tree=500.0), EXIT_STALL)
 
     def test_missing_log_counts_as_frozen(self):
-        self.assertEqual(self._code("running", None, False), EXIT_STALL)
+        self.assertEqual(self._code("running", None, False, tree=500.0), EXIT_STALL)
 
-    def test_unreadable_record_is_treated_as_alive(self):
-        self.assertEqual(job_record("/nonexistent/x.json"), {})
+    def test_unknown_tree_is_not_evidence_of_quiet(self):
+        """ツリーを読めないなら stall とも progress とも言えない — 断定せず報告する。"""
+        self.assertEqual(self._code("running", 500.0, False), EXIT_UNVERIFIABLE)
+        self.assertEqual(self._code("running", 500.0, True), EXIT_UNVERIFIABLE)
+
+    def test_running_command_suspends_the_stall_call(self):
+        """plugin は command 完了までの間 log を書かない — その沈黙で cancel させない。"""
+        lines = ["[t] Running command: cargo test --workspace"]
+        self.assertTrue(command_in_flight(lines))
+        self.assertIsNone(
+            verdict("running", 600.0, 600.0, False, 420, 300, running_command=True)
+        )
+
+    def test_finished_command_does_not_suspend_it(self):
+        lines = ["[t] Running command: x", "[t] Command completed: x (exit 0)"]
+        self.assertFalse(command_in_flight(lines))
+        self.assertEqual(self._code("running", 600.0, False, tree=600.0), EXIT_STALL)
+
+    def test_corrupt_record_is_not_a_dict(self):
+        """壊れた record は None — 空 status として生存扱いにすると stall へ化ける。"""
+        import tempfile
+
+        p = os.path.join(tempfile.mkdtemp(), "x.json")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("{broken")
+        self.assertIsNone(job_record(p))
+        self.assertIsNone(job_record("/nonexistent/x.json"))
         self.assertIsNone(verdict("", 5.0, None, False, 420, 300))
 
     def test_artifact_requires_the_token(self):
@@ -567,10 +659,39 @@ class WatchTest(unittest.TestCase):
         self.assertIsNone(started_epoch({}))
         self.assertIsNone(started_epoch({"startedAt": "nonsense"}))
         stamp = "2026-08-08T11:43:06.921Z"
-        self.assertEqual(
-            started_epoch({"startedAt": stamp}),
-            float(calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))),
-        )
+        whole = float(calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S")))
+        self.assertEqual(started_epoch({"startedAt": stamp}), whole + 0.921)
+        self.assertEqual(started_epoch({"startedAt": "2026-08-08T11:43:06Z"}), whole)
+
+    def test_same_second_leftover_is_still_stale(self):
+        """秒で切り捨てると、同じ秒に書かれた前 run の成果物を今回の物として受理する。"""
+        import tempfile
+
+        p = os.path.join(tempfile.mkdtemp(), "report.md")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("body\nREPORT_COMPLETE\n")
+        start = started_epoch({"startedAt": "2026-08-08T11:43:06.921Z"})
+        assert start is not None
+        os.utime(p, (start - 0.5, start - 0.5))
+        self.assertFalse(artifact_ready(p, "REPORT_COMPLETE", since=start))
+
+    def test_final_line_must_be_exactly_the_token(self):
+        """発注契約は「最終行が token の 1 行」— 前後の空白や余分な空行を通さない。"""
+        import tempfile
+
+        d = tempfile.mkdtemp()
+        cases = {
+            "body\nREPORT_COMPLETE\n": True,
+            "body\nREPORT_COMPLETE": True,
+            "body\n REPORT_COMPLETE \n": False,
+            "body\nREPORT_COMPLETE\n\n": False,
+            "body\nprefixREPORT_COMPLETE\n": False,
+        }
+        for i, (text, expect) in enumerate(cases.items()):
+            p = os.path.join(d, f"r{i}.md")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(text)
+            self.assertEqual(artifact_ready(p, "REPORT_COMPLETE"), expect, repr(text))
 
     def test_durations_must_be_finite_and_positive(self):
         """NaN は全比較を偽にし、監視を永久 loop にする — 受け付ける前に落とす。"""
@@ -601,8 +722,27 @@ class WatchTest(unittest.TestCase):
             "completed",
             stamps=("2026-08-08T00:00:00", "2026-08-08T00:02:00"),
         )
-        self.assertEqual(baseline_silence(root, "task-other"), 120.0)
-        self.assertIsNone(baseline_silence(root, "task-done"))
+        jobs = os.path.join(root, "ws", "jobs")
+        self.assertEqual(baseline_silence(jobs, "task-other"), 120.0)
+        self.assertIsNone(baseline_silence(jobs, "task-done"))
+
+    def test_baseline_is_scoped_to_one_workspace(self):
+        """別 workspace の遅い job で基準を上げない — 実 stall を隠す経路になる。"""
+        root, _rec, _log = self._state(
+            "ws",
+            "task-done",
+            "completed",
+            stamps=("2026-08-08T00:00:00", "2026-08-08T00:02:00"),
+        )
+        other = os.path.join(root, "other-ws", "jobs")
+        os.makedirs(other)
+        with open(os.path.join(other, "task-slow.json"), "w", encoding="utf-8") as f:
+            json.dump({"id": "task-slow", "status": "completed"}, f)
+        with open(os.path.join(other, "task-slow.log"), "w", encoding="utf-8") as f:
+            f.write("[2026-08-08T00:00:00Z] a\n[2026-08-08T01:00:00Z] b\n")
+        self.assertEqual(
+            baseline_silence(os.path.join(root, "ws", "jobs"), "task-other"), 120.0
+        )
 
     def test_baseline_excludes_cancelled_jobs(self):
         """cancel された job は stall の見本 — そこから学ぶと検出対象を正常値にしてしまう。"""
@@ -617,7 +757,7 @@ class WatchTest(unittest.TestCase):
             json.dump({"id": "task-stalled", "status": "cancelled"}, f)
         with open(os.path.join(jobs, "task-stalled.log"), "w", encoding="utf-8") as f:
             f.write("[2026-08-08T00:00:00Z] a\n[2026-08-08T00:40:00Z] b\n")
-        self.assertEqual(baseline_silence(root, "task-other"), 120.0)
+        self.assertEqual(baseline_silence(jobs, "task-other"), 120.0)
 
     def test_threshold_rises_past_observed_quiet_spells(self):
         """既定しきい値は履歴で決まる — 長考する runner に手で数字を渡さない。"""
@@ -646,6 +786,75 @@ class WatchTest(unittest.TestCase):
         cmd = cancel_command("task-x", "/home/u/wt-a")
         self.assertIn("cd /home/u/wt-a", cmd)
         self.assertIn("cancel task-x --json", cmd)
+
+    def _watch_args(self, root, job_id, **over):
+        opts = {
+            "job_id": job_id,
+            "artifact": None,
+            "token": None,
+            "stall_seconds": 420.0,
+            "hang_seconds": 300.0,
+            "poll_seconds": 0.01,
+            "timeout_seconds": 0.05,
+            "estimate_seconds": None,
+            "state_root": root,
+            "once": False,
+            "selftest": False,
+        }
+        opts.update(over)
+        return argparse.Namespace(**opts)
+
+    def test_watch_reports_ambiguous_duplicates(self):
+        """watch() 経由でも exit を確かめる — verdict() 単体 test は loop の分岐を覆わない。"""
+        root, _rec, _log = self._state("aaa", "task-dup", "cancelled")
+        jobs = os.path.join(root, "zzz", "jobs")
+        os.makedirs(jobs)
+        with open(os.path.join(jobs, "task-dup.json"), "w", encoding="utf-8") as f:
+            json.dump({"id": "task-dup", "status": "running"}, f)
+        with open(os.path.join(jobs, "task-dup.log"), "w", encoding="utf-8") as f:
+            f.write("x\n")
+        self.assertEqual(watch(self._watch_args(root, "task-dup")), EXIT_AMBIGUOUS)
+
+    def test_watch_reports_a_vanished_record(self):
+        """登録を掴んだ後に prune で消える経路 — 未登録でも stall でもない。"""
+        from unittest import mock
+
+        root, record, log = self._state("ws", "task-gone", "running")
+        os.unlink(record)  # 掴んだ直後に prune された状態
+        with mock.patch.object(
+            sys.modules[__name__], "find_jobs", lambda *a: [(record, log)]
+        ):
+            self.assertEqual(watch(self._watch_args(root, "task-gone")), EXIT_VANISHED)
+
+    def test_watch_reports_a_corrupt_record(self):
+        root, record, _log = self._state("ws", "task-bad", "running")
+        with open(record, "w", encoding="utf-8") as f:
+            f.write("{broken")
+        self.assertEqual(watch(self._watch_args(root, "task-bad")), EXIT_CORRUPT)
+
+    def test_watch_reports_alive_once_and_over_estimate(self):
+        """--once は 1 cadence で alive、見積もり 2 倍超は job の startedAt 起点で判定する。"""
+        root, record, _log = self._state("ws", "task-live", "running")
+        with open(record, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "id": "task-live",
+                    "status": "running",
+                    "startedAt": time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600)
+                    ),
+                },
+                f,
+            )
+        self.assertEqual(
+            watch(self._watch_args(root, "task-live", once=True)), EXIT_ALIVE
+        )
+        self.assertEqual(
+            watch(
+                self._watch_args(root, "task-live", once=True, estimate_seconds=300.0)
+            ),
+            EXIT_OVER_ESTIMATE,
+        )
 
     def test_evidence_names_every_basis(self):
         _root, _rec, log = self._state("ws", "task-x", "running")
