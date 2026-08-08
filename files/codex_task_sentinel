@@ -89,12 +89,13 @@ EXIT_OVER_ESTIMATE = 12
 EXIT_CORRUPT = 13
 EXIT_UNVERIFIABLE = 14
 
-# Note on a signal deliberately absent: whether a command is mid-flight cannot
-# be read from the log. The plugin appends message bodies verbatim, so a body
-# quoting a log line is indistinguishable from the event it quotes, in both
-# directions — a quoted start hides a real stall, a quoted end invents one. The
-# skill's second condition covers the same ground with evidence: a job running a
-# long command is writing its tree, and tree quiet is measured, not parsed.
+# The skill's third condition — is a command still running — can only be guessed
+# at. The plugin appends message bodies verbatim, so a body quoting a log line
+# looks exactly like the event it quotes. The guess is therefore used in one
+# direction only: a tail that looks like a command start suppresses a verdict
+# and is reported as such. It can never manufacture one, which is what a quoted
+# end would otherwise do to a job that is working.
+TAIL_COMMAND_START = re.compile(r"^\[[^\]]+\]\s+Running command:")
 
 
 def state_roots(explicit: str | None = None) -> list[str]:
@@ -282,6 +283,7 @@ def verdict(
     stall_seconds: float,
     hang_seconds: float,
     expects_artifact: bool = True,
+    tail_starts_command: bool = False,
 ) -> tuple[int, str] | None:
     """Terminal (exit code, headline) for one poll, or None to keep watching."""
     alive_status = status in ALIVE_STATUS or not status
@@ -315,6 +317,14 @@ def verdict(
         return None
     if tree is not None and tree < settled:
         return None  # writing files is working, whatever the log says
+    if tail_starts_command:
+        # A read-only command writes nothing, so quiet tree + quiet log is also
+        # what a working one looks like. The tail cannot settle it either way.
+        return EXIT_UNVERIFIABLE, (
+            "unverifiable: the log's last event starts a command that never "
+            "reported finishing, and a read-only command leaves the tree quiet too — "
+            "read the tail below before cancelling anything"
+        )
     if tree is None:
         # Both quiet conditions the skill requires must be observed, not assumed.
         return EXIT_UNVERIFIABLE, (
@@ -412,6 +422,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 threshold,
                 args.hang_seconds,
                 expects_artifact=args.artifact is not None,
+                tail_starts_command=bool(TAIL_COMMAND_START.match(last_log_line(log))),
             )
         if (
             out is None
@@ -517,8 +528,8 @@ class WatchTest(unittest.TestCase):
         os.utime(log, (time.time() - log_age, time.time() - log_age))
         return root, record, log
 
-    def _code(self, status, age, ready, tree=None):
-        out = verdict(status, age, tree, ready, 420, 300)
+    def _code(self, status, age, ready, tree=None, tail=False):
+        out = verdict(status, age, tree, ready, 420, 300, tail_starts_command=tail)
         self.assertIsNotNone(out, "terminal verdict を期待した")
         return out[0] if out else None
 
@@ -630,6 +641,21 @@ class WatchTest(unittest.TestCase):
 
     def test_missing_log_counts_as_frozen(self):
         self.assertEqual(self._code("running", None, False, tree=500.0), EXIT_STALL)
+
+    def test_a_command_start_at_the_tail_blocks_a_stall_call(self):
+        """read-only command は何も書かない — ツリー静穏だけで stall と断ずると働く job を切る。"""
+        self.assertEqual(
+            self._code("running", 600.0, False, tree=600.0, tail=True),
+            EXIT_UNVERIFIABLE,
+        )
+
+    def test_a_quoted_tail_can_only_suppress_never_assert(self):
+        """引用と event は区別できない以上、この材料で stall を作らせない (抑制のみ)。"""
+        out = verdict(
+            "running", 600.0, 600.0, False, 420, 300, tail_starts_command=True
+        )
+        assert out is not None
+        self.assertNotEqual(out[0], EXIT_STALL)
 
     def test_unknown_tree_is_not_evidence_of_quiet(self):
         """ツリーを読めないなら stall とも progress とも言えない — 断定せず報告する。"""
