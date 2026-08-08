@@ -26,7 +26,7 @@ Exit Criteria:
 - [x] `_normalize_model` が `[1m]` 等の context-window 変種を落とすよう修正 + unit test — 実データで `opus-5[1m]` の mismatch 33 行中 21 行が解消することを確認
 - [x] memory-routing skill に「壁と結論する前 / 2 回失敗した時に引く」 trigger を追加 (既存 Tag propagation 節の入口を拡張、コマンド重複なし)
 - [x] 壁宣言 probe を stop_checks の muted-memory-at-wall family として畳み込み — 別 session 提案の中身 (WALL_RE corpus / 否定周辺 ±120 字を query 化 / mute された entry の報告) を採用し、単独 hook 化で懸念した再 block loop と turn counter 二重 bump は exit 0 + additionalContext + `.muted` latch で解消。floor は実測分離点 0.35。`search_unfiltered()` を memory_surface に切り出して CLI と共用。stop_checks 107 tests (新規 7) / memory_surface 31 tests (新規 3)
-- [ ] deploy (ユーザー手動): `files/claude_user-hooks/memory_surface.py` → `~/.claude/hooks/`、`files/claude_managed-hooks/stop_checks.py` → `/etc/claude-code/hooks/`、`files/claude_managed-skills/` 配下の memory-routing・codex-delegation の SKILL.md → `/etc/claude-code/skills/<name>/` (`~/.claude/skills/` 側と同一 inode)、`files/claude_codex_watch` → `/usr/local/bin/` (0755)
+- [ ] deploy (ユーザー手動): `files/claude_user-hooks/memory_surface.py` → `~/.claude/hooks/`、`files/claude_managed-hooks/stop_checks.py` → `/etc/claude-code/hooks/`、`files/claude_managed-skills/` 配下の memory-routing・codex-delegation の SKILL.md → `/etc/claude-code/skills/<name>/` (`~/.claude/skills/` 側と同一 inode)、`files/codex_task_sentinel` → `/usr/local/bin/` (0755)
 
 codex (gpt-5.6-sol / xhigh) レビュー指摘の是正。deploy 前に少なくとも最初の 2 つを直す:
 
