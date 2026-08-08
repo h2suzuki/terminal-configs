@@ -484,6 +484,10 @@ def evidence(
     ]
     if unfinished:
         lines.append(f"  未完了 : {' / '.join(unfinished)}")
+    # 失敗理由は record が持っている — 出さなければ呼び手が同じ file を手で開き直すだけ。
+    failure = record.get("errorMessage")
+    if isinstance(failure, str) and failure.strip():
+        lines.append(f"  エラー : {failure.strip()[:200]}")
     lines += [
         f"  log    : {log}",
         f"  cancel : {cancel_command(job_id, root if isinstance(root, str) else None)}",
@@ -1196,6 +1200,27 @@ class WatchTest(unittest.TestCase):
             ),
             EXIT_OVER_ESTIMATE,
         )
+
+    def test_evidence_carries_the_records_own_error(self):
+        """failed の理由は record にあるのに出さないと、 呼び手が手で調べ直す — それを消すための道具。"""
+        _root, _rec, log = self._state("ws", "task-x", "failed")
+        text = evidence(
+            "task-x",
+            {
+                "status": "failed",
+                "errorMessage": "failed to load configuration: No such file",
+            },
+            log,
+            1.0,
+            1.0,
+            420.0,
+            None,
+        )
+        self.assertIn("failed to load configuration", text)
+
+    def test_evidence_omits_the_error_line_when_the_record_has_none(self):
+        _root, _rec, log = self._state("ws", "task-x", "running")
+        self.assertNotIn("エラー", self._evidence(log))
 
     def test_evidence_names_every_basis(self):
         _root, _rec, log = self._state("ws", "task-x", "running")
