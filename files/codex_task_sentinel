@@ -96,10 +96,16 @@ EXIT_UNVERIFIABLE = 14
 # fires when a start has no matching end — commands run in parallel, so the tail
 # alone misses one still running behind a neighbour's completion — or when the
 # tail itself starts a command. A quoted start over-suppresses, which costs
-# waiting. Two filters keep a quote from cancelling a running command: events are
-# read in stamp order, so a body quoting an older log line is dropped before it is
-# read as an event, and ends are then paired to starts by the command they name.
-# Measured over this machine's logs: 1150 events, none out of order.
+# waiting. A quote is separated from an event by stamp order — the runner appends,
+# so its stamps never go backwards, while a body citing an earlier line carries
+# that older stamp — and ends are then paired to starts by the command they name.
+# Measured over this machine's logs: 1150 events, none out of order, none dropped.
+#
+# Tracking where a body starts and ends was tried and removed: the format frames
+# only the opening of a block, so following the body costs real events (a blank
+# line inside a paragraph reads as the next block) to catch a case that needs a
+# body to carry a stamp no earlier than every event so far — a fabricated stamp,
+# not a quote. That residual is left named here rather than traded for lost events.
 COMMAND_START = re.compile(r"^\[[^\]]+\]\s+Running command:")
 COMMAND_END = re.compile(r"^\[[^\]]+\]\s+Command \w+:")
 
@@ -150,34 +156,12 @@ def heartbeat_age(log_path: str, now: float) -> float | None:
 
 
 def log_lines(log_path: str) -> list[str]:
-    """The runner's log with message bodies' first lines removed.
-
-    A block is written as a blank line, a titled line, then the body verbatim,
-    while ordinary events carry no leading blank. The line right after a titled
-    block start is therefore body text, whatever it looks like — which is where
-    a quoted log line lands when a message opens by citing one.
-    """
+    """Non-empty log lines, newest last, left edge intact so events can be anchored."""
     try:
         with open(log_path, encoding="utf-8", errors="replace") as f:
-            raw = [ln.rstrip("\n") for ln in f]
+            return [ln.rstrip("\n") for ln in f if ln.strip()]
     except OSError:
         return []
-    kept = []
-    after_blank = False
-    body_next = False
-    for line in raw:
-        if not line.strip():
-            after_blank = True
-            continue
-        if body_next:
-            body_next = False
-            after_blank = False
-            continue
-        if after_blank:
-            body_next = True  # this is a block title; the next line is its body
-            after_blank = False
-        kept.append(line)
-    return kept
 
 
 def last_log_line(log_path: str, limit: int = 160) -> str:
@@ -779,22 +763,6 @@ class WatchTest(unittest.TestCase):
             "[2026-08-09T00:00:01.000Z] Command completed: ls (exit 0)",
         ]
         self.assertTrue(command_may_be_running(lines), "2 回目の ls はまだ走っている")
-
-    def test_block_body_first_line_is_not_read_as_an_event(self):
-        """block は 空行 + title + 本文 で書かれる — title 直後の行は本文と確定できる。"""
-        import tempfile
-
-        p = os.path.join(tempfile.mkdtemp(), "job.log")
-        with open(p, "w", encoding="utf-8") as f:
-            f.write(
-                "[2026-08-09T00:00:00.000Z] Running command: sleep 600\n"
-                "\n"
-                "[2026-08-09T00:00:01.000Z] Assistant message\n"
-                "[2026-08-09T00:00:02.000Z] Command completed: sleep 600 (exit 0)\n"
-            )
-        self.assertTrue(
-            command_may_be_running(log_lines(p)), "本文の引用で実行中を消さない"
-        )
 
     def test_a_quoted_gap_does_not_teach_the_baseline(self):
         """引用の古い stamp が完走 job の無音記録を水増しすると stall 検出が死ぬ。"""
