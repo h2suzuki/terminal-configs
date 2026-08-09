@@ -51,13 +51,29 @@ class ExitTableSyncTest(unittest.TestCase):
         self.module = _rows(_read(SENTINEL), MODULE_ROW)
         self.skill = _rows(_read(SKILL), SKILL_ROW)
 
+    @staticmethod
+    def _runtime_codes() -> set[str]:
+        """実装が実際に返す exit 値 — 表どうしの比較だけでは定数の書き換えを見逃す。"""
+        return {
+            str(v)
+            for n, v in vars(sentinel).items()
+            if n.startswith("EXIT_") and isinstance(v, int)
+        }
+
     def test_both_tables_are_populated(self):
         """空の parse は差分ゼロに見えてしまうので、まず両表が読めていることを確かめる。"""
         self.assertGreaterEqual(len(self.module), 10)
         self.assertGreaterEqual(len(self.skill), 10)
+        self.assertGreaterEqual(len(self._runtime_codes()), 10)
 
     def test_the_skill_lists_every_exit_code(self):
         self.assertEqual(sorted(self.module, key=int), sorted(self.skill, key=int))
+
+    def test_both_tables_match_the_values_the_code_returns(self):
+        """docstring と skill が揃っていても、 定数を変えれば実 exit だけがずれる。"""
+        runtime = self._runtime_codes()
+        self.assertEqual(set(self.module), runtime)
+        self.assertEqual(set(self.skill), runtime)
 
     def test_the_two_tables_agree_on_which_codes_are_opt_in(self):
         """片方向の含意だと、 module 側だけを既定へ書き換える drift が green のまま通る。"""

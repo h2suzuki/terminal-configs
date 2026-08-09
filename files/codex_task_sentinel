@@ -187,15 +187,44 @@ def log_lines(log_path: str) -> Iterator[str]:
         return
 
 
-def log_tail(log_path: str, count: int = 6, limit: int = 200) -> list[str]:
-    """The last few raw log lines — one line only ever shows the newest short command, not the context it displaced."""
-    return [ln.strip()[:limit] for ln in collections.deque(log_lines(log_path), count)]
+def _tee(lines: Iterator[str], sink: collections.deque) -> Iterator[str]:
+    """Pass lines through while the sink keeps a window of the most recent ones."""
+    for line in lines:
+        sink.append(line)
+        yield line
+
+
+def scan_log(
+    log_path: str, count: int = 6, limit: int = 200
+) -> tuple[list[str], list[str]]:
+    """One pass giving (unfinished commands, bounded tail) from a single snapshot.
+
+    Reading twice lets the runner append in between, so a verdict could rest on a
+    quiet log while the evidence beside it shows the command that arrived after —
+    with --trust-log that pairs a cancel instruction with proof of work.
+    """
+    tail: collections.deque = collections.deque(maxlen=count)
+    pending = pending_commands(_tee(log_lines(log_path), tail))
+    return pending, [ln.strip()[:limit] for ln in tail]
 
 
 def command_text(line: str) -> str:
     """The command an event line refers to, with the end line's exit suffix removed."""
     body = re.sub(r"^\[[^\]]+\]\s+(Running command:|Command \w+:)\s*", "", line)
     return re.sub(r"\s*\(exit -?\d+\)\s*$", "", body).strip()
+
+
+def stamp_seconds(stamp: str) -> float | None:
+    """Epoch seconds for a log stamp, or None when it only looks like a date.
+
+    The regex matches on character shape, and message bodies reach the log
+    verbatim, so a fixture like [9999-99-99T99:99:99.000Z] is ordinary input.
+    Parsing it where the caller cannot see costs the whole watch.
+    """
+    try:
+        return time.mktime(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (ValueError, OverflowError):
+        return None
 
 
 def event_lines(lines: Iterator[str] | list[str]) -> Iterator[str]:
@@ -208,8 +237,8 @@ def event_lines(lines: Iterator[str] | list[str]) -> Iterator[str]:
     high = ""
     for line in lines:
         m = LOG_TS.match(line)
-        if not m:
-            continue
+        if not m or stamp_seconds(m.group(1)) is None:
+            continue  # 形だけ日付に見える本文 — 採用すると以降の event を丸ごと落とす
         if m.group(1) < high:
             continue
         high = m.group(1)
@@ -271,9 +300,9 @@ def longest_silence(log_path: str) -> float | None:
     previous = None
     for line in event_lines(log_lines(log_path)):
         m = LOG_TS.match(line)
-        if not m:
+        stamp = stamp_seconds(m.group(1)) if m else None
+        if stamp is None:
             continue
-        stamp = time.mktime(time.strptime(m.group(1)[:19], "%Y-%m-%dT%H:%M:%S"))
         if previous is not None and (worst is None or stamp - previous > worst):
             worst = stamp - previous
         previous = stamp
@@ -393,13 +422,10 @@ def verdict(
                 f"not-completed: job {status} — re-issue on a fresh thread "
                 f"(a cancelled or failed run is not a result){left if ready else ''}"
             )
-        if not (ready or not expects_artifact):
-            return EXIT_ENDED_WITHOUT_ARTIFACT, (
-                "ended-without-deliverable: job completed with no complete deliverable — "
-                "the log's tail below is what it reported instead"
-            )
         # The skill's completion is status AND a settled tree: a task can leave
         # a detached process still writing after the runner reports completed.
+        # That gates the missing-deliverable verdict too — the writer still going
+        # may be the one about to finish it.
         if tree is None:
             return EXIT_UNVERIFIABLE, (
                 "unverifiable: the job reports completed but its tree could not be "
@@ -407,6 +433,11 @@ def verdict(
             )
         if tree < hang_seconds:
             return None  # still settling; re-check rather than hand over mid-write
+        if not (ready or not expects_artifact):
+            return EXIT_ENDED_WITHOUT_ARTIFACT, (
+                "ended-without-deliverable: job completed with no complete deliverable — "
+                "the log's tail below is what it reported instead"
+            )
         return EXIT_DONE, "done: job completed and its tree settled"
     if not expects_artifact:
         ready = False  # nothing to be ready; only the tree and the log speak here
@@ -461,6 +492,7 @@ def evidence(
     artifact: str | None = None,
     ready: bool = False,
     unfinished: list[str] | None = None,
+    tail: list[str] | None = None,
 ) -> str:
     """Everything the verdict rests on, so no follow-up investigation is needed."""
     root = record.get("workspaceRoot")
@@ -471,7 +503,7 @@ def evidence(
         if baseline and age
         else ""
     )
-    tail = log_tail(log) or ["(なし)"]
+    shown = tail or ["(なし)"]
     # exit 14 は ready を verdict へ畳むので、畳んだ値をここで戻さないと成果物あり / なしが読めない。
     made = f"{'ready' if ready else 'not ready'} {artifact}" if artifact else "指定なし"
     lines = [
@@ -479,8 +511,8 @@ def evidence(
         f"  無音   : {quiet}{versus} / しきい値 {int(threshold)}s",
         f"  ツリー : {'書き込みなし' if tree is None else f'最終書き込み {int(tree)}s 前'}",
         f"  成果物 : {made}",
-        f"  末尾   : {tail[0]}",
-        *(f"           {ln}" for ln in tail[1:]),
+        f"  末尾   : {shown[0]}",
+        *(f"           {ln}" for ln in shown[1:]),
     ]
     if unfinished:
         lines.append(f"  未完了 : {' / '.join(unfinished)}")
@@ -528,7 +560,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         elapsed = now - (stamp_epoch((record or {}).get("startedAt")) or started)
         ready = artifact_ready(args.artifact, args.token, run_since(record or {}))
         # 1 poll 1 走査 — verdict も evidence も同じ結果を使い、log を読み直さない。
-        unfinished = pending_commands(log_lines(log))
+        unfinished, tail = scan_log(log)
         if not os.path.exists(record_path):
             # The plugin prunes to its newest 50 jobs regardless of status, so a
             # record that was here and is gone is lost history, not a verdict.
@@ -595,6 +627,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     args.artifact,
                     ready,
                     unfinished,
+                    tail,
                 )
             )
             return code
@@ -755,10 +788,16 @@ class WatchTest(unittest.TestCase):
     def test_completed_with_an_unreadable_tree_is_unverifiable(self):
         self.assertEqual(self._code("completed", 1.0, True), EXIT_UNVERIFIABLE)
 
-    def test_completed_without_deliverable_is_reported(self):
+    def test_completed_without_deliverable_waits_for_a_settled_tree(self):
+        """成果物なしの断定にも静穏したツリーが要る — まだ書いている writer がそれを置くかもしれない。"""
         self.assertEqual(
-            self._code("completed", 1.0, False), EXIT_ENDED_WITHOUT_ARTIFACT
+            self._code("completed", 1.0, False, tree=600.0),
+            EXIT_ENDED_WITHOUT_ARTIFACT,
         )
+        self.assertIsNone(verdict("completed", 1.0, 1.0, False, 420, 300))
+        out = verdict("completed", 1.0, None, False, 420, 300)
+        assert out is not None
+        self.assertEqual(out[0], EXIT_UNVERIFIABLE)
 
     def test_completion_without_an_expected_deliverable_is_done(self):
         """成果物を指定しない発注では、completed とツリー静穏で成功を表現できる。"""
@@ -1239,6 +1278,7 @@ class WatchTest(unittest.TestCase):
             self.assertIn(expect, text)
 
     def _evidence(self, log, artifact=None, ready=False):
+        unfinished, tail = scan_log(log)  # watch() と同じ 1 走査の結果を渡す
         return evidence(
             "task-x",
             {"status": "running", "workspaceRoot": "/w"},
@@ -1249,7 +1289,8 @@ class WatchTest(unittest.TestCase):
             None,
             artifact,
             ready,
-            pending_commands(log_lines(log)),  # watch() と同じ 1 走査の結果を渡す
+            unfinished,
+            tail,
         )
 
     def test_evidence_states_the_deliverable_three_ways(self):
@@ -1353,6 +1394,43 @@ class WatchTest(unittest.TestCase):
         self.assertTrue(all(len(ln) <= MAX_LOG_LINE for ln in log_lines(log)))
         self.assertEqual(pending_commands(log_lines(log)), ["cargo test --all"])
         self.assertIn("tail line", self._evidence(log))
+
+    def test_scan_log_reads_the_log_once(self):
+        """判定と evidence が別 snapshot だと、 静穏を根拠に cancel を勧めながら稼働中 command を並べる。"""
+        from unittest import mock
+
+        _root, _rec, log = self._state("ws", "task-x", "running")
+        with open(log, "w", encoding="utf-8") as f:
+            f.write("[2026-08-08T22:00:00.000Z] Running command: cargo test --all\n")
+        opens = []
+        real = open
+        with mock.patch(
+            "builtins.open",
+            lambda p, *a, **k: (opens.append(p), real(p, *a, **k))[1],
+        ):
+            pending, tail = scan_log(log)
+        self.assertEqual(opens.count(log), 1)
+        self.assertEqual(pending, ["cargo test --all"])
+        self.assertIn("cargo test --all", tail[-1])
+
+    def test_an_impossible_stamp_is_body_text_not_an_event(self):
+        """本文の日付 fixture を event として採ると、 完走 peer 1 件で監視全体が例外終了する。"""
+        _root, _rec, log = self._state("ws", "task-x", "completed")
+        with open(log, "w", encoding="utf-8") as f:
+            f.write("[2026-08-09T00:00:00.000Z] Assistant message\n")
+            f.write("[9999-99-99T99:99:99.000Z] fixture\n")
+            f.write("[2026-08-09T00:05:00.000Z] done\n")
+        self.assertIsNone(stamp_seconds("9999-99-99T99:99:99"))
+        self.assertEqual(longest_silence(log), 300.0)
+
+    def test_a_peer_with_an_impossible_stamp_does_not_kill_the_baseline(self):
+        root, _rec, _log = self._state("ws", "task-target", "running")
+        jobs = os.path.join(root, "ws", "jobs")
+        with open(os.path.join(jobs, "task-peer.json"), "w", encoding="utf-8") as f:
+            json.dump({"id": "task-peer", "status": "completed"}, f)
+        with open(os.path.join(jobs, "task-peer.log"), "w", encoding="utf-8") as f:
+            f.write("[2026-08-09T00:00:00.000Z] a\n[9999-99-99T99:99:99.000Z] b\n")
+        self.assertIsNone(baseline_silence(jobs, "task-target"))
 
     def test_pending_commands_names_the_unfinished_start(self):
         lines = [
