@@ -37,7 +37,7 @@ codex (gpt-5.6-sol / xhigh) レビュー指摘の是正。deploy 前に少なく
 - [ ] **観測できない**: fail-open が全て無言の `None` で、`search_unfiltered()` は記録もしないため「0 件」が無事故か feature 死かを区別できない。rate-limit した error log と wall 専用 event を残す
 - [x] **mismatch 行が emit の throttle を食う**: `_throttle_check()` の SQL に `kind` 条件が無く、mute 記録が 15 分の抑止に効いていた (実測: 60 秒後も空、901 秒後に初めて surface) → `kind` 引数を足して kind 別に見る (emit は emit、mismatch は mismatch)。mute 記録の直後でも emit が出ることを test で pin
 - [ ] **model source の一本化**: `_current_turn()` が持つ当該 turn の model を捨て、`_resolve_model()` が statusline cache を transcript より優先して再解決している。壁文と同じ turn の model を muted lookup へ渡す
-- [ ] **検索に時間上限が無い**: 元 probe の subprocess 20 秒 watchdog を失い、同一 process 呼び出しになった。例外 catch は hang に効かないので Stop 全体が止まりうる
+- [x] **検索に時間上限が無い**: 元 probe の subprocess 20 秒 watchdog を失い、例外 catch では hang に効かず Stop 全体が止まりうる状態だった → `_bounded()` (daemon thread + `join(20s)`) 経由で呼ぶ。返らなくても None で fail-open し、居残った thread は Stop の終了を待たせない
 - [ ] **提示が top-1 のみ**: 弱い誤 hit が真の教訓を shadow する。上位 2-3 件を score つきで返すか、margin が小さい時だけ複数出す
 - [ ] **強制力の設計**: warning 化で「読んでから結論を出し直す」は保証でなくなった。同じ壁を繰り返し、かつ提示 path を Read していない 2 回目だけ既存 advise-once に統合して block する案を検討する
 - [ ] **`models:` の役割分離 (設計)**: provenance (どの model で観測したか) と delivery allowlist (どの model に見せるか) を同じ field が兼ねるため、model 更新の度に corpus が cold-start する。`observed_models:` と `applies_to:` に分ける
@@ -52,7 +52,10 @@ Exit Criteria:
 - [ ] レビューの新規 material 指摘がゼロで安定する — 4〜7 巡目は連続ゼロ。exit 14 導入の検証を
   論点にした 12 巡目で 2 件、13 巡目でさらに 2 件。いずれも直前の巡の修正が生んだ欠陥で、全て修正済み。
   14 巡目は 4 回発注して 3 回失敗 (provider の content filter 2 回・plugin state dir 再利用 1 回)。
-  中断した 2 回の最終出力が示した欠陥 (baseline の list 化 / timeout headline) は自力で確認し修正した
+  中断した 2 回の最終出力が示した欠陥 (baseline の list 化 / timeout headline) は自力で確認し修正した。
+  4 回目が完走して 4 件 (completed + 活動中ツリーで exit 5 を早出し / 判定と evidence が別 snapshot /
+  同期 test が runtime 定数と繋がっていない / 本文の不正 stamp で監視が例外終了) — すべて修正済み。
+  15 巡目で再判定する
 - [x] log 由来の曖昧さが正常 job の cancel を招かない — 既定で cancel 導線 (exit 4/3) を出さず、
   exit 14 で evidence を示して判断を呼び手に渡す (206ce7a)。断定したい呼び手は `--trust-log`。
   12 巡目が 504 case の直積で「既定の exit 3/4 は 0 件」「`--trust-log` は旧判定と mismatch 0」を実測

@@ -161,6 +161,7 @@ import re
 import shlex
 import subprocess
 import sys
+import threading
 import time
 import unittest
 
@@ -846,6 +847,7 @@ WALL_DECLARATION_RE = re.compile(
 )
 MUTED_FLOOR = 0.35  # 実測: 該当局面の top hit 0.397 / 無関係文の top hit 0.270
 _MUTED_LATCH = ".muted"
+_SEARCH_TIMEOUT_SECONDS = 20.0
 
 # --- Persistence path (broader than memory only) ---
 # memory subtree / skill dir / hook dir / CLAUDE.md への Write/Edit が hollow-claims の
@@ -1510,6 +1512,15 @@ def _memory_surface_at_stop(payload: dict, text: str) -> str | None:
     )
 
 
+def _bounded(call):
+    """`call()` の値、 または timeout / 例外なら None。 daemon thread なので居残っても Stop の終了は待たされない。"""
+    out: list = []
+    worker = threading.Thread(target=lambda: out.append(call()), daemon=True)
+    worker.start()
+    worker.join(_SEARCH_TIMEOUT_SECONDS)
+    return out[0] if out else None
+
+
 def _situation_window(text: str, match: re.Match[str]) -> str:
     """否定の周辺文が状況語を持つ — 一致 phrase 単体では検索語が痩せる。"""
     lo, hi = max(0, match.start() - 120), min(len(text), match.end() + 120)
@@ -1527,14 +1538,23 @@ def _muted_memory_at_stop(payload: dict, text: str) -> str | None:
     cwd = payload.get("cwd")
     if not isinstance(cwd, str) or not cwd:
         cwd = os.getcwd()
-    try:
-        model = _memory_surface_mod._resolve_model(payload)
-        hits = _memory_surface_mod.search_unfiltered(
-            _situation_window(stripped, m),
-            _memory_surface_mod._encoded_project_id(cwd),
+
+    surface = _memory_surface_mod
+
+    def lookup():
+        return (
+            surface._resolve_model(payload),
+            surface.search_unfiltered(
+                _situation_window(stripped, m),
+                surface._encoded_project_id(cwd),
+            ),
         )
-    except Exception:
-        return None  # 旧 deploy の memory_surface に helper 不在でも fail-open
+
+    # 旧 deploy に helper が無ければ例外、 DB が返らなければ hang — 後者に except は効かない。
+    found = _bounded(lookup)
+    if found is None:
+        return None
+    model, hits = found
     if not model or not hits:
         return None
     muted = [h for h in hits if h[0] >= MUTED_FLOOR and model not in h[1].split()]
@@ -2382,6 +2402,24 @@ class StopMemorySurfaceTest(unittest.TestCase):
             self.assertIsNone(
                 _memory_surface_at_stop({"stop_hook_active": False, "cwd": "/p"}, "out")
             )
+
+    def test_muted_gives_up_on_a_search_that_does_not_return(self):
+        """例外 catch は hang に効かない — 元 probe の 20 秒 watchdog を失うと Stop 全体が止まる。"""
+        from unittest import mock
+
+        mod = self._fake_search([(0.9, "opus-4.8", "/m/x.md", "lesson")])
+        mod.search_unfiltered = lambda *a, **k: time.sleep(30)
+        started = time.time()
+        with (
+            mock.patch.object(self.M, "_memory_surface_mod", mod),
+            mock.patch.object(self.M, "_SEARCH_TIMEOUT_SECONDS", 0.05),
+        ):
+            self.assertIsNone(
+                _muted_memory_at_stop(
+                    {"stop_hook_active": False, "cwd": "/p"}, "実行できません"
+                )
+            )
+        self.assertLess(time.time() - started, 5.0)
 
     def test_muted_none_when_module_absent(self):
         from unittest import mock
