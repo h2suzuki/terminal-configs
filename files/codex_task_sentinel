@@ -33,7 +33,7 @@ Exit codes, and what the caller does with each:
   4  stall             --trust-log only: log and tree quiet — cancel, re-issue fresh
   5  no-deliverable    completed but produced nothing complete — read the log
   6  never-registered  no record in any searched root — the launch did not take
-  7  timeout           still alive at the deadline — decide whether to keep waiting
+  7  timeout           no verdict by the deadline — decide whether to keep waiting
   8  not-completed     cancelled or failed — never a result; re-issue on a fresh thread
   9  ambiguous         several records carry the id — disambiguate before trusting one
   10 vanished          the record was pruned after registration — outcome unknowable
@@ -565,18 +565,20 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 f"over-estimate: {int(elapsed)}s elapsed against a {int(args.estimate_seconds)}s "
                 "estimate — read the log against the order before waiting further",
             )
+        # completed でもツリーが落ち着くまでは verdict を保留するので、 保留を告げる
+        # headline は record の語をそのまま出す — 言い切ると直下の evidence と食い違う。
+        recorded = (record or {}).get("status") or "不明"
         if out is None and args.once:
-            # completed でもツリーが落ち着くまでは verdict を保留するので、 record の
-            # 語をそのまま出す — 「still running」 と言い切ると status と食い違う。
             out = (
                 EXIT_ALIVE,
                 f"alive: no terminal verdict yet after {int(elapsed)}s "
-                f"(record says {(record or {}).get('status') or '不明'})",
+                f"(record says {recorded})",
             )
         if out is None and now >= deadline:
             out = (
                 EXIT_TIMEOUT,
-                f"timeout: still alive after {int(args.timeout_seconds)}s",
+                f"timeout: no terminal verdict within {int(args.timeout_seconds)}s "
+                f"(record says {recorded})",
             )
         if out is not None:
             code, headline = out
@@ -1298,6 +1300,26 @@ class WatchTest(unittest.TestCase):
             )
         self.assertIn("未完了", buf.getvalue())
         self.assertIn("cargo test --all", buf.getvalue())
+
+    def test_timeout_headline_does_not_contradict_the_record(self):
+        """timeout も保留の一種 — completed の job に 「still alive」 と書けば evidence と食い違う。"""
+        import io
+        from contextlib import redirect_stdout
+
+        root, rec, log = self._state("ws", "task-done", "completed", log_age=0.0)
+        tree = os.path.join(root, "tree")
+        os.makedirs(tree)
+        with open(os.path.join(tree, "f"), "w", encoding="utf-8") as f:
+            f.write("x")
+        with open(rec, "w", encoding="utf-8") as f:
+            json.dump(
+                {"id": "task-done", "status": "completed", "workspaceRoot": tree}, f
+            )
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(watch(self._watch_args(root, "task-done")), EXIT_TIMEOUT)
+        self.assertIn("completed", buf.getvalue())
+        self.assertNotIn("still alive", buf.getvalue())
 
     def test_alive_headline_does_not_contradict_the_record(self):
         """completed でもツリーが落ち着くまでは保留するので、「still running」 と言い切らない。"""
