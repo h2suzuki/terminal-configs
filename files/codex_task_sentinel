@@ -95,6 +95,35 @@ EXIT_OVER_ESTIMATE = 12
 EXIT_CORRUPT = 13
 EXIT_UNVERIFIABLE = 14
 
+# The one place code, symbol, docstring slug and the skill's wording are tied
+# together. Comparing only the set of numbers let a name swap, a duplicated
+# value and a swapped pair of meanings all pass as synchronised.
+EXIT_CONTRACT = (
+    (EXIT_DONE, "EXIT_DONE", "done", "完了"),
+    (
+        EXIT_DONE_HUNG,
+        "EXIT_DONE_HUNG",
+        "done-hung",
+        "完了後 hang (`--trust-log` 時のみ)",
+    ),
+    (EXIT_STALL, "EXIT_STALL", "stall", "stall (`--trust-log` 時のみ)"),
+    (
+        EXIT_ENDED_WITHOUT_ARTIFACT,
+        "EXIT_ENDED_WITHOUT_ARTIFACT",
+        "no-deliverable",
+        "成果物なし完了",
+    ),
+    (EXIT_NEVER_REGISTERED, "EXIT_NEVER_REGISTERED", "never-registered", "未登録"),
+    (EXIT_TIMEOUT, "EXIT_TIMEOUT", "timeout", "timeout"),
+    (EXIT_NOT_COMPLETED, "EXIT_NOT_COMPLETED", "not-completed", "cancel / 失敗"),
+    (EXIT_AMBIGUOUS, "EXIT_AMBIGUOUS", "ambiguous", "id 重複"),
+    (EXIT_VANISHED, "EXIT_VANISHED", "vanished", "record 消失"),
+    (EXIT_ALIVE, "EXIT_ALIVE", "alive", "生存 (`--once`)"),
+    (EXIT_OVER_ESTIMATE, "EXIT_OVER_ESTIMATE", "over-estimate", "見積もり 2 倍超"),
+    (EXIT_CORRUPT, "EXIT_CORRUPT", "corrupt", "record 破損"),
+    (EXIT_UNVERIFIABLE, "EXIT_UNVERIFIABLE", "unverifiable", "検証不能"),
+)
+
 # The skill's third condition — is a command still running — can only be guessed
 # at. The plugin appends message bodies verbatim, so a body quoting a log line
 # looks exactly like the event it quotes. The guess is therefore used in one
@@ -151,6 +180,15 @@ def job_record(record_path: str) -> dict | None:
     except ValueError:
         return None
     return loaded if isinstance(loaded, dict) else None
+
+
+def log_stat(log_path: str) -> tuple[float, int] | None:
+    """(mtime, size) identifying one snapshot of the log; None when it is absent."""
+    try:
+        st = os.stat(log_path)
+    except OSError:
+        return None
+    return st.st_mtime, st.st_size
 
 
 def heartbeat_age(log_path: str, now: float) -> float | None:
@@ -222,7 +260,9 @@ def stamp_seconds(stamp: str) -> float | None:
     Parsing it where the caller cannot see costs the whole watch.
     """
     try:
-        return time.mktime(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))
+        # 末尾 Z のとおり UTC — mktime は local time として読むため、 DST 境界を挟む
+        # 2 点の差がその分ずれ、 baseline と stall 判定が動く。
+        return calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))
     except (ValueError, OverflowError):
         return None
 
@@ -554,13 +594,16 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
     while True:
         now = time.time()
         record = job_record(record_path)
-        age = heartbeat_age(log, now)
         tree = tree_age((record or {}).get("workspaceRoot"), now)
         # Elapsed runs from the job's own start so re-arming does not reset the clock.
         elapsed = now - (stamp_epoch((record or {}).get("startedAt")) or started)
         ready = artifact_ready(args.artifact, args.token, run_since(record or {}))
         # 1 poll 1 走査 — verdict も evidence も同じ結果を使い、log を読み直さない。
+        # 走査の前後で log が伸びたら、 その poll は古い無音と新しい本文の混成になる。
+        before = log_stat(log)
         unfinished, tail = scan_log(log)
+        age = heartbeat_age(log, now)
+        moved = log_stat(log) != before
         if not os.path.exists(record_path):
             # The plugin prunes to its newest 50 jobs regardless of status, so a
             # record that was here and is gone is lost history, not a verdict.
@@ -575,6 +618,9 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 "corrupt: the state record is present but unreadable — the job's "
                 "outcome cannot be read from it, so do not treat this as a stall",
             )
+        elif moved:
+            # 走査中に伸びた log は、 古い無音と新しい本文の混成 — その組で判定しない。
+            out = None
         else:
             out = verdict(
                 str(record.get("status") or ""),
@@ -1412,6 +1458,65 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(opens.count(log), 1)
         self.assertEqual(pending, ["cargo test --all"])
         self.assertIn("cargo test --all", tail[-1])
+
+    def test_stamps_are_utc_whatever_the_local_zone(self):
+        """plugin の stamp は末尾 Z の UTC — local time として読むと DST 境界で gap がずれる。"""
+        original = os.environ.get("TZ")
+        try:
+            seen = []
+            for zone in ("UTC", "America/New_York", "Asia/Tokyo"):
+                os.environ["TZ"] = zone
+                time.tzset()
+                seen.append(
+                    (
+                        stamp_seconds("2026-03-08T06:30:00"),  # US DST 切替の前後
+                        stamp_seconds("2026-03-08T07:30:00"),
+                    )
+                )
+            self.assertEqual(len(set(seen)), 1, seen)
+            first, second = seen[0]
+            assert first is not None and second is not None
+            self.assertEqual(second - first, 3600.0)
+        finally:
+            if original is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = original
+            time.tzset()
+
+    def test_a_log_that_grows_during_the_scan_withholds_the_verdict(self):
+        """古い無音と新しい本文の混成で cancel 導線を出さない — R14 の 2 回読みと同じ食い違い。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, rec, log = self._state("ws", "task-x", "running", log_age=600.0)
+        tree = os.path.join(root, "tree")
+        os.makedirs(tree)
+        with open(os.path.join(tree, "f"), "w", encoding="utf-8") as f:
+            f.write("x")
+        os.utime(os.path.join(tree, "f"), (time.time() - 600, time.time() - 600))
+        with open(rec, "w", encoding="utf-8") as f:
+            json.dump({"id": "task-x", "status": "running", "workspaceRoot": tree}, f)
+
+        real = scan_log
+
+        def growing(path, *a, **k):
+            out = real(path, *a, **k)
+            with open(path, "a", encoding="utf-8") as stream:
+                stream.write("[2026-08-09T01:45:38.190Z] Searching: newly appended\n")
+            return out
+
+        with (
+            mock.patch.object(sys.modules[__name__], "scan_log", growing),
+            redirect_stdout(io.StringIO()),
+        ):
+            code = watch(
+                self._watch_args(
+                    root, "task-x", once=True, stall_seconds=1.0, trust_log=True
+                )
+            )
+        self.assertEqual(code, EXIT_ALIVE)
 
     def test_an_impossible_stamp_is_body_text_not_an_event(self):
         """本文の日付 fixture を event として採ると、 完走 peer 1 件で監視全体が例外終了する。"""
