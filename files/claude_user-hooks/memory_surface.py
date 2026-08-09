@@ -640,12 +640,19 @@ def _throttle_check(
     file_path: str,
     session_id: str,
     now: float,
+    kind: str = "emit",
 ) -> bool:
-    """True iff this entry was injected in the same session within THROTTLE_SECONDS."""
+    """True iff this entry was logged under `kind` in the same session within THROTTLE_SECONDS.
+
+    Kept per kind: a mismatch row records that the model filter muted an entry,
+    not that anything was shown, so counting it against emits hides the entry for
+    15 minutes exactly when a fresh tag should make it appear.
+    """
     row = con.execute(
         "SELECT MAX(ts) FROM inject_log "
-        "WHERE file_path = ? AND coalesce(session_id, '') = coalesce(?, '')",
-        (file_path, session_id),
+        "WHERE file_path = ? AND coalesce(session_id, '') = coalesce(?, '') "
+        "AND coalesce(kind, 'emit') = ?",
+        (file_path, session_id, kind),
     ).fetchone()
     if not row or row[0] is None:
         return False
@@ -785,7 +792,7 @@ def _surface_core(
                 picks = _bm25_picks(rows_ok)
             picks = [p for p in picks if ok(p[0])]
             for file_path, _reminder, score in mismatches:
-                if _throttle_check(con, file_path, session_id, now):
+                if _throttle_check(con, file_path, session_id, now, "mismatch"):
                     continue
                 _record_inject(
                     con,
@@ -1357,6 +1364,30 @@ class SurfaceCoreTest(unittest.TestCase):
                 self.assertEqual(
                     len(_surface_core(con, "deploy repo 放置", "s2", "proj", now, 1)), 1
                 )
+            finally:
+                con.close()
+
+    def test_a_mismatch_row_does_not_throttle_a_later_emit(self):
+        """mute の記録は inject ではない — 同じ 15 分の抑止を食うと tag 追記直後の確認が空振りする。"""
+        from unittest import mock
+
+        db = self._tmp_db()
+        mod = sys.modules[__name__]
+        with (
+            mock.patch.object(mod, "DB_PATH", db),
+            mock.patch.object(
+                mod, "_hybrid_picks", lambda *a: [("/m/a.md", "lesson A", -6.0)]
+            ),
+        ):
+            con = _connect()
+            assert con is not None
+            try:
+                now = 1_000_000.0
+                _record_inject(
+                    con, "/m/a.md", "proj", "s1", now, 0.9, "q", "opus-5", "mismatch"
+                )
+                picks = _surface_core(con, "deploy 放置", "s1", "proj", now + 60, 1)
+                self.assertEqual([p[0] for p in picks], ["/m/a.md"])
             finally:
                 con.close()
 

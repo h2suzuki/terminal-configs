@@ -35,7 +35,7 @@ codex (gpt-5.6-sol / xhigh) レビュー指摘の是正。deploy 前に少なく
 - [x] **壁 regex の corpus 総取り替え**: 実測で誤検知 8/8・取りこぼし 8/8 → 動詞列挙をやめ「可能形の否定 + 断定の尾」を核にし、疑問「〜か」・条件「〜場合 / とき」・二重否定「〜わけではない」・推量「〜かもしれ」を尾で落とす。誤読系は自認に限るため過去形のみ (te 形はプログラムの誤読の叙述に出る)。table-driven test は断定 14 / 非断定 16。実 transcript 263 block で発火 7 件・全件が真の断定 (旧 regex は 3 件中 1 件が誤検知で、家族の動機になった壁宣言自体を落としていた)
 - [ ] **floor を backend 別に較正**: `MUTED_FLOOR=0.35` は hybrid 2 点のみが根拠。embed DB 不在時は `_fuse(s, 0.0)` 経由で BM25 <= -7 相当となり、通常 surface の BM25 <= -2 と桁が違う。hybrid / BM25 で定数を分け、labeled corpus で PR を測る
 - [ ] **観測できない**: fail-open が全て無言の `None` で、`search_unfiltered()` は記録もしないため「0 件」が無事故か feature 死かを区別できない。rate-limit した error log と wall 専用 event を残す
-- [ ] **mismatch 行が emit の throttle を食う**: `_throttle_check()` の SQL に `kind` 条件が無く、mute 記録が 15 分の抑止に効く。tag 追記直後の動作確認が空振りする (実測: 60 秒後も空、901 秒後に初めて surface)。`kind='emit'` のみ見るようにする
+- [x] **mismatch 行が emit の throttle を食う**: `_throttle_check()` の SQL に `kind` 条件が無く、mute 記録が 15 分の抑止に効いていた (実測: 60 秒後も空、901 秒後に初めて surface) → `kind` 引数を足して kind 別に見る (emit は emit、mismatch は mismatch)。mute 記録の直後でも emit が出ることを test で pin
 - [ ] **model source の一本化**: `_current_turn()` が持つ当該 turn の model を捨て、`_resolve_model()` が statusline cache を transcript より優先して再解決している。壁文と同じ turn の model を muted lookup へ渡す
 - [ ] **検索に時間上限が無い**: 元 probe の subprocess 20 秒 watchdog を失い、同一 process 呼び出しになった。例外 catch は hang に効かないので Stop 全体が止まりうる
 - [ ] **提示が top-1 のみ**: 弱い誤 hit が真の教訓を shadow する。上位 2-3 件を score つきで返すか、margin が小さい時だけ複数出す
