@@ -1515,7 +1515,16 @@ def _memory_surface_at_stop(payload: dict, text: str) -> str | None:
 def _bounded(call):
     """`call()` の値、 または timeout / 例外なら None。 daemon thread なので居残っても Stop の終了は待たされない。"""
     out: list = []
-    worker = threading.Thread(target=lambda: out.append(call()), daemon=True)
+
+    def run():
+        # thread 内の例外は excepthook が traceback を stderr に出す — 旧 deploy の
+        # memory_surface に helper が無いだけで Stop が壊れて見える。 黙って諦める。
+        try:
+            out.append(call())
+        except Exception:
+            pass
+
+    worker = threading.Thread(target=run, daemon=True)
     worker.start()
     worker.join(_SEARCH_TIMEOUT_SECONDS)
     return out[0] if out else None
@@ -2402,6 +2411,26 @@ class StopMemorySurfaceTest(unittest.TestCase):
             self.assertIsNone(
                 _memory_surface_at_stop({"stop_hook_active": False, "cwd": "/p"}, "out")
             )
+
+    def test_muted_stays_quiet_when_the_deployed_helper_is_missing(self):
+        """fail-open は戻り値だけでなく黙ることまで — thread へ投げた例外は traceback を stderr へ出す。"""
+        from unittest import mock
+
+        class Older:  # search_unfiltered を持たない旧 deploy の memory_surface
+            _resolve_model = staticmethod(lambda p: "opus-5")
+            _encoded_project_id = staticmethod(lambda c: c)
+
+        raised: list = []
+        with (
+            mock.patch.object(self.M, "_memory_surface_mod", Older()),
+            mock.patch.object(threading, "excepthook", raised.append),
+        ):
+            self.assertIsNone(
+                _muted_memory_at_stop(
+                    {"stop_hook_active": False, "cwd": "/p"}, "実行できません"
+                )
+            )
+        self.assertEqual(raised, [])
 
     def test_muted_gives_up_on_a_search_that_does_not_return(self):
         """例外 catch は hang に効かない — 元 probe の 20 秒 watchdog を失うと Stop 全体が止まる。"""
