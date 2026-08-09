@@ -95,33 +95,65 @@ EXIT_OVER_ESTIMATE = 12
 EXIT_CORRUPT = 13
 EXIT_UNVERIFIABLE = 14
 
-# The one place code, symbol, docstring slug and the skill's wording are tied
-# together. Comparing only the set of numbers let a name swap, a duplicated
-# value and a swapped pair of meanings all pass as synchronised.
+# code / symbol / docstring slug / skill の意味欄 / skill の呼び手の行動。
+# code は literal で持つ — 定数を参照にすると、 定数と契約を揃えて書き換えた変異が
+# 「同期している」 と読めてしまい、 実 exit だけが doc と食い違う。
 EXIT_CONTRACT = (
-    (EXIT_DONE, "EXIT_DONE", "done", "完了"),
+    (0, "EXIT_DONE", "done", "完了", "成果物を受け入れレビューへ"),
     (
-        EXIT_DONE_HUNG,
+        3,
         "EXIT_DONE_HUNG",
         "done-hung",
         "完了後 hang (`--trust-log` 時のみ)",
+        "成果物を検証してから cancel",
     ),
-    (EXIT_STALL, "EXIT_STALL", "stall", "stall (`--trust-log` 時のみ)"),
     (
-        EXIT_ENDED_WITHOUT_ARTIFACT,
+        4,
+        "EXIT_STALL",
+        "stall",
+        "stall (`--trust-log` 時のみ)",
+        "log を読み、cancel して fresh 再発注",
+    ),
+    (
+        5,
         "EXIT_ENDED_WITHOUT_ARTIFACT",
         "no-deliverable",
         "成果物なし完了",
+        "log が何を報告したか読む",
     ),
-    (EXIT_NEVER_REGISTERED, "EXIT_NEVER_REGISTERED", "never-registered", "未登録"),
-    (EXIT_TIMEOUT, "EXIT_TIMEOUT", "timeout", "timeout"),
-    (EXIT_NOT_COMPLETED, "EXIT_NOT_COMPLETED", "not-completed", "cancel / 失敗"),
-    (EXIT_AMBIGUOUS, "EXIT_AMBIGUOUS", "ambiguous", "id 重複"),
-    (EXIT_VANISHED, "EXIT_VANISHED", "vanished", "record 消失"),
-    (EXIT_ALIVE, "EXIT_ALIVE", "alive", "生存 (`--once`)"),
-    (EXIT_OVER_ESTIMATE, "EXIT_OVER_ESTIMATE", "over-estimate", "見積もり 2 倍超"),
-    (EXIT_CORRUPT, "EXIT_CORRUPT", "corrupt", "record 破損"),
-    (EXIT_UNVERIFIABLE, "EXIT_UNVERIFIABLE", "unverifiable", "検証不能"),
+    (
+        6,
+        "EXIT_NEVER_REGISTERED",
+        "never-registered",
+        "未登録",
+        "起動が成立していない。発注し直す",
+    ),
+    (7, "EXIT_TIMEOUT", "timeout", "timeout", "待ち続けるか判断する"),
+    (
+        8,
+        "EXIT_NOT_COMPLETED",
+        "not-completed",
+        "cancel / 失敗",
+        "結果ではない。fresh 再発注",
+    ),
+    (9, "EXIT_AMBIGUOUS", "ambiguous", "id 重複", "どの job か特定してから信じる"),
+    (10, "EXIT_VANISHED", "vanished", "record 消失", "prune 済で outcome は読めない"),
+    (11, "EXIT_ALIVE", "alive", "生存 (`--once`)", "re-arm するか調査に入る"),
+    (
+        12,
+        "EXIT_OVER_ESTIMATE",
+        "over-estimate",
+        "見積もり 2 倍超",
+        "log を発注書と突き合わせて調査",
+    ),
+    (13, "EXIT_CORRUPT", "corrupt", "record 破損", "stall と読まない"),
+    (
+        14,
+        "EXIT_UNVERIFIABLE",
+        "unverifiable",
+        "検証不能",
+        "ツリーを読めない、または既定で log もツリーも静穏。evidence を読んで人が決める",
+    ),
 )
 
 # The skill's third condition — is a command still running — can only be guessed
@@ -549,7 +581,8 @@ def evidence(
     lines = [
         f"  job    : {job_id} status={record.get('status') or '不明'} root={root or '不明'}",
         f"  無音   : {quiet}{versus} / しきい値 {int(threshold)}s",
-        f"  ツリー : {'書き込みなし' if tree is None else f'最終書き込み {int(tree)}s 前'}",
+        # None は 「静穏」 ではなく 「読めなかった」 — headline と強さを揃える。
+        f"  ツリー : {'不明 (workspaceRoot を読めないか対象 file なし)' if tree is None else f'最終書き込み {int(tree)}s 前'}",
         f"  成果物 : {made}",
         f"  末尾   : {shown[0]}",
         *(f"           {ln}" for ln in shown[1:]),
@@ -587,12 +620,15 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             return EXIT_NEVER_REGISTERED
         time.sleep(args.poll_seconds)
     record_path, log = found[0]
-    # Scope the baseline to this job's own workspace: a slow neighbour must not
-    # raise the bar here (a foreign 3600s gap once hid a two-hour stall).
-    baseline = baseline_silence(os.path.dirname(record_path), args.job_id)
-    threshold = stall_threshold(args.stall_seconds, baseline)
+    jobs_dir = os.path.dirname(record_path)
     while True:
         now = time.time()
+        # Scope the baseline to this job's own workspace: a slow neighbour must not
+        # raise the bar here (a foreign 3600s gap once hid a two-hour stall). Read
+        # it every poll — a peer's record goes completed before its last block is
+        # appended, so a baseline taken once can be missing that job's real gap.
+        baseline = baseline_silence(jobs_dir, args.job_id)
+        threshold = stall_threshold(args.stall_seconds, baseline)
         record = job_record(record_path)
         tree = tree_age((record or {}).get("workspaceRoot"), now)
         # Elapsed runs from the job's own start so re-arming does not reset the clock.
@@ -603,7 +639,9 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         before = log_stat(log)
         unfinished, tail = scan_log(log)
         age = heartbeat_age(log, now)
-        moved = log_stat(log) != before
+        # plugin は record を completed に書いてから final output を append する。
+        # その窓に入った poll は、 古い running のまま静穏を読んで stall と言える。
+        moved = log_stat(log) != before or job_record(record_path) != record
         if not os.path.exists(record_path):
             # The plugin prunes to its newest 50 jobs regardless of status, so a
             # record that was here and is gone is lost history, not a verdict.
@@ -1440,6 +1478,79 @@ class WatchTest(unittest.TestCase):
         self.assertTrue(all(len(ln) <= MAX_LOG_LINE for ln in log_lines(log)))
         self.assertEqual(pending_commands(log_lines(log)), ["cargo test --all"])
         self.assertIn("tail line", self._evidence(log))
+
+    def test_semantic_branches_return_their_documented_numbers(self):
+        """symbol 経由で期待すると、 定数と契約を揃えて書き換えた変異が実 exit ごと通る。"""
+        cases = (
+            (verdict("failed", 1.0, 600.0, False, 420, 300), 8),
+            (verdict("completed", 1.0, 600.0, True, 420, 300), 0),
+            (verdict("completed", 1.0, 600.0, False, 420, 300), 5),
+            (verdict("running", 600.0, 600.0, False, 420, 300), 14),
+            (verdict("running", 600.0, 600.0, False, 420, 300, trust_log=True), 4),
+        )
+        for out, expected in cases:
+            assert out is not None
+            self.assertEqual(out[0], expected)
+
+    def test_a_record_that_turns_completed_mid_poll_withholds_the_verdict(self):
+        """plugin は record を completed にしてから final output を append する — その窓で stall と言わない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, rec, log = self._state("ws", "task-x", "running", log_age=600.0)
+        tree = os.path.join(root, "tree")
+        os.makedirs(tree)
+        written = os.path.join(tree, "f")
+        with open(written, "w", encoding="utf-8") as f:
+            f.write("x")
+        os.utime(written, (time.time() - 600, time.time() - 600))
+        with open(rec, "w", encoding="utf-8") as f:
+            json.dump({"id": "task-x", "status": "running", "workspaceRoot": tree}, f)
+
+        real = scan_log
+
+        def then_completed(path, *a, **k):
+            out = real(path, *a, **k)
+            with open(rec, "w", encoding="utf-8") as stream:
+                json.dump(
+                    {"id": "task-x", "status": "completed", "workspaceRoot": tree},
+                    stream,
+                )
+            return out
+
+        with (
+            mock.patch.object(sys.modules[__name__], "scan_log", then_completed),
+            redirect_stdout(io.StringIO()),
+        ):
+            code = watch(
+                self._watch_args(
+                    root, "task-x", once=True, stall_seconds=1.0, trust_log=True
+                )
+            )
+        self.assertEqual(code, EXIT_ALIVE)
+
+    def test_the_baseline_follows_a_peers_late_final_block(self):
+        """peer の record が completed になった後に来る最終 block を、 一度きりの baseline は取り逃す。"""
+        root, _rec, _log = self._state("ws", "task-target", "running")
+        jobs = os.path.join(root, "ws", "jobs")
+        peer = os.path.join(jobs, "task-peer")
+        with open(peer + ".json", "w", encoding="utf-8") as f:
+            json.dump({"id": "task-peer", "status": "completed"}, f)
+        with open(peer + ".log", "w", encoding="utf-8") as f:
+            f.write("[2026-08-09T00:00:00.000Z] start\n")
+        self.assertIsNone(baseline_silence(jobs, "task-target"))
+        with open(peer + ".log", "a", encoding="utf-8") as f:
+            f.write("[2026-08-09T00:03:00.000Z] Final output\n")
+        self.assertEqual(baseline_silence(jobs, "task-target"), 180.0)
+        self.assertEqual(stall_threshold(None, 180.0), 540.0)
+
+    def test_evidence_calls_an_unreadable_tree_unknown_not_quiet(self):
+        """headline は 「読めない」 と言うのに evidence が 「書き込みなし」 では逆に読まれる。"""
+        _root, _rec, log = self._state("ws", "task-x", "running")
+        text = evidence("task-x", {"status": "running"}, log, 1.0, None, 420.0, None)
+        self.assertIn("不明", text)
+        self.assertNotIn("書き込みなし", text)
 
     def test_scan_log_reads_the_log_once(self):
         """判定と evidence が別 snapshot だと、 静穏を根拠に cancel を勧めながら稼働中 command を並べる。"""

@@ -19,9 +19,9 @@ SENTINEL = os.path.join(HERE, "codex_task_sentinel")
 SKILL = os.path.join(HERE, "claude_managed-skills", "codex-delegation", "SKILL.md")
 
 # "  4  stall             --trust-log only: log and tree quiet — ..."
-MODULE_ROW = re.compile(r"^ {2}(\d+)\s+(\S+\s{2,}.+)$")
+MODULE_ROW = re.compile(r"^ {2}(\d+)\s+(\S+)\s{2,}(.+)$")
 # "  | 4 | stall (`--trust-log` 時のみ) | log を読み、... |"
-SKILL_ROW = re.compile(r"^\s*\|\s*(\d+)\s*\|([^|]*)\|")
+SKILL_ROW = re.compile(r"^\s*\|\s*(\d+)\s*\|([^|]*)\|([^|]*)\|")
 
 TRUST_FLAG = "--trust-log"
 
@@ -40,8 +40,17 @@ def _read(path: str) -> list[str]:
         return f.read().splitlines()
 
 
-def _rows(lines: list[str], pattern: re.Pattern[str]) -> dict[str, str]:
-    return {m.group(1): m.group(2) for m in map(pattern.match, lines) if m}
+def _rows(lines: list[str], pattern: re.Pattern[str]) -> dict[str, tuple[str, ...]]:
+    """code -> 以降の列。 重複 code は dict の後勝ちで隠れるので _row_codes と併用する。"""
+    return {
+        m.group(1): tuple(g.strip() for g in m.groups()[1:])
+        for m in map(pattern.match, lines)
+        if m
+    }
+
+
+def _row_codes(lines: list[str], pattern: re.Pattern[str]) -> list[str]:
+    return [m.group(1) for m in map(pattern.match, lines) if m]
 
 
 class ExitTableSyncTest(unittest.TestCase):
@@ -54,7 +63,7 @@ class ExitTableSyncTest(unittest.TestCase):
     @staticmethod
     def _runtime_codes() -> set[str]:
         """実装が実際に返す exit 値 — 表どうしの比較だけでは定数の書き換えを見逃す。"""
-        return {str(code) for code, _n, _s, _m in sentinel.EXIT_CONTRACT}
+        return {str(row[0]) for row in sentinel.EXIT_CONTRACT}
 
     def test_the_contract_covers_every_constant_exactly_once(self):
         """値の集合だけを見ると、 名前の入れ替えも値の重複も同じ集合のまま通る。"""
@@ -64,21 +73,28 @@ class ExitTableSyncTest(unittest.TestCase):
             if n.startswith("EXIT_") and isinstance(v, int)
         }
         self.assertEqual(
-            declared, {n: code for code, n, _s, _m in sentinel.EXIT_CONTRACT}
+            declared, {n: code for code, n, _s, _m, _a in sentinel.EXIT_CONTRACT}
         )
-        codes = [code for code, _n, _s, _m in sentinel.EXIT_CONTRACT]
+        codes = [code for code, _n, _s, _m, _a in sentinel.EXIT_CONTRACT]
         self.assertEqual(len(codes), len(set(codes)))
 
-    def test_the_docstring_row_carries_the_contract_slug(self):
-        for code, _n, slug, _m in sentinel.EXIT_CONTRACT:
-            self.assertTrue(
-                self.module[str(code)].startswith(slug), f"exit {code}: {slug}"
-            )
+    def test_neither_table_repeats_a_code(self):
+        """重複行は dict の後勝ちで消える — 誤った行を正しい行の前に足す変異が隠れる。"""
+        for lines, pattern in (
+            (_read(SENTINEL), MODULE_ROW),
+            (_read(SKILL), SKILL_ROW),
+        ):
+            codes = _row_codes(lines, pattern)
+            self.assertEqual(len(codes), len(set(codes)), codes)
 
-    def test_the_skill_row_carries_the_contract_meaning(self):
-        """意味だけを入れ替える書き換えは、 数値集合が同じなので集合比較では捕まらない。"""
-        for code, _n, _s, meaning in sentinel.EXIT_CONTRACT:
-            self.assertEqual(self.skill[str(code)].strip(), meaning, f"exit {code}")
+    def test_the_docstring_row_carries_the_contract_slug(self):
+        for code, _n, slug, _m, _a in sentinel.EXIT_CONTRACT:
+            self.assertEqual(self.module[str(code)][0], slug, f"exit {code}")
+
+    def test_the_skill_row_carries_the_contract_meaning_and_action(self):
+        """意味も呼び手の行動も契約と揃える — 数値集合が同じ変異は集合比較では捕まらない。"""
+        for code, _n, _s, meaning, action in sentinel.EXIT_CONTRACT:
+            self.assertEqual(self.skill[str(code)], (meaning, action), f"exit {code}")
 
     def test_both_tables_are_populated(self):
         """空の parse は差分ゼロに見えてしまうので、まず両表が読めていることを確かめる。"""
