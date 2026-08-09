@@ -49,17 +49,27 @@ Goal: 監視判定が plugin の実挙動と skill の 4 分岐に一致する�
 
 Exit Criteria:
 
-- [ ] 敵対レビューの新規 material 指摘がゼロで安定する — 4〜7 巡目は連続ゼロだったが、
-  exit 14 導入の検証を論点にした 12 巡目で 2 件 (evidence 欠落 / skill の exit 表 stale) が出た。
-  両方を修正済みなので 13 巡目で再判定する
+- [ ] レビューの新規 material 指摘がゼロで安定する — 4〜7 巡目は連続ゼロ。exit 14 導入の検証を
+  論点にした 12 巡目で 2 件、13 巡目でさらに 2 件。いずれも直前の巡の修正が生んだ欠陥で、全て修正済み。
+  14 巡目は 4 回発注して 3 回失敗 (provider の content filter 2 回・plugin state dir 再利用 1 回)。
+  中断した 2 回の最終出力が示した欠陥 (baseline の list 化 / timeout headline) は自力で確認し修正した
 - [x] log 由来の曖昧さが正常 job の cancel を招かない — 既定で cancel 導線 (exit 4/3) を出さず、
   exit 14 で evidence を示して判断を呼び手に渡す (206ce7a)。断定したい呼び手は `--trust-log`。
   12 巡目が 504 case の直積で「既定の exit 3/4 は 0 件」「`--trust-log` は旧判定と mismatch 0」を実測
 - [ ] 上流 (plugin) が per-command lifecycle を record に持ち、stall 判定の原理的曖昧さ自体が消える
 
-12 巡の敵対レビュー (gpt-5.6-sol / xhigh) の指摘はすべて修正済み
-(a746ef5 / b9f32d0 / fabe928 / bb56980 / 7c4d532 / 2607f1d / 890349a / 1f37e46 / 206ce7a / 直近 1 件)。
-各巡の報告書は session scratchpad にあり、内容は commit message に要約してある。
+13 巡のレビュー (gpt-5.6-sol / xhigh) の指摘はすべて修正済み
+(a746ef5 / b9f32d0 / fabe928 / bb56980 / 7c4d532 / 2607f1d / 890349a / 1f37e46 / 206ce7a /
+13832d2 / d8b1781 / 87cc3e0 / 6ccb4b4)。内容は commit message に要約してある。
+
+- [ ] **worktree を作り直したときの plugin state dir 掃除を機構化する**: 同じ path で
+  `git worktree add` し直すと `plugin data/state/<worktree>-<hash>/` が再利用され、job が
+  `failed to load configuration: No such file or directory` で即死する。codex-delegation skill に
+  rule はあるが、worktree 再作成の時点では skill を invoke していないので発火しなかった
+  (2026-08-09 に実際に踏んだ)。`codex_worktree_gate.py` は既に codex の Bash を検査しているので、
+  起動時に「workspaceRoot の state dir があるのに worktree の作成時刻の方が新しい」を検出して
+  警告するのが素直。sentinel 側は `errorMessage` を evidence に出すようにして (87cc3e0)
+  「手で record を開き直す」までは消えている
 
 - [ ] **command lifecycle が log 層でしか観測できない (上流依存)**: plugin の `appendLogBlock` は
   message 本文を無加工で append するため、本文が log 行を引用すると event と区別できない。
