@@ -19,9 +19,9 @@ Goal: 実行中モデルの tag 判定と「壁と結論する前に引く」導
 
 Exit Criteria:
 
-- [ ] deploy 後の実 session で、`opus-5` tag 付き entry が `claude-opus-5[1m]` の session に surface することを観測する
-- [ ] deploy 後の実 session で muted-memory-at-wall が live 発火することを観測する
-- [ ] deploy 後に新規蓄積された `kind='mismatch'` が untagged entry 由来のみになっていることを SQL で確認する
+- [x] deploy 後の実 session で、`opus-5` tag 付き entry が `claude-opus-5[1m]` の session に surface することを観測する — 2026-08-09 deploy 後に実測。`_normalize_model('claude-opus-5[1m]') = opus-5`、user scope の tag 付き 9 件すべてが filter を通過 (mute 0)。実 inject_log にも deploy 後 `kind=emit model=opus-5` が 2 行増え、うち 1 件は project scope の entry
+- [x] deploy 後の実 session で muted-memory-at-wall が live 発火することを観測する — 2026-08-09、deploy 済 `/etc/claude-code/hooks/stop_checks.py` + 実 DB + 実 session の model 解決 (statusline 経由 `opus-5`) で `<muted-memory>` を生成。壁宣言「…実行できません。自前で実装に切り替えます。」に対し score 0.475 (floor 0.35) の `feedback_codex_sandbox_delegation.md` (models=opus-4.8) を名指しした。latch は temp path で実 turn から隔離して観測
+- [ ] deploy 後に新規蓄積された `kind='mismatch'` が untagged entry 由来のみになっていることを SQL で確認する — deploy 時 baseline は emit 522 / mismatch 106。deploy 後 1 時間で mismatch の増加は 0 件のため、判定には蓄積待ち
 
 - [x] `_normalize_model` が `[1m]` 等の context-window 変種を落とすよう修正 + unit test — 実データで `opus-5[1m]` の mismatch 33 行中 21 行が解消することを確認
 - [x] memory-routing skill に「壁と結論する前 / 2 回失敗した時に引く」 trigger を追加 (既存 Tag propagation 節の入口を拡張、コマンド重複なし)
