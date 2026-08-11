@@ -111,8 +111,6 @@ Exit Criteria:
   - **着手前に解く設計上の罠** (cross-check readback で判明): 発注は Bash しか持たない codex-rescue subagent 内で起きるが、`skill_reminder_gate` の skill-active state は agent 単位 (`agent_id or "main"`)。素直に相乗りすると skill を invoke できない subagent が恒久 deny になり発注不能。判定を親 session の state で行うか subagent を対象外にするかを先に決める
   - 相乗り先候補は 2 つ: `skill_reminder_gate.py` (編集前 gate) と `codex_worktree_gate.py` (既に codex Bash を検査済・検出面を持つ)。後者が有力
   - 射程を明示する: 今回の違反は監視側で発生。既存 codex hook は `status` / `cancel` / `result` を素通ししているので、監視系を含めるか決めてから実装する
-- 既存の失敗テスト 2 件 — **2026-08-11 再測で両者 pass** (`stop_checks` 117 tests OK / `test_git_corpus` 1 test OK)。後者が参照する `drafts/git-corpus/*.tsv` の「repo に不在」は `.gitignore:4` の `drafts/` 除外が原因で、clone には無いがローカルには実在する = local 専用 test という性質であり defect ではない
-- 環境 finding (2026-08-08 実測) — **2026-08-11 再測で解消**: memory index DB は `h2suzuki:h2suzuki 664` になり `os.access(W_OK)` True。`entry_models` 10 件はすべてこの user の entry で最新 `last_modified` は 2026-08-11 13:44、`kind='emit'` も同日に記録あり = index に載っている。skill と矛盾する reminder (「running[] が空になったら」) も memory/ と skills/ の双方に grep 0 件
 - [ ] index sync の失敗が不可視な設計を塞ぐ — 上の finding は解消したが、`memory_routing_gate.py` の sync が `--upsert` を stdout/stderr とも DEVNULL・`check=False` で呼び `_upsert_entry` も sqlite エラーを握り潰す構造は残る。同じ事故が再発しても気付けない (High の「観測できない」項目と同根なので併せて設計する)
 
 Work file: `last-session-handoff.md` の同名 section
