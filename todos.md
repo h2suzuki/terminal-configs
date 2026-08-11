@@ -131,9 +131,10 @@ Exit Criteria:
   - `test_non_repo_fails_open_with_diagnostic`: stderr の行数を数える assert をやめ、診断の件数を数えるようにした (本来の主張)。git stderr を 2 行に強制する test を追加して、件数が行数に追従しないことを pin
   - `test_corpus_against_current_adapter`: corpus は実 session 履歴から採取するもので repo に入れるべきでないと判断し、tracked 化ではなく不在時 `skipTest` を選択。dir を退避して skip、戻して pass を実測
 - [ ] index sync の失敗が不可視な設計を塞ぐ — `memory_routing_gate.py` の sync が `--upsert` を stdout/stderr とも DEVNULL・`check=False` で呼び、`_upsert_entry` も sqlite エラーを握り潰すため、失敗しても誰も気付かない
-  - **2026-08-11 実測: 既に大量に失敗している**。memory dir 配下の `.md` は disk 上 125 件 (user scope 78 / project scope 47) に対し `entries_fts` は **67 件**。内訳は user scope 78→32 (**46 件欠落**)、terminal-configs 14→6、zenn-articles 2→0、genai-development-process 21→20、daily-stock-analyzer 10→9。**corpus の 46% が index に載っておらず、model filter 以前に surface され得ない**
-  - `models:` tag を持つ file は disk 上 11 件だが `entry_models` は 10 行。欠けているのは `feedback_turn_end_continuation_claim.md` で、sync 漏れの具体例
-  - よって本項目は「再発に気付けない」設計課題ではなく、**現に効いている最大の配信欠損**。`models:` 役割分離 (可視性 7/67) より上流で、先に潰す価値がある
+  - **私が一度「corpus の 46% が index から欠落」と書いたのは誤り。撤回する**。disk 125 件に対し `entries_fts` 67 件なのは事実だが、名簿と突き合わせると欠落 58 件の内訳は roster file 自体が 7 件 (MEMORY.md ×5 / OLD-MEMORY.md ×2)、**OLD-MEMORY.md 収載 = retired が 42 件** (載らないのが正しい)、どちらの名簿にも無い orphan が 8 件。「欠損」と呼べるのは最後の 8 件だけ
+  - orphan 8 件の内訳: `user_profile.md` (feedback entry ではない)、2026-05-27 の 6 件 (`hook_deny_reason_wording` / `intent_preserving_rephrase` / `keep_token_efficiency_section` / `rule_extraction_workflow` / `subagent_bonus_claim_verify` / `verify_own_work_via_git_log` — いずれも同名の skill が存在するので skill 化に伴う retire を OLD-MEMORY.md に記録し忘れたと見られる)、そして **`feedback_turn_end_continuation_claim.md` (2026-08-06 / `models:` tag あり) だけが真の欠損**
+  - upsert 経路自体は健全: orphan 1 件に `--upsert` を実行すると rc=0 で index に載る (検証後 `--delete` で baseline 67 に戻した)。よって原因は権限でも parse でもなく、**`cmd_sync` が PostToolUse:Write でしか発火せず、それ以外の作成経路が index に入らないこと**
+  - 残る設計課題は当初のまま: 失敗しても DEVNULL + `check=False` + sqlite エラー握り潰しで不可視。ただし規模は 1 件であり、`models:` 役割分離より優先する理由は無い
 
 Work file: `last-session-handoff.md` の同名 section
 
