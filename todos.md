@@ -86,15 +86,26 @@ Exit Criteria:
   書けるのは plugin 側だけ (`phase` は investigating / editing / running 等の粗い活動状態で
   command 単位ではない)。plugin 更新時に再評価する
 
+### stop_checks の 2 修正を deploy して実運用で確認する
+
+Goal: 疑問文の誤 block と稼働中 worktree の誤提案が、実 session で起きなくなった状態にする。
+
+Exit Criteria:
+
+- [ ] deploy (ユーザー手動・root 要): `files/claude_managed-hooks/stop_checks.py` → `/etc/claude-code/hooks/stop_checks.py` (0755)
+- [ ] deploy 後の実 session で「〜ますか?」の質問が block されないことを観測する
+- [ ] deploy 前は旧版が動くため、質問形で終わるターンは誤 block が続く
+
 ### worktree-cleanup が稼働中の codex worktree を削除候補にする
 
 Goal: 実行中の作業を壊す削除提案を出さないようにする。
 
 Exit Criteria:
 
-- [ ] codex job が走っている worktree に対し、削除候補として提案されないことを実機で確認する
+- [ ] codex job が走っている worktree に対し、削除候補として提案されないことを実機で確認する — deploy 後に観測する
 
-- [ ] `stop_checks.py` の `_worktree_cleanup_warnings()` が「clean かつ本線の祖先」だけを見ており、その worktree を `workspaceRoot` とする codex job が running かどうかを見ていない。2026-08-08 の 2 回とも、codex がレビュー用 worktree で走っている最中に削除コマンドを提示した (成果物を書く前なので clean に見える)。提案どおり実行すると走行中の job の作業 root が消える。`~/.claude/plugins/data/codex-openai-codex/state/*/jobs/*.json` の `status=running` かつ `workspaceRoot` 一致を候補から除外する
+- [x] `stop_checks.py` の `_worktree_cleanup_warnings()` が「clean かつ本線の祖先」だけを見ており、その worktree を `workspaceRoot` とする codex job が running かどうかを見ていない。2026-08-08 の 2 回とも、codex がレビュー用 worktree で走っている最中に削除コマンドを提示した (成果物を書く前なので clean に見える)。提案どおり実行すると走行中の job の作業 root が消える。`~/.claude/plugins/data/codex-openai-codex/state/*/jobs/*.json` の `status=running` かつ `workspaceRoot` 一致を候補から除外する — `_codex_busy_roots()` で queued/running の作業 root を session 横断で集め realpath 一致で除外。test 4 件 (稼働中は非提案 / 別 session でも守る / 完了後は提案 / 他 tree は巻き添えにしない)
+- 残留リスク: crash した job の record が `running` のまま残ると、その worktree は恒久的に提案されなくなる。提案漏れは無害で誤削除は作業消失ゆえ、この非対称は安全側に倒している
 
 ## Medium
 
