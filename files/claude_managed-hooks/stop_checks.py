@@ -2955,6 +2955,11 @@ class WorktreeFixtureMixin:
         return self._check_cwd(repo)
 
 
+def _diagnostic_count(stderr: str) -> int:
+    """fail-open 診断の件数 — git stderr が何行に跨っても 1 件は 1 件。"""
+    return sum(line.startswith("worktree-cleanup:") for line in stderr.splitlines())
+
+
 class WorktreeCleanupTest(WorktreeFixtureMixin, unittest.TestCase):
     """Worktree warning claims. Run: python3 -m unittest stop_checks"""
 
@@ -3288,7 +3293,28 @@ class WorktreeCleanupTest(WorktreeFixtureMixin, unittest.TestCase):
 
         self.assertEqual(warnings, [])
         self.assertIn("rev-parse --show-toplevel failed", stderr.getvalue())
-        self.assertEqual(1, len(stderr.getvalue().strip().splitlines()))
+        self.assertEqual(1, _diagnostic_count(stderr.getvalue()))
+
+    def test_multiline_git_stderr_is_still_one_diagnostic(self):
+        """診断は 1 件という主張を、 git stderr の行数に依存せず pin する。"""
+        import io
+        from contextlib import redirect_stderr
+        from pathlib import Path
+        from unittest import mock
+
+        path = Path(self.tmp.name) / "not-a-repo"
+        path.mkdir()
+        stderr = io.StringIO()
+        failure = subprocess.CompletedProcess([], 128, "", "line one\nline two")
+        with (
+            mock.patch.object(subprocess, "run", return_value=failure),
+            redirect_stderr(stderr),
+        ):
+            warnings = _worktree_cleanup_warnings(str(path))
+
+        self.assertEqual(warnings, [])
+        self.assertGreater(len(stderr.getvalue().strip().splitlines()), 1)
+        self.assertEqual(1, _diagnostic_count(stderr.getvalue()))
 
     def test_git_missing_fails_open_with_diagnostic(self):
         import io

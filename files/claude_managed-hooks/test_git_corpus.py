@@ -15,6 +15,7 @@ from git_corpus_cases import (
     CASES_TSV,
     PATTERNS,
     REPO_ROOT,
+    SOURCE_TSV,
     CaseMode,
     CorpusCase,
     StaticRule,
@@ -363,6 +364,9 @@ def _print_report(evaluations: list[Evaluation]) -> None:
 
 class GitCorpusTest(unittest.TestCase):
     def test_corpus_against_current_adapter(self) -> None:
+        if not SOURCE_TSV.exists():
+            # 実 session 履歴から採取する corpus ゆえ意図的に untracked — 不在は環境差で欠陥ではない。
+            self.skipTest(f"source corpus not present: {SOURCE_TSV}")
         if not shutil_which("git"):
             self.fail("git executable is required")
         cases = build_cases()
