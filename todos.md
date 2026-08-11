@@ -29,7 +29,12 @@ Exit Criteria:
   exit table を数値集合で比較するため定数入替が通る)、16 巡目は 4 件 (contract が検査対象の定数を
   自分の出典にする / completed 直後の record と log で snapshot race 2 件 / 読めない tree に
   「書き込みなし」と表示) — いずれも修正済み (a0a6ace / b1d8ed7)。**17 巡目は 5 件、
-  全件が既出クラスの別サイトで新種クラスは 0**。報告書 `drafts/sentinel-review-r17-report.md`
+  全件が既出クラスの別サイトで新種クラスは 0**。報告書 `drafts/sentinel-review-r17-report.md`。
+  **18 巡目は 10 件** (`drafts/sentinel-review-r18-report.md`) — **うち 3 件は 17 巡目の修正で
+  私が作った欠陥** (movement guard に tree を入れ忘れ / `errors="replace"` で binary を完成品と受理 /
+  消えた entry 扱いが dangling symlink を恒久 active 化)、1 件は発注前に修正済み、
+  残る 6 件は走査漏れ。全件修正し、9 変異とも該当 test が落ちることを確認済み。
+  **`log_lines()` の途中読み取り失敗だけは未着手**として commit に明記した (19 巡目で判断する)
 - [ ] **指摘を生成側の癖として潰す** — 14〜17 巡の 16 件は 5 クラスに収まる。各クラスと、
   それを産む私の書き方:
 
