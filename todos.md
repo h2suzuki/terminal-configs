@@ -78,6 +78,14 @@ Exit Criteria:
 - [ ] **発注書の規約適合を発注スクリプト内で deterministic に検査する** — **方針確定 (2026-08-12・ユーザー判断)**。発注は結局スクリプト実行になるので、LLM の敵対レビューに頼らず**スクリプト側で決定的に検査して、規約違反なら発注を拒否する**
   - 却下した案 2 つ: (a) 「codex-delegation skill が active でない限り codex-companion の Bash を止める」hook — gate の state が agent 単位で subagent から見えず詰んでいた。(b) 発注書を codex に敵対レビューさせる — LLM 判定は確率的で、決定的にできるものを LLM に投げるのは `writing-code` の「deterministic transform を LLM に投げるな」に反する
   - 検査すべき規約は codex-delegation skill に既にある (worktree 隔離 / `--write` の扱い / running[]-empty monitor 禁止 等)。これらを発注スクリプトの引数・発注文から機械的に判定する
+  - **起動そのものもスクリプトが担う**: 2026-08-12 の 2 回の発注で、起動側の失敗が 3 件出た。
+    (a) 同じ発注が 2 job 走り、報告書 path が衝突しかけた (先発は default model、後発が指定どおり)。
+    (b) `task --help` が flag と解されず task 本文として起動され、本線 checkout に無関係な job が
+    走った (read-only だったため実害なし)。(c) `--model` / `--effort` が job record に届かず、
+    default model で敵対レビューが走りかけた — 弱いレビューの「指摘ゼロ」は空の合格になる。
+    いずれも「発注書の内容」ではなく「起動の手つき」の失敗で、スクリプトが flag を固定し
+    起動の重複を弾けば決定的に消える。job record の `request.model` / `request.effort` が
+    指定と一致することを起動直後に検証するところまでを含める
   - 経緯: 2026-08-08 に発注〜監視ターンで codex-delegation skill を invoke せず、既存規約を再違反した
 - [x] 環境依存で緑になる test 2 件を、環境に依らず正しい結果を出すようにする — 2026-08-11 に両方修正
   - `test_non_repo_fails_open_with_diagnostic`: stderr の行数を数える assert をやめ、診断の件数を数えるようにした (本来の主張)。git stderr を 2 行に強制する test を追加して、件数が行数に追従しないことを pin
