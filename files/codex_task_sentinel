@@ -242,6 +242,8 @@ def job_record(record_path: str, job_id: str | None = None) -> dict | None:
     """The on-disk record, or None when it is there but unreadable — a corrupt
     record is an unknown outcome, not a quiet job."""
     try:
+        if not stat.S_ISREG(os.stat(record_path).st_mode):
+            return None  # fifo は open が書き手を待って戻らない
         with open(record_path, encoding="utf-8") as f:
             loaded = json.load(f)
     except OSError:
@@ -323,7 +325,11 @@ def log_lines(
     the memory this tool may use, and a verdict lost to MemoryError helps nobody.
     """
     try:
-        with open(log_path, encoding="utf-8", errors="replace") as f:
+        if not stat.S_ISREG(os.stat(log_path).st_mode):
+            raise OSError("not a regular file")  # fifo は open が書き手を待って戻らない
+        # byte で読む — 置換後の文字列長で数えると、 消費 byte と一致せず
+        # 上限が狂い、 未読を残したまま「全量を読んだ」 と扱いうる。
+        with open(log_path, "rb") as f:
             # 開いた時点の size を上限にする — 動く EOF を追うと、 追記が読みより
             # 速い log で読み終わらず、 期限確認にすら戻れない。
             budget = os.fstat(f.fileno()).st_size
@@ -332,13 +338,13 @@ def log_lines(
                 chunk = f.readline(min(MAX_LOG_LINE, budget))
                 if not chunk:
                     return
-                budget -= len(chunk.encode("utf-8", "replace"))
-                whole = chunk.endswith("\n")
+                budget -= len(chunk)
+                whole = chunk.endswith(b"\n")
                 if dropping:  # 長すぎる行の残り — 頭の 1 片だけを 1 行として扱う
                     dropping = not whole
                     continue
                 dropping = not whole
-                line = chunk.rstrip("\n")
+                line = chunk.rstrip(b"\n").decode("utf-8", "replace")
                 if line.strip():
                     yield line
     except FileNotFoundError:
@@ -459,7 +465,13 @@ def tree_age(root: str | None, now: float) -> float | None:
     for base, dirs, files in os.walk(root, onerror=unreadable_dir):
         dirs[:] = [d for d in dirs if d != ".git"]
         # 削除・rename・空 dir の作成は、 どの file の mtime にも残らず親 dir にだけ残る。
-        for path in (base, *(os.path.join(base, name) for name in files)):
+        # dirs も測る — 辿らない directory symlink は base として現れないので、
+        # files だけ見ていると entry 自体が走査から漏れる。
+        for path in (
+            base,
+            *(os.path.join(base, name) for name in dirs),
+            *(os.path.join(base, name) for name in files),
+        ):
             # lstat で entry 自身を測る — getmtime は link を辿るので、 tree の外の
             # 頻繁に更新される target が job の活動として数えられてしまう。
             try:
@@ -594,12 +606,13 @@ def artifact_ready(
     # 保持するのは末尾だけなので、 「どこかに中身があったか」 は読みながら覚えておく。
     seen_content = False
     try:
+        # 種別は open の前に見る — fifo は open 自体が書き手を待って戻らない。
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            return None
         # 本文と鮮度は同じ descriptor の同じ瞬間から取る — path で stat し直すと、
         # 置換された別 inode の mtime が古い本文の完了 token と組になりうる。
         with open(path, "rb") as f:
             before = os.fstat(f.fileno())
-            if not stat.S_ISREG(before.st_mode):
-                return None  # fifo 等は EOF を待つと戻らない — 読めないものとして扱う
             # 全量を持つと巨大な成果物ひとつで監視が MemoryError で終わる。 decode は
             # 先頭から通し、 保持するのは末尾だけ — 途中の不正 byte も見逃さない。
             # 読む量は開いた時点の size まで — 動く EOF を追うと読み終わらない。
@@ -828,7 +841,17 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         sleep_until(deadline, args.poll_seconds)
     record_path, log = found[0]
     jobs_dir = os.path.dirname(record_path)
+    last_report: tuple[str, str] | None = None
     while True:
+        # sleep から戻った時点で期限なら、 新しい poll を始めない — 期限後の状態から
+        # 出た verdict が timeout に勝ってしまう。 どの sleep から来てもここを通る。
+        if last_report is not None and deadline_reached(deadline):
+            print(
+                f"timeout: no terminal verdict within {int(args.timeout_seconds)}s "
+                f"(record says {last_report[0]})"
+            )
+            print(last_report[1])
+            return EXIT_TIMEOUT
         now = time.time()
         # Scope the baseline to this job's own workspace: a slow neighbour must not
         # raise the bar here (a foreign 3600s gap once hid a two-hour stall). Read
@@ -968,30 +991,23 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 )
             )
             return code
+        last_report = (
+            recorded,
+            evidence(
+                args.job_id,
+                record or {},
+                log,
+                age,
+                tree,
+                threshold,
+                baseline,
+                args.artifact,
+                ready,
+                unfinished,
+                tail,
+            ),
+        )
         sleep_until(deadline, args.poll_seconds)
-        if deadline_reached(deadline):
-            # 期限後に始めた poll の verdict は timeout に勝ってしまう — 起きた時点で
-            # 期限なら、 直前の一貫した snapshot を根拠に exit 7 で閉じる。
-            print(
-                f"timeout: no terminal verdict within {int(args.timeout_seconds)}s "
-                f"(record says {recorded})"
-            )
-            print(
-                evidence(
-                    args.job_id,
-                    record or {},
-                    log,
-                    age,
-                    tree,
-                    threshold,
-                    baseline,
-                    args.artifact,
-                    ready,
-                    unfinished,
-                    tail,
-                )
-            )
-            return EXIT_TIMEOUT
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1547,6 +1563,71 @@ class WatchTest(unittest.TestCase):
             self.assertFalse(scan_log(log)[2])
             self.assertIsNone(longest_silence(log))
         self.assertEqual(seen, [1])
+
+    def test_the_discarded_path_also_stops_at_the_deadline(self):
+        """sleep が 2 箇所ある — 片方だけ期限確認を置くと、もう片方が素通りする。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-live", "running", log_age=900.0)
+        args = self._watch_args(
+            root, "task-live", timeout_seconds=0.03, poll_seconds=0.01, trust_log=True
+        )
+        # 1 回目は一貫、 2 回目以降は毎回 changed になり破棄 path の sleep を通る。
+        ages = itertools.chain([5.0, 5.0], itertools.cycle([900.0, 5.0]))
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".tree_age", lambda *a: next(ages)),
+        ):
+            self.assertEqual(watch(args), EXIT_TIMEOUT)
+
+    def test_the_log_budget_counts_bytes_not_replacements(self):
+        """置換後の文字数で数えると消費 byte と一致せず、末尾を落として全量扱いになる。"""
+        _root, _rec, log = self._state("ws", "task-x", "running")
+        with open(log, "wb") as f:
+            # 不正 byte は 1 byte だが U+FFFD は 3 byte — 置換後で数えると上限が膨らむ。
+            f.write(b"[2026-08-09T00:00:00.000Z] " + b"\xff" * 300 + b"\n")
+            f.write(b"[2026-08-09T00:00:01.000Z] last\n")
+        self.assertIn("last", "\n".join(log_lines(log)))
+
+    def test_no_reader_opens_a_special_file(self):
+        """open が書き手を待つのは成果物だけの話ではない — log も record も同じ。"""
+        from unittest import mock
+
+        fake = os.stat_result((stat.S_IFIFO | 0o644, 0, 0, 1, 0, 0, 0, 0, 0, 0))
+        opened = []
+        with (
+            mock.patch("os.stat", lambda *a, **k: fake),
+            mock.patch("builtins.open", lambda *a, **k: opened.append(1)),
+        ):
+            self.assertEqual(list(log_lines("/any/job.log")), [])
+            self.assertIsNone(job_record("/any/job.json"))
+        self.assertEqual(opened, [])
+
+    def test_a_fifo_deliverable_does_not_block_on_open(self):
+        """fifo は open 自体が書き手を待つ — 種別は open の前に見る。"""
+        from unittest import mock
+
+        fake = os.stat_result((stat.S_IFIFO | 0o644, 0, 0, 1, 0, 0, 0, 0, 0, 0))
+        opened = []
+        with (
+            mock.patch("os.stat", lambda *a, **k: fake),
+            mock.patch("builtins.open", lambda *a, **k: opened.append(1)),
+        ):
+            self.assertIsNone(artifact_ready("/any/fifo", "TOKEN", 0.0))
+        self.assertEqual(opened, [])
+
+    def test_a_directory_symlink_is_measured_as_an_entry(self):
+        """辿らない directory symlink は base に現れない — files だけでは漏れる。"""
+        outside = tempfile.mkdtemp()
+        root = tempfile.mkdtemp()
+        os.symlink(outside, os.path.join(root, "linked"))
+        os.utime(root, (0, 0))
+        age = tree_age(root, time.time())
+        if age is None:
+            self.fail("走査不能と判定された")
+        self.assertLess(age, 5.0)  # link 作成は今の活動
 
     def test_waking_at_the_deadline_does_not_start_another_poll(self):
         """期限後に始めた poll の verdict は timeout に勝つ — 起きた時点で閉じる。"""
