@@ -42,7 +42,6 @@ codex (gpt-5.6-sol / xhigh) レビュー指摘の是正。deploy 前に少なく
 - **model source の一本化 — 却下済み (2026-08-12・ユーザー判断)。再提案しないこと**。`_current_turn()` は使えない: memory_surface は UserPromptSubmit hook で、その時点では当該ターンの assistant 応答がまだ存在せず turn が成立しない。ゆえに `_resolve_model()` が statusline cache を先に見る現行構造が正しい。この結論は過去に一度出ており、本 session で私が蒸し返した
   - 私が「両者が食い違った実例は 1 件もない」と書いたのは監査の受け売りで誤り。実測すると本 session で `statusline=claude-opus-5[1m]` / `transcript=claude-opus-5` と食い違っている。ただし `_normalize_model` が `[1m]` を畳むので解決結果は同一 (`CONTEXT_WINDOW_SUFFIX = \[\d+[kmg]\]` は数字+k/m/g のみ畳み、`[safety-eval]` 等は畳まない)
 - [x] **検索に時間上限が無い**: 元 probe の subprocess 20 秒 watchdog を失い、例外 catch では hang に効かず Stop 全体が止まりうる状態だった → `_bounded()` (daemon thread + `join(20s)`) 経由で呼ぶ。返らなくても None で fail-open し、居残った thread は Stop の終了を待たせない
-- [ ] **失敗したら毎回、過去の教訓を横断検索する**: skill には書いたが hook は tool failure を観測しない。**要件変更 (2026-08-12・ユーザー判断): 「2 回目で起動」をやめ、失敗のたびに毎回起動する** — 2 回待つ理由が無い。current turn の tool_result 失敗を検知したら `search_unfiltered()` を回し、mute された候補も含めて提示する
 
 ### codex_task_sentinel: 敵対レビューの収束と上流依存 1 件
 
@@ -89,8 +88,10 @@ Exit Criteria:
 - [x] 実 session で open Task を残した wind-down に inject + block が発火し、todos.md 転記 + close で通過することを確認 — **2026-08-08 04:26 に full loop を live 観測**: ユーザー発言「セッションを閉じます」に対し UserPromptSubmit で inject (open Task #7 を列挙) → ターン終了時に stop_checks が exit 2 で block (#7 を名指し) → todos.md へ転記済みのうえ Task を close して通過。以下は経緯: 2026-08-07 **inject は実 session で live 発火を観測** (ユーザーの「セッションは終わります」prompt に対し UserPromptSubmit で open Task 1 件を列挙、clean tree ゆえ未コミット節は出ず = 偽陽性修正も live 確認)。block 側は下記 shadow 欠陥を修正済 (40f89e8)。deploy 完了・canonical と diff 一致を確認済 (2026-08-07 ユーザー実行) で、deployed 版が実 transcript から人間 prompt を復元し harness entry 14 件を skip することも確認。残るは **live block の観測のみ** (実装は 3a6a2c5 で完了・deploy 済)。ユーザー指摘により設計から作り直した: Stop payload には prompt が無いため transcript を遡っていたが、これをやめ **prompt を受け取る UserPromptSubmit hook 側で判定し session 単位の控えに記録**、Stop 側はそれを読むだけにした。未処理項目は従来どおり Task store + mytask の両対応。transcript を読まなくなったので下記 2 段の不発原因は原因ごと消滅し、widen-once (75de34b) も削除。通し試験で「合図なし→素通り / 合図あり→block / 通常発言で上書き→素通り」を確認、deploy 後は本番 hook が実際に控えを書くことも確認済 (04:11)。
   - 旧原因の記録 (再発時の手がかり): (1) harness 生成 entry が人間 prompt を shadow、(2) `_load_tail` が末尾 128KB しか読まず長 session で人間 prompt に届かない、(3) `<system-reminder>` も harness 生成だが roster 未収載だった
 
-- [ ] **発注書を発注先に敵対レビューさせてから発注する** — **方針変更 (2026-08-12・ユーザー判断)**。当初は「codex-delegation skill が active でない限り codex-companion の Bash を止める」という hook 案だったが、gate の state が agent 単位で subagent から見えないという罠があり詰んでいた。代わりに **発注書そのものを発注先 (codex) に敵対レビューさせ、規約に従っていなければ突き返す**。発注前に規約違反が発注先から返ってくるので、こちらの skill invoke 状態に依存しない
-  - 経緯: 2026-08-08 に発注〜監視ターンで codex-delegation skill を invoke せず、既存規約 (running[]-empty monitor 禁止) を再違反した
+- [ ] **発注書の規約適合を発注スクリプト内で deterministic に検査する** — **方針確定 (2026-08-12・ユーザー判断)**。発注は結局スクリプト実行になるので、LLM の敵対レビューに頼らず**スクリプト側で決定的に検査して、規約違反なら発注を拒否する**
+  - 却下した案 2 つ: (a) 「codex-delegation skill が active でない限り codex-companion の Bash を止める」hook — gate の state が agent 単位で subagent から見えず詰んでいた。(b) 発注書を codex に敵対レビューさせる — LLM 判定は確率的で、決定的にできるものを LLM に投げるのは `writing-code` の「deterministic transform を LLM に投げるな」に反する
+  - 検査すべき規約は codex-delegation skill に既にある (worktree 隔離 / `--write` の扱い / running[]-empty monitor 禁止 等)。これらを発注スクリプトの引数・発注文から機械的に判定する
+  - 経緯: 2026-08-08 に発注〜監視ターンで codex-delegation skill を invoke せず、既存規約を再違反した
 - [x] 環境依存で緑になる test 2 件を、環境に依らず正しい結果を出すようにする — 2026-08-11 に両方修正
   - `test_non_repo_fails_open_with_diagnostic`: stderr の行数を数える assert をやめ、診断の件数を数えるようにした (本来の主張)。git stderr を 2 行に強制する test を追加して、件数が行数に追従しないことを pin
   - `test_corpus_against_current_adapter`: corpus は実 session 履歴から採取するもので repo に入れるべきでないと判断し、tracked 化ではなく不在時 `skipTest` を選択。dir を退避して skip、戻して pass を実測
@@ -107,3 +108,11 @@ Exit Criteria:
   - よって本 entry の教訓を代替する skill / hook は存在せず、retire ではなく欠損として扱うのが妥当。なお本 session で intent-without-task から疑問形を除外して発火を弱めているため、この discipline の被覆は以前より薄い
 
 Work file: `last-session-handoff.md` の同名 section
+
+### 失敗時に過去の教訓を自動で引く (優先度低)
+
+Goal: tool 失敗のたびに横断検索を起動し、mute された教訓も含めて提示する。
+
+Exit Criteria:
+
+- [ ] **失敗したら毎回、過去の教訓を横断検索する**: skill には書いたが hook は tool failure を観測しない。**要件変更 (2026-08-12・ユーザー判断): 「2 回目で起動」をやめ、失敗のたびに毎回起動する** — 2 回待つ理由が無い。current turn の tool_result 失敗を検知したら `search_unfiltered()` を回し、mute された候補も含めて提示する
