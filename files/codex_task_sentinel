@@ -242,10 +242,8 @@ def job_record(record_path: str, job_id: str | None = None) -> dict | None:
     """The on-disk record, or None when it is there but unreadable — a corrupt
     record is an unknown outcome, not a quiet job."""
     try:
-        if not stat.S_ISREG(os.stat(record_path).st_mode):
-            return None  # fifo は open が書き手を待って戻らない
-        with open(record_path, encoding="utf-8") as f:
-            loaded = json.load(f)
+        with open_regular(record_path) as f:
+            loaded = json.loads(f.read().decode("utf-8"))
     except OSError:
         return None
     except (ValueError, RecursionError):
@@ -267,6 +265,14 @@ def job_record(record_path: str, job_id: str | None = None) -> dict | None:
     for field in ("startedAt", "createdAt"):
         if loaded.get(field) is not None and stamp_epoch(loaded[field]) is None:
             return None
+    # worker が拾うのは作成後 — 逆なら record が壊れており、 古い方を鮮度の下限に
+    # 使うと前 run の成果物を今回のものとして受理する。
+    began, made = (
+        stamp_epoch(loaded.get("startedAt")),
+        stamp_epoch(loaded.get("createdAt")),
+    )
+    if began is not None and made is not None and began < made:
+        return None
     # 空 status は alive と読まれて stall 判定まで進む。 file 名だけで id を信じると、
     # 別 job の状態をこの job の verdict にできる。
     if not (isinstance(loaded.get("status"), str) and loaded["status"].strip()):
@@ -274,6 +280,24 @@ def job_record(record_path: str, job_id: str | None = None) -> dict | None:
     if job_id is not None and loaded.get("id") != job_id:
         return None
     return loaded
+
+
+def open_regular(path: str):
+    """A read handle on a regular file, checked on the descriptor that gets read.
+
+    O_NONBLOCK keeps a fifo from parking the open, and fstat asks the descriptor
+    rather than the name a second time — swapping the path between a stat and an
+    open is exactly how a check on the name gets bypassed.
+    """
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError(f"{path} is not a regular file")
+        os.set_blocking(descriptor, True)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return os.fdopen(descriptor, "rb")
 
 
 def record_gone(record_path: str) -> bool:
@@ -325,11 +349,9 @@ def log_lines(
     the memory this tool may use, and a verdict lost to MemoryError helps nobody.
     """
     try:
-        if not stat.S_ISREG(os.stat(log_path).st_mode):
-            raise OSError("not a regular file")  # fifo は open が書き手を待って戻らない
         # byte で読む — 置換後の文字列長で数えると、 消費 byte と一致せず
         # 上限が狂い、 未読を残したまま「全量を読んだ」 と扱いうる。
-        with open(log_path, "rb") as f:
+        with open_regular(log_path) as f:
             # 開いた時点の size を上限にする — 動く EOF を追うと、 追記が読みより
             # 速い log で読み終わらず、 期限確認にすら戻れない。
             budget = os.fstat(f.fileno()).st_size
@@ -606,12 +628,9 @@ def artifact_ready(
     # 保持するのは末尾だけなので、 「どこかに中身があったか」 は読みながら覚えておく。
     seen_content = False
     try:
-        # 種別は open の前に見る — fifo は open 自体が書き手を待って戻らない。
-        if not stat.S_ISREG(os.stat(path).st_mode):
-            return None
         # 本文と鮮度は同じ descriptor の同じ瞬間から取る — path で stat し直すと、
         # 置換された別 inode の mtime が古い本文の完了 token と組になりうる。
-        with open(path, "rb") as f:
+        with open_regular(path) as f:
             before = os.fstat(f.fileno())
             # 全量を持つと巨大な成果物ひとつで監視が MemoryError で終わる。 decode は
             # 先頭から通し、 保持するのは末尾だけ — 途中の不正 byte も見逃さない。
@@ -666,7 +685,8 @@ def cancel_command(job_id: str, root: str | None) -> str:
     if companion is None:
         # 在りかを言えないなら、 動かない command を印字するより言えないと言う。
         return f"codex plugin's companion script not found — cancel {job_id} from the plugin"
-    node = f"node {shlex.quote(companion)} cancel {job_id} --json"
+    # job id も quote する — 印字した command はそのまま shell に貼られる。
+    node = f"node {shlex.quote(companion)} cancel {shlex.quote(job_id)} --json"
     return f"(cd {shlex.quote(root)} && {node})" if root else node
 
 
@@ -773,6 +793,7 @@ def evidence(
     ready: bool | None = False,
     unfinished: list[str] | None = None,
     tail: list[str] | None = None,
+    whole_log: bool = True,
 ) -> str:
     """Everything the verdict rests on, so no follow-up investigation is needed."""
     root = record.get("workspaceRoot")
@@ -789,7 +810,9 @@ def evidence(
     made = f"{state} {artifact}" if artifact else "指定なし"
     lines = [
         f"  job    : {job_id} status={record.get('status') or '不明'} root={root or '不明'}",
-        f"  無音   : {quiet}{versus} / しきい値 {int(threshold)}s",
+        # 読み切れなかった view の静穏と tail を、 完全なものとして見せない。
+        f"  無音   : {quiet}{versus} / しきい値 {int(threshold)}s"
+        + ("" if whole_log else " (log を最後まで読めず)"),
         # None は 「静穏」 ではなく 「読めなかった」 — headline と強さを揃える。
         f"  ツリー : {'不明 (workspaceRoot を読めないか対象 file なし)' if tree is None else f'最終書き込み {int(tree)}s 前'}",
         f"  成果物 : {made}",
@@ -840,11 +863,19 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             return EXIT_NEVER_REGISTERED
         sleep_until(deadline, args.poll_seconds)
     record_path, log = found[0]
+    if deadline_reached(deadline):
+        # 登録待ちを抜けた時点で期限なら、 1 度も観測せずに新しい poll を始めない。
+        print(
+            f"timeout: registered but not observed within {int(args.timeout_seconds)}s"
+        )
+        print(f"  job    : {args.job_id} record={record_path}")
+        return EXIT_TIMEOUT
     jobs_dir = os.path.dirname(record_path)
     last_report: tuple[str, str] | None = None
     while True:
-        # sleep から戻った時点で期限なら、 新しい poll を始めない — 期限後の状態から
-        # 出た verdict が timeout に勝ってしまう。 どの sleep から来てもここを通る。
+        # 期限に達していたら新しい poll を始めない — 期限後の状態から出た verdict が
+        # timeout に勝ってしまう。 一貫した poll が 1 度も無い場合は下の破棄分岐が
+        # 理由付きの exit 14 を返すので、 ここは判定を持てた場合だけを引き受ける。
         if last_report is not None and deadline_reached(deadline):
             print(
                 f"timeout: no terminal verdict within {int(args.timeout_seconds)}s "
@@ -988,6 +1019,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     ready,
                     unfinished,
                     tail,
+                    whole_log,
                 )
             )
             return code
@@ -1005,6 +1037,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 ready,
                 unfinished,
                 tail,
+                whole_log,
             ),
         )
         sleep_until(deadline, args.poll_seconds)
@@ -1558,7 +1591,7 @@ class WatchTest(unittest.TestCase):
 
         _root, _rec, log = self._state("ws", "task-x", "running")
         seen = []
-        with mock.patch("builtins.open", side_effect=PermissionError):
+        with mock.patch("os.open", side_effect=PermissionError):
             list(log_lines(log, lambda: seen.append(1)))
             self.assertFalse(scan_log(log)[2])
             self.assertIsNone(longest_silence(log))
@@ -1591,32 +1624,61 @@ class WatchTest(unittest.TestCase):
             f.write(b"[2026-08-09T00:00:01.000Z] last\n")
         self.assertIn("last", "\n".join(log_lines(log)))
 
-    def test_no_reader_opens_a_special_file(self):
-        """open が書き手を待つのは成果物だけの話ではない — log も record も同じ。"""
-        from unittest import mock
+    def test_registering_at_the_deadline_does_not_start_a_poll(self):
+        """登録待ちを抜けた時点で期限なら、 一度も観測せずに verdict を作らない。"""
+        import io
+        from contextlib import redirect_stdout
 
-        fake = os.stat_result((stat.S_IFIFO | 0o644, 0, 0, 1, 0, 0, 0, 0, 0, 0))
-        opened = []
-        with (
-            mock.patch("os.stat", lambda *a, **k: fake),
-            mock.patch("builtins.open", lambda *a, **k: opened.append(1)),
-        ):
-            self.assertEqual(list(log_lines("/any/job.log")), [])
-            self.assertIsNone(job_record("/any/job.json"))
-        self.assertEqual(opened, [])
+        root, _rec, _log = self._state("ws", "task-done", "completed", log_age=900.0)
+        args = self._watch_args(root, "task-done", timeout_seconds=1e-9)
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(watch(args), EXIT_TIMEOUT)
 
-    def test_a_fifo_deliverable_does_not_block_on_open(self):
-        """fifo は open 自体が書き手を待つ — 種別は open の前に見る。"""
-        from unittest import mock
+    def test_a_record_started_before_it_was_created_is_corrupt(self):
+        """worker が拾うのは作成後 — 逆順の record で古い方を鮮度の下限にしない。"""
+        p = os.path.join(tempfile.mkdtemp(), "task-x.json")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(
+                '{"id": "task-x", "status": "running", '
+                '"createdAt": "2026-08-08T12:00:00Z", '
+                '"startedAt": "2026-08-08T11:00:00Z"}'
+            )
+        self.assertIsNone(job_record(p))
 
-        fake = os.stat_result((stat.S_IFIFO | 0o644, 0, 0, 1, 0, 0, 0, 0, 0, 0))
-        opened = []
-        with (
-            mock.patch("os.stat", lambda *a, **k: fake),
-            mock.patch("builtins.open", lambda *a, **k: opened.append(1)),
-        ):
-            self.assertIsNone(artifact_ready("/any/fifo", "TOKEN", 0.0))
-        self.assertEqual(opened, [])
+    def test_a_partial_log_view_says_so_in_the_evidence(self):
+        """静穏と tail を、 読み切れなかった view のものだと分かる形で出す。"""
+        _root, _rec, log = self._state("ws", "task-x", "running")
+        whole = evidence("task-x", {"status": "running"}, log, 5.0, 5.0, 420.0, None)
+        partial = evidence(
+            "task-x", {"status": "running"}, log, 5.0, 5.0, 420.0, None, whole_log=False
+        )
+        self.assertNotIn("最後まで読めず", whole)
+        self.assertIn("最後まで読めず", partial)
+
+    def test_the_cancel_command_quotes_the_job_id(self):
+        """印字した command はそのまま shell へ貼られる — id も quote する。"""
+        self.assertIn("'task-x; rm -rf /'", cancel_command("task-x; rm -rf /", None))
+
+    def test_no_reader_takes_a_special_file_for_an_empty_one(self):
+        """書き手のいない fifo は空ではなく読めない — 実物で確かめる。"""
+        import threading
+
+        pipe = os.path.join(tempfile.mkdtemp(), "job.log")
+        os.mkfifo(pipe)
+        seen, got = [], []
+
+        def read_it() -> None:
+            got.append(list(log_lines(pipe, lambda: seen.append(1))))
+            got.append(job_record(pipe))
+            got.append(artifact_ready(pipe, "TOKEN", 0.0))
+
+        worker = threading.Thread(target=read_it, daemon=True)
+        worker.start()
+        # 退行は hang でなく失敗として出す — 止まる test は suite ごと道連れにする。
+        worker.join(10.0)
+        self.assertFalse(worker.is_alive(), "fifo の open で止まった")
+        self.assertEqual(got, [[], None, None])
+        self.assertEqual(seen, [1])  # 空 log ではなく読取失敗として報告される
 
     def test_a_directory_symlink_is_measured_as_an_entry(self):
         """辿らない directory symlink は base に現れない — files だけでは漏れる。"""
@@ -2195,9 +2257,10 @@ class WatchTest(unittest.TestCase):
             f.write("a different length entirely\n")
         real, calls = os.fstat, []
         with mock.patch(
+            # open_regular の 1 回目は種別判定用 — 本文前後の 2 回目と 3 回目を食い違わせる。
             "os.fstat",
             lambda fd: (
-                real(fd) if calls.append(fd) or len(calls) == 1 else os.stat(other)
+                real(fd) if calls.append(fd) or len(calls) <= 2 else os.stat(other)
             ),
         ):
             self.assertFalse(artifact_ready(p, "REPORT_COMPLETE", time.time() - 60))
@@ -2273,7 +2336,7 @@ class WatchTest(unittest.TestCase):
         p = os.path.join(tempfile.mkdtemp(), "report.md")
         with open(p, "w", encoding="utf-8") as f:
             f.write("body\nREPORT_COMPLETE\n")
-        with mock.patch("builtins.open", side_effect=PermissionError):
+        with mock.patch("os.open", side_effect=PermissionError):
             self.assertIsNone(artifact_ready(p, "REPORT_COMPLETE", time.time() - 60))
         self.assertEqual(
             self._code("completed", 5.0, None, tree=400.0), EXIT_UNVERIFIABLE
@@ -2522,9 +2585,9 @@ class WatchTest(unittest.TestCase):
         with open(log, "w", encoding="utf-8") as f:
             f.write("[2026-08-08T22:00:00.000Z] Running command: cargo test --all\n")
         opens = []
-        real = open
+        real = os.open
         with mock.patch(
-            "builtins.open",
+            "os.open",
             lambda p, *a, **k: (opens.append(p), real(p, *a, **k))[1],
         ):
             pending, tail, _whole = scan_log(log)
