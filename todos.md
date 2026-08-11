@@ -96,9 +96,9 @@ Goal: 疑問文の誤 block と稼働中 worktree の誤提案が、実 session 
 
 Exit Criteria:
 
-- [ ] deploy (ユーザー手動・root 要): `files/claude_managed-hooks/stop_checks.py` → `/etc/claude-code/hooks/stop_checks.py` (0755)
+- [x] deploy (ユーザー手動・root 要): `files/claude_managed-hooks/stop_checks.py` → `/etc/claude-code/hooks/stop_checks.py` (0755) — 2026-08-11 23:54:41 に実施、`diff -q` 一致・mode 0755・3 修正の marker 9 箇所を確認
 - [ ] deploy 後の実 session で「〜ますか?」の質問が block されないことを観測する
-- [ ] deploy 前は旧版が動くため、質問形で終わるターンは誤 block が続く
+- [ ] deploy 後の実 session で、稼働中 codex job の worktree が削除候補に出ないことを観測する
 
 ### worktree-cleanup が稼働中の codex worktree を削除候補にする
 
