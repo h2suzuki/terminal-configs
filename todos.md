@@ -139,8 +139,8 @@ Exit Criteria:
   - upsert 経路自体は健全: orphan 1 件に `--upsert` を実行すると rc=0 で index に載る (検証後 `--delete` で baseline 67 に戻した)。原因は権限でも parse でもない
   - **機序を code で確定**: `_list_active_entries()` (`memory_surface.py:466-486`) は **MEMORY.md の `- [title](path.md)` link だけ**を active とみなし、`_main_rebuild()` は当該 scope を `DELETE` で全消ししてから listed path のみ再投入する (`:1164-1180`)。つまり **MEMORY.md に link されていない entry は、次の `--rebuild` で無言で index から消える**
   - 実害の実例: `feedback_turn_end_continuation_claim.md` は 2026-08-06 19:14〜08-07 17:17 に **32 回 emit** し 08-08 01:05 まで mismatch を記録していた = 当時は index にいた。その後 rebuild で消え、以降 0 件。同名 skill も無いので retire ではない
-- [ ] deploy (ユーザー手動): `files/claude_user-hooks/memory_surface.py` → `~/.claude/hooks/memory_surface.py`
-- [ ] `feedback_turn_end_continuation_claim.md` を MEMORY.md に載せ直すか retire するかを決める (内容判断・要ユーザー)
+- [x] deploy (ユーザー手動): `files/claude_user-hooks/memory_surface.py` → `~/.claude/hooks/memory_surface.py` — 2026-08-12 00:33 に deploy、`diff` 0 hunk 一致。私が渡した `install -m 0644` が原因で一度 0644 になり裸実行が rc=126 で死んだが、`chmod 0755` で復旧 (裸実行 rc=0 を確認)
+- [x] `feedback_turn_end_continuation_claim.md` を MEMORY.md に載せ直すか retire するかを決める (内容判断・要ユーザー) — 2026-08-12 に復帰。MEMORY.md へ追記 (40 行) + `--upsert` で `entries_fts` 68 件。deploy 済 hook で `--rebuild` すると `rebuilt 33/33` かつ `dropped` 行が消え、roster 経由で落ちなくなったことを確認。tag は観測どおり `fable-5` のまま
   - 判断材料 (除外ゼロ走査): `継続します` / `自走` / `再開の種` / `continuation-claim` は user skill 33 本・managed skill 30 本・3 つの CLAUDE.md・repo の `files/` 全体で **0 hit**。`遂行宣言` は `stop_checks.py` の intent-without-task family にのみ存在するが、その是正は「Task を登録せよ」であって「未来形の主張をするな」ではない
   - よって本 entry の教訓を代替する skill / hook は存在せず、retire ではなく欠損として扱うのが妥当。なお本 session で intent-without-task から疑問形を除外して発火を弱めているため、この discipline の被覆は以前より薄い
 
