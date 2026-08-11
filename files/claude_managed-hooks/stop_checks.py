@@ -749,8 +749,13 @@ INTENT_DECLARE_RE = re.compile(
 )
 
 # --- Pattern: euphemism-for-error (block) ---
-# 「誤解を招く」 は自分の誤りを相手の読み方の問題にすり替える言い換え。
-EUPHEMISM_RE = re.compile("誤解")
+# 自分の発言を 「誤解を招く X」 と評した時だけ捕まえる。 設計対象 (命名・ラベル・doc) への
+# 同じ評価は正当な技術用語ゆえ落とす (実 corpus 8064 件で裸の 「誤解」 は 21 hit・うち 17 が正当)。
+EUPHEMISM_RE = re.compile(
+    r"誤解を(?:招く|招き(?:やすい|うる|かねない)|生む)(?:ような)?"
+    r"(?:記述|表現|書き方|説明|言い方|文言|記載|報告|回答|answer|framing)"
+    r"|誤解を招きました|誤解させ(?:まし|てしまい)"
+)
 
 # --- Pattern: claim-without-evidence (warning, no block) ---
 # 「無い」系だけでなく「できない / 書かれていない」系も対象 (実測 2026-08-08: 探索範囲を確かめずに
@@ -2271,17 +2276,30 @@ class EnforcementFamilyTest(unittest.TestCase):
         self.assertFalse(any("intent-without-task" in b for b in blk))
 
     def test_euphemism_for_error_blocks(self):
-        """「誤解を招く」 は誤りを相手の読み方の問題にすり替える婉曲表現。"""
+        """自分の発言を 「誤解を招く X」 と評すのは、 誤りを相手の読み方にすり替える言い換え。"""
         for text in (
             "誤解を招く記述でした。",
             "誤解を招きやすい書き方でした。",
-            "誤解されるかもしれません。",
-            "その点は誤解です。",
+            "誤解を招くような説明でした。",
+            "誤解を招きました。",
+            "誤解させてしまいました。",
         ):
             with self.subTest(text=text):
                 code, _w, blk = self._c(text)
                 self.assertEqual(code, 2)
                 self.assertTrue(any("euphemism-for-error" in b for b in blk))
+
+    def test_misleading_design_artifact_is_not_blocked(self):
+        """設計対象への同じ評価は正当な技術用語 — 実 corpus の多数派はこちら。"""
+        for text in (
+            "誤解を招く「内」を廃止し、全銘柄中 N 件と表示します。",
+            "create 寄りの名前で誤解を招くので rename を提案します。",
+            "誤解が残っていれば指摘してください。",
+            "次に読む人が両者を矛盾と誤解することはありません。",
+        ):
+            with self.subTest(text=text):
+                blk = self._blk(text)
+                self.assertFalse(any("euphemism-for-error" in b for b in blk))
 
     def test_plain_admission_is_not_blocked(self):
         """名指しの誤り認定は通す — 婉曲表現だけを捕まえる。"""
