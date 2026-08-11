@@ -111,6 +111,10 @@ Exit Criteria:
   - **着手前に解く設計上の罠** (cross-check readback で判明): 発注は Bash しか持たない codex-rescue subagent 内で起きるが、`skill_reminder_gate` の skill-active state は agent 単位 (`agent_id or "main"`)。素直に相乗りすると skill を invoke できない subagent が恒久 deny になり発注不能。判定を親 session の state で行うか subagent を対象外にするかを先に決める
   - 相乗り先候補は 2 つ: `skill_reminder_gate.py` (編集前 gate) と `codex_worktree_gate.py` (既に codex Bash を検査済・検出面を持つ)。後者が有力
   - 射程を明示する: 今回の違反は監視側で発生。既存 codex hook は `status` / `cancel` / `result` を素通ししているので、監視系を含めるか決めてから実装する
+- [ ] 環境依存で緑になる test 2 件を、環境に依らず正しい結果を出すようにする — 2026-08-11 に両者 pass するが、**どちらも記録された脆弱性は未修正で、現環境でたまたま再現しないだけ**
+  - `stop_checks.WorktreeCleanupTest.test_non_repo_fails_open_with_diagnostic`: stderr を 1 行と決め打つ assert (`files/claude_managed-hooks/stop_checks.py:3176`) は健在。現 TMPDIR が repo と同 filesystem なので git stderr が 1 行に収まっているだけ
+  - `test_git_corpus.GitCorpusTest.test_corpus_against_current_adapter`: 入力 corpus `drafts/git-corpus/unique-git-commands.tsv` (実 git 履歴から採取した 4041 件) を読むが `drafts/` は `.gitignore:4` で除外。dir を退避して実行すると skip でなく FileNotFoundError で error する。ローカルに残っているから通っているだけ
+  - 対処は corpus を tracked にするか、不在時に `skipTest` するかの選択 **(要相談)**
 - [ ] index sync の失敗が不可視な設計を塞ぐ — 上の finding は解消したが、`memory_routing_gate.py` の sync が `--upsert` を stdout/stderr とも DEVNULL・`check=False` で呼び `_upsert_entry` も sqlite エラーを握り潰す構造は残る。同じ事故が再発しても気付けない (High の「観測できない」項目と同根なので併せて設計する)
 
 Work file: `last-session-handoff.md` の同名 section
