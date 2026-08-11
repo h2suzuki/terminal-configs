@@ -78,27 +78,6 @@ Exit Criteria:
   「手で record を開き直す」までは消えている
 
 
-### stop_checks の 2 修正を deploy して実運用で確認する
-
-Goal: 疑問文の誤 block と稼働中 worktree の誤提案が、実 session で起きなくなった状態にする。
-
-Exit Criteria:
-
-- [x] deploy (ユーザー手動・root 要): `files/claude_managed-hooks/stop_checks.py` → `/etc/claude-code/hooks/stop_checks.py` (0755) — 2026-08-11 23:54:41 に実施、`diff -q` 一致・mode 0755・3 修正の marker 9 箇所を確認
-- [x] deploy 後の実 session で「〜ますか?」の質問が block されないことを観測する — 2026-08-12 確認。deploy (23:54) 以降、質問で終えたターン 9 回に対し intent-without-task の発火は 0 件 (transcript 内の同名文字列は私の散文が hook の source を引用したもので、実発火は deploy 前の 14:26Z の 1 件のみ)
-- [x] deploy 後の実 session で、稼働中 codex job の worktree が削除候補に出ないことを観測する — 下記 worktree-cleanup 側で実機確認済
-
-### worktree-cleanup が稼働中の codex worktree を削除候補にする
-
-Goal: 実行中の作業を壊す削除提案を出さないようにする。
-
-Exit Criteria:
-
-- [x] codex job が走っている worktree に対し、削除候補として提案されないことを実機で確認する — 2026-08-12 実機確認。本 repo から linked worktree を実際に作り、実 state dir に `status=running` の job record を置いて **deploy 済** `stop_checks.py` の `_worktree_cleanup_warnings()` を呼ぶと当該 worktree への提案は **0 件**。同 record を `completed` に変えると **1 件**提案された。fixture (worktree・job record) は削除済み
-
-- [x] `stop_checks.py` の `_worktree_cleanup_warnings()` が「clean かつ本線の祖先」だけを見ており、その worktree を `workspaceRoot` とする codex job が running かどうかを見ていない。2026-08-08 の 2 回とも、codex がレビュー用 worktree で走っている最中に削除コマンドを提示した (成果物を書く前なので clean に見える)。提案どおり実行すると走行中の job の作業 root が消える。`~/.claude/plugins/data/codex-openai-codex/state/*/jobs/*.json` の `status=running` かつ `workspaceRoot` 一致を候補から除外する — `_codex_busy_roots()` で queued/running の作業 root を session 横断で集め realpath 一致で除外。test 4 件 (稼働中は非提案 / 別 session でも守る / 完了後は提案 / 他 tree は巻き添えにしない)
-- 残留リスク: crash した job の record が `running` のまま残ると、その worktree は恒久的に提案されなくなる。提案漏れは無害で誤削除は作業消失ゆえ、この非対称は安全側に倒している
-
 ## Medium
 
 ### Handoff 強化 + 言語 lint 機構の deploy と実運用確認
@@ -128,13 +107,3 @@ Exit Criteria:
   - よって本 entry の教訓を代替する skill / hook は存在せず、retire ではなく欠損として扱うのが妥当。なお本 session で intent-without-task から疑問形を除外して発火を弱めているため、この discipline の被覆は以前より薄い
 
 Work file: `last-session-handoff.md` の同名 section
-
-### court バグ guard (command + stop_checks/skill 配線)
-
-Goal: stray token (court/count/câu… と揺れる) + 行頭 invoke-leak を厳密パターンで捕捉し、court バグ汚染 (#76912 / #64108) を早期検知する。
-
-Exit Criteria:
-- [x] 検出方式を実データで確定 — 888 transcript 走査で 2 signature を FP ゼロ検証: stray-token 単独行 `(?m)^[ \t]*(court|count)[ \t]*$` / 行頭 invoke-leak `(?m)^[ \t]*<invoke name="`。token 固定でなく leaked XML を token 非依存で捕捉するのが要 (実バグ例 "câu")
-- [x] 実装 + test + commit — 02e3054 (command `files/claude_court_guard` 7 tests / stop_checks warning-only 55 tests / /my-tasks 自己チェック / 両 .sh に copy 行、独立再実行 OK)
-- [x] deploy 完了・配置検証 — 2026-07-13 ユーザー実行、`/usr/local/bin/claude_court_guard` PATH 動作・hooks/ 一致を確認
-- 既知 finding (低 pri): stop_checks の court チェックは生 `text` 対象で、fence 内に court パターンを書く session は理論上 FP。`stripped` 化は要検討 (実 corpus では 0 FP)
