@@ -81,10 +81,14 @@ ALIVE_STATUS = frozenset({"queued", "running"})
 BASELINE_STATUS = "completed"
 STALL_FLOOR_SECONDS = 420.0  # the skill's 7 min, used when history gives nothing larger
 STALL_BASELINE_FACTOR = 3.0
-LOG_TS = re.compile(r"^\[(\d{4}-\d\d-\d\dT[\d:.]+)Z\]")
+# 秒以降を緩く受けると、 本文の [.. 00:00:01:99Z] のような不正 stamp が event に化け、
+# 稼働中 command の start を偽の end で消してしまう。 runner はこの形しか書かない。
+LOG_TS = re.compile(r"^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?)Z\]")
 # A log line is an event line plus, at worst, one shortened command; a body that
 # runs longer than this is prose, and reading all of it only risks the verdict.
 MAX_LOG_LINE = 8192
+# 未完了 start の保持上限 — 実ログの最大は 3 件で、 これを超えるのは本文が作った偽 start。
+MAX_PENDING = 512
 
 EXIT_DONE = 0
 EXIT_DONE_HUNG = 3
@@ -195,15 +199,34 @@ def state_roots(explicit: str | None = None) -> list[str]:
     return list(dict.fromkeys(roots))
 
 
-def find_jobs(job_id: str, roots: list[str]) -> list[tuple[str, str]]:
-    """Every (record, log) pair carrying this id — more than one is an ambiguity, not a pick."""
+def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], bool]:
+    """Every (record, log) pair carrying this id, plus whether every root was readable.
+
+    glob reports a directory it may not enter exactly as it reports an empty one,
+    so an absent record and an unreadable branch would otherwise be the same
+    answer — and only one of them means the launch never took.
+    """
     found = []
+    complete = True
     for root in roots:
-        for record in sorted(
-            glob.glob(os.path.join(root, "*", "jobs", job_id + ".json"))
-        ):
+        try:
+            workspaces = sorted(os.listdir(root))
+        except FileNotFoundError:
+            continue  # 未作成の root は「無い」で正しい — 走査漏れではない
+        except OSError:
+            complete = False
+            continue
+        for workspace in workspaces:
+            record = os.path.join(root, workspace, "jobs", job_id + ".json")
+            try:
+                os.stat(record)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                complete = False
+                continue
             found.append((record, record[: -len(".json")] + ".log"))
-    return found
+    return found, complete
 
 
 def job_record(record_path: str) -> dict | None:
@@ -216,7 +239,14 @@ def job_record(record_path: str) -> dict | None:
         return None
     except ValueError:
         return None
-    return loaded if isinstance(loaded, dict) else None
+    if not isinstance(loaded, dict):
+        return None
+    # JSON は型を約束しない。 後段は status を文字列、 workspaceRoot を path として
+    # 扱うので、 違う型で来た record は読めなかったものとして exit 13 へ送る。
+    for field in ("status", "workspaceRoot", "errorMessage"):
+        if loaded.get(field) is not None and not isinstance(loaded[field], str):
+            return None
+    return loaded
 
 
 def file_stat(path: str | None) -> tuple[float, int] | None:
@@ -333,11 +363,14 @@ def pending_commands(lines: Iterator[str] | list[str]) -> list[str]:
     Ends are matched to starts by the command they name; the plugin shortens that
     text to 96 characters, so two long commands can share a key. An end matching
     nothing pending is dropped rather than allowed to cancel a running start.
+    Held to MAX_PENDING: a body can forge any number of starts, and each is short
+    enough to pass the per-line bound while the list itself grows without one.
     """
     pending: list[str] = []
     for line in event_lines(lines):
         if COMMAND_START.match(line):
-            pending.append(command_text(line))
+            if len(pending) < MAX_PENDING:
+                pending.append(command_text(line))
         elif COMMAND_END.match(line):
             text = command_text(line)
             for i in range(len(pending) - 1, -1, -1):
@@ -352,9 +385,22 @@ def command_may_be_running(lines: Iterator[str] | list[str]) -> bool:
     return bool(pending_commands(lines))
 
 
+def entry_mtime(path: str, now: float) -> float:
+    """A dangling symlink's own mtime; `now` only when the entry itself is gone.
+
+    getmtime follows the link, so a link whose target has been deleted raises the
+    same error as an entry that vanished mid-walk — and calling that one a write
+    now would report a tree with any stale symlink as forever active.
+    """
+    try:
+        return os.lstat(path).st_mtime
+    except OSError:
+        return now
+
+
 def tree_age(root: str | None, now: float) -> float | None:
     """Seconds since the newest write under the job's tree; None when unknowable."""
-    if not root or not os.path.isdir(root):
+    if not isinstance(root, str) or not root or not os.path.isdir(root):
         return None
     newest = None
     unreadable = False
@@ -369,7 +415,7 @@ def tree_age(root: str | None, now: float) -> float | None:
             try:
                 mtime = os.path.getmtime(os.path.join(base, name))
             except FileNotFoundError:
-                mtime = now  # 走査中に消えた = たった今の書き込みで、静穏の証拠ではない
+                mtime = entry_mtime(os.path.join(base, name), now)
             except OSError:
                 unreadable = True
                 continue
@@ -402,7 +448,9 @@ def longest_silence(log_path: str) -> float | None:
     return worst
 
 
-def baseline_silence(jobs_dir: str, exclude: str) -> float | None:
+def baseline_silence(
+    jobs_dir: str, exclude: str, now: float, settle_seconds: float = 0.0
+) -> float | None:
     """Longest quiet spell among jobs that completed in THIS workspace; None with no history.
 
     Scoped to one workspace on purpose: a slow job in an unrelated workspace
@@ -415,7 +463,13 @@ def baseline_silence(jobs_dir: str, exclude: str) -> float | None:
         record = job_record(record_path)
         if record is None or record.get("status") != BASELINE_STATUS:
             continue
-        quiet = longest_silence(record_path[: -len(".json")] + ".log")
+        peer_log = record_path[: -len(".json")] + ".log"
+        # completed と書かれてから最終 block が append されるまでの窓で読むと、
+        # その peer の本当の gap を欠いた低い baseline になる。 落ち着くまで数えない。
+        peer_age = heartbeat_age(peer_log, now)
+        if peer_age is None or peer_age < settle_seconds:
+            continue
+        quiet = longest_silence(peer_log)
         if quiet is not None and (worst is None or quiet > worst):
             worst = quiet
     return worst
@@ -462,8 +516,8 @@ def stamp_epoch(stamp: object) -> float | None:
 
 def artifact_ready(
     path: str | None, token: str | None, since: float | None = None
-) -> bool:
-    """A deliverable counts once its final line is exactly the token and this run wrote it.
+) -> bool | None:
+    """Whether the deliverable is this run's finished output; None when it cannot be read.
 
     `since` is the earliest instant this run could have written. With no floor
     there is nothing separating this run's output from an earlier run's, so the
@@ -474,12 +528,17 @@ def artifact_ready(
     try:
         # 本文と鮮度は同じ descriptor の同じ瞬間から取る — path で stat し直すと、
         # 置換された別 inode の mtime が古い本文の完了 token と組になりうる。
-        with open(path, encoding="utf-8", errors="replace") as f:
+        with open(path, encoding="utf-8") as f:
             before = os.fstat(f.fileno())
             body = f.read()
             after = os.fstat(f.fileno())
-    except OSError:
+    except FileNotFoundError:
+        return False  # まだ書かれていない — 読めないのではなく、無い
+    except UnicodeDecodeError:
+        # 置換して読み進めると、 binary の末尾行が token と一致して完成品になる。
         return False
+    except OSError:
+        return None  # 在るのに読めない — 「成果物なし」と断定してよい根拠がない
     if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
         return False  # 読んでいる間に伸びた = まだ書かれている最中
     if after.st_mtime < since:
@@ -519,7 +578,7 @@ def verdict(
     status: str,
     age: float | None,
     tree: float | None,
-    ready: bool,
+    ready: bool | None,
     stall_seconds: float,
     hang_seconds: float,
     expects_artifact: bool = True,
@@ -550,6 +609,12 @@ def verdict(
             )
         if tree < hang_seconds:
             return None  # still settling; re-check rather than hand over mid-write
+        if expects_artifact and ready is None:
+            return EXIT_UNVERIFIABLE, (
+                "unverifiable: the job reports completed but its deliverable could "
+                "not be read, so it cannot be shown to be missing either — check "
+                "the path below"
+            )
         if not (ready or not expects_artifact):
             return EXIT_ENDED_WITHOUT_ARTIFACT, (
                 "ended-without-deliverable: job completed with no complete deliverable — "
@@ -607,7 +672,7 @@ def evidence(
     threshold: float,
     baseline: float | None,
     artifact: str | None = None,
-    ready: bool = False,
+    ready: bool | None = False,
     unfinished: list[str] | None = None,
     tail: list[str] | None = None,
 ) -> str:
@@ -622,7 +687,8 @@ def evidence(
     )
     shown = tail or ["(なし)"]
     # exit 14 は ready を verdict へ畳むので、畳んだ値をここで戻さないと成果物あり / なしが読めない。
-    made = f"{'ready' if ready else 'not ready'} {artifact}" if artifact else "指定なし"
+    state = "unreadable" if ready is None else ("ready" if ready else "not ready")
+    made = f"{state} {artifact}" if artifact else "指定なし"
     lines = [
         f"  job    : {job_id} status={record.get('status') or '不明'} root={root or '不明'}",
         f"  無音   : {quiet}{versus} / しきい値 {int(threshold)}s",
@@ -633,7 +699,8 @@ def evidence(
         *(f"           {ln}" for ln in shown[1:]),
     ]
     if unfinished:
-        lines.append(f"  未完了 : {' / '.join(unfinished)}")
+        rest = f" 他 {len(unfinished) - 5} 件" if len(unfinished) > 5 else ""
+        lines.append(f"  未完了 : {' / '.join(unfinished[:5])}{rest}")
     # 失敗理由は record が持っている — 出さなければ呼び手が同じ file を手で開き直すだけ。
     failure = record.get("errorMessage")
     if isinstance(failure, str) and failure.strip():
@@ -651,7 +718,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
     started = time.monotonic()
     found: list[tuple[str, str]] = []
     while not found:
-        found = find_jobs(args.job_id, roots)
+        found, complete = find_jobs(args.job_id, roots)
         if len(found) > 1:
             print(f"ambiguous: {len(found)} records carry the id {args.job_id}")
             for record, _log in found:
@@ -660,6 +727,14 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         if found:
             break
         if deadline_reached(deadline, args.poll_seconds):
+            if not complete:
+                # 走査しきれていない以上、 「登録されていない」 は言えない。
+                print(
+                    f"unverifiable: part of the state tree could not be read, so "
+                    f"{args.job_id} cannot be shown to be unregistered"
+                )
+                print(f"  searched: {', '.join(roots)}")
+                return EXIT_UNVERIFIABLE
             print(f"never-registered: no state record for {args.job_id}")
             print(f"  searched: {', '.join(roots)}")
             return EXIT_NEVER_REGISTERED
@@ -672,7 +747,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # raise the bar here (a foreign 3600s gap once hid a two-hour stall). Read
         # it every poll — a peer's record goes completed before its last block is
         # appended, so a baseline taken once can be missing that job's real gap.
-        baseline = baseline_silence(jobs_dir, args.job_id)
+        baseline = baseline_silence(jobs_dir, args.job_id, now, args.hang_seconds)
         threshold = stall_threshold(args.stall_seconds, baseline)
         record = job_record(record_path)
         # 1 poll 1 走査 — verdict も evidence も同じ結果を使い、読み直さない。 走査の
@@ -690,9 +765,13 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         )
         # plugin は record を completed に書いてから final output を append する。
         # その窓に入った poll は、 古い running のまま静穏を読んで stall と言える。
-        moved = (file_stat(log), file_stat(args.artifact)) != before or job_record(
-            record_path
-        ) != record
+        moved = (
+            (file_stat(log), file_stat(args.artifact)) != before
+            or job_record(record_path) != record
+            # os.walk は snapshot ではないので、 列挙済み file への書き込みは
+            # 走査し直さない限りこの poll から丸ごと抜け落ちる。
+            or tree_age((record or {}).get("workspaceRoot"), now) != tree
+        )
         if not os.path.exists(record_path):
             # The plugin prunes to its newest 50 jobs regardless of status, so a
             # record that was here and is gone is lost history, not a verdict.
@@ -864,11 +943,11 @@ class WatchTest(unittest.TestCase):
     def test_job_found_in_any_workspace(self):
         """隔離 worktree に登録された job も見つかる (本線 workspace 決め打ちにしない)。"""
         root, record, log = self._state("wt-review-deadbeef", "task-x", "running")
-        self.assertEqual(find_jobs("task-x", [root]), [(record, log)])
+        self.assertEqual(find_jobs("task-x", [root]), ([(record, log)], True))
 
     def test_job_absent_returns_nothing(self):
         root, _r, _l = self._state("ws", "task-x", "running")
-        self.assertEqual(find_jobs("task-other", [root]), [])
+        self.assertEqual(find_jobs("task-other", [root]), ([], True))
 
     def test_duplicate_ids_are_all_returned(self):
         """同一 id が 2 件あるなら選ばずに全部返す — 黙って先頭を掴むと live job を取り違える。"""
@@ -879,7 +958,7 @@ class WatchTest(unittest.TestCase):
             json.dump({"id": "task-dup", "status": "running"}, f)
         with open(os.path.join(jobs, "task-dup.log"), "w", encoding="utf-8") as f:
             f.write("x\n")
-        self.assertEqual(len(find_jobs("task-dup", [root])), 2)
+        self.assertEqual(len(find_jobs("task-dup", [root])[0]), 2)
 
     def test_state_roots_follow_the_plugin_resolver(self):
         """plugin は CLAUDE_PLUGIN_DATA、無ければ temp dir を使う — 配布 path 決め打ちにしない。"""
@@ -1247,8 +1326,8 @@ class WatchTest(unittest.TestCase):
             stamps=("2026-08-08T00:00:00", "2026-08-08T00:02:00"),
         )
         jobs = os.path.join(root, "ws", "jobs")
-        self.assertEqual(baseline_silence(jobs, "task-other"), 120.0)
-        self.assertIsNone(baseline_silence(jobs, "task-done"))
+        self.assertEqual(baseline_silence(jobs, "task-other", time.time()), 120.0)
+        self.assertIsNone(baseline_silence(jobs, "task-done", time.time()))
 
     def test_baseline_is_scoped_to_one_workspace(self):
         """別 workspace の遅い job で基準を上げない — 実 stall を隠す経路になる。"""
@@ -1265,7 +1344,10 @@ class WatchTest(unittest.TestCase):
         with open(os.path.join(other, "task-slow.log"), "w", encoding="utf-8") as f:
             f.write("[2026-08-08T00:00:00Z] a\n[2026-08-08T01:00:00Z] b\n")
         self.assertEqual(
-            baseline_silence(os.path.join(root, "ws", "jobs"), "task-other"), 120.0
+            baseline_silence(
+                os.path.join(root, "ws", "jobs"), "task-other", time.time()
+            ),
+            120.0,
         )
 
     def test_baseline_excludes_cancelled_jobs(self):
@@ -1281,7 +1363,7 @@ class WatchTest(unittest.TestCase):
             json.dump({"id": "task-stalled", "status": "cancelled"}, f)
         with open(os.path.join(jobs, "task-stalled.log"), "w", encoding="utf-8") as f:
             f.write("[2026-08-08T00:00:00Z] a\n[2026-08-08T00:40:00Z] b\n")
-        self.assertEqual(baseline_silence(jobs, "task-other"), 120.0)
+        self.assertEqual(baseline_silence(jobs, "task-other", time.time()), 120.0)
 
     def test_threshold_rises_past_observed_quiet_spells(self):
         """既定しきい値は履歴で決まる — 長考する runner に手で数字を渡さない。"""
@@ -1347,7 +1429,7 @@ class WatchTest(unittest.TestCase):
         root, record, log = self._state("ws", "task-gone", "running")
         os.unlink(record)  # 掴んだ直後に prune された状態
         with mock.patch.object(
-            sys.modules[__name__], "find_jobs", lambda *a: [(record, log)]
+            sys.modules[__name__], "find_jobs", lambda *a: ([(record, log)], True)
         ):
             self.assertEqual(watch(self._watch_args(root, "task-gone")), EXIT_VANISHED)
 
@@ -1528,11 +1610,105 @@ class WatchTest(unittest.TestCase):
         with open(os.path.join(root, "f"), "w", encoding="utf-8") as f:
             f.write("x")
         os.utime(os.path.join(root, "f"), (0, 0))
-        with mock.patch("os.path.getmtime", side_effect=FileNotFoundError):
+        with (
+            mock.patch("os.path.getmtime", side_effect=FileNotFoundError),
+            mock.patch("os.lstat", side_effect=FileNotFoundError),
+        ):
             age = tree_age(root, time.time())
         if age is None:
             self.fail("消えた file が観測不能として扱われた")
         self.assertLess(age, 1.0)
+
+    def test_tree_moving_during_the_poll_withholds_the_verdict(self):
+        """os.walk は snapshot ではない — 走査後に動いた tree の age で判定しない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-live", "running", log_age=900.0)
+        ages = iter([900.0, 5.0])
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".tree_age", lambda *a: next(ages, 5.0)),
+        ):
+            self.assertEqual(
+                watch(self._watch_args(root, "task-live", once=True)), EXIT_ALIVE
+            )
+
+    def test_peer_still_being_appended_to_does_not_set_the_baseline(self):
+        """completed と書かれてから最終 block が来るまでの peer は、まだ手本にならない。"""
+        root, record, _log = self._state("ws", "task-live", "running")
+        jobs = os.path.dirname(record)
+        with open(os.path.join(jobs, "task-peer.json"), "w", encoding="utf-8") as f:
+            json.dump({"id": "task-peer", "status": "completed"}, f)
+        with open(os.path.join(jobs, "task-peer.log"), "w", encoding="utf-8") as f:
+            f.write("[2026-08-09T00:00:00.000Z] a\n[2026-08-09T00:01:00.000Z] b\n")
+        now = time.time()
+        self.assertEqual(baseline_silence(jobs, "task-live", now, 0.0), 60.0)
+        self.assertIsNone(baseline_silence(jobs, "task-live", now, 300.0))
+
+    def test_binary_body_with_a_matching_last_line_is_not_ready(self):
+        """置換して読むと、 binary の末尾行が token と一致して完成品に化ける。"""
+        p = os.path.join(tempfile.mkdtemp(), "report.md")
+        with open(p, "wb") as f:
+            f.write(b"\xff\nREPORT_COMPLETE\n")
+        self.assertFalse(artifact_ready(p, "REPORT_COMPLETE", time.time() - 60))
+
+    def test_unreadable_deliverable_is_unknown_not_missing(self):
+        """読めなかった成果物を「無い」にすると、completed job に exit 5 を出す。"""
+        from unittest import mock
+
+        p = os.path.join(tempfile.mkdtemp(), "report.md")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("body\nREPORT_COMPLETE\n")
+        with mock.patch("builtins.open", side_effect=PermissionError):
+            self.assertIsNone(artifact_ready(p, "REPORT_COMPLETE", time.time() - 60))
+        self.assertEqual(
+            self._code("completed", 5.0, None, tree=400.0), EXIT_UNVERIFIABLE
+        )
+
+    def test_record_field_of_the_wrong_type_is_unreadable(self):
+        """JSON は型を約束しない — list の workspaceRoot は走査で例外になる。"""
+        p = os.path.join(tempfile.mkdtemp(), "task-x.json")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write('{"status": "running", "workspaceRoot": []}')
+        self.assertIsNone(job_record(p))
+
+    def test_unreadable_state_root_is_not_never_registered(self):
+        """走査しきれていないなら「登録されていない」とは言えない。"""
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, "ws", "jobs"))
+        os.chmod(root, 0o000)
+        self.addCleanup(os.chmod, root, 0o755)
+        self.assertEqual(find_jobs("task-x", [root]), ([], False))
+
+    def test_malformed_stamp_is_not_an_event(self):
+        """秒の後に余分な colon がある行は runner が書かない — 本文である。"""
+        lines = [
+            "[2026-08-09T00:00:00.000Z] Running command: cargo test",
+            "[2026-08-09T00:00:01:99Z] Command completed: cargo test (exit 0)",
+        ]
+        self.assertEqual(pending_commands(lines), ["cargo test"])
+
+    def test_forged_starts_cannot_grow_without_bound(self):
+        """本文は妥当な stamp を持つ start をいくらでも並べられる。"""
+        lines = [
+            "[2026-08-09T00:%02d:%02d.000Z] Running command: probe %d"
+            % (i // 60, i % 60, i)
+            for i in range(MAX_PENDING + 50)
+        ]
+        self.assertEqual(len(pending_commands(lines)), MAX_PENDING)
+
+    def test_dangling_symlink_is_not_a_write(self):
+        """link 先が無いだけの entry を「今の書き込み」にすると、静穏に到達できなくなる。"""
+        root = tempfile.mkdtemp()
+        link = os.path.join(root, "dangling")
+        os.symlink(os.path.join(root, "gone"), link)
+        os.utime(link, (0, 0), follow_symlinks=False)
+        age = tree_age(root, time.time())
+        if age is None:
+            self.fail("dangling symlink で走査不能と判定された")
+        self.assertGreater(age, 1000.0)
 
     def test_cancel_command_names_a_companion_that_exists(self):
         """印字した cancel が MODULE_NOT_FOUND で落ちるなら、evidence は行動へ繋がらない。"""
@@ -1710,10 +1886,10 @@ class WatchTest(unittest.TestCase):
             json.dump({"id": "task-peer", "status": "completed"}, f)
         with open(peer + ".log", "w", encoding="utf-8") as f:
             f.write("[2026-08-09T00:00:00.000Z] start\n")
-        self.assertIsNone(baseline_silence(jobs, "task-target"))
+        self.assertIsNone(baseline_silence(jobs, "task-target", time.time()))
         with open(peer + ".log", "a", encoding="utf-8") as f:
             f.write("[2026-08-09T00:03:00.000Z] Final output\n")
-        self.assertEqual(baseline_silence(jobs, "task-target"), 180.0)
+        self.assertEqual(baseline_silence(jobs, "task-target", time.time()), 180.0)
         self.assertEqual(stall_threshold(None, 180.0), 540.0)
 
     def test_evidence_calls_an_unreadable_tree_unknown_not_quiet(self):
@@ -1817,7 +1993,7 @@ class WatchTest(unittest.TestCase):
             json.dump({"id": "task-peer", "status": "completed"}, f)
         with open(os.path.join(jobs, "task-peer.log"), "w", encoding="utf-8") as f:
             f.write("[2026-08-09T00:00:00.000Z] a\n[9999-99-99T99:99:99.000Z] b\n")
-        self.assertIsNone(baseline_silence(jobs, "task-target"))
+        self.assertIsNone(baseline_silence(jobs, "task-target", time.time()))
 
     def test_pending_commands_names_the_unfinished_start(self):
         lines = [
