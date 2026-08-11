@@ -97,6 +97,8 @@ MAX_PENDING = 512
 # 成果物から読む上限。 これを超える file は末尾だけを見るので、 それより前の
 # 不正 byte は検出できない (完了 token の判定には末尾で足りる)。
 MAX_ARTIFACT_BYTES = 1 << 20
+# record は job 1 件のメタデータ — 実機の最大は 1.3KB で、 これを超えるのは異常。
+MAX_RECORD_BYTES = 1 << 20
 
 EXIT_DONE = 0
 EXIT_DONE_HUNG = 3
@@ -243,7 +245,12 @@ def job_record(record_path: str, job_id: str | None = None) -> dict | None:
     record is an unknown outcome, not a quiet job."""
     try:
         with open_regular(record_path) as f:
-            loaded = json.loads(f.read().decode("utf-8"))
+            # log / 成果物と同じく上限を置く — record だけ無制限だと、 巨大または
+            # 伸び続ける JSON ひとつで監視が読み終わらない。
+            raw = f.read(MAX_RECORD_BYTES + 1)
+            if len(raw) > MAX_RECORD_BYTES:
+                return None
+            loaded = json.loads(raw.decode("utf-8"))
     except OSError:
         return None
     except (ValueError, RecursionError):
@@ -687,7 +694,10 @@ def cancel_command(job_id: str, root: str | None) -> str:
         return f"codex plugin's companion script not found — cancel {job_id} from the plugin"
     # job id も quote する — 印字した command はそのまま shell に貼られる。
     node = f"node {shlex.quote(companion)} cancel {shlex.quote(job_id)} --json"
-    return f"(cd {shlex.quote(root)} && {node})" if root else node
+    # 無い dir へ cd する command を出しても実行できない — 出せる形だけを出す。
+    if not (root and os.path.isdir(root)):
+        return node
+    return f"(cd {shlex.quote(root)} && {node})"
 
 
 def verdict(
@@ -1744,12 +1754,25 @@ class WatchTest(unittest.TestCase):
 
         handle = Endless()
         fake = os.stat_result((stat.S_IFREG | 0o644, 0, 0, 1, 0, 0, 16, 0, 0, 0))
+        # reader の入口は os.open — 旧入口を mock すると test は緑のまま何も見なくなる。
         with (
-            mock.patch("builtins.open", lambda *a, **k: handle),
+            mock.patch("os.open", lambda *a, **k: 0),
+            mock.patch("os.set_blocking", lambda *a, **k: None),
+            mock.patch("os.fdopen", lambda *a, **k: handle),
             mock.patch("os.fstat", lambda _fd: fake),
         ):
             artifact_ready("/any/report.md", "TOKEN", 0.0)
+        self.assertGreaterEqual(handle.reads, 1)  # 空振りしていないこと
         self.assertLessEqual(handle.reads, 2)
+
+    def test_an_oversized_record_is_corrupt_not_an_endless_read(self):
+        """log と成果物に置いた上限が record にだけ無いと、そこから読み終わらない。"""
+        p = os.path.join(tempfile.mkdtemp(), "task-x.json")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write('{"id": "task-x", "status": "running", "pad": "')
+            f.write("a" * (MAX_RECORD_BYTES + 16))
+            f.write('"}')
+        self.assertIsNone(job_record(p))
 
     def test_a_deeply_nested_record_is_corrupt_not_a_traceback(self):
         """JSON の深い入れ子は ValueError ではなく RecursionError で来る。"""
@@ -2063,9 +2086,12 @@ class WatchTest(unittest.TestCase):
 
     def test_cancel_command_carries_the_workspace(self):
         """判定を読んだ人がその場で流せる形にする (cwd を自分で組み立てさせない)。"""
-        cmd = cancel_command("task-x", "/home/u/wt-a")
-        self.assertIn("cd /home/u/wt-a", cmd)
+        here = tempfile.mkdtemp()
+        cmd = cancel_command("task-x", here)
+        self.assertIn(f"cd {here}", cmd)
         self.assertIn("cancel task-x --json", cmd)
+        # 無い dir なら cd を付けない — 貼っても動かない command は evidence にならない。
+        self.assertNotIn("cd ", cancel_command("task-x", os.path.join(here, "gone")))
 
     def _watch_args(self, root, job_id, **over):
         opts = {
