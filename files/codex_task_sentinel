@@ -64,8 +64,13 @@ STATE_ROOT = os.path.expanduser("~/.claude/plugins/data/codex-openai-codex/state
 # The plugin resolves its state root from CLAUDE_PLUGIN_DATA and falls back to
 # the temp dir, so watching only the packaged path loses jobs it really started.
 PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA"
-COMPANION = os.path.expanduser(
-    "~/.claude/plugins/cache/openai-codex/codex/1.0.5/scripts/codex-companion.mjs"
+# The cached companion carries its version in the path, so pinning one spells a
+# cancel command that cannot run; the marketplace copy has no version to go stale.
+COMPANION_GLOB = os.path.expanduser(
+    "~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs"
+)
+COMPANION_FALLBACK = os.path.expanduser(
+    "~/.claude/plugins/marketplaces/openai-codex/plugins/codex/scripts/codex-companion.mjs"
 )
 # The companion's own vocabulary for a job that is still going; anything else
 # it writes is terminal. Listing the alive side keeps unseen end states terminal.
@@ -214,13 +219,18 @@ def job_record(record_path: str) -> dict | None:
     return loaded if isinstance(loaded, dict) else None
 
 
-def log_stat(log_path: str) -> tuple[float, int] | None:
-    """(mtime, size) identifying one snapshot of the log; None when it is absent."""
+def file_stat(path: str | None) -> tuple[float, int] | None:
+    """(mtime, size) identifying one snapshot of a file; None when it is absent."""
     try:
-        st = os.stat(log_path)
+        st = os.stat(path) if path else None
     except OSError:
         return None
-    return st.st_mtime, st.st_size
+    return (st.st_mtime, st.st_size) if st else None
+
+
+def deadline_reached(deadline: float, margin: float = 0.0) -> bool:
+    """Whether the watch has run out of time — measured as elapsed, never as a clock."""
+    return time.monotonic() + margin > deadline
 
 
 def heartbeat_age(log_path: str, now: float) -> float | None:
@@ -347,15 +357,26 @@ def tree_age(root: str | None, now: float) -> float | None:
     if not root or not os.path.isdir(root):
         return None
     newest = None
-    for base, dirs, files in os.walk(root):
+    unreadable = False
+
+    def unreadable_dir(_error: OSError) -> None:
+        nonlocal unreadable  # 走査できなかった subtree の中は、書き込み中かもしれない
+        unreadable = True
+
+    for base, dirs, files in os.walk(root, onerror=unreadable_dir):
         dirs[:] = [d for d in dirs if d != ".git"]
         for name in files:
             try:
                 mtime = os.path.getmtime(os.path.join(base, name))
+            except FileNotFoundError:
+                mtime = now  # 走査中に消えた = たった今の書き込みで、静穏の証拠ではない
             except OSError:
+                unreadable = True
                 continue
             if newest is None or mtime > newest:
                 newest = mtime
+    if unreadable:
+        return None
     return None if newest is None else now - newest
 
 
@@ -451,12 +472,18 @@ def artifact_ready(
     if not path or since is None:
         return False
     try:
-        with open(path, encoding="utf-8") as f:
+        # 本文と鮮度は同じ descriptor の同じ瞬間から取る — path で stat し直すと、
+        # 置換された別 inode の mtime が古い本文の完了 token と組になりうる。
+        with open(path, encoding="utf-8", errors="replace") as f:
+            before = os.fstat(f.fileno())
             body = f.read()
-        if os.path.getmtime(path) < since:
-            return False  # a leftover from an earlier run is not this run's output
+            after = os.fstat(f.fileno())
     except OSError:
         return False
+    if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
+        return False  # 読んでいる間に伸びた = まだ書かれている最中
+    if after.st_mtime < since:
+        return False  # a leftover from an earlier run is not this run's output
     if not token:
         return bool(body.strip())
     # The order says the final line IS the token: no padding, no trailing blanks.
@@ -464,9 +491,21 @@ def artifact_ready(
     return bool(lines) and lines[-1] == token
 
 
+def version_key(path: str) -> tuple[int, ...]:
+    """The version directory of a cached plugin path, ordered numerically not lexically."""
+    part = path.split(os.sep)[-3] if path.count(os.sep) >= 3 else ""
+    return tuple(int(x) if x.isdigit() else 0 for x in part.split("."))
+
+
+def companion_path() -> str:
+    """The companion this machine actually has, newest version first."""
+    found = glob.glob(COMPANION_GLOB)
+    return max(found, key=version_key) if found else COMPANION_FALLBACK
+
+
 def cancel_command(job_id: str, root: str | None) -> str:
     """The cancel the operator would otherwise have to assemble, cwd included."""
-    node = f"node {shlex.quote(COMPANION)} cancel {job_id} --json"
+    node = f"node {shlex.quote(companion_path())} cancel {job_id} --json"
     return f"(cd {shlex.quote(root)} && {node})" if root else node
 
 
@@ -602,8 +641,8 @@ def evidence(
 
 def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
     roots = roots if roots is not None else state_roots(args.state_root)
-    deadline = time.time() + args.timeout_seconds
-    started = time.time()
+    deadline = time.monotonic() + args.timeout_seconds
+    started = time.monotonic()
     found: list[tuple[str, str]] = []
     while not found:
         found = find_jobs(args.job_id, roots)
@@ -614,7 +653,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             return EXIT_AMBIGUOUS
         if found:
             break
-        if time.time() + args.poll_seconds > deadline:
+        if deadline_reached(deadline, args.poll_seconds):
             print(f"never-registered: no state record for {args.job_id}")
             print(f"  searched: {', '.join(roots)}")
             return EXIT_NEVER_REGISTERED
@@ -630,18 +669,24 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         baseline = baseline_silence(jobs_dir, args.job_id)
         threshold = stall_threshold(args.stall_seconds, baseline)
         record = job_record(record_path)
-        tree = tree_age((record or {}).get("workspaceRoot"), now)
-        # Elapsed runs from the job's own start so re-arming does not reset the clock.
-        elapsed = now - (stamp_epoch((record or {}).get("startedAt")) or started)
-        ready = artifact_ready(args.artifact, args.token, run_since(record or {}))
-        # 1 poll 1 走査 — verdict も evidence も同じ結果を使い、log を読み直さない。
-        # 走査の前後で log が伸びたら、 その poll は古い無音と新しい本文の混成になる。
-        before = log_stat(log)
+        # 1 poll 1 走査 — verdict も evidence も同じ結果を使い、読み直さない。 走査の
+        # 前後で観測対象が動いたら、 その poll は古い無音と新しい本文の混成になる。
+        before = (file_stat(log), file_stat(args.artifact))
         unfinished, tail = scan_log(log)
         age = heartbeat_age(log, now)
+        tree = tree_age((record or {}).get("workspaceRoot"), now)
+        ready = artifact_ready(args.artifact, args.token, run_since(record or {}))
+        # Elapsed runs from the job's own start so re-arming does not reset the clock;
+        # without that stamp it is this watch's own elapsed, which no clock change moves.
+        job_started = stamp_epoch((record or {}).get("startedAt"))
+        elapsed = (
+            now - job_started if job_started is not None else time.monotonic() - started
+        )
         # plugin は record を completed に書いてから final output を append する。
         # その窓に入った poll は、 古い running のまま静穏を読んで stall と言える。
-        moved = log_stat(log) != before or job_record(record_path) != record
+        moved = (file_stat(log), file_stat(args.artifact)) != before or job_record(
+            record_path
+        ) != record
         if not os.path.exists(record_path):
             # The plugin prunes to its newest 50 jobs regardless of status, so a
             # record that was here and is gone is lost history, not a verdict.
@@ -650,15 +695,17 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 "vanished: the state record disappeared after registration — "
                 "the plugin prunes old jobs, so this job's outcome is unknowable here",
             )
+        elif moved:
+            # 走査中に動いた観測は古い無音と新しい本文の混成 — その組で判定しない。
+            # corrupt より先に見る: 読めたり読めなかったりする record は変化であって、
+            # 確定した corrupt ではない。
+            out = None
         elif record is None:
             out = (
                 EXIT_CORRUPT,
                 "corrupt: the state record is present but unreadable — the job's "
                 "outcome cannot be read from it, so do not treat this as a stall",
             )
-        elif moved:
-            # 走査中に伸びた log は、 古い無音と新しい本文の混成 — その組で判定しない。
-            out = None
         else:
             out = verdict(
                 str(record.get("status") or ""),
@@ -690,7 +737,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 f"alive: no terminal verdict yet after {int(elapsed)}s "
                 f"(record says {recorded})",
             )
-        if out is None and now >= deadline:
+        if out is None and deadline_reached(deadline):
             out = (
                 EXIT_TIMEOUT,
                 f"timeout: no terminal verdict within {int(args.timeout_seconds)}s "
@@ -1427,6 +1474,112 @@ class WatchTest(unittest.TestCase):
             )
         self.assertIn("未完了", buf.getvalue())
         self.assertIn("cargo test --all", buf.getvalue())
+
+    def test_partial_multibyte_deliverable_is_not_ready(self):
+        """書きかけの多 byte 列や binary は「まだ ready でない」であって例外ではない。"""
+        p = os.path.join(tempfile.mkdtemp(), "report.md")
+        with open(p, "wb") as f:
+            f.write(b"body\nREPORT_COMPLETE\n" + "完".encode()[:-1])
+        self.assertFalse(artifact_ready(p, "REPORT_COMPLETE", time.time() - 60))
+
+    def test_deliverable_moving_under_the_read_is_not_ready(self):
+        """本文と鮮度が別の瞬間から来たら、古い完成品で今回の完了を宣言できてしまう。"""
+        from unittest import mock
+
+        base = tempfile.mkdtemp()
+        p = os.path.join(base, "report.md")
+        other = os.path.join(base, "other")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("body\nREPORT_COMPLETE\n")
+        with open(other, "w", encoding="utf-8") as f:
+            f.write("a different length entirely\n")
+        real, calls = os.fstat, []
+        with mock.patch(
+            "os.fstat",
+            lambda fd: (
+                real(fd) if calls.append(fd) or len(calls) == 1 else os.stat(other)
+            ),
+        ):
+            self.assertFalse(artifact_ready(p, "REPORT_COMPLETE", time.time() - 60))
+
+    def test_unreadable_subtree_is_not_evidence_of_quiet(self):
+        """一部でも走査できないなら「最終書き込みは N 秒前」と言い切れない。"""
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, "open"))
+        with open(os.path.join(root, "open", "f"), "w", encoding="utf-8") as f:
+            f.write("x")
+        closed = os.path.join(root, "closed")
+        os.makedirs(closed)
+        os.chmod(closed, 0o000)
+        self.addCleanup(os.chmod, closed, 0o755)
+        self.assertIsNone(tree_age(root, time.time()))
+
+    def test_file_vanishing_during_the_walk_is_activity(self):
+        """走査中に消えた file は静穏の証拠ではない — 消えたこと自体が今の書き込みである。"""
+        from unittest import mock
+
+        root = tempfile.mkdtemp()
+        with open(os.path.join(root, "f"), "w", encoding="utf-8") as f:
+            f.write("x")
+        os.utime(os.path.join(root, "f"), (0, 0))
+        with mock.patch("os.path.getmtime", side_effect=FileNotFoundError):
+            age = tree_age(root, time.time())
+        if age is None:
+            self.fail("消えた file が観測不能として扱われた")
+        self.assertLess(age, 1.0)
+
+    def test_cancel_command_names_a_companion_that_exists(self):
+        """印字した cancel が MODULE_NOT_FOUND で落ちるなら、evidence は行動へ繋がらない。"""
+        if not glob.glob(COMPANION_GLOB):  # 実環境が無ければ空で skip 相当
+            return
+        self.assertTrue(os.path.exists(companion_path()))
+        self.assertIn(companion_path(), cancel_command("task-x", None))
+
+    def test_companion_version_is_ordered_numerically(self):
+        """辞書順だと 1.0.10 が 1.0.9 より古いと読まれ、消えた版を指し続ける。"""
+        from unittest import mock
+
+        cached = [
+            os.path.expanduser(
+                f"~/.claude/plugins/cache/openai-codex/codex/{v}/scripts/x.mjs"
+            )
+            for v in ("1.0.9", "1.0.10")
+        ]
+        with mock.patch("glob.glob", return_value=cached):
+            self.assertEqual(companion_path(), cached[1])
+        with mock.patch("glob.glob", return_value=[]):
+            self.assertEqual(companion_path(), COMPANION_FALLBACK)
+
+    def test_deadline_ignores_the_wall_clock(self):
+        """時計合わせで待ち時間が変わってはいけない — 期限は経過時間であって時刻ではない。"""
+        from unittest import mock
+
+        deadline = time.monotonic() + 3600
+        with mock.patch("time.time", lambda: time.time() + 7200):
+            self.assertFalse(deadline_reached(deadline))
+        with mock.patch("time.monotonic", lambda: deadline + 1):
+            self.assertTrue(deadline_reached(deadline))
+
+    def test_record_unreadable_for_one_read_is_not_corrupt(self):
+        """読めたり読めなかったりする record は変化した record — 確定した corrupt ではない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-live", "running")
+        real, calls = job_record, []
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(
+                __name__ + ".job_record",
+                lambda path: (
+                    None if calls.append(path) or len(calls) == 1 else real(path)
+                ),
+            ),
+        ):
+            self.assertNotEqual(
+                watch(self._watch_args(root, "task-live", once=True)), EXIT_CORRUPT
+            )
 
     def test_timeout_headline_does_not_contradict_the_record(self):
         """timeout も保留の一種 — completed の job に 「still alive」 と書けば evidence と食い違う。"""
