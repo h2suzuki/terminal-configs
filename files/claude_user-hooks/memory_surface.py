@@ -486,6 +486,28 @@ def _list_active_entries(memory_dir: str) -> list[str]:
     return paths
 
 
+def _roster_slugs(memory_dir: str, roster: str) -> set[str]:
+    try:
+        with open(os.path.join(memory_dir, roster), encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return set()
+    return set(re.findall(r"^- \[.+\]\(([^)]+\.md)\)", text, flags=re.MULTILINE))
+
+
+def _unlisted_entries(memory_dir: str) -> list[str]:
+    """rebuild が黙って落とす entry — disk にあるがどちらの名簿にも無いもの。"""
+    known = _roster_slugs(memory_dir, "MEMORY.md") | _roster_slugs(
+        memory_dir, "OLD-MEMORY.md"
+    )
+    known = {os.path.basename(slug) for slug in known}
+    return sorted(
+        os.path.join(memory_dir, name)
+        for name in os.listdir(memory_dir)
+        if name.startswith("feedback") and name.endswith(".md") and name not in known
+    )
+
+
 def _build_query(prompt: str) -> str | None:
     """Extract 3+ char CJK runs and 4+ char ASCII tokens; OR-join for FTS5."""
     cjk = re.findall(r"[぀-ゟ゠-ヿ一-鿿]{3,}", prompt)
@@ -1187,6 +1209,14 @@ def _main_rebuild(argv: list[str]) -> int:
             sys.stderr.write(
                 f"rebuilt {len(paths) - errs}/{len(paths)} entries from {memory_dir}\n"
             )
+            # 名簿落ちは wipe で消えたまま戻らないので、消した側から名指しする。
+            dropped = _unlisted_entries(memory_dir)
+            if dropped:
+                sys.stderr.write(
+                    f"dropped {len(dropped)} entry/entries present on disk but listed in "
+                    f"neither MEMORY.md nor OLD-MEMORY.md; add to a roster or --delete:\n"
+                    + "".join(f"  {p}\n" for p in dropped)
+                )
             return 1 if errs else 0
         finally:
             con.close()
@@ -1759,6 +1789,68 @@ class PixelL4InjectTest(unittest.TestCase):
             assert out2 is not None
             self.assertIn("concern-detected", out2)
             self.assertNotIn("pixel-diff-detected", out2)
+
+
+class RebuildDropReportTest(unittest.TestCase):
+    """--rebuild が落とす entry の報告。 Run: python3 -m unittest memory_surface"""
+
+    @staticmethod
+    def _memory_dir(listed=(), retired=(), on_disk=()):
+        import tempfile
+
+        d = tempfile.mkdtemp(prefix="mem-rebuild-")
+        for name in on_disk:
+            with open(os.path.join(d, name), "w", encoding="utf-8") as f:
+                f.write("reminder: r\nkeywords: k\n\nbody\n")
+        for roster, names in (("MEMORY.md", listed), ("OLD-MEMORY.md", retired)):
+            with open(os.path.join(d, roster), "w", encoding="utf-8") as f:
+                f.write("".join(f"- [title]({n})\n" for n in names))
+        return d
+
+    def _names(self, d):
+        return sorted(os.path.basename(p) for p in _unlisted_entries(d))
+
+    def test_entry_in_neither_roster_is_reported(self):
+        """rebuild は listed 以外を全消しするので、名簿落ちは黙って消える = 報告対象。"""
+        d = self._memory_dir(
+            listed=["feedback_a.md"],
+            retired=["feedback_b.md"],
+            on_disk=["feedback_a.md", "feedback_b.md", "feedback_c.md"],
+        )
+        self.assertEqual(["feedback_c.md"], self._names(d))
+
+    def test_retired_entry_is_not_reported(self):
+        """OLD-MEMORY.md 収載は index から外れるのが正しく、報告するとノイズになる。"""
+        d = self._memory_dir(
+            listed=["feedback_a.md"],
+            retired=["feedback_b.md"],
+            on_disk=["feedback_a.md", "feedback_b.md"],
+        )
+        self.assertEqual([], self._names(d))
+
+    def test_missing_old_roster_does_not_hide_the_gap(self):
+        d = self._memory_dir(
+            listed=["feedback_a.md"], on_disk=["feedback_a.md", "feedback_c.md"]
+        )
+        os.remove(os.path.join(d, "OLD-MEMORY.md"))
+        self.assertEqual(["feedback_c.md"], self._names(d))
+
+    def test_rebuild_names_the_dropped_entry_on_stderr(self):
+        import io
+        import tempfile
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        d = self._memory_dir(
+            listed=["feedback_a.md"], on_disk=["feedback_a.md", "feedback_c.md"]
+        )
+        db = os.path.join(tempfile.mkdtemp(), "idx.sqlite3")
+        err = io.StringIO()
+        with mock.patch(f"{__name__}.DB_PATH", db), redirect_stderr(err):
+            _main_rebuild([d])
+
+        self.assertIn("feedback_c.md", err.getvalue())
+        self.assertNotIn("feedback_a.md", err.getvalue())
 
 
 if __name__ == "__main__":
