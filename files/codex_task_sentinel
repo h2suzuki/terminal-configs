@@ -56,6 +56,7 @@ import math
 import os
 import re
 import shlex
+import stat
 import sys
 import tempfile
 import time
@@ -245,7 +246,8 @@ def job_record(record_path: str, job_id: str | None = None) -> dict | None:
             loaded = json.load(f)
     except OSError:
         return None
-    except ValueError:
+    except (ValueError, RecursionError):
+        # 深くネストした JSON は ValueError ではなく RecursionError で来る。
         return None
     if not isinstance(loaded, dict):
         return None
@@ -322,11 +324,15 @@ def log_lines(
     """
     try:
         with open(log_path, encoding="utf-8", errors="replace") as f:
+            # 開いた時点の size を上限にする — 動く EOF を追うと、 追記が読みより
+            # 速い log で読み終わらず、 期限確認にすら戻れない。
+            budget = os.fstat(f.fileno()).st_size
             dropping = False
-            while True:
-                chunk = f.readline(MAX_LOG_LINE)
+            while budget > 0:
+                chunk = f.readline(min(MAX_LOG_LINE, budget))
                 if not chunk:
                     return
+                budget -= len(chunk.encode("utf-8", "replace"))
                 whole = chunk.endswith("\n")
                 if dropping:  # 長すぎる行の残り — 頭の 1 片だけを 1 行として扱う
                     dropping = not whole
@@ -439,21 +445,6 @@ def command_may_be_running(lines: Iterator[str] | list[str]) -> bool:
     return bool(pending_commands(lines))
 
 
-def entry_mtime(path: str, now: float) -> float | None:
-    """A dangling link's own mtime, `now` when the entry is gone, None when unreadable.
-
-    getmtime follows the link, so a link whose target has been deleted raises the
-    same error as an entry that vanished mid-walk — and calling that one a write
-    now would report a tree with any stale symlink as forever active.
-    """
-    try:
-        return os.lstat(path).st_mtime
-    except FileNotFoundError:
-        return now  # 一覧にあった entry が消えた = たった今の書き込み
-    except OSError:
-        return None
-
-
 def tree_age(root: str | None, now: float) -> float | None:
     """Seconds since the newest write under the job's tree; None when unknowable."""
     if not isinstance(root, str) or not root or not os.path.isdir(root):
@@ -469,10 +460,12 @@ def tree_age(root: str | None, now: float) -> float | None:
         dirs[:] = [d for d in dirs if d != ".git"]
         # 削除・rename・空 dir の作成は、 どの file の mtime にも残らず親 dir にだけ残る。
         for path in (base, *(os.path.join(base, name) for name in files)):
+            # lstat で entry 自身を測る — getmtime は link を辿るので、 tree の外の
+            # 頻繁に更新される target が job の活動として数えられてしまう。
             try:
-                mtime = os.path.getmtime(path)
+                mtime = os.lstat(path).st_mtime
             except FileNotFoundError:
-                mtime = entry_mtime(path, now)
+                mtime = now  # 一覧にあった entry が消えた = たった今の書き込み
             except OSError:
                 mtime = None
             if mtime is None:
@@ -605,9 +598,16 @@ def artifact_ready(
         # 置換された別 inode の mtime が古い本文の完了 token と組になりうる。
         with open(path, "rb") as f:
             before = os.fstat(f.fileno())
+            if not stat.S_ISREG(before.st_mode):
+                return None  # fifo 等は EOF を待つと戻らない — 読めないものとして扱う
             # 全量を持つと巨大な成果物ひとつで監視が MemoryError で終わる。 decode は
             # 先頭から通し、 保持するのは末尾だけ — 途中の不正 byte も見逃さない。
-            while chunk := f.read(MAX_ARTIFACT_BYTES):
+            # 読む量は開いた時点の size まで — 動く EOF を追うと読み終わらない。
+            remaining = before.st_size
+            while remaining > 0 and (
+                chunk := f.read(min(MAX_ARTIFACT_BYTES, remaining))
+            ):
+                remaining -= len(chunk)
                 body += decoder.decode(chunk)
                 seen_content = seen_content or bool(body.strip())
                 body = body[-MAX_ARTIFACT_BYTES:]
@@ -969,6 +969,29 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             )
             return code
         sleep_until(deadline, args.poll_seconds)
+        if deadline_reached(deadline):
+            # 期限後に始めた poll の verdict は timeout に勝ってしまう — 起きた時点で
+            # 期限なら、 直前の一貫した snapshot を根拠に exit 7 で閉じる。
+            print(
+                f"timeout: no terminal verdict within {int(args.timeout_seconds)}s "
+                f"(record says {recorded})"
+            )
+            print(
+                evidence(
+                    args.job_id,
+                    record or {},
+                    log,
+                    age,
+                    tree,
+                    threshold,
+                    baseline,
+                    args.artifact,
+                    ready,
+                    unfinished,
+                    tail,
+                )
+            )
+            return EXIT_TIMEOUT
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1524,6 +1547,88 @@ class WatchTest(unittest.TestCase):
             self.assertFalse(scan_log(log)[2])
             self.assertIsNone(longest_silence(log))
         self.assertEqual(seen, [1])
+
+    def test_waking_at_the_deadline_does_not_start_another_poll(self):
+        """期限後に始めた poll の verdict は timeout に勝つ — 起きた時点で閉じる。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-live", "running", log_age=900.0)
+        args = self._watch_args(
+            root, "task-live", timeout_seconds=0.02, poll_seconds=0.05, trust_log=True
+        )
+        # 1 回目は tree が動いていて保留、 2 回目なら静穏で stall を出せる状態。
+        ages = itertools.chain([5.0, 5.0], itertools.repeat(900.0))
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".tree_age", lambda *a: next(ages)),
+        ):
+            self.assertEqual(watch(args), EXIT_TIMEOUT)
+
+    def test_a_log_that_grows_while_read_still_ends(self):
+        """動く EOF を追うと読み終わらない — 開いた時点の size で切る。"""
+        _root, _rec, log = self._state("ws", "task-x", "running")
+        with open(log, "w", encoding="utf-8") as f:
+            f.write("[2026-08-09T00:00:00.000Z] a\n")
+        lines = log_lines(log)
+        first = next(lines)  # ここで open され、読む量が決まる
+        with open(log, "a", encoding="utf-8") as grow:
+            grow.write("[2026-08-09T00:00:01.000Z] b\n" * 200)
+        self.assertEqual(list(lines), [])  # 読み始めた後の追記は この snapshot に無い
+        self.assertIn("] a", first)
+
+    def test_a_deliverable_that_grows_while_read_is_bounded(self):
+        """成果物も動く EOF を追わない — 追えば読み終わらず期限確認へ戻れない。"""
+        from unittest import mock
+
+        class Endless:
+            def __init__(self) -> None:
+                self.reads = 0
+
+            def fileno(self) -> int:
+                return 0
+
+            def read(self, size: int) -> bytes:
+                self.reads += 1
+                return b"a" * size if self.reads <= 50 else b""
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc) -> bool:
+                return False
+
+        handle = Endless()
+        fake = os.stat_result((stat.S_IFREG | 0o644, 0, 0, 1, 0, 0, 16, 0, 0, 0))
+        with (
+            mock.patch("builtins.open", lambda *a, **k: handle),
+            mock.patch("os.fstat", lambda _fd: fake),
+        ):
+            artifact_ready("/any/report.md", "TOKEN", 0.0)
+        self.assertLessEqual(handle.reads, 2)
+
+    def test_a_deeply_nested_record_is_corrupt_not_a_traceback(self):
+        """JSON の深い入れ子は ValueError ではなく RecursionError で来る。"""
+        p = os.path.join(tempfile.mkdtemp(), "task-x.json")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("[" * 200000)
+        self.assertIsNone(job_record(p))
+
+    def test_a_symlink_target_outside_the_tree_is_not_activity(self):
+        """link 先の更新は job の書き込みではない — entry 自身の時刻を測る。"""
+        outside = os.path.join(tempfile.mkdtemp(), "hot")
+        with open(outside, "w", encoding="utf-8") as f:
+            f.write("x")
+        root = tempfile.mkdtemp()
+        link = os.path.join(root, "link")
+        os.symlink(outside, link)
+        os.utime(link, (0, 0), follow_symlinks=False)
+        os.utime(root, (0, 0))
+        age = tree_age(root, time.time())
+        if age is None:
+            self.fail("走査不能と判定された")
+        self.assertGreater(age, 1000.0)
 
     def test_no_sleep_outlives_the_deadline(self):
         """poll が timeout より長くても、約束した期限で目を覚ます。"""
