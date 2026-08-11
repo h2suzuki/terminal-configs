@@ -133,8 +133,10 @@ Exit Criteria:
 - [ ] index sync の失敗が不可視な設計を塞ぐ — `memory_routing_gate.py` の sync が `--upsert` を stdout/stderr とも DEVNULL・`check=False` で呼び、`_upsert_entry` も sqlite エラーを握り潰すため、失敗しても誰も気付かない
   - **私が一度「corpus の 46% が index から欠落」と書いたのは誤り。撤回する**。disk 125 件に対し `entries_fts` 67 件なのは事実だが、名簿と突き合わせると欠落 58 件の内訳は roster file 自体が 7 件 (MEMORY.md ×5 / OLD-MEMORY.md ×2)、**OLD-MEMORY.md 収載 = retired が 42 件** (載らないのが正しい)、どちらの名簿にも無い orphan が 8 件。「欠損」と呼べるのは最後の 8 件だけ
   - orphan 8 件の内訳: `user_profile.md` (feedback entry ではない)、2026-05-27 の 6 件 (`hook_deny_reason_wording` / `intent_preserving_rephrase` / `keep_token_efficiency_section` / `rule_extraction_workflow` / `subagent_bonus_claim_verify` / `verify_own_work_via_git_log` — いずれも同名の skill が存在するので skill 化に伴う retire を OLD-MEMORY.md に記録し忘れたと見られる)、そして **`feedback_turn_end_continuation_claim.md` (2026-08-06 / `models:` tag あり) だけが真の欠損**
-  - upsert 経路自体は健全: orphan 1 件に `--upsert` を実行すると rc=0 で index に載る (検証後 `--delete` で baseline 67 に戻した)。よって原因は権限でも parse でもなく、**`cmd_sync` が PostToolUse:Write でしか発火せず、それ以外の作成経路が index に入らないこと**
-  - 残る設計課題は当初のまま: 失敗しても DEVNULL + `check=False` + sqlite エラー握り潰しで不可視。ただし規模は 1 件であり、`models:` 役割分離より優先する理由は無い
+  - upsert 経路自体は健全: orphan 1 件に `--upsert` を実行すると rc=0 で index に載る (検証後 `--delete` で baseline 67 に戻した)。原因は権限でも parse でもない
+  - **機序を code で確定**: `_list_active_entries()` (`memory_surface.py:466-486`) は **MEMORY.md の `- [title](path.md)` link だけ**を active とみなし、`_main_rebuild()` は当該 scope を `DELETE` で全消ししてから listed path のみ再投入する (`:1164-1180`)。つまり **MEMORY.md に link されていない entry は、次の `--rebuild` で無言で index から消える**
+  - 実害の実例: `feedback_turn_end_continuation_claim.md` は 2026-08-06 19:14〜08-07 17:17 に **32 回 emit** し 08-08 01:05 まで mismatch を記録していた = 当時は index にいた。その後 rebuild で消え、以降 0 件。同名 skill も無いので retire ではない
+  - よって対処は 2 つに分かれる: (a) 当該 entry を MEMORY.md に載せ直す (= 内容判断・要ユーザー)、(b) `--rebuild` が「disk にあるが listed でない entry」を drop する際に報告する (= 本項目の可視化そのもの)
 
 Work file: `last-session-handoff.md` の同名 section
 
