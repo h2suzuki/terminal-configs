@@ -49,6 +49,7 @@ import argparse
 import calendar
 import collections
 import glob
+import itertools
 import json
 import math
 import os
@@ -58,7 +59,7 @@ import sys
 import tempfile
 import time
 import unittest
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 STATE_ROOT = os.path.expanduser("~/.claude/plugins/data/codex-openai-codex/state")
 # The plugin resolves its state root from CLAUDE_PLUGIN_DATA and falls back to
@@ -282,7 +283,9 @@ def heartbeat_age(log_path: str, now: float) -> float | None:
         return None
 
 
-def log_lines(log_path: str) -> Iterator[str]:
+def log_lines(
+    log_path: str, onerror: Callable[[], None] | None = None
+) -> Iterator[str]:
     """Non-empty log lines, newest last, left edge intact so events can be anchored.
 
     Streamed, and each line is cut at MAX_LOG_LINE: the plugin appends message
@@ -304,7 +307,13 @@ def log_lines(log_path: str) -> Iterator[str]:
                 line = chunk.rstrip("\n")
                 if line.strip():
                     yield line
+    except FileNotFoundError:
+        return  # まだ書かれていない log は、 途中で切れた view とは別のこと
     except OSError:
+        # 途中で読めなくなった view は短い。 未完了 start を落として stall 抑止を
+        # 消しうるので、 「読めた分」 を全量として扱わせない。
+        if onerror is not None:
+            onerror()
         return
 
 
@@ -317,16 +326,22 @@ def _tee(lines: Iterator[str], sink: collections.deque) -> Iterator[str]:
 
 def scan_log(
     log_path: str, count: int = 6, limit: int = 200
-) -> tuple[list[str], list[str]]:
-    """One pass giving (unfinished commands, bounded tail) from a single snapshot.
+) -> tuple[list[str], list[str], bool]:
+    """One pass giving (unfinished commands, bounded tail, whole log read) from one snapshot.
 
     Reading twice lets the runner append in between, so a verdict could rest on a
     quiet log while the evidence beside it shows the command that arrived after —
     with --trust-log that pairs a cancel instruction with proof of work.
     """
     tail: collections.deque = collections.deque(maxlen=count)
-    pending = pending_commands(_tee(log_lines(log_path), tail))
-    return pending, [ln.strip()[:limit] for ln in tail]
+    whole = True
+
+    def truncated() -> None:
+        nonlocal whole
+        whole = False
+
+    pending = pending_commands(_tee(log_lines(log_path, truncated), tail))
+    return pending, [ln.strip()[:limit] for ln in tail], whole
 
 
 def command_text(line: str) -> str:
@@ -453,7 +468,13 @@ def longest_silence(log_path: str) -> float | None:
     """
     worst = None
     previous = None
-    for line in event_lines(log_lines(log_path)):
+    whole = True
+
+    def truncated() -> None:
+        nonlocal whole  # 短い view の最大 gap は、その log の最大 gap ではない
+        whole = False
+
+    for line in event_lines(log_lines(log_path, truncated)):
         m = LOG_TS.match(line)
         stamp = stamp_seconds(m.group(1)) if m else None
         if stamp is None:
@@ -461,7 +482,7 @@ def longest_silence(log_path: str) -> float | None:
         if previous is not None and (worst is None or stamp - previous > worst):
             worst = stamp - previous
         previous = stamp
-    return worst
+    return worst if whole else None
 
 
 def baseline_silence(
@@ -755,8 +776,9 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             for record, _log in found:
                 print(f"  {record}")
             return EXIT_AMBIGUOUS
-        if found:
+        if found and complete:
             break
+        found = []  # 走査しきれていない 1 件は「唯一」の証明になっていない
         if deadline_reached(deadline, args.poll_seconds):
             if not complete:
                 # 走査しきれていない以上、 「登録されていない」 は言えない。
@@ -780,11 +802,11 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # appended, so a baseline taken once can be missing that job's real gap.
         baseline = baseline_silence(jobs_dir, args.job_id, now, args.hang_seconds)
         threshold = stall_threshold(args.stall_seconds, baseline)
-        record = job_record(record_path)
+        record = job_record(record_path, args.job_id)
         # 1 poll 1 走査 — verdict も evidence も同じ結果を使い、読み直さない。 走査の
         # 前後で観測対象が動いたら、 その poll は古い無音と新しい本文の混成になる。
         before = (file_stat(log), file_stat(args.artifact))
-        unfinished, tail = scan_log(log)
+        unfinished, tail, whole_log = scan_log(log)
         age = heartbeat_age(log, now)
         tree = tree_age((record or {}).get("workspaceRoot"), now)
         ready = artifact_ready(args.artifact, args.token, run_since(record or {}))
@@ -798,10 +820,14 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # その窓に入った poll は、 古い running のまま静穏を読んで stall と言える。
         moved = (
             (file_stat(log), file_stat(args.artifact)) != before
-            or job_record(record_path) != record
+            or job_record(record_path, args.job_id) != record
             # os.walk は snapshot ではないので、 列挙済み file への書き込みは
             # 走査し直さない限りこの poll から丸ごと抜け落ちる。
             or tree_age((record or {}).get("workspaceRoot"), now) != tree
+            # log を最後まで読めていない view は、 未完了 start を落として stall 抑止を消す。
+            or not whole_log
+            # 監視開始後に同じ id の record が増えても、 固定した path だけ見ていては気付けない。
+            or find_jobs(args.job_id, roots) != ([(record_path, log)], True)
         )
         if not os.path.exists(record_path):
             # The plugin prunes to its newest 50 jobs regardless of status, so a
@@ -833,6 +859,15 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 expects_artifact=args.artifact is not None,
                 command_may_run=bool(unfinished),
                 trust_log=args.trust_log,
+            )
+        # 破棄した poll をそのまま下の分岐へ流すと、 混成した snapshot が exit 12 / 7 / 11 の
+        # evidence として出る。 動いた回はここで打ち切り、 次の poll で取り直す。
+        if out is None and moved and (args.once or deadline_reached(deadline)):
+            out = (
+                EXIT_ALIVE if args.once else EXIT_UNVERIFIABLE,
+                f"{'alive' if args.once else 'unverifiable'}: the job's state changed "
+                f"while it was being read, so no single observation backs a verdict "
+                f"(record says {(record or {}).get('status') or '不明'})",
             )
         if (
             out is None
@@ -1423,6 +1458,90 @@ class WatchTest(unittest.TestCase):
         self.assertAlmostEqual(age, 90, delta=5)
         self.assertIsNone(tree_age("/nonexistent", time.time()))
 
+    def test_a_broken_log_read_is_reported_to_every_reader(self):
+        """短い view は未完了 start を落とし、その log の最大 gap でもない。"""
+        from unittest import mock
+
+        _root, _rec, log = self._state("ws", "task-x", "running")
+        seen = []
+        with mock.patch("builtins.open", side_effect=PermissionError):
+            list(log_lines(log, lambda: seen.append(1)))
+            self.assertFalse(scan_log(log)[2])
+            self.assertIsNone(longest_silence(log))
+        self.assertEqual(seen, [1])
+
+    def test_a_short_log_view_does_not_settle_a_verdict(self):
+        """途中で切れた log は未完了 start を落とす — その view で完了を宣言しない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-done", "completed", log_age=900.0)
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".scan_log", lambda *a, **k: ([], ["x"], False)),
+        ):
+            self.assertEqual(
+                watch(self._watch_args(root, "task-done", once=True)), EXIT_ALIVE
+            )
+
+    def test_a_record_found_behind_an_unreadable_root_is_not_taken(self):
+        """全 root を読めていない 1 件は、「唯一の record」の証明になっていない。"""
+        import io
+        from contextlib import redirect_stdout
+
+        root, _rec, _log = self._state("ws", "task-live", "running")
+        blocked = tempfile.mkdtemp()
+        os.chmod(blocked, 0o000)
+        self.addCleanup(os.chmod, blocked, 0o755)
+        args = self._watch_args(root, "task-live", timeout_seconds=0.02)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(watch(args, roots=[blocked, root]), EXIT_UNVERIFIABLE)
+        # 登録待ちで止まること — poll に入ってから変化として拾うのとは別の主張。
+        self.assertIn("cannot be shown to be unregistered", buf.getvalue())
+
+    def test_a_duplicate_appearing_after_the_start_stops_the_verdict(self):
+        """開始時の一意性だけ見ていると、監視中に増えた同一 id を見逃す。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-done", "completed")
+        real, calls = find_jobs, []
+
+        def gaining(job_id, roots):
+            found, complete = real(job_id, roots)
+            calls.append(1)
+            extra = [] if len(calls) == 1 else [("/elsewhere.json", "/elsewhere.log")]
+            return found + extra, complete
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".find_jobs", gaining),
+        ):
+            self.assertEqual(
+                watch(self._watch_args(root, "task-done", once=True)), EXIT_ALIVE
+            )
+
+    def test_a_state_that_keeps_changing_is_not_a_timeout(self):
+        """破棄した poll を流すと、混成した snapshot が timeout の evidence になる。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-live", "running", log_age=900.0)
+        ages = itertools.cycle([900.0, 5.0])
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".tree_age", lambda *a: next(ages)),
+        ):
+            self.assertEqual(
+                watch(self._watch_args(root, "task-live", timeout_seconds=0.02)),
+                EXIT_UNVERIFIABLE,
+            )
+
     def test_peer_growing_during_the_read_does_not_set_the_baseline(self):
         """読取の前後で伸びた peer の gap は、不完全な view から来た値である。"""
         from unittest import mock
@@ -1629,7 +1748,7 @@ class WatchTest(unittest.TestCase):
             self.assertIn(expect, text)
 
     def _evidence(self, log, artifact=None, ready=False):
-        unfinished, tail = scan_log(log)  # watch() と同じ 1 走査の結果を渡す
+        unfinished, tail, _whole = scan_log(log)  # watch() と同じ 1 走査の結果を渡す
         return evidence(
             "task-x",
             {"status": "running", "workspaceRoot": "/w"},
@@ -1895,8 +2014,10 @@ class WatchTest(unittest.TestCase):
             redirect_stdout(io.StringIO()),
             mock.patch(
                 __name__ + ".job_record",
-                lambda path: (
-                    None if calls.append(path) or len(calls) == 1 else real(path)
+                lambda path, job_id=None: (
+                    None
+                    if calls.append(path) or len(calls) == 1
+                    else real(path, job_id)
                 ),
             ),
         ):
@@ -2043,7 +2164,7 @@ class WatchTest(unittest.TestCase):
             "builtins.open",
             lambda p, *a, **k: (opens.append(p), real(p, *a, **k))[1],
         ):
-            pending, tail = scan_log(log)
+            pending, tail, _whole = scan_log(log)
         self.assertEqual(opens.count(log), 1)
         self.assertEqual(pending, ["cargo test --all"])
         self.assertIn("cargo test --all", tail[-1])
