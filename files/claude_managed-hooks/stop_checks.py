@@ -325,8 +325,11 @@ def _worktree_cleanup_warnings(cwd: str | None) -> list[str]:
     if info is None:
         return []
     repo, main_head, candidates = info
+    busy = _codex_busy_roots() if candidates else set()
     warnings: list[str] = []
     for path in candidates:
+        if os.path.realpath(path) in busy:
+            continue
         if _clean_merged_worktree(repo, path, main_head):
             command = (
                 f"git -C {shlex.quote(repo)} worktree remove -- {shlex.quote(path)}"
@@ -375,7 +378,7 @@ def _codex_is_linked_worktree(path: str) -> bool | None:
     return git_dir != common_dir
 
 
-def _codex_job_records(session_id: str) -> list[dict]:
+def _codex_job_records(session_id: str | None) -> list[dict]:
     records: list[dict] = []
     try:
         state_root = os.path.expanduser(_CODEX_STATE_ROOT)
@@ -397,14 +400,24 @@ def _codex_job_records(session_id: str) -> list[dict]:
                                 record = json.load(stream)
                         except (OSError, ValueError):
                             continue
-                        if (
-                            isinstance(record, dict)
-                            and record.get("sessionId") == session_id
+                        if isinstance(record, dict) and (
+                            session_id is None or record.get("sessionId") == session_id
                         ):
                             records.append(record)
     except OSError:
         return []
     return records
+
+
+def _codex_busy_roots() -> set[str]:
+    """未完了 codex job の作業 root — 壊れるのは job ゆえ session を跨いで全部拾う。"""
+    return {
+        os.path.realpath(record["workspaceRoot"])
+        for record in _codex_job_records(None)
+        if record.get("status") in ("queued", "running")
+        and isinstance(record.get("workspaceRoot"), str)
+        and record["workspaceRoot"]
+    }
 
 
 def _codex_job_sort_key(record: dict) -> tuple[bool, float]:
@@ -728,7 +741,12 @@ INTENT_DECLARE_PATTERNS: list[str] = [
     r"デプロイします",
     r"deploy\s?します",
 ]
-INTENT_DECLARE_RE = re.compile("|".join(INTENT_DECLARE_PATTERNS), re.IGNORECASE)
+# 疑問の終助詞 「か」 が続く形は user への問いかけ (declare-and-proceed の担当) で宣言ではない。
+_INTENT_QUESTION_TAIL = r"(?!(?:でしょう)?か(?:[?？。、,!！)\]」』]|\s|$))"
+INTENT_DECLARE_RE = re.compile(
+    "(?:" + "|".join(INTENT_DECLARE_PATTERNS) + ")" + _INTENT_QUESTION_TAIL,
+    re.IGNORECASE,
+)
 
 # --- Pattern: claim-without-evidence (warning, no block) ---
 # 「無い」系だけでなく「できない / 書かれていない」系も対象 (実測 2026-08-08: 探索範囲を確かめずに
@@ -2203,6 +2221,27 @@ class EnforcementFamilyTest(unittest.TestCase):
         blk = self._blk("説明します")
         self.assertFalse(any("intent-without-task" in b for b in blk))
 
+    def test_interrogative_is_not_a_declaration(self):
+        """疑問形の「〜ますか」 は user への問いかけで、 遂行宣言ではない。"""
+        for text in (
+            "どれから進めますか?",
+            "先に修正しますか？",
+            "この順で対応しますか",
+            "実装しますか、それとも設計から詰めますか?",
+        ):
+            with self.subTest(text=text):
+                blk = self._blk(text)
+                self.assertFalse(any("intent-without-task" in b for b in blk))
+
+    def test_declaration_with_causal_kara_still_blocks(self):
+        """除外は疑問の 「か」 だけに効き、 「〜ますから」 の宣言を落とさない。"""
+        blk = self._blk("先に修正しますから、その後で見てください。")
+        self.assertTrue(any("intent-without-task" in b for b in blk))
+
+    def test_declaration_alongside_question_still_blocks(self):
+        blk = self._blk("まず修正します。次はどれから進めますか?")
+        self.assertTrue(any("intent-without-task" in b for b in blk))
+
     def test_intent_fenced_not_fired(self):
         # strip_fences removes the declaration; bare prose is clean so no block.
         text = "検討結果:\n```\nやります\n```\n以上です。"
@@ -2820,6 +2859,38 @@ class WorktreeFixtureMixin:
             }
         )
         os.makedirs(self.env["HOME"])
+        from unittest import mock
+
+        home_patch = mock.patch.dict(os.environ, {"HOME": self.env["HOME"]})
+        home_patch.start()
+        self.addCleanup(home_patch.stop)  # ty: ignore[unresolved-attribute]
+
+    def _job(
+        self,
+        root,
+        job_id,
+        session="session",
+        write=True,
+        status="completed",
+        updated_at=None,
+    ):
+        path = os.path.join(
+            self.env["HOME"], ".claude/plugins/data/codex-openai-codex/state/test/jobs"
+        )
+        os.makedirs(path, exist_ok=True)
+        with open(
+            os.path.join(path, job_id + ".json"), "w", encoding="utf-8"
+        ) as stream:
+            record = {
+                "id": job_id,
+                "sessionId": session,
+                "write": write,
+                "workspaceRoot": str(root),
+                "status": status,
+            }
+            if updated_at is not None:
+                record["updatedAt"] = updated_at
+            json.dump(record, stream)
 
     def _git(self, *args, cwd):
         return subprocess.run(
@@ -2903,6 +2974,50 @@ class WorktreeCleanupTest(WorktreeFixtureMixin, unittest.TestCase):
         )
         self.assertNotIn("--force", warnings[0])
         self.assertIn("取り込み後", warnings[0])
+
+    def test_running_codex_job_keeps_its_worktree_off_the_list(self):
+        """稼働中 job の作業 root は、 成果物を書く前で clean に見えても削除候補にしない。"""
+        repo = self._repo()
+        linked = self._linked(repo)
+        self._advance_main(repo)
+        self._job(linked, "job-1", status="running")
+
+        _code, warnings, _blocking = self._check_repo(repo)
+
+        self.assertEqual(warnings, [])
+
+    def test_running_job_of_another_session_also_protects(self):
+        """別 session の job でも作業 root は守る — 壊れるのは job であって session ではない。"""
+        repo = self._repo()
+        linked = self._linked(repo)
+        self._advance_main(repo)
+        self._job(linked, "job-1", session="other-session", status="queued")
+
+        _code, warnings, _blocking = self._check_repo(repo)
+
+        self.assertEqual(warnings, [])
+
+    def test_finished_codex_job_leaves_its_worktree_removable(self):
+        repo = self._repo()
+        linked = self._linked(repo)
+        self._advance_main(repo)
+        self._job(linked, "job-1", status="completed")
+
+        _code, warnings, _blocking = self._check_repo(repo)
+
+        self.assertEqual(len(warnings), 1)
+        self.assertIn(str(linked), warnings[0])
+
+    def test_running_job_elsewhere_does_not_shield_other_worktrees(self):
+        repo = self._repo()
+        linked = self._linked(repo)
+        self._advance_main(repo)
+        self._job(repo, "job-1", status="running")
+
+        _code, warnings, _blocking = self._check_repo(repo)
+
+        self.assertEqual(len(warnings), 1)
+        self.assertIn(str(linked), warnings[0])
 
     def test_linked_worktree_under_repo_is_detected_from_main_cwd(self):
         repo = self._repo()
@@ -3269,41 +3384,6 @@ class WorktreeCleanupTest(WorktreeFixtureMixin, unittest.TestCase):
 
 class CodexSharedWriteTest(WorktreeFixtureMixin, unittest.TestCase):
     """Codex job-state warning claims. Run: python3 -m unittest stop_checks"""
-
-    def setUp(self):
-        super().setUp()
-        from unittest import mock
-
-        self.home_patch = mock.patch.dict(os.environ, {"HOME": self.env["HOME"]})
-        self.home_patch.start()
-        self.addCleanup(self.home_patch.stop)
-
-    def _job(
-        self,
-        root,
-        job_id,
-        session="session",
-        write=True,
-        status="completed",
-        updated_at=None,
-    ):
-        path = os.path.join(
-            self.env["HOME"], ".claude/plugins/data/codex-openai-codex/state/test/jobs"
-        )
-        os.makedirs(path, exist_ok=True)
-        with open(
-            os.path.join(path, job_id + ".json"), "w", encoding="utf-8"
-        ) as stream:
-            record = {
-                "id": job_id,
-                "sessionId": session,
-                "write": write,
-                "workspaceRoot": str(root),
-                "status": status,
-            }
-            if updated_at is not None:
-                record["updatedAt"] = updated_at
-            json.dump(record, stream)
 
     def _payload(self):
         return {
