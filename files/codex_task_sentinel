@@ -28,7 +28,7 @@ Takes a job id plus the deliverable it must produce; --help lists the rest and
 
 Exit codes, and what the caller does with each:
 
-  0  done              the deliverable is this run's and the job completed
+  0  done              the job completed; a named deliverable is this run's
   3  done-hung         --trust-log only: deliverable ready, runner still registered — verify, then cancel
   4  stall             --trust-log only: log and tree quiet — cancel, re-issue fresh
   5  no-deliverable    completed but produced nothing complete — read the log
@@ -37,7 +37,7 @@ Exit codes, and what the caller does with each:
   8  not-completed     cancelled or failed — never a result; re-issue on a fresh thread
   9  ambiguous         several records carry the id — disambiguate before trusting one
   10 vanished          the record was pruned after registration — outcome unknowable
-  11 alive             --once only: still running; re-arm or investigate
+  11 alive             --once only: no verdict this cadence; re-arm or investigate
   12 over-estimate     twice --estimate-seconds with no verdict — investigate
   13 corrupt           the record is present but unreadable — do not read it as a stall
   14 unverifiable      nothing observable settles it — read the evidence, then decide
@@ -84,6 +84,8 @@ ALIVE_STATUS = frozenset({"queued", "running"})
 BASELINE_STATUS = "completed"
 STALL_FLOOR_SECONDS = 420.0  # the skill's 7 min, used when history gives nothing larger
 STALL_BASELINE_FACTOR = 3.0
+# 1 回の sleep の上限 — 有限でも巨大な cadence は time.sleep が overflow する。
+MAX_SLEEP_SECONDS = 3600.0
 # 秒以降を緩く受けると、 本文の [.. 00:00:01:99Z] のような不正 stamp が event に化け、
 # 稼働中 command の start を偽の end で消してしまう。 runner はこの形しか書かない。
 LOG_TS = re.compile(r"^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?)Z\]")
@@ -94,8 +96,8 @@ RECORD_TS = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?Z")
 MAX_LOG_LINE = 8192
 # 未完了 start の保持上限 — 実ログの最大は 3 件で、 これを超えるのは本文が作った偽 start。
 MAX_PENDING = 512
-# 成果物から読む上限。 これを超える file は末尾だけを見るので、 それより前の
-# 不正 byte は検出できない (完了 token の判定には末尾で足りる)。
+# 成果物は全体を strict decode するが、 1 回の read 量と保持する末尾 buffer を
+# この値に抑える — 全量を持つと巨大な成果物ひとつで MemoryError になる。
 MAX_ARTIFACT_BYTES = 1 << 20
 # record は job 1 件のメタデータ — 実機の最大は 1.3KB で、 これを超えるのは異常。
 MAX_RECORD_BYTES = 1 << 20
@@ -231,7 +233,12 @@ def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], boo
             try:
                 os.stat(record)
             except (FileNotFoundError, NotADirectoryError):
-                # 通常 file は jobs/ を抱えられない — 走査漏れではなく、 空だと分かる。
+                # 通常 file なら jobs/ を抱えられないので空で正しい。 列挙後に entry が
+                # 消えたなら走査できていないので、 不在と断定しない。
+                try:
+                    os.lstat(os.path.join(root, workspace))
+                except OSError:
+                    complete = False
                 continue
             except OSError:
                 complete = False
@@ -319,13 +326,17 @@ def record_gone(record_path: str) -> bool:
     return False
 
 
-def file_stat(path: str | None) -> tuple[float, int] | None:
-    """(mtime, size) identifying one snapshot of a file; None when it is absent."""
+def file_stat(path: str | None) -> tuple[int, int, float, int] | None:
+    """One snapshot of a file, identity included; None when it is absent.
+
+    dev and ino are part of it because a replacement can carry the same mtime
+    and size, and then two different files compare as one unchanged snapshot.
+    """
     try:
         st = os.stat(path) if path else None
     except OSError:
         return None
-    return (st.st_mtime, st.st_size) if st else None
+    return (st.st_dev, st.st_ino, st.st_mtime, st.st_size) if st else None
 
 
 def deadline_reached(deadline: float, margin: float = 0.0) -> bool:
@@ -334,8 +345,14 @@ def deadline_reached(deadline: float, margin: float = 0.0) -> bool:
 
 
 def sleep_until(deadline: float, poll_seconds: float) -> None:
-    """Wait one cadence at most, and never past the deadline the caller was promised."""
-    time.sleep(max(0.0, min(poll_seconds, deadline - time.monotonic())))
+    """Wait one cadence at most, and never past the deadline the caller was promised.
+
+    Capped because a finite but enormous cadence overflows time.sleep on some
+    platforms, and a traceback is not one of the exits this tool promises.
+    """
+    time.sleep(
+        max(0.0, min(poll_seconds, deadline - time.monotonic(), MAX_SLEEP_SECONDS))
+    )
 
 
 def heartbeat_age(log_path: str, now: float) -> float | None:
@@ -572,7 +589,7 @@ def baseline_silence(
         # completed と書かれてから最終 block が append されるまでの窓で読むと、
         # その peer の本当の gap を欠いた低い baseline になる。 落ち着くまで数えない。
         before = file_stat(peer_log)
-        if before is None or now - before[0] < settle_seconds:
+        if before is None or now - before[2] < settle_seconds:  # [2] は mtime
             continue
         quiet = longest_silence(peer_log)
         if file_stat(peer_log) != before:
@@ -689,10 +706,15 @@ def version_key(path: str) -> tuple[int, ...]:
 
 def companion_path() -> str | None:
     """The companion this machine actually has; None when neither copy is present."""
-    found = [path for path in glob.glob(COMPANION_GLOB) if os.path.exists(path)]
+
+    def usable(path: str) -> bool:
+        # node に渡す script — 在るだけでは足りず、 読める通常 file である必要がある。
+        return os.path.isfile(path) and os.access(path, os.R_OK)
+
+    found = [path for path in glob.glob(COMPANION_GLOB) if usable(path)]
     if found:
         return max(found, key=version_key)
-    return COMPANION_FALLBACK if os.path.exists(COMPANION_FALLBACK) else None
+    return COMPANION_FALLBACK if usable(COMPANION_FALLBACK) else None
 
 
 def cancel_command(job_id: str, root: str | None) -> str:
@@ -897,6 +919,11 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # bool に畳むと、 後から別 path の同名 record へ黙ってすり替わる。
         seen_pairs.update(found)
         found = []
+        if args.once:
+            # --once は 1 cadence で返す約束 — 登録待ちだけ待ち続けるのは約束違反。
+            print(f"alive: {printable(args.job_id)} is not registered yet")
+            print(f"  searched: {printable(', '.join(roots))}")
+            return EXIT_ALIVE
         # 終局は実期限で決める — margin を足すと、 待つと約束した時間内の登録を取り逃す。
         if deadline_reached(deadline):
             if not complete or seen_pairs:
@@ -1881,6 +1908,55 @@ class WatchTest(unittest.TestCase):
             self.fail("消えた dir が走査不能として扱われた")
         self.assertLess(age, 5.0)
 
+    def test_a_replacement_with_the_same_size_and_mtime_is_seen(self):
+        """(mtime, size) は identity ではない — 同値の差し替えが変化なしに見える。"""
+        base = tempfile.mkdtemp()
+        one, two = os.path.join(base, "a"), os.path.join(base, "b")
+        for path in (one, two):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("same")
+            os.utime(path, (1000, 1000))
+        self.assertNotEqual(file_stat(one), file_stat(two))
+
+    def test_once_returns_while_still_waiting_for_registration(self):
+        """--once は 1 cadence で返す約束 — 登録待ちで待ち続けるのは約束違反。"""
+        import io
+        from contextlib import redirect_stdout
+
+        root = tempfile.mkdtemp()
+        args = self._watch_args(root, "task-absent", once=True, timeout_seconds=3600.0)
+        began = time.monotonic()
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(watch(args), EXIT_ALIVE)
+        self.assertLess(time.monotonic() - began, 5.0)
+
+    def test_a_workspace_vanishing_mid_scan_is_not_an_absence(self):
+        """列挙後に消えた entry は「通常 file だから空」ではない。"""
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-x", "running")
+        real = os.stat
+
+        def gone(path, *a, **k):
+            if path.endswith("task-other.json"):
+                raise FileNotFoundError(path)
+            return real(path, *a, **k)
+
+        with (
+            mock.patch("os.stat", gone),
+            mock.patch("os.lstat", side_effect=FileNotFoundError),
+        ):
+            self.assertEqual(find_jobs("task-other", [root]), ([], False))
+
+    def test_an_enormous_cadence_does_not_overflow_the_sleep(self):
+        """有限でも巨大な cadence は time.sleep が overflow する — 契約 exit を返せない。"""
+        from unittest import mock
+
+        asked = []
+        with mock.patch("time.sleep", asked.append):  # 実際に眠らず、渡す値だけ見る
+            sleep_until(time.monotonic() + 1e300, 1e300)
+        self.assertEqual(asked, [MAX_SLEEP_SECONDS])
+
     def test_the_cancel_command_needs_a_traversable_root(self):
         """存在するだけでは cd できない — 検索権の無い dir は貼っても動かない。"""
         blocked = tempfile.mkdtemp()
@@ -2646,12 +2722,15 @@ class WatchTest(unittest.TestCase):
         ]
         with (
             mock.patch("glob.glob", return_value=cached),
-            mock.patch("os.path.exists", return_value=True),
+            mock.patch("os.path.isfile", return_value=True),
+            mock.patch("os.access", return_value=True),
         ):
             self.assertEqual(companion_path(), cached[1])
+        # 在っても読めない / 通常 file でないなら、実行できる command にならない。
         with (
             mock.patch("glob.glob", return_value=cached),
-            mock.patch("os.path.exists", return_value=False),
+            mock.patch("os.path.isfile", return_value=True),
+            mock.patch("os.access", return_value=False),
         ):
             self.assertIsNone(companion_path())
             self.assertIn("not found", cancel_command("task-x", None))
