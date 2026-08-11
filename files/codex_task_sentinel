@@ -497,15 +497,21 @@ def version_key(path: str) -> tuple[int, ...]:
     return tuple(int(x) if x.isdigit() else 0 for x in part.split("."))
 
 
-def companion_path() -> str:
-    """The companion this machine actually has, newest version first."""
-    found = glob.glob(COMPANION_GLOB)
-    return max(found, key=version_key) if found else COMPANION_FALLBACK
+def companion_path() -> str | None:
+    """The companion this machine actually has; None when neither copy is present."""
+    found = [path for path in glob.glob(COMPANION_GLOB) if os.path.exists(path)]
+    if found:
+        return max(found, key=version_key)
+    return COMPANION_FALLBACK if os.path.exists(COMPANION_FALLBACK) else None
 
 
 def cancel_command(job_id: str, root: str | None) -> str:
     """The cancel the operator would otherwise have to assemble, cwd included."""
-    node = f"node {shlex.quote(companion_path())} cancel {job_id} --json"
+    companion = companion_path()
+    if companion is None:
+        # 在りかを言えないなら、 動かない command を印字するより言えないと言う。
+        return f"codex plugin's companion script not found — cancel {job_id} from the plugin"
+    node = f"node {shlex.quote(companion)} cancel {job_id} --json"
     return f"(cd {shlex.quote(root)} && {node})" if root else node
 
 
@@ -1532,8 +1538,11 @@ class WatchTest(unittest.TestCase):
         """印字した cancel が MODULE_NOT_FOUND で落ちるなら、evidence は行動へ繋がらない。"""
         if not glob.glob(COMPANION_GLOB):  # 実環境が無ければ空で skip 相当
             return
-        self.assertTrue(os.path.exists(companion_path()))
-        self.assertIn(companion_path(), cancel_command("task-x", None))
+        found = companion_path()
+        if found is None:
+            self.fail("cache に版があるのに companion を選べていない")
+        self.assertTrue(os.path.exists(found))
+        self.assertIn(found, cancel_command("task-x", None))
 
     def test_companion_version_is_ordered_numerically(self):
         """辞書順だと 1.0.10 が 1.0.9 より古いと読まれ、消えた版を指し続ける。"""
@@ -1545,10 +1554,17 @@ class WatchTest(unittest.TestCase):
             )
             for v in ("1.0.9", "1.0.10")
         ]
-        with mock.patch("glob.glob", return_value=cached):
+        with (
+            mock.patch("glob.glob", return_value=cached),
+            mock.patch("os.path.exists", return_value=True),
+        ):
             self.assertEqual(companion_path(), cached[1])
-        with mock.patch("glob.glob", return_value=[]):
-            self.assertEqual(companion_path(), COMPANION_FALLBACK)
+        with (
+            mock.patch("glob.glob", return_value=cached),
+            mock.patch("os.path.exists", return_value=False),
+        ):
+            self.assertIsNone(companion_path())
+            self.assertIn("not found", cancel_command("task-x", None))
 
     def test_deadline_ignores_the_wall_clock(self):
         """時計合わせで待ち時間が変わってはいけない — 期限は経過時間であって時刻ではない。"""
