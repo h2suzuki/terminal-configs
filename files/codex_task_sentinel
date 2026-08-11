@@ -502,9 +502,10 @@ def tree_age(root: str | None, now: float) -> float | None:
             *(os.path.join(base, name) for name in files),
         ):
             # lstat で entry 自身を測る — getmtime は link を辿るので、 tree の外の
-            # 頻繁に更新される target が job の活動として数えられてしまう。
+            # 頻繁に更新される target が job の活動として数えられてしまう。 ただし
+            # root 自身が symlink なら、 監視対象はその target dir そのものである。
             try:
-                mtime = os.lstat(path).st_mtime
+                mtime = (os.stat(path) if path == root else os.lstat(path)).st_mtime
             except FileNotFoundError:
                 mtime = now  # 一覧にあった entry が消えた = たった今の書き込み
             except OSError:
@@ -663,6 +664,14 @@ def artifact_ready(
         return None  # 在るのに読めない — 「成果物なし」と断定してよい根拠がない
     if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
         return False  # 読んでいる間に伸びた = まだ書かれている最中
+    try:
+        # 読み終えた inode が今も その path か — 読取中だけ在った成果物を ready に
+        # すると、 外側の「不在 → 不在」比較では変化として拾えない。
+        named = os.stat(path)
+    except OSError:
+        return False
+    if (named.st_dev, named.st_ino) != (after.st_dev, after.st_ino):
+        return False
     if after.st_mtime < since:
         return False  # a leftover from an earlier run is not this run's output
     if not token:
@@ -695,7 +704,8 @@ def cancel_command(job_id: str, root: str | None) -> str:
     # job id も quote する — 印字した command はそのまま shell に貼られる。
     node = f"node {shlex.quote(companion)} cancel {shlex.quote(job_id)} --json"
     # 無い dir へ cd する command を出しても実行できない — 出せる形だけを出す。
-    if not (root and os.path.isdir(root)):
+    # 存在するだけでは足りない — 検索権が無い dir への cd は Permission denied になる。
+    if not (root and os.path.isdir(root) and os.access(root, os.X_OK)):
         return node
     return f"(cd {shlex.quote(root)} && {node})"
 
@@ -791,6 +801,17 @@ def verdict(
     )
 
 
+def printable(text: object) -> str:
+    """External text with control characters escaped — it is printed to a terminal.
+
+    The plugin appends message bodies verbatim, so a body carrying CR or an escape
+    sequence can erase the headline above it or forge a cancel line beneath it.
+    """
+    return "".join(
+        ch if ch.isprintable() or ch == " " else f"\\x{ord(ch):02x}" for ch in str(text)
+    )
+
+
 def evidence(
     job_id: str,
     record: dict,
@@ -819,23 +840,25 @@ def evidence(
     state = "unreadable" if ready is None else ("ready" if ready else "not ready")
     made = f"{state} {artifact}" if artifact else "指定なし"
     lines = [
-        f"  job    : {job_id} status={record.get('status') or '不明'} root={root or '不明'}",
+        f"  job    : {printable(job_id)} "
+        f"status={printable(record.get('status') or '不明')} "
+        f"root={printable(root or '不明')}",
         # 読み切れなかった view の静穏と tail を、 完全なものとして見せない。
         f"  無音   : {quiet}{versus} / しきい値 {int(threshold)}s"
         + ("" if whole_log else " (log を最後まで読めず)"),
         # None は 「静穏」 ではなく 「読めなかった」 — headline と強さを揃える。
         f"  ツリー : {'不明 (workspaceRoot を読めないか対象 file なし)' if tree is None else f'最終書き込み {int(tree)}s 前'}",
         f"  成果物 : {made}",
-        f"  末尾   : {shown[0]}",
-        *(f"           {ln}" for ln in shown[1:]),
+        f"  末尾   : {printable(shown[0])}",
+        *(f"           {printable(ln)}" for ln in shown[1:]),
     ]
     if unfinished:
         rest = f" 他 {len(unfinished) - 5} 件" if len(unfinished) > 5 else ""
-        lines.append(f"  未完了 : {' / '.join(unfinished[:5])}{rest}")
+        lines.append(f"  未完了 : {printable(' / '.join(unfinished[:5]))}{rest}")
     # 失敗理由は record が持っている — 出さなければ呼び手が同じ file を手で開き直すだけ。
     failure = record.get("errorMessage")
     if isinstance(failure, str) and failure.strip():
-        lines.append(f"  エラー : {failure.strip()[:200]}")
+        lines.append(f"  エラー : {printable(failure.strip()[:200])}")
     lines += [
         f"  log    : {log}",
         f"  cancel : {cancel_command(job_id, root if isinstance(root, str) else None)}",
@@ -848,6 +871,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
     deadline = time.monotonic() + args.timeout_seconds
     started = time.monotonic()
     found: list[tuple[str, str]] = []
+    seen_any = False
     while not found:
         found, complete = find_jobs(args.job_id, roots)
         if len(found) > 1:
@@ -857,14 +881,19 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             return EXIT_AMBIGUOUS
         if found and complete:
             break
-        found = []  # 走査しきれていない 1 件は「唯一」の証明になっていない
+        # 走査しきれていない 1 件は「唯一」の証明にならないが、 見たことは事実。
+        # 忘れると、 後で prune された後に 「起動が成立していない」 と誤断定する。
+        seen_any = seen_any or bool(found)
+        found = []
         # 終局は実期限で決める — margin を足すと、 待つと約束した時間内の登録を取り逃す。
         if deadline_reached(deadline):
-            if not complete:
-                # 走査しきれていない以上、 「登録されていない」 は言えない。
+            if not complete or seen_any:
+                # 走査しきれていない、 または一度は見えた — どちらも
+                # 「登録されていない」 とは言えない。
                 print(
-                    f"unverifiable: part of the state tree could not be read, so "
-                    f"{args.job_id} cannot be shown to be unregistered"
+                    f"unverifiable: the state tree could not be read in full or the "
+                    f"record was seen and then lost, so {args.job_id} cannot be shown "
+                    f"to be unregistered"
                 )
                 print(f"  searched: {', '.join(roots)}")
                 return EXIT_UNVERIFIABLE
@@ -1764,6 +1793,80 @@ class WatchTest(unittest.TestCase):
             artifact_ready("/any/report.md", "TOKEN", 0.0)
         self.assertGreaterEqual(handle.reads, 1)  # 空振りしていないこと
         self.assertLessEqual(handle.reads, 2)
+
+    def test_a_record_seen_once_is_never_called_unregistered(self):
+        """一度見えた record を忘れると、prune 後に「起動していない」と誤断定する。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-live", "running")
+        seen = [([("/a.json", "/a.log")], False), ([], True)]
+        args = self._watch_args(root, "task-live", timeout_seconds=0.03)
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(
+                __name__ + ".find_jobs",
+                lambda *a: seen.pop(0) if seen else ([], True),
+            ),
+        ):
+            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
+
+    def test_the_cancel_command_needs_a_traversable_root(self):
+        """存在するだけでは cd できない — 検索権の無い dir は貼っても動かない。"""
+        blocked = tempfile.mkdtemp()
+        os.chmod(blocked, 0o600)  # 読めるが辿れない
+        self.addCleanup(os.chmod, blocked, 0o755)
+        self.assertNotIn("cd ", cancel_command("task-x", blocked))
+
+    def test_a_root_symlink_is_measured_through_to_its_target(self):
+        """root 自身が symlink なら、監視対象は target dir そのものである。"""
+        target = tempfile.mkdtemp()
+        link = os.path.join(tempfile.mkdtemp(), "root")
+        os.symlink(target, link)
+        os.utime(link, (0, 0), follow_symlinks=False)
+        age = tree_age(link, time.time())
+        if age is None:
+            self.fail("走査不能と判定された")
+        self.assertLess(age, 5.0)  # target dir は今作られた
+
+    def test_a_deliverable_unlinked_during_the_read_is_not_ready(self):
+        """読取中だけ在った成果物は、外側の「不在 → 不在」比較では拾えない。"""
+        from unittest import mock
+
+        p = os.path.join(tempfile.mkdtemp(), "report.md")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("body\nREPORT_COMPLETE\n")
+        real, swapped = os.stat, []
+
+        def vanishing(path, *a, **k):
+            if path == p and not swapped:
+                swapped.append(1)
+                # 先に別 file を作ってから rename — 消してから作り直すと、 同じ inode 番号
+                # が再利用されて差し替えを再現できないことがある。
+                with open(p + ".new", "w", encoding="utf-8") as new:
+                    new.write("body\nREPORT_COMPLETE\n")
+                os.rename(p + ".new", p)
+            return real(path, *a, **k)
+
+        with mock.patch("os.stat", vanishing):
+            self.assertFalse(artifact_ready(p, "REPORT_COMPLETE", time.time() - 60))
+
+    def test_control_characters_cannot_repaint_the_evidence(self):
+        """log 本文と record は無加工で届く — CR や ESC で表示を作り替えられる。"""
+        text = evidence(
+            "task-x",
+            {"status": "failed", "errorMessage": "boom\r  cancel : rm -rf /"},
+            "/w/job.log",
+            5.0,
+            5.0,
+            420.0,
+            None,
+            tail=["\x1b[2Kfake"],
+        )
+        self.assertNotIn("\r", text)
+        self.assertNotIn("\x1b", text)
+        self.assertIn("\\x0d", text)
 
     def test_an_oversized_record_is_corrupt_not_an_endless_read(self):
         """log と成果物に置いた上限が record にだけ無いと、そこから読み終わらない。"""
