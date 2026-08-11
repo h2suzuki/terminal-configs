@@ -19,21 +19,31 @@ escape sequence は解さず、``--cwd`` の変数展開・コマンド置換は
 from __future__ import annotations
 
 import contextlib
+import glob
+import hashlib
 import io
 import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
 
 GIT_TIMEOUT_SECONDS = 2
 CODEX_SCRIPT = "codex-companion.mjs"
+PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA"
+# 環境変数が無いときに plugin が使う 2 つの root。 どちらも無ければ検査は素通りする。
+PACKAGED_STATE_ROOT = os.path.expanduser(
+    "~/.claude/plugins/data/codex-openai-codex/state"
+)
+FALLBACK_STATE_ROOT = os.path.join(tempfile.gettempdir(), "codex-companion")
 SHELL_PUNCTUATION = frozenset(";&|()")
 LEXER_PUNCTUATION = ";&|()`"
 ESCAPE_HATCH = "CODEX_SHARED_TREE_OK=1"
@@ -78,6 +88,14 @@ ROUTE_DENY_REASON = (
     "正規経路は codex:codex-rescue subagent 経由で、発注書 path を渡す形です。"
     "status / cancel / result は本 session の Bash から直接起動して構いません。"
     "意図的に直接起動する場合は、セグメント先頭に CODEX_ROUTE_OK=1 を置いてください。"
+    "この hook 自身は file を変更しません。"
+)
+STALE_STATE_DENY_REASON = (
+    "codex-worktree-gate: この worktree より古い codex plugin の state dir が同じ path 名で残っています"
+    "（{state_dir}）。 同じ path で worktree を作り直すと前の incarnation の state が再利用され、"
+    "app-server が failed to load configuration: No such file or directory で即死します。"
+    "`rm -rf {state_dir}` で state dir を消してから、同じ command を実行し直してください。"
+    "消えるのは過去 job の記録だけで、worktree の作業内容と発注書は失われません。"
     "この hook 自身は file を変更しません。"
 )
 ESCAPE_CONTEXT = (
@@ -742,6 +760,75 @@ def _git_dir(cwd: str) -> tuple[str, str] | None:
     return git_dir, common_dir
 
 
+def _worktree_root(git_dir: str) -> str | None:
+    """linked worktree の作業 root — git 自身が add 時に書いた gitdir を辿る。"""
+    try:
+        with open(os.path.join(git_dir, "gitdir"), encoding="utf-8") as handle:
+            pointer = handle.read().strip()
+    except OSError:
+        return None
+    return os.path.dirname(pointer) or None
+
+
+def _state_dirs(workspace_root: str) -> list[str]:
+    """plugin と同じ規則で導いた state dir — slug は basename、 hash は realpath の sha256。"""
+    slug = re.sub(
+        r"^-+|-+$",
+        "",
+        re.sub(r"[^a-zA-Z0-9._-]+", "-", os.path.basename(workspace_root)),
+    )
+    digest = hashlib.sha256(os.path.realpath(workspace_root).encode()).hexdigest()[:16]
+    name = f"{slug or 'workspace'}-{digest}"
+    data_dir = os.environ.get(PLUGIN_DATA_ENV)
+    roots = (
+        [os.path.join(data_dir, "state")]
+        if data_dir
+        else [PACKAGED_STATE_ROOT, FALLBACK_STATE_ROOT]
+    )
+    return [os.path.join(root, name) for root in roots]
+
+
+def _epoch(stamp: object) -> float | None:
+    try:
+        return datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _oldest_record(state_dir: str) -> float | None:
+    """state dir が抱える最古の記録時刻 — 何も読めなければ None。"""
+    stamps = []
+    for name in ("broker.json", "state.json"):
+        with contextlib.suppress(OSError):
+            stamps.append(os.stat(os.path.join(state_dir, name)).st_mtime)
+    for path in glob.glob(os.path.join(state_dir, "jobs", "*.json")):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                created = _epoch(json.load(handle).get("createdAt"))
+        except (OSError, ValueError, AttributeError):
+            continue
+        if created is not None:
+            stamps.append(created)
+    return min(stamps) if stamps else None
+
+
+def _stale_state_dir(git_dir: str) -> str | None:
+    """作り直した worktree が引き継いでしまう、前の incarnation の state dir。"""
+    workspace_root = _worktree_root(git_dir)
+    if workspace_root is None:
+        return None
+    try:
+        # commondir は worktree 追加時に 1 度書かれ、 以後の git 操作では触られない。
+        created = os.stat(os.path.join(git_dir, "commondir")).st_mtime
+    except OSError:
+        return None
+    for state_dir in _state_dirs(workspace_root):
+        oldest = _oldest_record(state_dir)
+        if oldest is not None and oldest < created:
+            return state_dir
+    return None
+
+
 def _gate(payload: object) -> None:
     if not isinstance(payload, dict) or payload.get("tool_name") != "Bash":
         return
@@ -829,8 +916,21 @@ def _gate(payload: object) -> None:
                     "add --cwd <absolute path>.\n"
                 )
         git_dirs = _git_dir(effective_cwd)
-        if git_dirs is None or _is_linked_worktree(*git_dirs):
+        if git_dirs is None:
             continue
+        if _is_linked_worktree(*git_dirs):
+            stale = _stale_state_dir(git_dirs[0])
+            if stale is None:
+                continue
+            _emit(
+                {
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": STALE_STATE_DENY_REASON.format(
+                        state_dir=stale
+                    ),
+                }
+            )
+            return
         _emit(
             {
                 "permissionDecision": "deny",
@@ -886,6 +986,15 @@ def _init_repo(path: Path) -> None:
         ],
         cwd=path,
     )
+
+
+def setUpModule():
+    """plugin state を実 HOME から隔離する — 実機の残骸が判定を動かすと再現しない。"""
+    patch = mock.patch.dict(
+        os.environ, {PLUGIN_DATA_ENV: tempfile.mkdtemp(prefix="codex-gate-state-")}
+    )
+    patch.start()
+    unittest.addModuleCleanup(patch.stop)
 
 
 class GitFixture:
@@ -975,6 +1084,41 @@ class CodexWorktreeGateTest(unittest.TestCase):
         self.assertIn("hook 自身は file を変更しません", reason)
 
     def test_linked_worktree_task_write_allows(self):
+        self._allow(
+            self._payload(
+                "node /opt/codex-companion.mjs task --write",
+                self.git.linked,
+            )
+        )
+
+    def _state_dir(self, worktree: Path) -> Path:
+        """plugin の命名規約を実装とは別に導く — basename と realpath の sha256 先頭 16 桁。"""
+        digest = hashlib.sha256(os.path.realpath(worktree).encode()).hexdigest()[:16]
+        return Path(os.environ[PLUGIN_DATA_ENV]) / "state" / f"{worktree.name}-{digest}"
+
+    def _write_job(self, worktree: Path, created_at: str) -> Path:
+        state_dir = self._state_dir(worktree)
+        (state_dir / "jobs").mkdir(parents=True, exist_ok=True)
+        (state_dir / "jobs" / "task-old.json").write_text(
+            json.dumps({"id": "task-old", "createdAt": created_at}), encoding="utf-8"
+        )
+        self.addCleanup(shutil.rmtree, state_dir, ignore_errors=True)
+        return state_dir
+
+    def test_state_dir_predating_the_worktree_denies_with_cleanup(self):
+        state_dir = self._write_job(self.git.linked, "2020-01-01T00:00:00.000Z")
+        reason = self._deny(
+            self._payload(
+                "node /opt/codex-companion.mjs task --write",
+                self.git.linked,
+            )
+        )
+        self.assertIn(str(state_dir), reason)
+        self.assertIn("rm -rf", reason)
+        self.assertIn("hook 自身は file を変更しません", reason)
+
+    def test_state_dir_younger_than_the_worktree_allows(self):
+        self._write_job(self.git.linked, "2999-01-01T00:00:00.000Z")
         self._allow(
             self._payload(
                 "node /opt/codex-companion.mjs task --write",
