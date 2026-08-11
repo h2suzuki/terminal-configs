@@ -487,9 +487,13 @@ def tree_age(root: str | None, now: float) -> float | None:
     newest = None
     unreadable = False
 
-    def unreadable_dir(_error: OSError) -> None:
-        nonlocal unreadable  # 走査できなかった subtree の中は、書き込み中かもしれない
-        unreadable = True
+    def unreadable_dir(error: OSError) -> None:
+        nonlocal unreadable, newest
+        if isinstance(error, FileNotFoundError):
+            # 走査中に消えた dir は file と同じく 「たった今の書き込み」。
+            newest = now if newest is None else max(newest, now)
+            return
+        unreadable = True  # 走査できなかった subtree の中は、書き込み中かもしれない
 
     for base, dirs, files in os.walk(root, onerror=unreadable_dir):
         dirs[:] = [d for d in dirs if d != ".git"]
@@ -588,14 +592,12 @@ def stall_threshold(explicit: float | None, baseline: float | None) -> float:
 
 
 def run_since(record: dict) -> float | None:
-    """The earliest instant this run could have written anything.
+    """The earliest instant this run could have written anything; None before it ran.
 
-    A queued job has no startedAt yet — the plugin adds it when the worker
-    picks the job up — so fall back to createdAt rather than dropping the
-    freshness floor entirely and accepting an earlier run's deliverable.
+    startedAt is added when the worker picks the job up, so a job still queued has
+    written nothing — falling back to createdAt would let a file someone else
+    touched after the job was created count as this run's deliverable.
     """
-    # startedAt が無い = worker がまだ拾っていない。 createdAt へ落とすと、 作成後に
-    # 誰かが同じ path を更新しただけの file を この run の成果物として受理できる。
     return stamp_epoch(record.get("startedAt"))
 
 
@@ -638,9 +640,9 @@ def artifact_ready(
         # 置換された別 inode の mtime が古い本文の完了 token と組になりうる。
         with open_regular(path) as f:
             before = os.fstat(f.fileno())
-            # 全量を持つと巨大な成果物ひとつで監視が MemoryError で終わる。 decode は
-            # 先頭から通し、 保持するのは末尾だけ — 途中の不正 byte も見逃さない。
-            # 読む量は開いた時点の size まで — 動く EOF を追うと読み終わらない。
+            # 全体を先頭から strict decode するので途中の不正 byte も落ちる。 保持は
+            # 末尾だけ — 全量を持つと巨大な成果物ひとつで MemoryError になる。
+            # 読む総量は開いた時点の size まで — 動く EOF を追うと読み終わらない。
             remaining = before.st_size
             while remaining > 0 and (
                 chunk := f.read(min(MAX_ARTIFACT_BYTES, remaining))
@@ -880,7 +882,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 print(f"  {printable(record)}")
             return EXIT_AMBIGUOUS
         if found and complete:
-            if seen_pairs and found[0] not in seen_pairs:
+            # 「その 1 件が過去にも見えた」 では足りない — A→B と替わった後の B も通る。
+            if seen_pairs - {found[0]}:
                 # 前に見たのと別の record — 同じ id でも同じ job とは限らない。
                 print(
                     f"unverifiable: {printable(args.job_id)} resolved to a different "
@@ -901,10 +904,10 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 # 「登録されていない」 とは言えない。
                 print(
                     f"unverifiable: the state tree could not be read in full or the "
-                    f"record was seen and then lost, so {args.job_id} cannot be shown "
-                    f"to be unregistered"
+                    f"record was seen and then lost, so {printable(args.job_id)} "
+                    f"cannot be shown to be unregistered"
                 )
-                print(f"  searched: {', '.join(roots)}")
+                print(f"  searched: {printable(', '.join(roots))}")
                 return EXIT_UNVERIFIABLE
             print(f"never-registered: no state record for {printable(args.job_id)}")
             print(f"  searched: {printable(', '.join(roots))}")
@@ -916,7 +919,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         print(
             f"timeout: registered but not observed within {int(args.timeout_seconds)}s"
         )
-        print(f"  job    : {args.job_id} record={record_path}")
+        print(f"  job    : {printable(args.job_id)} record={printable(record_path)}")
         return EXIT_TIMEOUT
     jobs_dir = os.path.dirname(record_path)
     last_report: tuple[str, str] | None = None
@@ -1682,10 +1685,13 @@ class WatchTest(unittest.TestCase):
         import io
         from contextlib import redirect_stdout
 
-        root, _rec, _log = self._state("ws", "task-done", "completed", log_age=900.0)
-        args = self._watch_args(root, "task-done", timeout_seconds=1e-9)
-        with redirect_stdout(io.StringIO()):
+        # id に制御文字を混ぜて、この分岐の出力も escape されることを併せて確かめる。
+        root, _rec, _log = self._state("ws", "task\rx", "completed", log_age=900.0)
+        args = self._watch_args(root, "task\rx", timeout_seconds=1e-9)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
             self.assertEqual(watch(args), EXIT_TIMEOUT)
+        self.assertNotIn("\r", buf.getvalue())
 
     def test_a_record_started_before_it_was_created_is_corrupt(self):
         """worker が拾うのは作成後 — 逆順の record で古い方を鮮度の下限にしない。"""
@@ -1829,6 +1835,50 @@ class WatchTest(unittest.TestCase):
             ),
         ):
             self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
+
+    def test_a_record_that_changed_between_partial_scans_is_unverifiable(self):
+        """A の後に B を見て B で確定できるなら、すり替えを許したままになる。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-live", "running")
+        scans = [
+            ([("/a.json", "/a.log")], False),
+            ([("/b.json", "/b.log")], False),
+            ([("/b.json", "/b.log")], True),
+        ]
+        args = self._watch_args(root, "task-live", timeout_seconds=0.05)
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(
+                __name__ + ".find_jobs",
+                lambda *a: scans.pop(0) if scans else ([("/b.json", "/b.log")], True),
+            ),
+        ):
+            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
+
+    def test_a_directory_removed_during_the_walk_is_activity(self):
+        """走査中に消えた dir は file と同じ — 読取不能に上書きすると静穏へ到達しない。"""
+        from unittest import mock
+
+        root = tempfile.mkdtemp()
+        os.makedirs(os.path.join(root, "sub"))
+        for path in (os.path.join(root, "sub"), root):
+            os.utime(path, (0, 0))
+        real = os.walk
+
+        def removing(top, **kw):
+            for base, dirs, files in real(top, **kw):
+                if base == root and dirs:
+                    os.rmdir(os.path.join(root, dirs[0]))
+                yield base, dirs, files
+
+        with mock.patch("os.walk", removing):
+            age = tree_age(root, time.time())
+        if age is None:
+            self.fail("消えた dir が走査不能として扱われた")
+        self.assertLess(age, 5.0)
 
     def test_the_cancel_command_needs_a_traversable_root(self):
         """存在するだけでは cd できない — 検索権の無い dir は貼っても動かない。"""
