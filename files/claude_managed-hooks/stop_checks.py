@@ -748,6 +748,10 @@ INTENT_DECLARE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# --- Pattern: euphemism-for-error (block) ---
+# 「誤解を招く」 は自分の誤りを相手の読み方の問題にすり替える言い換え。
+EUPHEMISM_RE = re.compile("誤解")
+
 # --- Pattern: claim-without-evidence (warning, no block) ---
 # 「無い」系だけでなく「できない / 書かれていない」系も対象 (実測 2026-08-08: 探索範囲を確かめずに
 # 「どのスキルにも書かれていません」、 正規ルート未試行で「権限では実施できません」と誤断定した)。
@@ -1247,6 +1251,19 @@ def _check(
                 f"priority / 不可逆 op の pre-approval なら質問のまま再出力 (skill invoke 後は本 gate を "
                 f"通過) してください。"
             )
+
+    # euphemism-for-error (block, no pairing): 誤りを相手の読み方の問題にすり替えない
+    m = EUPHEMISM_RE.search(stripped)
+    if m:
+        blocking.append(
+            "euphemism-for-error: 「誤解」 系の語を検出しました。 「誤解を招く」 "
+            "「誤解されやすい」 は自分の誤りを相手の読み方の問題にすり替える言い換えで、 "
+            "読み手には ごまかし に見えます。 間違っていたなら 「〜は間違いだった」 と "
+            "名指しし、 正しい事実を 1 行で併記してください。 そのうえで、 ごまかしが "
+            "無いこと — 要件自体が不成立だったのか / 記述だけが不正確だったのか / "
+            "実装は正しかったのか — を切り分けて verbalize してから再出力してください。 "
+            "user の発言を引用する等で語そのものが要る場合は fence 内に置いてください。"
+        )
 
     # intent-without-task (block if work-execution declaration without task tool)
     m = INTENT_DECLARE_RE.search(stripped)
@@ -2252,6 +2269,28 @@ class EnforcementFamilyTest(unittest.TestCase):
     def test_speech_act_setsumei_excluded(self):
         blk = self._blk("説明します")
         self.assertFalse(any("intent-without-task" in b for b in blk))
+
+    def test_euphemism_for_error_blocks(self):
+        """「誤解を招く」 は誤りを相手の読み方の問題にすり替える婉曲表現。"""
+        for text in (
+            "誤解を招く記述でした。",
+            "誤解を招きやすい書き方でした。",
+            "誤解されるかもしれません。",
+            "その点は誤解です。",
+        ):
+            with self.subTest(text=text):
+                code, _w, blk = self._c(text)
+                self.assertEqual(code, 2)
+                self.assertTrue(any("euphemism-for-error" in b for b in blk))
+
+    def test_plain_admission_is_not_blocked(self):
+        """名指しの誤り認定は通す — 婉曲表現だけを捕まえる。"""
+        blk = self._blk("あの記述は間違いでした。正しくは最大 2 件出します。")
+        self.assertFalse(any("euphemism-for-error" in b for b in blk))
+
+    def test_euphemism_inside_fence_not_fired(self):
+        blk = self._blk("引用:\n```\n誤解を招く\n```\n以上です。")
+        self.assertFalse(any("euphemism-for-error" in b for b in blk))
 
     def test_interrogative_is_not_a_declaration(self):
         """疑問形の「〜ますか」 は user への問いかけで、 遂行宣言ではない。"""
