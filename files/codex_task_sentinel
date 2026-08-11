@@ -1043,7 +1043,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             )
         # completed でもツリーが落ち着くまでは verdict を保留するので、 保留を告げる
         # headline は record の語をそのまま出す — 言い切ると直下の evidence と食い違う。
-        recorded = (record or {}).get("status") or "不明"
+        # headline へそのまま入るので、 保持する時点で escape しておく。
+        recorded = printable((record or {}).get("status") or "不明")
         if out is None and args.once:
             out = (
                 EXIT_ALIVE,
