@@ -585,15 +585,41 @@ def _viterbi_ids(
     return ids
 
 
+EMBED_WARN_INTERVAL_SECONDS = 3600
+
+
+def _warn_degraded(reason: str) -> None:
+    """劣化を hot path から報告する — 黙って BM25 に落ちると誰も気付けない。"""
+    cache = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    marker = os.path.join(cache, "claude-memory-surface", "embed-degraded.stamp")
+    try:
+        if time.time() - os.path.getmtime(marker) < EMBED_WARN_INTERVAL_SECONDS:
+            return
+    except OSError:
+        pass
+    try:
+        os.makedirs(os.path.dirname(marker), exist_ok=True)
+        with open(marker, "w", encoding="utf-8") as stream:
+            stream.write(reason + "\n")
+    except OSError:
+        pass
+    sys.stderr.write(
+        f"memory-surface: {reason}; falling back to BM25 only, so hybrid scores and "
+        f"the muted-memory floor no longer hold. Rebuild with claude_memory_rag_builder.\n"
+    )
+
+
 def _model_open() -> tuple[sqlite3.Connection, int, int] | None:
     """Read-only open of the embed model DB; None when absent/invalid (BM25 fallback)."""
     if not os.path.exists(MODEL_DB_PATH):
+        _warn_degraded(f"embed model DB missing at {MODEL_DB_PATH}")
         return None
     try:
         con = sqlite3.connect("file:%s?mode=ro" % MODEL_DB_PATH, uri=True, timeout=2.0)
         meta = dict(con.execute("SELECT key, value FROM meta"))
         return con, int(meta["dim"]), int(meta["max_token_len"])
-    except (sqlite3.Error, KeyError, ValueError):
+    except (sqlite3.Error, KeyError, ValueError) as exc:
+        _warn_degraded(f"embed model DB unreadable at {MODEL_DB_PATH}: {exc}")
         return None
 
 
@@ -1297,6 +1323,62 @@ class TurnMarkerTest(unittest.TestCase):
         self.assertIsNone(
             _turn_marker({"prompt": "<task-notification> x", "transcript_path": "/x"})
         )
+
+
+class EmbedDbDegradationTest(unittest.TestCase):
+    """embed model DB 喪失は黙って BM25 に落ちず報告する。 Run: python3 -m unittest memory_surface"""
+
+    def setUp(self):
+        import tempfile
+        from unittest import mock
+
+        cache = mock.patch.dict(
+            os.environ, {"XDG_CACHE_HOME": tempfile.mkdtemp(prefix="embed-warn-")}
+        )
+        cache.start()
+        self.addCleanup(cache.stop)
+
+    @staticmethod
+    def _open(path):
+        import io
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        err = io.StringIO()
+        with mock.patch(f"{__name__}.MODEL_DB_PATH", path), redirect_stderr(err):
+            con = _model_open()
+        if con is not None:
+            con[0].close()
+        return con, err.getvalue()
+
+    def test_missing_db_is_reported_not_silent(self):
+        con, err = self._open("/nonexistent/embed.sqlite3")
+        self.assertIsNone(con)
+        self.assertIn("missing", err)
+
+    def test_unreadable_db_is_reported_as_distinct_from_missing(self):
+        """不在と破損は別の事故 — 復旧手順が違うので文面で区別する。"""
+        import tempfile
+
+        path = os.path.join(tempfile.mkdtemp(), "broken.sqlite3")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("not a database")
+        con, err = self._open(path)
+        self.assertIsNone(con)
+        self.assertIn("unreadable", err)
+        self.assertNotIn("missing", err)
+
+    def test_repeat_within_window_reports_once(self):
+        _con, first = self._open("/nonexistent/embed.sqlite3")
+        _con2, second = self._open("/nonexistent/embed.sqlite3")
+        self.assertIn("missing", first)
+        self.assertEqual("", second)
+
+    def test_healthy_db_says_nothing(self):
+        if not os.path.exists(MODEL_DB_PATH):
+            self.skipTest("embed model DB not built")
+        _con, err = self._open(MODEL_DB_PATH)
+        self.assertEqual("", err)
 
 
 class HybridEncoderTest(unittest.TestCase):
