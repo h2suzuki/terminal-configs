@@ -25,8 +25,6 @@ Exit Criteria:
   - 経緯の記録: 過去の `[x]` は「latch を temp path に隔離した replay」を根拠にした虚偽 closure だったので一度 `[ ]` に戻し、今回 live 発火で改めて閉じた
   - 私は「機会が 2 回しかないので 0 発火は当然」と一度書いたが、これは text 付き assistant message 126 件という弱い標本によるもので撤回する。より硬い測定では production Stop 3226 件を census して 106 件が壁 regex に一致し、deploy 済 module + 実 DB の replay で 83 件が emit 相当 (2.6% ≒ 39 turn に 1 回)。「機会が稀」は否定されている
   - 未説明の 1 件が核心: deploy 確定後の window (18 Stop) に入った唯一の壁一致 Stop (2026-08-11T12:57:57Z) は、replay では model 解決 3 通りすべてで emit するのに、production では additionalContext が空で hook 実行 183 ms だった (同夜 emit した Stop は 435 ms)。log が無いため「live text が regex に当たらなかった」のか「壊れている」のか判別できない
-- [ ] deploy 後に新規蓄積された `kind='mismatch'` が untagged entry 由来のみになっていることを SQL で確認する — 2026-08-11 に再測 (蓄積待ちは解消)。`opus-5[1m]` 形の model 記録は全期間 87 行で最終行が **2026-08-09 10:01:44 JST**、fix commit bc63663 (10:19:11 JST) 以降は **0 行** = 正規化漏れ由来の mute は止まっている。**注意: 当初この行に「01:01 以降 0 件」と書いたが、これは UTC 表記のまま timezone を明記しなかったもの。本 file は JST 表記なので誤読を招いた (JST 01:01 以降なら 40 行ある)**
-  - 残る問い: tag 付き entry の legit な mute は `_model_pred` の完全一致と `MODELS_DEFAULT` の構造そのもので、原理的に消えない。Exit 文言「untagged 由来のみ」は達成不能なので、この項目は下の `models:` 役割分離に統合して条件を書き直す **(要相談)**
 
 - [x] `_normalize_model` が `[1m]` 等の context-window 変種を落とすよう修正 + unit test — 修正自体は有効 (pre-fix の `_normalize_model` は `opus-5[1m]` を返し、`_model_pred` は完全一致で判定するため `models: opus-5` の entry は原理的に mute された)。ただし当初書いた「33 行中 21 行が解消」は再現不能: `MODELS_DEFAULT = 'opus-4.8'` ゆえ untagged entry の mute は本バグと無関係に起きており、87 行中 76 行がこれに当たる。mute 時点で既に tag が付いていた確定被害は **6 行** (2 file / 2 session / 101 分間)、今日の tag での counterfactual でも 11 行。最古の `models:` tag は 2026-08-09 08:18:57 で、累計が 33 行に達した時点では tag が 1 件も存在しない
 - [x] memory-routing skill に「壁と結論する前 / 2 回失敗した時に引く」 trigger を追加 (既存 Tag propagation 節の入口を拡張、コマンド重複なし)
@@ -40,19 +38,11 @@ codex (gpt-5.6-sol / xhigh) レビュー指摘の是正。deploy 前に少なく
 - [x] **壁 regex の corpus 総取り替え**: 実測で誤検知 8/8・取りこぼし 8/8 → 動詞列挙をやめ「可能形の否定 + 断定の尾」を核にし、疑問「〜か」・条件「〜場合 / とき」・二重否定「〜わけではない」・推量「〜かもしれ」を尾で落とす。誤読系は自認に限るため過去形のみ (te 形はプログラムの誤読の叙述に出る)。table-driven test は断定 14 / 非断定 16。実 transcript 263 block で発火 7 件・全件が真の断定 (旧 regex は 3 件中 1 件が誤検知で、家族の動機になった壁宣言自体を落としていた)
 - [x] **floor を backend 別に較正** → **問題の本体は「劣化が無言だったこと」だったので、そちらを塞いだ** (ユーザー判断: DB を失えば普通エラーを出すはず、出さないならエラー処理を掛けろ)。`_model_open()` は DB 不在でも破損でも無言の `None` を返していた (docstring も "None when absent/invalid") → `_warn_degraded()` を追加し、不在と破損を区別して stderr に報告し復旧コマンドまで示す。hot path なので marker file の mtime で 1 時間に 1 回に絞る。test 4 件 (不在 / 破損 / 窓内は 1 回 / 健全時は無言)、memory_surface 41 tests、deploy 済 (`diff -q` 一致・0755・裸実行 rc=0)
   - 定数を hybrid / BM25 で分ける作業自体は**していない**。実測では `entries_fts` 68 = `entries_vec` 68 で join でも欠落 0 件、embed DB (359 MB) も健在ゆえ BM25 単独分岐に traffic が無い。失えば警告が出るので、黙って劣化する経路は残っていない
-- [ ] **観測できない**: fail-open が全て無言の `None` で、`search_unfiltered()` は記録もしないため「0 件」が無事故か feature 死かを区別できない。rate-limit した error log と wall 専用 event を残す
 - [x] **mismatch 行が emit の throttle を食う**: `_throttle_check()` の SQL に `kind` 条件が無く、mute 記録が 15 分の抑止に効いていた (実測: 60 秒後も空、901 秒後に初めて surface) → `kind` 引数を足して kind 別に見る (emit は emit、mismatch は mismatch)。mute 記録の直後でも emit が出ることを test で pin
 - **model source の一本化 — 却下済み (2026-08-12・ユーザー判断)。再提案しないこと**。`_current_turn()` は使えない: memory_surface は UserPromptSubmit hook で、その時点では当該ターンの assistant 応答がまだ存在せず turn が成立しない。ゆえに `_resolve_model()` が statusline cache を先に見る現行構造が正しい。この結論は過去に一度出ており、本 session で私が蒸し返した
   - 私が「両者が食い違った実例は 1 件もない」と書いたのは監査の受け売りで誤り。実測すると本 session で `statusline=claude-opus-5[1m]` / `transcript=claude-opus-5` と食い違っている。ただし `_normalize_model` が `[1m]` を畳むので解決結果は同一 (`CONTEXT_WINDOW_SUFFIX = \[\d+[kmg]\]` は数字+k/m/g のみ畳み、`[safety-eval]` 等は畳まない)
 - [x] **検索に時間上限が無い**: 元 probe の subprocess 20 秒 watchdog を失い、例外 catch では hang に効かず Stop 全体が止まりうる状態だった → `_bounded()` (daemon thread + `join(20s)`) 経由で呼ぶ。返らなくても None で fail-open し、居残った thread は Stop の終了を待たせない
-- [ ] **提示が top-1 のみ**: 弱い誤 hit が真の教訓を shadow する。上位 2-3 件を score つきで返すか、margin が小さい時だけ複数出す
-- [ ] **強制力の設計**: warning 化で「読んでから結論を出し直す」は保証でなくなった。同じ壁を繰り返し、かつ提示 path を Read していない 2 回目だけ既存 advise-once に統合して block する案を検討する
-- [ ] **`models:` の役割分離**: provenance (どの model で観測したか) と delivery allowlist (どの model に見せるか) を同じ field が兼ねている
-  - **却下済み (2026-08-12・ユーザー判断): 未タグの既定を「全モデル可視」にする案は採らない**。理由は「あるモデルの失敗を他モデルへ通知するのはノイズ」。同案を再提案しないこと。したがって model 更新時の cold-start は塞ぐべき欠陥ではなく、各モデルが自分の教訓を自分で貯める設計意図として扱う
-  - 2026-08-11 実測: entry は disk 上 78 件 / index 67 件だが、`models:` tag を持つのは **10 件のみ** (opus-5 が 6、fable-5 が 3、両方が 1)。untagged は `MODELS_DEFAULT = 'opus-4.8'` に落ちるため、可視件数は **opus-4.8 が 49 / opus-5 が 7 / fable-5 が 4 / haiku-4.5 が 0**
-  - filter 導入前の 1532 injection (37 活動日・約 10.8 件/session) に対し、導入後の emit は 39 件で mute が 207 件。うち 38 件が単一 session、32 件が単一 entry
-  - **この配信減を私は一度「唯一 measured な defect」「本丸」と書いたが、その評価は撤回する**。上の却下理由に照らせば、他モデルで観測された教訓が届かないのは意図した挙動であり、数字の大きさは欠陥の大きさを意味しない。残る論点は「同一モデルで観測済みの教訓が届かない」case に限られる (例: `[1m]` 正規化漏れ。これは修正済み)
-- [ ] **「2 回失敗」の機械 trigger**: skill には書いたが hook は tool failure を観測しない。current turn の tool_result 失敗 signature を数え、2 回目で横断検索を起動する
+- [ ] **失敗したら毎回、過去の教訓を横断検索する**: skill には書いたが hook は tool failure を観測しない。**要件変更 (2026-08-12・ユーザー判断): 「2 回目で起動」をやめ、失敗のたびに毎回起動する** — 2 回待つ理由が無い。current turn の tool_result 失敗を検知したら `search_unfiltered()` を回し、mute された候補も含めて提示する
 
 ### codex_task_sentinel: 敵対レビューの収束と上流依存 1 件
 
@@ -73,7 +63,6 @@ Exit Criteria:
 - [x] log 由来の曖昧さが正常 job の cancel を招かない — 既定で cancel 導線 (exit 4/3) を出さず、
   exit 14 で evidence を示して判断を呼び手に渡す (206ce7a)。断定したい呼び手は `--trust-log`。
   12 巡目が 504 case の直積で「既定の exit 3/4 は 0 件」「`--trust-log` は旧判定と mismatch 0」を実測
-- [ ] 上流 (plugin) が per-command lifecycle を record に持ち、stall 判定の原理的曖昧さ自体が消える
 
 13 巡のレビュー (gpt-5.6-sol / xhigh) の指摘はすべて修正済み
 (a746ef5 / b9f32d0 / fabe928 / bb56980 / 7c4d532 / 2607f1d / 890349a / 1f37e46 / 206ce7a /
@@ -88,14 +77,6 @@ Exit Criteria:
   警告するのが素直。sentinel 側は `errorMessage` を evidence に出すようにして (87cc3e0)
   「手で record を開き直す」までは消えている
 
-- [ ] **command lifecycle が log 層でしか観測できない (上流依存)**: plugin の `appendLogBlock` は
-  message 本文を無加工で append するため、本文が log 行を引用すると event と区別できない。
-  11 巡の敵対レビューで「真 event を一切落とさず正しい stall 判定も保つ reader は作れない」と
-  結論が出ている (stamp 単調性 + コマンド名の対応付けで実 corpus の誤検知は 0 だが、
-  本文が未来 stamp を持てば通る)。害の側は 206ce7a で消した。
-  原理的に閉じるには job record に per-command lifecycle (item id) の永続化が要り、
-  書けるのは plugin 側だけ (`phase` は investigating / editing / running 等の粗い活動状態で
-  command 単位ではない)。plugin 更新時に再評価する
 
 ### stop_checks の 2 修正を deploy して実運用で確認する
 
@@ -104,8 +85,8 @@ Goal: 疑問文の誤 block と稼働中 worktree の誤提案が、実 session 
 Exit Criteria:
 
 - [x] deploy (ユーザー手動・root 要): `files/claude_managed-hooks/stop_checks.py` → `/etc/claude-code/hooks/stop_checks.py` (0755) — 2026-08-11 23:54:41 に実施、`diff -q` 一致・mode 0755・3 修正の marker 9 箇所を確認
-- [ ] deploy 後の実 session で「〜ますか?」の質問が block されないことを観測する
-- [ ] deploy 後の実 session で、稼働中 codex job の worktree が削除候補に出ないことを観測する
+- [x] deploy 後の実 session で「〜ますか?」の質問が block されないことを観測する — 2026-08-12 確認。deploy (23:54) 以降、質問で終えたターン 9 回に対し intent-without-task の発火は 0 件 (transcript 内の同名文字列は私の散文が hook の source を引用したもので、実発火は deploy 前の 14:26Z の 1 件のみ)
+- [x] deploy 後の実 session で、稼働中 codex job の worktree が削除候補に出ないことを観測する — 下記 worktree-cleanup 側で実機確認済
 
 ### worktree-cleanup が稼働中の codex worktree を削除候補にする
 
@@ -113,7 +94,7 @@ Goal: 実行中の作業を壊す削除提案を出さないようにする。
 
 Exit Criteria:
 
-- [ ] codex job が走っている worktree に対し、削除候補として提案されないことを実機で確認する — deploy 後に観測する
+- [x] codex job が走っている worktree に対し、削除候補として提案されないことを実機で確認する — 2026-08-12 実機確認。本 repo から linked worktree を実際に作り、実 state dir に `status=running` の job record を置いて **deploy 済** `stop_checks.py` の `_worktree_cleanup_warnings()` を呼ぶと当該 worktree への提案は **0 件**。同 record を `completed` に変えると **1 件**提案された。fixture (worktree・job record) は削除済み
 
 - [x] `stop_checks.py` の `_worktree_cleanup_warnings()` が「clean かつ本線の祖先」だけを見ており、その worktree を `workspaceRoot` とする codex job が running かどうかを見ていない。2026-08-08 の 2 回とも、codex がレビュー用 worktree で走っている最中に削除コマンドを提示した (成果物を書く前なので clean に見える)。提案どおり実行すると走行中の job の作業 root が消える。`~/.claude/plugins/data/codex-openai-codex/state/*/jobs/*.json` の `status=running` かつ `workspaceRoot` 一致を候補から除外する — `_codex_busy_roots()` で queued/running の作業 root を session 横断で集め realpath 一致で除外。test 4 件 (稼働中は非提案 / 別 session でも守る / 完了後は提案 / 他 tree は巻き添えにしない)
 - 残留リスク: crash した job の record が `running` のまま残ると、その worktree は恒久的に提案されなくなる。提案漏れは無害で誤削除は作業消失ゆえ、この非対称は安全側に倒している
@@ -129,10 +110,8 @@ Exit Criteria:
 - [x] 実 session で open Task を残した wind-down に inject + block が発火し、todos.md 転記 + close で通過することを確認 — **2026-08-08 04:26 に full loop を live 観測**: ユーザー発言「セッションを閉じます」に対し UserPromptSubmit で inject (open Task #7 を列挙) → ターン終了時に stop_checks が exit 2 で block (#7 を名指し) → todos.md へ転記済みのうえ Task を close して通過。以下は経緯: 2026-08-07 **inject は実 session で live 発火を観測** (ユーザーの「セッションは終わります」prompt に対し UserPromptSubmit で open Task 1 件を列挙、clean tree ゆえ未コミット節は出ず = 偽陽性修正も live 確認)。block 側は下記 shadow 欠陥を修正済 (40f89e8)。deploy 完了・canonical と diff 一致を確認済 (2026-08-07 ユーザー実行) で、deployed 版が実 transcript から人間 prompt を復元し harness entry 14 件を skip することも確認。残るは **live block の観測のみ** (実装は 3a6a2c5 で完了・deploy 済)。ユーザー指摘により設計から作り直した: Stop payload には prompt が無いため transcript を遡っていたが、これをやめ **prompt を受け取る UserPromptSubmit hook 側で判定し session 単位の控えに記録**、Stop 側はそれを読むだけにした。未処理項目は従来どおり Task store + mytask の両対応。transcript を読まなくなったので下記 2 段の不発原因は原因ごと消滅し、widen-once (75de34b) も削除。通し試験で「合図なし→素通り / 合図あり→block / 通常発言で上書き→素通り」を確認、deploy 後は本番 hook が実際に控えを書くことも確認済 (04:11)。
   - 旧原因の記録 (再発時の手がかり): (1) harness 生成 entry が人間 prompt を shadow、(2) `_load_tail` が末尾 128KB しか読まず長 session で人間 prompt に届かない、(3) `<system-reminder>` も harness 生成だが roster 未収載だった
 
-- [ ] codex-companion を叩く Bash を codex-delegation skill が active でない限り止める — 2026-08-08 に発注〜監視ターンで同 skill を invoke せず、既存規約 (running[]-empty monitor 禁止) を再違反した。CLAUDE.md「ルール違反 = 即 countermeasure」に基づく機構化
-  - **着手前に解く設計上の罠** (cross-check readback で判明): 発注は Bash しか持たない codex-rescue subagent 内で起きるが、`skill_reminder_gate` の skill-active state は agent 単位 (`agent_id or "main"`)。素直に相乗りすると skill を invoke できない subagent が恒久 deny になり発注不能。判定を親 session の state で行うか subagent を対象外にするかを先に決める
-  - 相乗り先候補は 2 つ: `skill_reminder_gate.py` (編集前 gate) と `codex_worktree_gate.py` (既に codex Bash を検査済・検出面を持つ)。後者が有力
-  - 射程を明示する: 今回の違反は監視側で発生。既存 codex hook は `status` / `cancel` / `result` を素通ししているので、監視系を含めるか決めてから実装する
+- [ ] **発注書を発注先に敵対レビューさせてから発注する** — **方針変更 (2026-08-12・ユーザー判断)**。当初は「codex-delegation skill が active でない限り codex-companion の Bash を止める」という hook 案だったが、gate の state が agent 単位で subagent から見えないという罠があり詰んでいた。代わりに **発注書そのものを発注先 (codex) に敵対レビューさせ、規約に従っていなければ突き返す**。発注前に規約違反が発注先から返ってくるので、こちらの skill invoke 状態に依存しない
+  - 経緯: 2026-08-08 に発注〜監視ターンで codex-delegation skill を invoke せず、既存規約 (running[]-empty monitor 禁止) を再違反した
 - [x] 環境依存で緑になる test 2 件を、環境に依らず正しい結果を出すようにする — 2026-08-11 に両方修正
   - `test_non_repo_fails_open_with_diagnostic`: stderr の行数を数える assert をやめ、診断の件数を数えるようにした (本来の主張)。git stderr を 2 行に強制する test を追加して、件数が行数に追従しないことを pin
   - `test_corpus_against_current_adapter`: corpus は実 session 履歴から採取するもので repo に入れるべきでないと判断し、tracked 化ではなく不在時 `skipTest` を選択。dir を退避して skip、戻して pass を実測
@@ -158,5 +137,4 @@ Exit Criteria:
 - [x] 検出方式を実データで確定 — 888 transcript 走査で 2 signature を FP ゼロ検証: stray-token 単独行 `(?m)^[ \t]*(court|count)[ \t]*$` / 行頭 invoke-leak `(?m)^[ \t]*<invoke name="`。token 固定でなく leaked XML を token 非依存で捕捉するのが要 (実バグ例 "câu")
 - [x] 実装 + test + commit — 02e3054 (command `files/claude_court_guard` 7 tests / stop_checks warning-only 55 tests / /my-tasks 自己チェック / 両 .sh に copy 行、独立再実行 OK)
 - [x] deploy 完了・配置検証 — 2026-07-13 ユーザー実行、`/usr/local/bin/claude_court_guard` PATH 動作・hooks/ 一致を確認
-- [ ] 実運用で court 汚染の live 検出を確認 (opportunistic)
 - 既知 finding (低 pri): stop_checks の court チェックは生 `text` 対象で、fence 内に court パターンを書く session は理論上 FP。`stripped` 化は要検討 (実 corpus では 0 FP)
