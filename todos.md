@@ -13,36 +13,6 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 
 ## High
 
-### memory surface の model tag mute を塞ぐ
-
-Goal: 実行中モデルの tag 判定と「壁と結論する前に引く」導線を直し、過去の教訓が mute されたまま同じ失敗を繰り返す経路を閉じる。
-
-Exit Criteria:
-
-- [x] deploy 後の実 session で、`opus-5` tag 付き entry が `claude-opus-5[1m]` の session に surface することを観測する — **2026-08-11 に成立。当初 2026-08-09 の観測として書いた根拠は誤りだったので差し替えた** (`kind=emit` かつ `model LIKE 'opus-5%'` の行は DB 全期間で 2 行しかなく、両方とも 2026-08-11 23:20 / 23:49 に本 session が生成したもの。2026-08-09 時点では 1 行も存在しない)。正しい根拠: `models: opus-5` の `feedback_grep_before_reading_search_space.md` が、`claude-opus-5[1m]` で走る本 session に `kind=emit model=opus-5` で surface した
-- [x] deploy 後の実 session で muted-memory-at-wall が live 発火することを観測する — **2026-08-12 に初の live 発火を観測**。私が「読み違えた」と書いたターンの Stop で `<muted-memory>` が additionalContext に入り、`models=opus-4.8` ゆえ mute されていた `feedback_cjk_tool_arg_glyph_contamination.md` を名指しした。replay ではなく実 turn である証拠: 直前まで HOME 配下 0 件だった `.muted` latch が `96c7898d-...turns.muted` として初めて生成された
-  - 提示を受けて実際に走査した (本 family の目的どおりの帰結): 当該 entry は Fable 5 固有の Cyrillic 混入で、todos.md・memory entry・commit message 14603 字・両 hook source を Greek/Cyrillic/Hangul 等で走査して混入 0 件。よって tag は追記していない (「効きそうだから」で盛らない)
-  - 経緯の記録: 過去の `[x]` は「latch を temp path に隔離した replay」を根拠にした虚偽 closure だったので一度 `[ ]` に戻し、今回 live 発火で改めて閉じた
-  - 私は「機会が 2 回しかないので 0 発火は当然」と一度書いたが、これは text 付き assistant message 126 件という弱い標本によるもので撤回する。より硬い測定では production Stop 3226 件を census して 106 件が壁 regex に一致し、deploy 済 module + 実 DB の replay で 83 件が emit 相当 (2.6% ≒ 39 turn に 1 回)。「機会が稀」は否定されている
-  - 未説明の 1 件が核心: deploy 確定後の window (18 Stop) に入った唯一の壁一致 Stop (2026-08-11T12:57:57Z) は、replay では model 解決 3 通りすべてで emit するのに、production では additionalContext が空で hook 実行 183 ms だった (同夜 emit した Stop は 435 ms)。log が無いため「live text が regex に当たらなかった」のか「壊れている」のか判別できない
-
-- [x] `_normalize_model` が `[1m]` 等の context-window 変種を落とすよう修正 + unit test — 修正自体は有効 (pre-fix の `_normalize_model` は `opus-5[1m]` を返し、`_model_pred` は完全一致で判定するため `models: opus-5` の entry は原理的に mute された)。ただし当初書いた「33 行中 21 行が解消」は再現不能: `MODELS_DEFAULT = 'opus-4.8'` ゆえ untagged entry の mute は本バグと無関係に起きており、87 行中 76 行がこれに当たる。mute 時点で既に tag が付いていた確定被害は **6 行** (2 file / 2 session / 101 分間)、今日の tag での counterfactual でも 11 行。最古の `models:` tag は 2026-08-09 08:18:57 で、累計が 33 行に達した時点では tag が 1 件も存在しない
-- [x] memory-routing skill に「壁と結論する前 / 2 回失敗した時に引く」 trigger を追加 (既存 Tag propagation 節の入口を拡張、コマンド重複なし)
-- [x] 壁宣言 probe を stop_checks の muted-memory-at-wall family として畳み込み — 別 session 提案の中身 (WALL_RE corpus / 否定周辺 ±120 字を query 化 / mute された entry の報告) を採用し、単独 hook 化で懸念した再 block loop と turn counter 二重 bump は exit 0 + additionalContext + `.muted` latch で解消。floor は実測分離点 0.35。`search_unfiltered()` を memory_surface に切り出して CLI と共用。stop_checks 107 tests (新規 7) / memory_surface 31 tests (新規 3)
-- [x] deploy (ユーザー手動): `files/claude_user-hooks/memory_surface.py` → `~/.claude/hooks/`、`files/claude_managed-hooks/stop_checks.py` → `/etc/claude-code/hooks/`、`files/claude_managed-skills/` 配下の memory-routing・codex-delegation の SKILL.md → `/etc/claude-code/skills/<name>/` (`~/.claude/skills/` 側と同一 inode)、`files/codex_task_sentinel` → `/usr/local/bin/` (0755) — 2026-08-11 に 5 対象すべて `diff -q` 一致を確認
-
-codex (gpt-5.6-sol / xhigh) レビュー指摘の是正。deploy 前に少なくとも最初の 2 つを直す:
-
-- [x] **発火 0 回の経路**: enforcement block が出た turn は `main()` が muted lookup 前に return し、retry は `stop_hook_active` gate で止まる。壁宣言と謝罪等が同居する典型応答ほど一度も出ない → `_run` の block stderr 出力直後で lookup し併記 (降格 retry は exit 0 で main 経路に戻すため二重に出さない)。test 2 件
-- [x] **latch が初回 turn で無効**: `_stop_latch_key()` が `.turns` file の存在に依存し、muted warning を返した Stop は marker/bump に到達しないため fresh session では latch が no-op → `.turns` 不在を turn key `"0"` とし、`_stop_latched`/`_stop_latch_set` を flock 済み 1 回 RMW の `_stop_latch_claim()` に統合 (.wt / codex / surf / muted の 4 latch 共通)。test 4 件
-- [x] **壁 regex の corpus 総取り替え**: 実測で誤検知 8/8・取りこぼし 8/8 → 動詞列挙をやめ「可能形の否定 + 断定の尾」を核にし、疑問「〜か」・条件「〜場合 / とき」・二重否定「〜わけではない」・推量「〜かもしれ」を尾で落とす。誤読系は自認に限るため過去形のみ (te 形はプログラムの誤読の叙述に出る)。table-driven test は断定 14 / 非断定 16。実 transcript 263 block で発火 7 件・全件が真の断定 (旧 regex は 3 件中 1 件が誤検知で、家族の動機になった壁宣言自体を落としていた)
-- [x] **floor を backend 別に較正** → **問題の本体は「劣化が無言だったこと」だったので、そちらを塞いだ** (ユーザー判断: DB を失えば普通エラーを出すはず、出さないならエラー処理を掛けろ)。`_model_open()` は DB 不在でも破損でも無言の `None` を返していた (docstring も "None when absent/invalid") → `_warn_degraded()` を追加し、不在と破損を区別して stderr に報告し復旧コマンドまで示す。hot path なので marker file の mtime で 1 時間に 1 回に絞る。test 4 件 (不在 / 破損 / 窓内は 1 回 / 健全時は無言)、memory_surface 41 tests、deploy 済 (`diff -q` 一致・0755・裸実行 rc=0)
-  - 定数を hybrid / BM25 で分ける作業自体は**していない**。実測では `entries_fts` 68 = `entries_vec` 68 で join でも欠落 0 件、embed DB (359 MB) も健在ゆえ BM25 単独分岐に traffic が無い。失えば警告が出るので、黙って劣化する経路は残っていない
-- [x] **mismatch 行が emit の throttle を食う**: `_throttle_check()` の SQL に `kind` 条件が無く、mute 記録が 15 分の抑止に効いていた (実測: 60 秒後も空、901 秒後に初めて surface) → `kind` 引数を足して kind 別に見る (emit は emit、mismatch は mismatch)。mute 記録の直後でも emit が出ることを test で pin
-- **model source の一本化 — 却下済み (2026-08-12・ユーザー判断)。再提案しないこと**。`_current_turn()` は使えない: memory_surface は UserPromptSubmit hook で、その時点では当該ターンの assistant 応答がまだ存在せず turn が成立しない。ゆえに `_resolve_model()` が statusline cache を先に見る現行構造が正しい。この結論は過去に一度出ており、本 session で私が蒸し返した
-  - 私が「両者が食い違った実例は 1 件もない」と書いたのは監査の受け売りで誤り。実測すると本 session で `statusline=claude-opus-5[1m]` / `transcript=claude-opus-5` と食い違っている。ただし `_normalize_model` が `[1m]` を畳むので解決結果は同一 (`CONTEXT_WINDOW_SUFFIX = \[\d+[kmg]\]` は数字+k/m/g のみ畳み、`[safety-eval]` 等は畳まない)
-- [x] **検索に時間上限が無い**: 元 probe の subprocess 20 秒 watchdog を失い、例外 catch では hang に効かず Stop 全体が止まりうる状態だった → `_bounded()` (daemon thread + `join(20s)`) 経由で呼ぶ。返らなくても None で fail-open し、居残った thread は Stop の終了を待たせない
-
 ### codex_task_sentinel: 敵対レビューの収束と上流依存 1 件
 
 Goal: 監視判定が plugin の実挙動と skill の 4 分岐に一致する状態にする。
