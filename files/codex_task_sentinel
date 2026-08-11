@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import codecs
 import collections
 import glob
 import itertools
@@ -226,7 +227,8 @@ def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], boo
             record = os.path.join(root, workspace, "jobs", job_id + ".json")
             try:
                 os.stat(record)
-            except FileNotFoundError:
+            except (FileNotFoundError, NotADirectoryError):
+                # 通常 file は jobs/ を抱えられない — 走査漏れではなく、 空だと分かる。
                 continue
             except OSError:
                 complete = False
@@ -259,6 +261,17 @@ def job_record(record_path: str, job_id: str | None = None) -> dict | None:
     if job_id is not None and loaded.get("id") != job_id:
         return None
     return loaded
+
+
+def record_gone(record_path: str) -> bool:
+    """Whether the record is really absent — os.path.exists calls unreadable absent too."""
+    try:
+        os.lstat(record_path)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False  # 読めないだけ — 消失 (exit 10) ではなく corrupt / 検証不能の側
+    return False
 
 
 def file_stat(path: str | None) -> tuple[float, int] | None:
@@ -567,34 +580,32 @@ def artifact_ready(
     """
     if not path or since is None:
         return False
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    body = ""
     try:
         # 本文と鮮度は同じ descriptor の同じ瞬間から取る — path で stat し直すと、
         # 置換された別 inode の mtime が古い本文の完了 token と組になりうる。
         with open(path, "rb") as f:
             before = os.fstat(f.fileno())
-            # 全量展開すると、 巨大な成果物ひとつで監視自身が MemoryError で終わる。
-            trimmed = before.st_size > MAX_ARTIFACT_BYTES
-            if trimmed:
-                f.seek(before.st_size - MAX_ARTIFACT_BYTES)
-            raw = f.read(MAX_ARTIFACT_BYTES)
+            # 全量を持つと巨大な成果物ひとつで監視が MemoryError で終わる。 decode は
+            # 先頭から通し、 保持するのは末尾だけ — 途中の不正 byte も見逃さない。
+            while chunk := f.read(MAX_ARTIFACT_BYTES):
+                body = (body + decoder.decode(chunk))[-MAX_ARTIFACT_BYTES:]
+            body = (body + decoder.decode(b"", True))[-MAX_ARTIFACT_BYTES:]
             after = os.fstat(f.fileno())
     except FileNotFoundError:
         return False  # まだ書かれていない — 読めないのではなく、無い
+    except UnicodeDecodeError:
+        # 置換して読むと、 binary の末尾行が token と一致して完成品に化ける。
+        return False
     except OSError:
         return None  # 在るのに読めない — 「成果物なし」と断定してよい根拠がない
     if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
         return False  # 読んでいる間に伸びた = まだ書かれている最中
     if after.st_mtime < since:
         return False  # a leftover from an earlier run is not this run's output
-    while trimmed and raw and raw[0] & 0xC0 == 0x80:
-        raw = raw[1:]  # 末尾から読んだので、先頭が 1 文字の途中でありうる
-    try:
-        # 置換して読むと、 binary の末尾行が token と一致して完成品に化ける。
-        body = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return False
     if not token:
-        return bool(body.strip())
+        return before.st_size > 0 and bool(body.strip())
     # The order says the final line IS the token: no padding, no trailing blanks.
     lines = body.splitlines()
     return bool(lines) and lines[-1] == token
@@ -816,20 +827,26 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         elapsed = (
             now - job_started if job_started is not None else time.monotonic() - started
         )
+        # 監視開始後に同じ id の record が増えても、 固定した path だけ見ていては気付けない。
+        seen, scanned_all = find_jobs(args.job_id, roots)
+        if len(seen) > 1:
+            print(f"ambiguous: {len(seen)} records carry the id {args.job_id}")
+            for duplicate, _log in seen:
+                print(f"  {duplicate}")
+            return EXIT_AMBIGUOUS
         # plugin は record を completed に書いてから final output を append する。
         # その窓に入った poll は、 古い running のまま静穏を読んで stall と言える。
-        moved = (
+        changed = (
             (file_stat(log), file_stat(args.artifact)) != before
             or job_record(record_path, args.job_id) != record
             # os.walk は snapshot ではないので、 列挙済み file への書き込みは
             # 走査し直さない限りこの poll から丸ごと抜け落ちる。
             or tree_age((record or {}).get("workspaceRoot"), now) != tree
-            # log を最後まで読めていない view は、 未完了 start を落として stall 抑止を消す。
-            or not whole_log
-            # 監視開始後に同じ id の record が増えても、 固定した path だけ見ていては気付けない。
-            or find_jobs(args.job_id, roots) != ([(record_path, log)], True)
         )
-        if not os.path.exists(record_path):
+        # 「動いた」 と 「読めなかった」 は別の理由 — 畳むと headline がどちらも
+        # 「読取中に変わった」 になり、 安定して読めない log が活動に化ける。
+        unreadable = not whole_log or not scanned_all or seen != [(record_path, log)]
+        if record_gone(record_path):
             # The plugin prunes to its newest 50 jobs regardless of status, so a
             # record that was here and is gone is lost history, not a verdict.
             out = (
@@ -837,7 +854,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 "vanished: the state record disappeared after registration — "
                 "the plugin prunes old jobs, so this job's outcome is unknowable here",
             )
-        elif moved:
+        elif changed or unreadable:
             # 走査中に動いた観測は古い無音と新しい本文の混成 — その組で判定しない。
             # corrupt より先に見る: 読めたり読めなかったりする record は変化であって、
             # 確定した corrupt ではない。
@@ -862,7 +879,13 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             )
         # 破棄した poll をそのまま下の分岐へ流すと、 混成した snapshot が exit 12 / 7 / 11 の
         # evidence として出る。 動いた回はここで打ち切り、 次の poll で取り直す。
-        if out is None and moved and (args.once or deadline_reached(deadline)):
+        if out is None and unreadable and (args.once or deadline_reached(deadline)):
+            out = (
+                EXIT_UNVERIFIABLE,
+                "unverifiable: the log or the state tree could not be read in full, so "
+                "nothing observed here settles what the job is doing",
+            )
+        elif out is None and changed and (args.once or deadline_reached(deadline)):
             out = (
                 EXIT_ALIVE if args.once else EXIT_UNVERIFIABLE,
                 f"{'alive' if args.once else 'unverifiable'}: the job's state changed "
@@ -1470,8 +1493,33 @@ class WatchTest(unittest.TestCase):
             self.assertIsNone(longest_silence(log))
         self.assertEqual(seen, [1])
 
-    def test_a_short_log_view_does_not_settle_a_verdict(self):
-        """途中で切れた log は未完了 start を落とす — その view で完了を宣言しない。"""
+    def test_a_plain_file_in_a_state_root_is_not_an_unreadable_branch(self):
+        """通常 file は jobs/ を抱えられない — 空だと観測できている。"""
+        root, record, log = self._state("ws", "task-x", "running")
+        with open(os.path.join(root, ".DS_Store"), "w", encoding="utf-8") as f:
+            f.write("x")
+        self.assertEqual(find_jobs("task-x", [root]), ([(record, log)], True))
+
+    def test_invalid_bytes_before_the_tail_are_still_caught(self):
+        """末尾だけ decode すると、その前の不正 byte が strict 検査を素通りする。"""
+        p = os.path.join(tempfile.mkdtemp(), "report.md")
+        with open(p, "wb") as f:
+            f.write(b"\xff" + b"a" * (MAX_ARTIFACT_BYTES + 16) + b"\nREPORT_COMPLETE\n")
+        self.assertFalse(artifact_ready(p, "REPORT_COMPLETE", time.time() - 60))
+
+    def test_an_unreadable_record_is_not_a_vanished_one(self):
+        """exit 10 は prune による消失。 読めないだけの record をそこへ送らない。"""
+        from unittest import mock
+
+        p = os.path.join(tempfile.mkdtemp(), "task-x.json")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write('{"id": "task-x", "status": "running"}')
+        with mock.patch("os.lstat", side_effect=PermissionError):
+            self.assertFalse(record_gone(p))
+        self.assertTrue(record_gone(os.path.join(os.path.dirname(p), "absent.json")))
+
+    def test_a_short_log_view_is_unverifiable_not_alive(self):
+        """読めなかった log は「まだ走っている」の証拠ではない — 何も settle しない。"""
         import io
         from contextlib import redirect_stdout
         from unittest import mock
@@ -1483,7 +1531,7 @@ class WatchTest(unittest.TestCase):
             mock.patch(__name__ + ".scan_log", lambda *a, **k: ([], ["x"], False)),
         ):
             self.assertEqual(
-                watch(self._watch_args(root, "task-done", once=True)), EXIT_ALIVE
+                watch(self._watch_args(root, "task-done", once=True)), EXIT_UNVERIFIABLE
             )
 
     def test_a_record_found_behind_an_unreadable_root_is_not_taken(self):
@@ -1502,8 +1550,8 @@ class WatchTest(unittest.TestCase):
         # 登録待ちで止まること — poll に入ってから変化として拾うのとは別の主張。
         self.assertIn("cannot be shown to be unregistered", buf.getvalue())
 
-    def test_a_duplicate_appearing_after_the_start_stops_the_verdict(self):
-        """開始時の一意性だけ見ていると、監視中に増えた同一 id を見逃す。"""
+    def test_a_duplicate_appearing_after_the_start_is_ambiguous(self):
+        """契約では 2 件は exit 9 — 変化として畳むと path も verdict も失われる。"""
         import io
         from contextlib import redirect_stdout
         from unittest import mock
@@ -1517,13 +1565,12 @@ class WatchTest(unittest.TestCase):
             extra = [] if len(calls) == 1 else [("/elsewhere.json", "/elsewhere.log")]
             return found + extra, complete
 
-        with (
-            redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".find_jobs", gaining),
-        ):
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch(__name__ + ".find_jobs", gaining):
             self.assertEqual(
-                watch(self._watch_args(root, "task-done", once=True)), EXIT_ALIVE
+                watch(self._watch_args(root, "task-done", once=True)), EXIT_AMBIGUOUS
             )
+        self.assertIn("/elsewhere.json", buf.getvalue())
 
     def test_a_state_that_keeps_changing_is_not_a_timeout(self):
         """破棄した poll を流すと、混成した snapshot が timeout の evidence になる。"""
