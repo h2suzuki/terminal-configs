@@ -84,11 +84,16 @@ STALL_BASELINE_FACTOR = 3.0
 # 秒以降を緩く受けると、 本文の [.. 00:00:01:99Z] のような不正 stamp が event に化け、
 # 稼働中 command の start を偽の end で消してしまう。 runner はこの形しか書かない。
 LOG_TS = re.compile(r"^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?)Z\]")
+# record の stamp は UTC 表記。 末尾まで固定しないと offset 付きや junk 付きが通る。
+RECORD_TS = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?Z$")
 # A log line is an event line plus, at worst, one shortened command; a body that
 # runs longer than this is prose, and reading all of it only risks the verdict.
 MAX_LOG_LINE = 8192
 # 未完了 start の保持上限 — 実ログの最大は 3 件で、 これを超えるのは本文が作った偽 start。
 MAX_PENDING = 512
+# 成果物から読む上限。 これを超える file は末尾だけを見るので、 それより前の
+# 不正 byte は検出できない (完了 token の判定には末尾で足りる)。
+MAX_ARTIFACT_BYTES = 1 << 20
 
 EXIT_DONE = 0
 EXIT_DONE_HUNG = 3
@@ -229,7 +234,7 @@ def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], boo
     return found, complete
 
 
-def job_record(record_path: str) -> dict | None:
+def job_record(record_path: str, job_id: str | None = None) -> dict | None:
     """The on-disk record, or None when it is there but unreadable — a corrupt
     record is an unknown outcome, not a quiet job."""
     try:
@@ -246,6 +251,12 @@ def job_record(record_path: str) -> dict | None:
     for field in ("status", "workspaceRoot", "errorMessage"):
         if loaded.get(field) is not None and not isinstance(loaded[field], str):
             return None
+    # 空 status は alive と読まれて stall 判定まで進む。 file 名だけで id を信じると、
+    # 別 job の状態をこの job の verdict にできる。
+    if not (isinstance(loaded.get("status"), str) and loaded["status"].strip()):
+        return None
+    if job_id is not None and loaded.get("id") != job_id:
+        return None
     return loaded
 
 
@@ -385,8 +396,8 @@ def command_may_be_running(lines: Iterator[str] | list[str]) -> bool:
     return bool(pending_commands(lines))
 
 
-def entry_mtime(path: str, now: float) -> float:
-    """A dangling symlink's own mtime; `now` only when the entry itself is gone.
+def entry_mtime(path: str, now: float) -> float | None:
+    """A dangling link's own mtime, `now` when the entry is gone, None when unreadable.
 
     getmtime follows the link, so a link whose target has been deleted raises the
     same error as an entry that vanished mid-walk — and calling that one a write
@@ -394,8 +405,10 @@ def entry_mtime(path: str, now: float) -> float:
     """
     try:
         return os.lstat(path).st_mtime
+    except FileNotFoundError:
+        return now  # 一覧にあった entry が消えた = たった今の書き込み
     except OSError:
-        return now
+        return None
 
 
 def tree_age(root: str | None, now: float) -> float | None:
@@ -411,12 +424,15 @@ def tree_age(root: str | None, now: float) -> float | None:
 
     for base, dirs, files in os.walk(root, onerror=unreadable_dir):
         dirs[:] = [d for d in dirs if d != ".git"]
-        for name in files:
+        # 削除・rename・空 dir の作成は、 どの file の mtime にも残らず親 dir にだけ残る。
+        for path in (base, *(os.path.join(base, name) for name in files)):
             try:
-                mtime = os.path.getmtime(os.path.join(base, name))
+                mtime = os.path.getmtime(path)
             except FileNotFoundError:
-                mtime = entry_mtime(os.path.join(base, name), now)
+                mtime = entry_mtime(path, now)
             except OSError:
+                mtime = None
+            if mtime is None:
                 unreadable = True
                 continue
             if newest is None or mtime > newest:
@@ -458,18 +474,21 @@ def baseline_silence(
     """
     worst = None
     for record_path in glob.glob(os.path.join(jobs_dir, "*.json")):
-        if os.path.basename(record_path)[: -len(".json")] == exclude:
+        peer_id = os.path.basename(record_path)[: -len(".json")]
+        if peer_id == exclude:
             continue
-        record = job_record(record_path)
+        record = job_record(record_path, peer_id)
         if record is None or record.get("status") != BASELINE_STATUS:
             continue
         peer_log = record_path[: -len(".json")] + ".log"
         # completed と書かれてから最終 block が append されるまでの窓で読むと、
         # その peer の本当の gap を欠いた低い baseline になる。 落ち着くまで数えない。
-        peer_age = heartbeat_age(peer_log, now)
-        if peer_age is None or peer_age < settle_seconds:
+        before = file_stat(peer_log)
+        if before is None or now - before[0] < settle_seconds:
             continue
         quiet = longest_silence(peer_log)
+        if file_stat(peer_log) != before:
+            continue  # 読んでいる間に伸びた peer は、この poll の手本にならない
         if quiet is not None and (worst is None or quiet > worst):
             worst = quiet
     return worst
@@ -504,14 +523,16 @@ def stamp_epoch(stamp: object) -> float | None:
     Keeps the fraction: truncating to the second lets a file written earlier in
     the same second pass as this run's output.
     """
-    if not isinstance(stamp, str) or len(stamp) < 19:
-        return None
+    matched = RECORD_TS.match(stamp) if isinstance(stamp, str) else None
+    if not matched:
+        return None  # 末尾まで見ないと +09:00 や junk 付きを UTC として採ってしまう
     try:  # the record stamps UTC, so read it as UTC rather than through local time
-        whole = float(calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S")))
+        whole = float(
+            calendar.timegm(time.strptime(matched.group(1), "%Y-%m-%dT%H:%M:%S"))
+        )
     except ValueError:
         return None
-    fraction = re.match(r"\.\d+", stamp[19:])
-    return whole + float(fraction.group(0)) if fraction else whole
+    return whole + float(matched.group(2)) if matched.group(2) else whole
 
 
 def artifact_ready(
@@ -528,21 +549,29 @@ def artifact_ready(
     try:
         # 本文と鮮度は同じ descriptor の同じ瞬間から取る — path で stat し直すと、
         # 置換された別 inode の mtime が古い本文の完了 token と組になりうる。
-        with open(path, encoding="utf-8") as f:
+        with open(path, "rb") as f:
             before = os.fstat(f.fileno())
-            body = f.read()
+            # 全量展開すると、 巨大な成果物ひとつで監視自身が MemoryError で終わる。
+            trimmed = before.st_size > MAX_ARTIFACT_BYTES
+            if trimmed:
+                f.seek(before.st_size - MAX_ARTIFACT_BYTES)
+            raw = f.read(MAX_ARTIFACT_BYTES)
             after = os.fstat(f.fileno())
     except FileNotFoundError:
         return False  # まだ書かれていない — 読めないのではなく、無い
-    except UnicodeDecodeError:
-        # 置換して読み進めると、 binary の末尾行が token と一致して完成品になる。
-        return False
     except OSError:
         return None  # 在るのに読めない — 「成果物なし」と断定してよい根拠がない
     if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
         return False  # 読んでいる間に伸びた = まだ書かれている最中
     if after.st_mtime < since:
         return False  # a leftover from an earlier run is not this run's output
+    while trimmed and raw and raw[0] & 0xC0 == 0x80:
+        raw = raw[1:]  # 末尾から読んだので、先頭が 1 文字の途中でありうる
+    try:
+        # 置換して読むと、 binary の末尾行が token と一致して完成品に化ける。
+        body = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
     if not token:
         return bool(body.strip())
     # The order says the final line IS the token: no padding, no trailing blanks.
@@ -598,6 +627,14 @@ def verdict(
                 f"not-completed: job {status} — re-issue on a fresh thread "
                 f"(a cancelled or failed run is not a result){left if ready else ''}"
             )
+    # cancel / 失敗は成果物を読めるかに関わらず結果ではないので、 その先で見る。
+    # 生存中も completed も、 読めない成果物からは done も stall も言えない。
+    if expects_artifact and ready is None:
+        return EXIT_UNVERIFIABLE, (
+            "unverifiable: the deliverable is there but could not be read, so it can "
+            "be shown neither finished nor missing — check the path below"
+        )
+    if not alive_status:
         # The skill's completion is status AND a settled tree: a task can leave
         # a detached process still writing after the runner reports completed.
         # That gates the missing-deliverable verdict too — the writer still going
@@ -609,12 +646,6 @@ def verdict(
             )
         if tree < hang_seconds:
             return None  # still settling; re-check rather than hand over mid-write
-        if expects_artifact and ready is None:
-            return EXIT_UNVERIFIABLE, (
-                "unverifiable: the job reports completed but its deliverable could "
-                "not be read, so it cannot be shown to be missing either — check "
-                "the path below"
-            )
         if not (ready or not expects_artifact):
             return EXIT_ENDED_WITHOUT_ARTIFACT, (
                 "ended-without-deliverable: job completed with no complete deliverable — "
@@ -886,8 +917,12 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def check_durations(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+def check_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     """NaN or a negative wait makes every deadline comparison false — refuse it up front."""
+    if args.token and not args.artifact:
+        # 成果物が無ければ token を照合する相手がいない。 黙って無視すると、
+        # 完了 token を指定した呼び手が「検査された」 と読んだまま exit 0 を受け取る。
+        parser.error("--token needs --artifact: there is nothing to check it against")
     for name in (
         "stall_seconds",
         "hang_seconds",
@@ -903,7 +938,7 @@ def check_durations(parser: argparse.ArgumentParser, args: argparse.Namespace) -
 def main(argv: list[str]) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    check_durations(parser, args)
+    check_arguments(parser, args)
     if args.selftest:
         loaded = unittest.defaultTestLoader.loadTestsFromName(__name__ + ".WatchTest")
         return (
@@ -1283,7 +1318,7 @@ class WatchTest(unittest.TestCase):
         for bad in ("nan", "-1", "0", "inf"):
             with self.assertRaises(SystemExit):
                 args = parser.parse_args(["task-x", "--poll-seconds", bad])
-                check_durations(parser, args)
+                check_arguments(parser, args)
 
     def test_silences_measure_gaps_between_log_lines(self):
         _root, _rec, log = self._state(
@@ -1381,11 +1416,106 @@ class WatchTest(unittest.TestCase):
             f.write("ref\n")
         with open(os.path.join(root, "src.py"), "w", encoding="utf-8") as f:
             f.write("x\n")
-        os.utime(os.path.join(root, "src.py"), (time.time() - 90, time.time() - 90))
+        for path in (os.path.join(root, "src.py"), root):
+            os.utime(path, (time.time() - 90, time.time() - 90))
         age = tree_age(root, time.time())
         assert age is not None
         self.assertAlmostEqual(age, 90, delta=5)
         self.assertIsNone(tree_age("/nonexistent", time.time()))
+
+    def test_peer_growing_during_the_read_does_not_set_the_baseline(self):
+        """読取の前後で伸びた peer の gap は、不完全な view から来た値である。"""
+        from unittest import mock
+
+        _root, record, _log = self._state("ws", "task-live", "running")
+        jobs = os.path.dirname(record)
+        peer_log = os.path.join(jobs, "task-peer.log")
+        with open(os.path.join(jobs, "task-peer.json"), "w", encoding="utf-8") as f:
+            json.dump({"id": "task-peer", "status": "completed"}, f)
+        with open(peer_log, "w", encoding="utf-8") as f:
+            f.write("[2026-08-09T00:00:00.000Z] a\n[2026-08-09T00:01:00.000Z] b\n")
+        real = longest_silence
+
+        def growing(path):
+            quiet = real(path)
+            with open(path, "a", encoding="utf-8") as appended:
+                appended.write("[2026-08-09T00:10:00.000Z] c\n")
+            return quiet
+
+        with mock.patch(__name__ + ".longest_silence", growing):
+            self.assertIsNone(baseline_silence(jobs, "task-live", time.time(), 0.0))
+
+    def test_token_without_a_deliverable_is_refused(self):
+        """照合相手が無いまま受理すると、token を指定した呼び手が検査済みと読む。"""
+        parser = build_parser()
+        with self.assertRaises(SystemExit):
+            check_arguments(parser, parser.parse_args(["task-x", "--token", "DONE"]))
+
+    def test_huge_deliverable_is_read_bounded(self):
+        """全量展開すると、成果物ひとつで監視自身が MemoryError で終わる。"""
+        p = os.path.join(tempfile.mkdtemp(), "report.md")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("あ" * MAX_ARTIFACT_BYTES)  # bound を超える多 byte 本文
+            f.write("\nREPORT_COMPLETE\n")
+        self.assertTrue(artifact_ready(p, "REPORT_COMPLETE", time.time() - 60))
+
+    def test_unreadable_entry_is_not_a_write_now(self):
+        """読めない entry を「0 秒前に書かれた」にすると、未知が偽の活動に化ける。"""
+        from unittest import mock
+
+        root = tempfile.mkdtemp()
+        with open(os.path.join(root, "f"), "w", encoding="utf-8") as f:
+            f.write("x")
+        with (
+            mock.patch("os.path.getmtime", side_effect=FileNotFoundError),
+            mock.patch("os.lstat", side_effect=PermissionError),
+        ):
+            self.assertIsNone(tree_age(root, time.time()))
+
+    def test_unreadable_deliverable_never_becomes_a_stall(self):
+        """running でも、読めない成果物から cancel を指示する根拠は出ない。"""
+        self.assertEqual(
+            self._code("running", 900.0, None, tree=900.0), EXIT_UNVERIFIABLE
+        )
+
+    def test_record_without_status_or_with_another_id_is_unreadable(self):
+        """空 status は alive と読まれ、file 名だけの id は別 job の状態を持ち込む。"""
+        base = tempfile.mkdtemp()
+        for name, body in (
+            ("no-status.json", '{"id": "task-x"}'),
+            ("blank.json", '{"id": "task-x", "status": "  "}'),
+            ("other-id.json", '{"id": "task-other", "status": "completed"}'),
+        ):
+            with open(os.path.join(base, name), "w", encoding="utf-8") as f:
+                f.write(body)
+        self.assertIsNone(job_record(os.path.join(base, "no-status.json")))
+        self.assertIsNone(job_record(os.path.join(base, "blank.json")))
+        self.assertIsNone(job_record(os.path.join(base, "other-id.json"), "task-x"))
+
+    def test_record_stamp_must_be_utc_to_the_end(self):
+        """前 19 文字だけ見ると、offset 付きや junk 付きを UTC として採る。"""
+        self.assertIsNotNone(stamp_epoch("2026-08-08T11:43:06Z"))
+        self.assertIsNotNone(stamp_epoch("2026-08-08T11:43:06.921Z"))
+        for bad in (
+            "2026-08-08T11:43:06+09:00",
+            "2026-08-08T11:43:06junk",
+            "2026-08-08T11:43:06.921junk",
+            "2026-08-08T11:43:06",
+        ):
+            self.assertIsNone(stamp_epoch(bad), bad)
+
+    def test_directory_activity_counts_as_a_write(self):
+        """削除・rename・空 dir の作成は、どの file の mtime にも残らず親 dir にだけ残る。"""
+        root = tempfile.mkdtemp()
+        with open(os.path.join(root, "old"), "w", encoding="utf-8") as f:
+            f.write("x")
+        for path in (os.path.join(root, "old"), root):
+            os.utime(path, (time.time() - 900, time.time() - 900))
+        os.makedirs(os.path.join(root, "made"))  # 空 dir — file の mtime は動かない
+        age = tree_age(root, time.time())
+        if age is None:
+            self.fail("走査不能と判定された")
+        self.assertLess(age, 5.0)
 
     def test_cancel_command_carries_the_workspace(self):
         """判定を読んだ人がその場で流せる形にする (cwd を自分で組み立てさせない)。"""
@@ -1705,6 +1835,7 @@ class WatchTest(unittest.TestCase):
         link = os.path.join(root, "dangling")
         os.symlink(os.path.join(root, "gone"), link)
         os.utime(link, (0, 0), follow_symlinks=False)
+        os.utime(root, (0, 0))  # dir 自身の活動と link の扱いを分けて見る
         age = tree_age(root, time.time())
         if age is None:
             self.fail("dangling symlink で走査不能と判定された")
