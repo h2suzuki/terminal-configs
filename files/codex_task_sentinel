@@ -594,11 +594,9 @@ def run_since(record: dict) -> float | None:
     picks the job up — so fall back to createdAt rather than dropping the
     freshness floor entirely and accepting an earlier run's deliverable.
     """
-    for field in ("startedAt", "createdAt"):
-        stamp = stamp_epoch(record.get(field))
-        if stamp is not None:
-            return stamp
-    return None
+    # startedAt が無い = worker がまだ拾っていない。 createdAt へ落とすと、 作成後に
+    # 誰かが同じ path を更新しただけの file を この run の成果物として受理できる。
+    return stamp_epoch(record.get("startedAt"))
 
 
 def stamp_epoch(stamp: object) -> float | None:
@@ -838,7 +836,7 @@ def evidence(
     shown = tail or ["(なし)"]
     # exit 14 は ready を verdict へ畳むので、畳んだ値をここで戻さないと成果物あり / なしが読めない。
     state = "unreadable" if ready is None else ("ready" if ready else "not ready")
-    made = f"{state} {artifact}" if artifact else "指定なし"
+    made = f"{state} {printable(artifact)}" if artifact else "指定なし"
     lines = [
         f"  job    : {printable(job_id)} "
         f"status={printable(record.get('status') or '不明')} "
@@ -860,8 +858,8 @@ def evidence(
     if isinstance(failure, str) and failure.strip():
         lines.append(f"  エラー : {printable(failure.strip()[:200])}")
     lines += [
-        f"  log    : {log}",
-        f"  cancel : {cancel_command(job_id, root if isinstance(root, str) else None)}",
+        f"  log    : {printable(log)}",
+        f"  cancel : {printable(cancel_command(job_id, root if isinstance(root, str) else None))}",
     ]
     return "\n".join(lines)
 
@@ -871,23 +869,34 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
     deadline = time.monotonic() + args.timeout_seconds
     started = time.monotonic()
     found: list[tuple[str, str]] = []
-    seen_any = False
+    seen_pairs: set[tuple[str, str]] = set()
     while not found:
         found, complete = find_jobs(args.job_id, roots)
         if len(found) > 1:
-            print(f"ambiguous: {len(found)} records carry the id {args.job_id}")
+            print(
+                f"ambiguous: {len(found)} records carry the id {printable(args.job_id)}"
+            )
             for record, _log in found:
-                print(f"  {record}")
+                print(f"  {printable(record)}")
             return EXIT_AMBIGUOUS
         if found and complete:
+            if seen_pairs and found[0] not in seen_pairs:
+                # 前に見たのと別の record — 同じ id でも同じ job とは限らない。
+                print(
+                    f"unverifiable: {printable(args.job_id)} resolved to a different "
+                    f"record than the one seen earlier"
+                )
+                for pair in sorted(seen_pairs | {found[0]}):
+                    print(f"  {printable(pair[0])}")
+                return EXIT_UNVERIFIABLE
             break
-        # 走査しきれていない 1 件は「唯一」の証明にならないが、 見たことは事実。
-        # 忘れると、 後で prune された後に 「起動が成立していない」 と誤断定する。
-        seen_any = seen_any or bool(found)
+        # 走査しきれていない 1 件は「唯一」の証明にならないが、 どれを見たかは事実。
+        # bool に畳むと、 後から別 path の同名 record へ黙ってすり替わる。
+        seen_pairs.update(found)
         found = []
         # 終局は実期限で決める — margin を足すと、 待つと約束した時間内の登録を取り逃す。
         if deadline_reached(deadline):
-            if not complete or seen_any:
+            if not complete or seen_pairs:
                 # 走査しきれていない、 または一度は見えた — どちらも
                 # 「登録されていない」 とは言えない。
                 print(
@@ -897,8 +906,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 )
                 print(f"  searched: {', '.join(roots)}")
                 return EXIT_UNVERIFIABLE
-            print(f"never-registered: no state record for {args.job_id}")
-            print(f"  searched: {', '.join(roots)}")
+            print(f"never-registered: no state record for {printable(args.job_id)}")
+            print(f"  searched: {printable(', '.join(roots))}")
             return EXIT_NEVER_REGISTERED
         sleep_until(deadline, args.poll_seconds)
     record_path, log = found[0]
@@ -946,9 +955,11 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # 監視開始後に同じ id の record が増えても、 固定した path だけ見ていては気付けない。
         seen, scanned_all = find_jobs(args.job_id, roots)
         if len(seen) > 1:
-            print(f"ambiguous: {len(seen)} records carry the id {args.job_id}")
+            print(
+                f"ambiguous: {len(seen)} records carry the id {printable(args.job_id)}"
+            )
             for duplicate, _log in seen:
-                print(f"  {duplicate}")
+                print(f"  {printable(duplicate)}")
             return EXIT_AMBIGUOUS
         # plugin は record を completed に書いてから final output を append する。
         # その窓に入った poll は、 古い running のまま静穏を読んで stall と言える。
@@ -1044,7 +1055,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             )
         if out is not None:
             code, headline = out
-            print(headline)
+            print(printable(headline))
             print(
                 evidence(
                     args.job_id,
@@ -1257,15 +1268,18 @@ class WatchTest(unittest.TestCase):
         assert out is not None
         self.assertEqual(out[0], EXIT_DONE)
 
-    def test_queued_record_still_bounds_artifact_freshness(self):
-        """queued 中は startedAt が無い — createdAt に落とさないと前 run の成果物を通す。"""
+    def test_a_job_not_yet_started_owns_no_deliverable(self):
+        """worker が拾う前の job は何も書けない — createdAt を下限にすると他人の file を通す。"""
         stamp = "2026-08-08T11:43:06.921Z"
-        self.assertEqual(run_since({"createdAt": stamp}), stamp_epoch(stamp))
+        self.assertIsNone(run_since({"createdAt": stamp}))  # queued のまま
         self.assertEqual(
             run_since({"createdAt": "2026-08-08T00:00:00Z", "startedAt": stamp}),
             stamp_epoch(stamp),
         )
         self.assertIsNone(run_since({}))
+        # 下限が無ければ ready にならないので、queued が done-hung へは進めない。
+        out = verdict("queued", 900.0, 900.0, False, 420, 300, trust_log=True)
+        self.assertNotEqual(out and out[0], EXIT_DONE_HUNG)
 
     def test_no_freshness_floor_means_not_ready(self):
         """下限が読めないなら、今回書かれた成果物だと示せない。"""
@@ -1766,14 +1780,14 @@ class WatchTest(unittest.TestCase):
 
         class Endless:
             def __init__(self) -> None:
-                self.reads = 0
+                self.asked: list[int] = []
 
             def fileno(self) -> int:
                 return 0
 
             def read(self, size: int) -> bytes:
-                self.reads += 1
-                return b"a" * size if self.reads <= 50 else b""
+                self.asked.append(size)
+                return b"a" * size if len(self.asked) <= 50 else b""
 
             def __enter__(self):
                 return self
@@ -1782,7 +1796,10 @@ class WatchTest(unittest.TestCase):
                 return False
 
         handle = Endless()
-        fake = os.stat_result((stat.S_IFREG | 0o644, 0, 0, 1, 0, 0, 16, 0, 0, 0))
+        size = (
+            MAX_ARTIFACT_BYTES * 3 + 7
+        )  # 上限を跨がないと 1 回当たりの量を pin できない
+        fake = os.stat_result((stat.S_IFREG | 0o644, 0, 0, 1, 0, 0, size, 0, 0, 0))
         # reader の入口は os.open — 旧入口を mock すると test は緑のまま何も見なくなる。
         with (
             mock.patch("os.open", lambda *a, **k: 0),
@@ -1791,8 +1808,9 @@ class WatchTest(unittest.TestCase):
             mock.patch("os.fstat", lambda _fd: fake),
         ):
             artifact_ready("/any/report.md", "TOKEN", 0.0)
-        self.assertGreaterEqual(handle.reads, 1)  # 空振りしていないこと
-        self.assertLessEqual(handle.reads, 2)
+        self.assertGreater(len(handle.asked), 1)  # 空振りせず、複数 chunk に割れたこと
+        self.assertTrue(all(0 < n <= MAX_ARTIFACT_BYTES for n in handle.asked))
+        self.assertEqual(sum(handle.asked), size)  # size を超えて追いかけていない
 
     def test_a_record_seen_once_is_never_called_unregistered(self):
         """一度見えた record を忘れると、prune 後に「起動していない」と誤断定する。"""
@@ -1852,6 +1870,24 @@ class WatchTest(unittest.TestCase):
         with mock.patch("os.stat", vanishing):
             self.assertFalse(artifact_ready(p, "REPORT_COMPLETE", time.time() - 60))
 
+    def test_control_characters_cannot_repaint_the_headline(self):
+        """headline にも record の文字列が入る — evidence だけ escape しても足りない。"""
+        import io
+        from contextlib import redirect_stdout
+
+        root = tempfile.mkdtemp()
+        jobs = os.path.join(root, "ws", "jobs")
+        os.makedirs(jobs)
+        with open(os.path.join(jobs, "task-x.json"), "w", encoding="utf-8") as f:
+            json.dump({"id": "task-x", "status": "failed\r  cancel : rm -rf /"}, f)
+        with open(os.path.join(jobs, "task-x.log"), "w", encoding="utf-8") as f:
+            f.write("x\n")
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            watch(self._watch_args(root, "task-x", once=True))
+        self.assertNotIn("\r", buf.getvalue())
+        self.assertIn("\\x0d", buf.getvalue())
+
     def test_control_characters_cannot_repaint_the_evidence(self):
         """log 本文と record は無加工で届く — CR や ESC で表示を作り替えられる。"""
         text = evidence(
@@ -1870,12 +1906,34 @@ class WatchTest(unittest.TestCase):
 
     def test_an_oversized_record_is_corrupt_not_an_endless_read(self):
         """log と成果物に置いた上限が record にだけ無いと、そこから読み終わらない。"""
+        from unittest import mock
+
         p = os.path.join(tempfile.mkdtemp(), "task-x.json")
         with open(p, "w", encoding="utf-8") as f:
             f.write('{"id": "task-x", "status": "running", "pad": "')
             f.write("a" * (MAX_RECORD_BYTES + 16))
             f.write('"}')
         self.assertIsNone(job_record(p))
+
+        # 有限 file の verdict だけでは、 全量一括 read への退行を素通りさせる。
+        class Growing:
+            def __init__(self) -> None:
+                self.asked: list[int | None] = []
+
+            def read(self, size=None) -> bytes:
+                self.asked.append(size)
+                return b"a" * (size if size else MAX_RECORD_BYTES * 4)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc) -> bool:
+                return False
+
+        handle = Growing()
+        with mock.patch(__name__ + ".open_regular", lambda _p: handle):
+            self.assertIsNone(job_record(p))
+        self.assertEqual(handle.asked, [MAX_RECORD_BYTES + 1])
 
     def test_a_deeply_nested_record_is_corrupt_not_a_traceback(self):
         """JSON の深い入れ子は ValueError ではなく RecursionError で来る。"""
