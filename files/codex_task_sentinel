@@ -87,7 +87,7 @@ STALL_BASELINE_FACTOR = 3.0
 # 稼働中 command の start を偽の end で消してしまう。 runner はこの形しか書かない。
 LOG_TS = re.compile(r"^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?)Z\]")
 # record の stamp は UTC 表記。 末尾まで固定しないと offset 付きや junk 付きが通る。
-RECORD_TS = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?Z$")
+RECORD_TS = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?Z")
 # A log line is an event line plus, at worst, one shortened command; a body that
 # runs longer than this is prose, and reading all of it only risks the verdict.
 MAX_LOG_LINE = 8192
@@ -296,6 +296,11 @@ def file_stat(path: str | None) -> tuple[float, int] | None:
 def deadline_reached(deadline: float, margin: float = 0.0) -> bool:
     """Whether the watch has run out of time — measured as elapsed, never as a clock."""
     return time.monotonic() + margin > deadline
+
+
+def sleep_until(deadline: float, poll_seconds: float) -> None:
+    """Wait one cadence at most, and never past the deadline the caller was promised."""
+    time.sleep(max(0.0, min(poll_seconds, deadline - time.monotonic())))
 
 
 def heartbeat_age(log_path: str, now: float) -> float | None:
@@ -567,7 +572,8 @@ def stamp_epoch(stamp: object) -> float | None:
     Keeps the fraction: truncating to the second lets a file written earlier in
     the same second pass as this run's output.
     """
-    matched = RECORD_TS.match(stamp) if isinstance(stamp, str) else None
+    # fullmatch で終端まで固定する — `$` は末尾の改行の手前にも一致してしまう。
+    matched = RECORD_TS.fullmatch(stamp) if isinstance(stamp, str) else None
     if not matched:
         return None  # 末尾まで見ないと +09:00 や junk 付きを UTC として採ってしまう
     try:  # the record stamps UTC, so read it as UTC rather than through local time
@@ -592,6 +598,8 @@ def artifact_ready(
         return False
     decoder = codecs.getincrementaldecoder("utf-8")()
     body = ""
+    # 保持するのは末尾だけなので、 「どこかに中身があったか」 は読みながら覚えておく。
+    seen_content = False
     try:
         # 本文と鮮度は同じ descriptor の同じ瞬間から取る — path で stat し直すと、
         # 置換された別 inode の mtime が古い本文の完了 token と組になりうる。
@@ -600,8 +608,12 @@ def artifact_ready(
             # 全量を持つと巨大な成果物ひとつで監視が MemoryError で終わる。 decode は
             # 先頭から通し、 保持するのは末尾だけ — 途中の不正 byte も見逃さない。
             while chunk := f.read(MAX_ARTIFACT_BYTES):
-                body = (body + decoder.decode(chunk))[-MAX_ARTIFACT_BYTES:]
-            body = (body + decoder.decode(b"", True))[-MAX_ARTIFACT_BYTES:]
+                body += decoder.decode(chunk)
+                seen_content = seen_content or bool(body.strip())
+                body = body[-MAX_ARTIFACT_BYTES:]
+            body += decoder.decode(b"", True)
+            seen_content = seen_content or bool(body.strip())
+            body = body[-MAX_ARTIFACT_BYTES:]
             after = os.fstat(f.fileno())
     except FileNotFoundError:
         return False  # まだ書かれていない — 読めないのではなく、無い
@@ -615,7 +627,7 @@ def artifact_ready(
     if after.st_mtime < since:
         return False  # a leftover from an earlier run is not this run's output
     if not token:
-        return before.st_size > 0 and bool(body.strip())
+        return seen_content
     # The order says the final line IS the token: no padding, no trailing blanks.
     lines = body.splitlines()
     return bool(lines) and lines[-1] == token
@@ -813,8 +825,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             print(f"never-registered: no state record for {args.job_id}")
             print(f"  searched: {', '.join(roots)}")
             return EXIT_NEVER_REGISTERED
-        # 期限をまたいで眠らない — 残りが短ければその分だけ待つ。
-        time.sleep(max(0.0, min(args.poll_seconds, deadline - time.monotonic())))
+        sleep_until(deadline, args.poll_seconds)
     record_path, log = found[0]
     jobs_dir = os.path.dirname(record_path)
     while True:
@@ -854,6 +865,10 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             # os.walk は snapshot ではないので、 列挙済み file への書き込みは
             # 走査し直さない限りこの poll から丸ごと抜け落ちる。
             or tree_age((record or {}).get("workspaceRoot"), now) != tree
+            # threshold の出どころも同じ poll のもの — peer が後から伸びると、
+            # 古い低い bar と新しい対象 snapshot の組で stall を断定できる。
+            or baseline_silence(jobs_dir, args.job_id, now, args.hang_seconds)
+            != baseline
         )
         # 「動いた」 と 「読めなかった」 は別の理由 — 畳むと headline がどちらも
         # 「読取中に変わった」 になり、 安定して読めない log が活動に化ける。
@@ -893,7 +908,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # evidence として出る。 期限前なら取り直し、 期限か --once なら理由を名指しで返す。
         if out is None and (changed or unreadable):
             if not (args.once or deadline_reached(deadline)):
-                time.sleep(args.poll_seconds)
+                sleep_until(deadline, args.poll_seconds)
                 continue
             out = (
                 (
@@ -953,7 +968,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 )
             )
             return code
-        time.sleep(args.poll_seconds)
+        sleep_until(deadline, args.poll_seconds)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1509,6 +1524,49 @@ class WatchTest(unittest.TestCase):
             self.assertFalse(scan_log(log)[2])
             self.assertIsNone(longest_silence(log))
         self.assertEqual(seen, [1])
+
+    def test_no_sleep_outlives_the_deadline(self):
+        """poll が timeout より長くても、約束した期限で目を覚ます。"""
+        deadline = time.monotonic() + 0.02
+        began = time.monotonic()
+        sleep_until(deadline, 5.0)
+        self.assertLess(time.monotonic() - began, 1.0)
+
+    def test_a_peer_growing_after_the_baseline_discards_the_poll(self):
+        """threshold と対象 snapshot が別の瞬間から来たら、その組で断定しない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-live", "running", log_age=900.0)
+        jobs = os.path.dirname(record)
+        with open(os.path.join(jobs, "task-peer.json"), "w", encoding="utf-8") as f:
+            json.dump({"id": "task-peer", "status": "completed"}, f)
+        with open(os.path.join(jobs, "task-peer.log"), "w", encoding="utf-8") as f:
+            f.write("[2026-08-09T00:00:00.000Z] a\n[2026-08-09T00:01:00.000Z] b\n")
+        bars = itertools.cycle([60.0, 900.0])
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".baseline_silence", lambda *a: next(bars)),
+        ):
+            self.assertEqual(
+                watch(self._watch_args(root, "task-live", once=True, trust_log=True)),
+                EXIT_ALIVE,
+            )
+
+    def test_a_stamp_with_a_trailing_newline_is_rejected(self):
+        """`$` は末尾の改行の手前にも一致する — 終端まで固定しないと strict ではない。"""
+        self.assertIsNone(stamp_epoch("2026-08-08T11:43:06Z\n"))
+        self.assertIsNone(stamp_epoch("2026-08-08T11:43:06Z\n\n"))
+        self.assertIsNotNone(stamp_epoch("2026-08-08T11:43:06Z"))
+
+    def test_content_before_a_whitespace_tail_still_counts(self):
+        """末尾だけ保持するので、先頭側の中身は読みながら覚えておくしかない。"""
+        p = os.path.join(tempfile.mkdtemp(), "report.md")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("body\n" + " " * (MAX_ARTIFACT_BYTES + 16))
+        self.assertTrue(artifact_ready(p, None, time.time() - 60))
 
     def test_a_discarded_poll_never_becomes_an_over_estimate(self):
         """破棄した snapshot を exit 12 の evidence にしない — comment はそう書いてある。"""
