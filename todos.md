@@ -21,12 +21,12 @@ Exit Criteria:
 
 - [x] deploy 後の実 session で、`opus-5` tag 付き entry が `claude-opus-5[1m]` の session に surface することを観測する — 2026-08-09 deploy 後に実測。`_normalize_model('claude-opus-5[1m]') = opus-5`、user scope の tag 付き 9 件すべてが filter を通過 (mute 0)。実 inject_log にも deploy 後 `kind=emit model=opus-5` が 2 行増え、うち 1 件は project scope の entry
 - [x] deploy 後の実 session で muted-memory-at-wall が live 発火することを観測する — 2026-08-09、deploy 済 `/etc/claude-code/hooks/stop_checks.py` + 実 DB + 実 session の model 解決 (statusline 経由 `opus-5`) で `<muted-memory>` を生成。壁宣言「…実行できません。自前で実装に切り替えます。」に対し score 0.475 (floor 0.35) の `feedback_codex_sandbox_delegation.md` (models=opus-4.8) を名指しした。latch は temp path で実 turn から隔離して観測
-- [ ] deploy 後に新規蓄積された `kind='mismatch'` が untagged entry 由来のみになっていることを SQL で確認する — deploy 時 baseline は emit 522 / mismatch 106。deploy 後 1 時間で mismatch の増加は 0 件のため、判定には蓄積待ち
+- [ ] deploy 後に新規蓄積された `kind='mismatch'` が untagged entry 由来のみになっていることを SQL で確認する — 2026-08-11 に再測 (蓄積待ちは解消)。deploy 直後の 2026-08-09 01:01 以降、`opus-5[1m]` 形の model 記録は 0 件 = 正規化漏れ由来の mute は消えた。ただし post-deploy の mismatch 12 件の内訳は untagged 4 件 / **他モデル tag 付き 8 件** (例: `models: opus-5` の entry を opus-4.8 session で mute)。tag 付き entry の legit な mute は原理的に残るので Exit 文言「untagged 由来のみ」は達成不能 — 下の `models:` 役割分離と合わせて条件を再定義する必要がある **(要相談)**
 
 - [x] `_normalize_model` が `[1m]` 等の context-window 変種を落とすよう修正 + unit test — 実データで `opus-5[1m]` の mismatch 33 行中 21 行が解消することを確認
 - [x] memory-routing skill に「壁と結論する前 / 2 回失敗した時に引く」 trigger を追加 (既存 Tag propagation 節の入口を拡張、コマンド重複なし)
 - [x] 壁宣言 probe を stop_checks の muted-memory-at-wall family として畳み込み — 別 session 提案の中身 (WALL_RE corpus / 否定周辺 ±120 字を query 化 / mute された entry の報告) を採用し、単独 hook 化で懸念した再 block loop と turn counter 二重 bump は exit 0 + additionalContext + `.muted` latch で解消。floor は実測分離点 0.35。`search_unfiltered()` を memory_surface に切り出して CLI と共用。stop_checks 107 tests (新規 7) / memory_surface 31 tests (新規 3)
-- [ ] deploy (ユーザー手動): `files/claude_user-hooks/memory_surface.py` → `~/.claude/hooks/`、`files/claude_managed-hooks/stop_checks.py` → `/etc/claude-code/hooks/`、`files/claude_managed-skills/` 配下の memory-routing・codex-delegation の SKILL.md → `/etc/claude-code/skills/<name>/` (`~/.claude/skills/` 側と同一 inode)、`files/codex_task_sentinel` → `/usr/local/bin/` (0755)
+- [x] deploy (ユーザー手動): `files/claude_user-hooks/memory_surface.py` → `~/.claude/hooks/`、`files/claude_managed-hooks/stop_checks.py` → `/etc/claude-code/hooks/`、`files/claude_managed-skills/` 配下の memory-routing・codex-delegation の SKILL.md → `/etc/claude-code/skills/<name>/` (`~/.claude/skills/` 側と同一 inode)、`files/codex_task_sentinel` → `/usr/local/bin/` (0755) — 2026-08-11 に 5 対象すべて `diff -q` 一致を確認
 
 codex (gpt-5.6-sol / xhigh) レビュー指摘の是正。deploy 前に少なくとも最初の 2 つを直す:
 
@@ -55,7 +55,10 @@ Exit Criteria:
   中断した 2 回の最終出力が示した欠陥 (baseline の list 化 / timeout headline) は自力で確認し修正した。
   4 回目が完走して 4 件 (completed + 活動中ツリーで exit 5 を早出し / 判定と evidence が別 snapshot /
   同期 test が runtime 定数と繋がっていない / 本文の不正 stamp で監視が例外終了) — すべて修正済み。
-  15 巡目で再判定する
+  15 巡目は 3 件 (mktime が Z stamp を local 時刻として読む / silence age を log 再読より前に取る /
+  exit table を数値集合で比較するため定数入替が通る)、16 巡目は 4 件 (contract が検査対象の定数を
+  自分の出典にする / completed 直後の record と log で snapshot race 2 件 / 読めない tree に
+  「書き込みなし」と表示) — いずれも修正済み (a0a6ace / b1d8ed7)。17 巡目で再判定する
 - [x] log 由来の曖昧さが正常 job の cancel を招かない — 既定で cancel 導線 (exit 4/3) を出さず、
   exit 14 で evidence を示して判断を呼び手に渡す (206ce7a)。断定したい呼び手は `--trust-log`。
   12 巡目が 504 case の直積で「既定の exit 3/4 は 0 件」「`--trust-log` は旧判定と mismatch 0」を実測
@@ -108,8 +111,9 @@ Exit Criteria:
   - **着手前に解く設計上の罠** (cross-check readback で判明): 発注は Bash しか持たない codex-rescue subagent 内で起きるが、`skill_reminder_gate` の skill-active state は agent 単位 (`agent_id or "main"`)。素直に相乗りすると skill を invoke できない subagent が恒久 deny になり発注不能。判定を親 session の state で行うか subagent を対象外にするかを先に決める
   - 相乗り先候補は 2 つ: `skill_reminder_gate.py` (編集前 gate) と `codex_worktree_gate.py` (既に codex Bash を検査済・検出面を持つ)。後者が有力
   - 射程を明示する: 今回の違反は監視側で発生。既存 codex hook は `status` / `cancel` / `result` を素通ししているので、監視系を含めるか決めてから実装する
-- 既存の失敗テスト 2 件 (今 session 以前から・新規 regression ではない): `stop_checks.WorktreeCleanupTest.test_non_repo_fails_open_with_diagnostic` (temp dir が repo と別 filesystem だと git stderr が 2 行になり 1 行前提の assert が落ちる) / `test_git_corpus.GitCorpusTest.test_corpus_against_current_adapter` (参照する `drafts/git-corpus/*.tsv` が repo に不在で error、原因未調査)
-- 環境 finding (2026-08-08 実測・要 root): memory index DB (`/var/lib/claude-rag-memory/memory_index.sqlite3`) が `nobody:nogroup 664` で uid scorer から書けず (`os.access(W_OK)` False)、この user の memory entry は **index に永久に載らない**。`memory_routing_gate.py` の sync は `--upsert` を stdout/stderr とも DEVNULL・`check=False` で呼び、`_upsert_entry` も sqlite エラーを握り潰すため**失敗が完全に不可視**。dir が 0777 ゆえ `-wal`/`-shm` は作れて健全に見える。結果 `--search` は root 由来の 13 件しか返さず、その中に skill と矛盾する reminder (「running[] が空になったら」) が現役で残る
+- 既存の失敗テスト 2 件 — **2026-08-11 再測で両者 pass** (`stop_checks` 117 tests OK / `test_git_corpus` 1 test OK)。後者が参照する `drafts/git-corpus/*.tsv` の「repo に不在」は `.gitignore:4` の `drafts/` 除外が原因で、clone には無いがローカルには実在する = local 専用 test という性質であり defect ではない
+- 環境 finding (2026-08-08 実測) — **2026-08-11 再測で解消**: memory index DB は `h2suzuki:h2suzuki 664` になり `os.access(W_OK)` True。`entry_models` 10 件はすべてこの user の entry で最新 `last_modified` は 2026-08-11 13:44、`kind='emit'` も同日に記録あり = index に載っている。skill と矛盾する reminder (「running[] が空になったら」) も memory/ と skills/ の双方に grep 0 件
+- [ ] index sync の失敗が不可視な設計を塞ぐ — 上の finding は解消したが、`memory_routing_gate.py` の sync が `--upsert` を stdout/stderr とも DEVNULL・`check=False` で呼び `_upsert_entry` も sqlite エラーを握り潰す構造は残る。同じ事故が再発しても気付けない (High の「観測できない」項目と同根なので併せて設計する)
 
 Work file: `last-session-handoff.md` の同名 section
 
