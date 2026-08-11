@@ -1746,8 +1746,40 @@ def main() -> int:
     return 0
 
 
+_TEST_CACHE_PATCHES: list = []
+
+
+def setUpModule():
+    """latch を実 HOME の cache から隔離する — 共有すると並行実行が互いを偽 fail させる。"""
+    import tempfile
+    from unittest import mock
+
+    patch = mock.patch.dict(
+        os.environ, {"XDG_CACHE_HOME": tempfile.mkdtemp(prefix="stop-cache-")}
+    )
+    patch.start()
+    _TEST_CACHE_PATCHES.append(patch)
+
+
+def tearDownModule():
+    while _TEST_CACHE_PATCHES:
+        _TEST_CACHE_PATCHES.pop().stop()
+
+
 class TurnMarkerTest(unittest.TestCase):
     """Turn-marker unit tests. Run: python3 -m unittest stop_checks"""
+
+    def test_counter_path_honours_xdg_cache_home(self):
+        """session_id だけの payload でも latch は XDG_CACHE_HOME 配下に落ちる。"""
+        import tempfile
+        from unittest import mock
+
+        cache = tempfile.mkdtemp()
+        with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": cache}):
+            path = _counter_path({"session_id": "sid"})
+
+        assert path is not None
+        self.assertTrue(path.startswith(cache), path)
 
     TS = "2026-06-02T04:45:24.945Z"
 
