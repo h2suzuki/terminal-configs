@@ -43,9 +43,11 @@ codex (gpt-5.6-sol / xhigh) レビュー指摘の是正。deploy 前に少なく
 - [x] **検索に時間上限が無い**: 元 probe の subprocess 20 秒 watchdog を失い、例外 catch では hang に効かず Stop 全体が止まりうる状態だった → `_bounded()` (daemon thread + `join(20s)`) 経由で呼ぶ。返らなくても None で fail-open し、居残った thread は Stop の終了を待たせない
 - [ ] **提示が top-1 のみ**: 弱い誤 hit が真の教訓を shadow する。上位 2-3 件を score つきで返すか、margin が小さい時だけ複数出す
 - [ ] **強制力の設計**: warning 化で「読んでから結論を出し直す」は保証でなくなった。同じ壁を繰り返し、かつ提示 path を Read していない 2 回目だけ既存 advise-once に統合して block する案を検討する
-- [ ] **`models:` の役割分離 — 設計ではなく実測された regression**: provenance (どの model で観測したか) と delivery allowlist (どの model に見せるか) を同じ field が兼ねるため、model 更新の度に corpus が cold-start する。`observed_models:` と `applies_to:` に分ける
+- [ ] **`models:` の役割分離**: provenance (どの model で観測したか) と delivery allowlist (どの model に見せるか) を同じ field が兼ねている
+  - **却下済み (2026-08-12・ユーザー判断): 未タグの既定を「全モデル可視」にする案は採らない**。理由は「あるモデルの失敗を他モデルへ通知するのはノイズ」。同案を再提案しないこと。したがって model 更新時の cold-start は塞ぐべき欠陥ではなく、各モデルが自分の教訓を自分で貯める設計意図として扱う
   - 2026-08-11 実測: entry は disk 上 78 件 / index 67 件だが、`models:` tag を持つのは **10 件のみ** (opus-5 が 6、fable-5 が 3、両方が 1)。untagged は `MODELS_DEFAULT = 'opus-4.8'` に落ちるため、可視件数は **opus-4.8 が 49 / opus-5 が 7 / fable-5 が 4 / haiku-4.5 が 0**
-  - filter 導入前の 1532 injection (37 活動日・約 10.8 件/session) に対し、導入後の emit は 39 件で mute が 207 件。うち 38 件が単一 session、32 件が単一 entry。**「tag mute を塞ぐ」どころか filter 自体が配信を 1 桁落としている**のが本丸で、本項目はこの family で唯一 measured な defect
+  - filter 導入前の 1532 injection (37 活動日・約 10.8 件/session) に対し、導入後の emit は 39 件で mute が 207 件。うち 38 件が単一 session、32 件が単一 entry
+  - **この配信減を私は一度「唯一 measured な defect」「本丸」と書いたが、その評価は撤回する**。上の却下理由に照らせば、他モデルで観測された教訓が届かないのは意図した挙動であり、数字の大きさは欠陥の大きさを意味しない。残る論点は「同一モデルで観測済みの教訓が届かない」case に限られる (例: `[1m]` 正規化漏れ。これは修正済み)
 - [ ] **「2 回失敗」の機械 trigger**: skill には書いたが hook は tool failure を観測しない。current turn の tool_result 失敗 signature を数え、2 回目で横断検索を起動する
 
 ### codex_task_sentinel: 敵対レビューの収束と上流依存 1 件
