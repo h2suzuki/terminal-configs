@@ -1,0 +1,53 @@
+# codex_task_sentinel 既存裁定
+
+区分は次のとおりである。(A) は現構造の AST・文字列走査で決定的に検査できるもの、(B) は return funnel または読取経路の構造化後に機械検査できるもの、(C) は挙動 test で担保するもの、(D) はコード外のプロセス規約である。
+
+| 番号 | 本文 | 区分 | 担保手段 |
+|---:|---|:---:|---|
+| 1 | **既定は cancel を指示しない**: plugin は message 本文を無加工で log へ append するため、同じ bytes が「本文が引用した偽 event」と「真正 event」の両方を表しうる。 静穏な log から stall を断定できないので、 既定は exit 14 で evidence を提示し判断を呼び手に渡す。`--trust-log` を明示した呼び手だけが exit 3 / 4 の断定に落ちる | C | `test_a_quiet_log_does_not_order_a_cancel_by_default` |
+| 2 | **観測信号は sandbox 内から観測でき、 かつ当該 job に紐づくものに限る**: process liveness は pid namespace 隔離で観測不能、 broker socket も job のものと結び付かない。「pgrep で生存確認せよ」「socket を見よ」 は不成立 | D | プロセス規約 |
+| 3 | **`EXIT_CONTRACT` は exit code を literal で保持する**: 定数参照にすると、 定数と契約を揃えて書き換えた変異が「同期している」と読めてしまう。 「重複だから定数を参照せよ」 は退行 | A | `test_exit_contract_codes_are_integer_literals` |
+| 4 | **完了判定は「成果物 + disk 上の job record」で行う**: 「status 出力から id が消えたこと」は終了済 id が latestFinished に残るため真になり得ない | C | `test_terminal_status_with_deliverable_is_done` |
+| 5 | **job id は全 workspace の state dir を走査して引く**: 隔離 worktree の job は本線 checkout から companion に尋ねると「実行中なし」と出る | C | `test_job_found_in_any_workspace` |
+| 6 | **実ログ corpus test は実環境が無ければ 0 件で通る設計**: corpus は repo に入れない | D | プロセス規約 |
+| 7 | **ツリーが一部でも走査できなければ `tree_age` は `None`** を返し、 exit 14 へ落とす。「読めた分だけで age を返せ」 は 17 巡目で塞いだ欠陥そのもの | C | `test_unreadable_subtree_is_not_evidence_of_quiet` |
+| 8 | **走査中に消えた file は「たった今の書き込み」として扱う**: dir 一覧にあった entry が stat 時に消えていたなら、 その走査窓の中で変化が起きている。 「不可知として `None` にせよ」 は活動中ツリーを恒久的に exit 14 にするため採らない | C | `test_file_vanishing_during_the_walk_is_activity` |
+| 9 | **期限は monotonic、 age と elapsed は wall clock**: 期限は経過時間なので時計合わせで動いてはならず、 mtime との差や record の UTC stamp との差は wall clock でしか意味を持たない。「全部 monotonic に統一せよ」 は不成立 | A | `test_wall_clock_call_sites_are_allowlisted` |
+| 10 | **`baseline_silence` は読めない peer を飛ばす**: これは threshold の下限を上げないだけで、ツリーの状態を断定しない。 `max(STALL_FLOOR_SECONDS, ...)` の floor が残り、 その値で断定に進むのは `--trust-log` を明示した呼び手だけである | C | `test_an_uncounted_baseline_does_not_license_a_stall` |
+| 11 | **成果物は strict UTF-8 で読む**: 置換して読むと binary の末尾行が token と一致して完成品に化ける。 「書きかけで例外になるから置換せよ」 は 18 巡目で塞いだ欠陥そのもの | A | `test_lossy_decode_call_sites_are_allowlisted` |
+| 12 | **成果物は 3 値**: 無い / 未完成 は `False`、 在るのに読めないは `None` で exit 14 へ送る。「bool に畳め」 は completed job を「成果物なし」と誤断定する | C | `test_unreadable_deliverable_is_unknown_not_missing` |
+| 13 | **消えた entry と dangling symlink は `os.lstat` で区別する**: link 先が無いだけの entry を「今の書き込み」 にすると、 その tree は永久に静穏へ到達しない | C | `test_dangling_symlink_is_not_a_write` |
+| 14 | **`baseline_silence` は成長中の peer を数えない**: 「2 poll 続けて一致するまで断定を保留」案は却下済み — `--once --trust-log` が exit 4 に到達できなくなり同期 test が落ちる | C | `test_peer_growing_during_the_read_does_not_set_the_baseline` |
+| 15 | **走査しきれなかった `--once` は「未登録」と言わない**: 31 巡目の修正である。「1 cadence で登録が見えなければ alive でよい」 は退行 | C | `test_once_does_not_call_an_incomplete_scan_unregistered` |
+| 16 | **走査の上限に達したら結果でなく「読み切れなかった」を返す**: `MAX_SCAN_BYTES` / `MAX_TREE_ENTRIES` / `MAX_WORKSPACES` / `MAX_PEERS` は無制限 I/O で poll が期限へ戻れなくなるのを防ぐ。 「読めた分で判断せよ」 は 17 巡目で塞いだ欠陥そのものである | C | `test_a_log_too_large_to_read_is_not_a_whole_view` / `test_a_tree_too_wide_says_unread_not_absent` / `test_workspace_names_stop_at_the_cap_before_they_are_all_read` / `test_the_peer_budget_counts_entries_not_just_records` |
+| 17 | **失敗を 1 つの番兵値に畳まない**: `record_stamp` が `("absent",)` / `("unopenable", errno)` / 実 snapshot を返し分けるのは、 別々の失敗どうしが等しくなって「不変」の証拠に化けるのを防ぐためである。 「None に統一せよ」 は退行 | C | `test_two_broken_reads_of_one_record_are_not_a_stable_corrupt` |
+| 18 | **期限後に初めて見た状態から終局を返さない**: `observed_late` を跨いだ poll が返せるのは timeout だけである。 estimate も `--once` も重複判定も同じ gate を通す | B | `test_nothing_but_a_timeout_follows_a_late_observation` |
+| 19 | **完了は「成果物 + disk の record」で決まる**: log の可読性は完了条件に無い。安定して読めた completed record を log が読めないことで止めるのは退行 (34 巡目の修正) | C | `test_an_unreadable_log_does_not_block_a_completed_record` |
+| 20 | **判断に使う parse と、 その安定を確かめる指紋は同じ 1 回の open から取る**:`record_view` がそれである。 外側の前後一致は中間値との一致を証明しない | B | `test_a_parse_of_other_bytes_is_not_this_polls_record` |
+| 21 | **期限を跨いだ poll が返せるのは exit 7 だけ**: contract の `7 timeout` は「no verdict by the deadline」 である。 discard・重複・estimate・`--once` のどの分岐も、 跨いだ後は終局を作らない。 これは 35 巡目の修正で 1 点に集約した | B | `test_a_verdict_first_seen_after_the_deadline_is_a_timeout` |
+| 22 | **上限は選り分けの前に消費する**: `MAX_PEERS` は保持量でなく走査 I/O を囲う | C | `test_the_peer_budget_counts_entries_not_just_records` |
+| 23 | **読めなかった候補は「id を名乗る record」 に数えない**: `carrying_records` が `carried` と `unknown` を分けて返すのはそのためで、 exit 9 は `carried` が 2 件以上の時だけ | C | `test_an_unreadable_sibling_does_not_make_a_lone_record_ambiguous` |
+| 24 | **log は完了条件ではない**: 可読性も変化も completed の先行確定を止めない。止めるのは成果物・ツリー・record 自身の変化だけである | C | `test_a_growing_log_does_not_hold_back_a_completed_record` |
+| 25 | **明示された `--stall-seconds` は履歴を使わない**: 使わない材料の読み残しで判定を止めない | C | `test_an_explicit_threshold_does_not_wait_on_peer_history` |
+| 26 | **record は `id` を非空 string で持つ**: 欠落・異型は「別 job を名乗った」 ではなく読めなかったのと同じ (exit 13)。 明示的に別の string を名乗るものだけが未登録側である | C | `test_record_field_of_the_wrong_type_is_unreadable` |
+| 27 | **`--once` の登録側 return も期限を通す**: 1 cadence が期限を跨いだら exit 7 である。ただし期限まで待って完全な走査が空だった場合の exit 6 は、 その定義そのものなので退行ではない | B | `test_an_incomplete_scan_at_the_deadline_is_a_timeout` |
+| 28 | **`job_id` は 1 つの file 名 component**: path を渡せば `os.path.join` が先行部分を捨てる | C | `test_a_job_id_that_is_a_path_is_refused` |
+| 29 | **parse に使った descriptor の指紋を、 前後の観測と一致させる**: record は `record_view`、log は `scan_log`、 peer log は `longest_silence` が返す。 外側の path 比較だけでは A→B→A が透過する | B | `test_a_log_swapped_around_the_parse_is_not_one_view` |
+| 30 | **貼れる cancel command を後から表示用に変換しない**: 制御文字を含む id / root では貼付可能な command を出さず、 plugin から cancel する旨を出す | C | `test_a_cancel_command_is_not_offered_for_a_control_character_id` |
+| 31 | **内容を解釈する 4 経路は全て指紋を返す**: `record_view` / `scan_log` / `longest_silence` / `artifact_view`。 この 4 つで全数であることを前提にしてよい | B | 構造化後に機械化 |
+| 32 | **判定と表示は同じ値を使う**: 走査後に動いた観測から作った表示値は、 headline でも evidence でも全て「不明」 にする。 補正対象は status・root・cancel の cwd・無音・末尾・未完了 command・全量読了・履歴との倍率・baseline・threshold・ツリー・成果物である。tree と成果物は record の `workspaceRoot` / `startedAt` から引くので record の不安定も見る | B | `test_a_failed_verdict_does_not_claim_a_changed_log` |
+| 33 | **「無い」 と 「動いた」 と 「読み切れていない」 を同じ表示に畳まない**: 動いた観測を `None` や空 list や `False` に畳むと、 それぞれ「無い」 「なし」 「最後まで読めず」 という別の確定状態に化ける。 呼び手は生値と `moved` / `unscanned` の 2 集合を渡し、 表示の決定は `evidence()` に集約する | B | `test_a_failed_verdict_does_not_claim_a_changed_deliverable` |
+| 34 | **先行確定は完全走査を要る**: 唯一の record と示せていない poll から terminal verdict を先行確定しない | C | `test_a_record_found_behind_an_unreadable_root_is_not_taken` |
+| 35 | **走査し切れていない空集合は「消えた」 でも「差し替わった」 でもない**: 候補集合の不一致を移動と読むのは完全走査の時だけ。 inode の不一致は無条件に移動である | C | 不完全走査は消失でない: `test_a_record_seen_once_is_never_called_unregistered` / 不完全走査は移動でない: `test_a_record_that_changed_between_partial_scans_is_unverifiable` / inode 不一致は移動: `test_a_record_replaced_between_rounds_is_a_different_record` |
+| 36 | **補正は観測ごとに閉じる**: ある観測を読み切れなかったことを、 読み切れた別の観測の理由に伝播させない | B | `test_an_unreadable_peer_root_is_not_reported_as_a_change` |
+| 37 | **押さえるのは「読んだ descriptor」**: 別に開き直した fd では、 読んだ inode を押さえたことにならない。 `scan_log` / `longest_silence` は `hold` で読んだ handle を渡す。ただし record の `pinned` は「番号の再利用を防ぐ」 目的なので同一 inode の別 fd でよい | B | `test_the_log_inode_is_held_while_it_is_compared` |
+| 38 | **掴めなかった理由を identity に化けさせない**: pin できなかったら、 消失は exit 10、開けないままは exit 13 をその場で返す。 同じ名前が後で読めても同じ record ではない | C | `test_a_record_that_could_not_be_pinned_is_not_replaced` |
+| 39 | **identity を番号だけで覚えない**: inode 番号は解放されると再利用される。比較の間は descriptor で inode を押さえる (record は watch 全体、 log と peer log と成果物はその比較が終わるまで)。 全量 digest は log の規模で poll I/O を倍にするため採らない | C | `test_a_recycled_inode_is_not_the_pinned_record` |
+| 40 | **観測は必ず「読んだ descriptor」 から作る**: record の pin も無音も、 別に開き直したり path を stat し直したりせず、 その値を得た descriptor から作る | B | `test_the_silence_comes_from_the_descriptor_that_read` |
+| 41 | **観測の前後比較は、 その観測を成す全要素で行う**: ツリーは最大 mtime と entry 数、record は bytes の指紋、 log と成果物は読んだ descriptor の指紋である | C | `test_a_tree_with_the_same_newest_mtime_but_other_entries_moved` |
+| 42 | **検証していない候補を読み直して採らない**: 解決時に読めなかった候補は corrupt である。消えている場合だけ exit 10 へ委ねる | C | `test_an_unvalidated_candidate_is_not_replaced_by_a_readable_one` |
+| 43 | **掴みは新しいものを得てから手放す**: 間を空けると番号を再利用される | B | `test_a_hold_kept_through_an_unheld_round_still_sees_the_swap` |
+| 44 | **周回の間に別 inode へ替わった record は別 record**: 同じ path でも exit 14 で返す | C | `test_a_record_replaced_between_rounds_is_a_different_record` |
+| 45 | **一度見えた候補は忘れない**: 動いた候補も `seen_pairs` に残す。 忘れると完全な空走査の後に「未登録」 (exit 6) と断定できてしまう | C | `test_a_shifting_candidate_is_remembered_as_seen` |
+| 46 | **読取窓の中だけ消えた観測は「無い」 ではない**: path に entry が在るのに view を読めなかったなら、 それは不在ではなく変化である。 「log なし」 「成果物なし」 は path にも無い時の答えで、不在の指紋は他の失敗と別値を名乗る。 52 巡目の修正である | C | `test_a_log_gone_only_during_the_read_is_not_stable_absence` |
+| 47 | **行の分割は LF だけで行う**: `str.splitlines()` は VT・FF・NEL・U+2028 も境界として消すので、token の後ろにそれらが付いた成果物が完成品に化ける。 「splitlines のほうが素直」 は退行 | A | `test_splitlines_has_no_call_sites` |

@@ -46,6 +46,7 @@ Exit codes, and what the caller does with each:
 from __future__ import annotations
 
 import argparse
+import ast
 import calendar
 import codecs
 import collections
@@ -5891,6 +5892,246 @@ class WatchTest(unittest.TestCase):
         ]
         self.assertEqual(pending_commands(lines), ["cargo test"])
         self.assertTrue(command_may_be_running(lines))
+
+
+class SourceInvariantTest(unittest.TestCase):
+    """Structural invariants decided by the sentinel review rulings."""
+
+    _tree = None
+    _owner_map = None
+
+    @classmethod
+    def _source_tree(cls):
+        if cls._tree is None:
+            with open(__file__, encoding="utf-8") as source_file:
+                cls._tree = ast.parse(source_file.read())
+        return cls._tree
+
+    @staticmethod
+    def _call_name(node):
+        parts = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if not isinstance(node, ast.Name):
+            return ""
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+
+    @classmethod
+    def _owners(cls, tree):
+        if cls._owner_map is not None:
+            return cls._owner_map
+        owners = {}
+
+        class Owner(ast.NodeVisitor):
+            def __init__(self):
+                self.stack = []
+
+            def visit_scope(self, node, kind):
+                self.stack.append((kind, node.name))
+                self.generic_visit(node)
+                self.stack.pop()
+
+            def visit_ClassDef(self, node):
+                self.visit_scope(node, "class")
+
+            def visit_FunctionDef(self, node):
+                self.visit_scope(node, "function")
+
+            visit_AsyncFunctionDef = visit_FunctionDef
+
+            def visit_Call(self, node):
+                in_class = bool(self.stack and self.stack[0][0] == "class")
+                function = next(
+                    (
+                        name
+                        for kind, name in reversed(self.stack)
+                        if kind == "function"
+                    ),
+                    "<module>",
+                )
+                owners[node] = (in_class, function)
+                self.generic_visit(node)
+
+        Owner().visit(tree)
+        cls._owner_map = owners
+        return owners
+
+    def _bad_call_lines(self, matches, allowed):
+        tree = self._source_tree()
+        owners = self._owners(tree)
+        return [
+            node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and not owners[node][0]
+            and matches(node)
+            and (self._call_name(node.func), owners[node][1]) not in allowed
+        ]
+
+    def test_splitlines_has_no_call_sites(self):
+        """Ruling 47 permits LF-only splitting, never splitlines semantics."""
+        tree = self._source_tree()
+        bad = [
+            node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute) and node.attr == "splitlines"
+        ]
+        self.assertFalse(bad, f"splitlines attributes at lines {bad}")
+
+    def test_exit_contract_codes_are_integer_literals(self):
+        """Ruling 3 keeps contract numbers independent from exit symbols."""
+        tree = self._source_tree()
+        contracts = [
+            node.value
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "EXIT_CONTRACT"
+                for target in node.targets
+            )
+        ]
+        bad = []
+        if not contracts:
+            bad.append(1)
+        elif len(contracts) != 1 or not isinstance(
+            contracts[0], (ast.Tuple, ast.List)
+        ):
+            bad.append(contracts[0].lineno)
+        else:
+            for row in contracts[0].elts:
+                if not isinstance(row, (ast.Tuple, ast.List)) or not row.elts:
+                    bad.append(row.lineno)
+                elif not (
+                    isinstance(row.elts[0], ast.Constant)
+                    and isinstance(row.elts[0].value, int)
+                    and not isinstance(row.elts[0].value, bool)
+                ):
+                    bad.append(row.elts[0].lineno)
+        self.assertFalse(bad, f"non-literal EXIT_CONTRACT codes at lines {bad}")
+
+    def test_wall_clock_call_sites_are_allowlisted(self):
+        """Ruling 9 reserves wall time for age and elapsed observations."""
+        # deadline_reached と sleep_until は時刻を引数で受け取り、自分では wall clock を読まない。
+        allowed = {("time.time", "watch")}
+        bad = self._bad_call_lines(
+            lambda node: self._call_name(node.func) == "time.time", allowed
+        )
+        self.assertFalse(bad, f"non-allowlisted time.time calls at lines {bad}")
+
+    def test_file_open_call_sites_are_allowlisted(self):
+        """Production file opens enter through the descriptor-checking reader."""
+        allowed = {("os.open", "open_regular")}
+        bad = self._bad_call_lines(
+            lambda node: (
+                (isinstance(node.func, ast.Name) and node.func.id == "open")
+                or (isinstance(node.func, ast.Attribute) and node.func.attr == "open")
+            ),
+            allowed,
+        )
+        self.assertFalse(bad, f"non-allowlisted file opens at lines {bad}")
+
+    def test_lossy_decode_call_sites_are_allowlisted(self):
+        """Ruling 11 permits lossy conversion only for untrusted log display."""
+        def matches(node):
+            call = self._call_name(node.func)
+            has_errors_keyword = any(keyword.arg == "errors" for keyword in node.keywords)
+            decode_with_errors = (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "decode"
+                and (
+                    (
+                        len(node.args) >= 2
+                        and isinstance(node.args[1], ast.Constant)
+                        and isinstance(node.args[1].value, str)
+                    )
+                    or has_errors_keyword
+                )
+            )
+            str_with_errors = call == "str" and (
+                len(node.args) >= 3 or has_errors_keyword
+            )
+            return decode_with_errors or str_with_errors
+
+        # 式 receiver の callee 名は空文字になるが、owner と組にして log_lines だけを許す。
+        allowed = {("", "log_lines")}
+        bad = self._bad_call_lines(matches, allowed)
+        self.assertFalse(bad, f"non-allowlisted lossy conversions at lines {bad}")
+
+    def test_patch_targets_resolve_to_existing_attributes(self):
+        """Every patch target must name an attribute that the implementation has."""
+        tree = self._source_tree()
+
+        def resolved(dotted):
+            parts = dotted.split(".")
+            try:
+                value = __import__(parts[0])
+                for part in parts[1:]:
+                    value = getattr(value, part)
+                return value
+            except (AttributeError, ImportError):
+                return None
+
+        def object_has_attribute(target, attribute):
+            is_this_module = (
+                isinstance(target, ast.Subscript)
+                and self._call_name(target.value) == "sys.modules"
+                and isinstance(target.slice, ast.Name)
+                and target.slice.id == "__name__"
+            )
+            if is_this_module:
+                return hasattr(sys.modules[__name__], attribute)
+            dotted = self._call_name(target)
+            value = resolved(dotted) if dotted else None
+            return value is not None and hasattr(value, attribute)
+
+        def patch_target_exists(node):
+            call = self._call_name(node.func)
+            if call == "mock.patch.object":
+                if len(node.args) < 2 or not (
+                    isinstance(node.args[1], ast.Constant)
+                    and isinstance(node.args[1].value, str)
+                ):
+                    return False
+                return object_has_attribute(node.args[0], node.args[1].value)
+            if call != "mock.patch":
+                return True
+            if not node.args:
+                return False
+            target = node.args[0]
+            if isinstance(target, ast.Constant) and isinstance(target.value, str):
+                dotted = target.value
+            elif (
+                isinstance(target, ast.BinOp)
+                and isinstance(target.op, ast.Add)
+                and isinstance(target.left, ast.Name)
+                and target.left.id == "__name__"
+                and isinstance(target.right, ast.Constant)
+                and isinstance(target.right.value, str)
+            ):
+                dotted = __name__ + target.right.value
+            else:
+                return False
+            prefix, dot, attribute = dotted.rpartition(".")
+            if not dot:
+                return False
+            return (
+                hasattr(sys.modules[__name__], attribute)
+                if prefix == __name__
+                else resolved(dotted) is not None
+            )
+
+        bad = [
+            node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and not patch_target_exists(node)
+        ]
+        self.assertFalse(bad, f"unresolved patch targets at lines {bad}")
+
+
+class WatchTest(WatchTest, SourceInvariantTest):
+    pass
 
 
 if __name__ == "__main__":
