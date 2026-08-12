@@ -88,9 +88,9 @@ STALL_BASELINE_FACTOR = 3.0
 MAX_SLEEP_SECONDS = 3600.0
 # 秒以降を緩く受けると、 本文の [.. 00:00:01:99Z] のような不正 stamp が event に化け、
 # 稼働中 command の start を偽の end で消してしまう。 runner はこの形しか書かない。
-LOG_TS = re.compile(r"^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?)Z\]")
+LOG_TS = re.compile(r"^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:[0-5]\d(?:\.\d+)?)Z\]")
 # record の stamp は UTC 表記。 末尾まで固定しないと offset 付きや junk 付きが通る。
-RECORD_TS = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?Z")
+RECORD_TS = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:[0-5]\d)(\.\d+)?Z")
 # A log line is an event line plus, at worst, one shortened command; a body that
 # runs longer than this is prose, and reading all of it only risks the verdict.
 MAX_LOG_LINE = 8192
@@ -233,6 +233,14 @@ def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], boo
             try:
                 os.stat(record)
             except (FileNotFoundError, NotADirectoryError):
+                # record 名の entry 自体が在る (壊れた symlink 等) なら不在ではない。
+                try:
+                    os.lstat(record)
+                except OSError:
+                    pass
+                else:
+                    found.append((record, record[: -len(".json")] + ".log"))
+                    continue
                 # 通常 file なら jobs/ を抱えられないので空で正しい。 列挙後に entry が
                 # 消えたなら走査できていないので、 不在と断定しない。
                 try:
@@ -244,6 +252,12 @@ def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], boo
                 complete = False
                 continue
             found.append((record, record[: -len(".json")] + ".log"))
+        try:
+            # 走査の前後で顔ぶれが変われば、 得た結果は 1 つの snapshot ではない。
+            if sorted(os.listdir(root)) != workspaces:
+                complete = False
+        except OSError:
+            complete = False
     return found, complete
 
 
@@ -920,10 +934,18 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         seen_pairs.update(found)
         found = []
         if args.once:
-            # --once は 1 cadence で返す約束 — 登録待ちだけ待ち続けるのは約束違反。
-            print(f"alive: {printable(args.job_id)} is not registered yet")
+            # --once は 1 cadence で返す約束。 ただし走査が不完全、 または一度でも
+            # record を見ているなら 「未登録」 とは言えない。
+            if complete and not seen_pairs:
+                print(f"alive: {printable(args.job_id)} is not registered yet")
+                print(f"  searched: {printable(', '.join(roots))}")
+                return EXIT_ALIVE
+            print(
+                f"unverifiable: {printable(args.job_id)} could not be shown "
+                f"unregistered in one cadence"
+            )
             print(f"  searched: {printable(', '.join(roots))}")
-            return EXIT_ALIVE
+            return EXIT_UNVERIFIABLE
         # 終局は実期限で決める — margin を足すと、 待つと約束した時間内の登録を取り逃す。
         if deadline_reached(deadline):
             if not complete or seen_pairs:
@@ -949,6 +971,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         print(f"  job    : {printable(args.job_id)} record={printable(record_path)}")
         return EXIT_TIMEOUT
     jobs_dir = os.path.dirname(record_path)
+    # 同じ path が別 inode へ差し替わっても、 内容が同じなら record 比較では気付けない。
+    record_inode = (file_stat(record_path) or (None, None))[:2]
     last_report: tuple[str, str] | None = None
     while True:
         # 期限に達していたら新しい poll を始めない — 期限後の状態から出た verdict が
@@ -1006,7 +1030,12 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         )
         # 「動いた」 と 「読めなかった」 は別の理由 — 畳むと headline がどちらも
         # 「読取中に変わった」 になり、 安定して読めない log が活動に化ける。
-        unreadable = not whole_log or not scanned_all or seen != [(record_path, log)]
+        unreadable = (
+            not whole_log
+            or not scanned_all
+            or seen != [(record_path, log)]
+            or (file_stat(record_path) or (None, None))[:2] != record_inode
+        )
         if record_gone(record_path):
             # The plugin prunes to its newest 50 jobs regardless of status, so a
             # record that was here and is gone is lost history, not a verdict.
@@ -1956,6 +1985,79 @@ class WatchTest(unittest.TestCase):
         with mock.patch("time.sleep", asked.append):  # 実際に眠らず、渡す値だけ見る
             sleep_until(time.monotonic() + 1e300, 1e300)
         self.assertEqual(asked, [MAX_SLEEP_SECONDS])
+
+    def test_a_record_replaced_in_place_is_not_a_consistent_poll(self):
+        """同じ path が別 inode に替われば、内容が同じでも同じ record ではない。"""
+        import io
+        from contextlib import redirect_stdout
+
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-live", "completed")
+        args = self._watch_args(root, "task-live", once=True)
+        real = scan_log
+
+        def swap(path, *a, **k):
+            # poll の最中に同内容・別 inode へ差し替える。
+            with open(record + ".new", "w", encoding="utf-8") as f:
+                json.dump({"id": "task-live", "status": "completed"}, f)
+            os.rename(record + ".new", record)
+            return real(path, *a, **k)
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".scan_log", swap),
+            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+        ):
+            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
+
+    def test_a_workspace_list_that_changes_mid_scan_is_incomplete(self):
+        """listdir は 1 度きりの snapshot ではない — 前後で顔ぶれが変われば単一結果でない。"""
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-x", "running")
+        listings = [["ws"], ["ws", "later"]]
+        with mock.patch(
+            "os.listdir", lambda _r: listings.pop(0) if listings else ["ws"]
+        ):
+            _found, complete = find_jobs("task-x", [root])
+        self.assertFalse(complete)
+
+    def test_a_leap_second_stamp_is_not_an_event(self):
+        """runner は秒 60 を書かない — 受理すると本文の偽 stamp が event になる。"""
+        self.assertIsNone(stamp_epoch("2026-08-08T11:43:60Z"))
+        self.assertEqual(
+            pending_commands(
+                [
+                    "[2026-08-09T00:00:00.000Z] Running command: cargo test",
+                    "[2026-08-09T00:00:60.000Z] Command completed: cargo test (exit 0)",
+                ]
+            ),
+            ["cargo test"],
+        )
+
+    def test_a_dangling_record_link_is_not_an_absence(self):
+        """record 名の entry が在る以上、「登録されていない」とは言えない。"""
+        root, record, _log = self._state("ws", "task-x", "running")
+        os.unlink(record)
+        os.symlink(os.path.join(os.path.dirname(record), "gone.json"), record)
+        found, complete = find_jobs("task-x", [root])
+        self.assertEqual([pair[0] for pair in found], [record])
+        self.assertTrue(complete)
+
+    def test_once_does_not_call_an_incomplete_scan_unregistered(self):
+        """走査しきれていないなら、1 cadence でも「未登録」とは言えない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root = tempfile.mkdtemp()
+        args = self._watch_args(root, "task-absent", once=True)
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".find_jobs", lambda *a: ([], False)),
+        ):
+            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
 
     def test_the_cancel_command_needs_a_traversable_root(self):
         """存在するだけでは cd できない — 検索権の無い dir は貼っても動かない。"""
