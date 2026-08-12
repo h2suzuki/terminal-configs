@@ -6395,6 +6395,15 @@ class SourceInvariantTest(unittest.TestCase):
         )
         self.assertFalse(bad, f"non-allowlisted deadline gates at lines {bad}")
 
+    def test_output_call_sites_are_allowlisted(self):
+        """Direct production output belongs only to the terminal output funnel."""
+        allowed = {("print", "finish")}
+        output_calls = {"print", "sys.stdout.write", "sys.stderr.write"}
+        bad = self._bad_call_lines(
+            lambda node: self._call_name(node.func) in output_calls, allowed
+        )
+        self.assertFalse(bad, f"non-allowlisted output calls at lines {bad}")
+
     def test_wall_clock_call_sites_are_allowlisted(self):
         """Ruling 9 reserves wall time for age and elapsed observations."""
         # deadline_reached と sleep_until は時刻を引数で受け取り、自分では wall clock を読まない。
