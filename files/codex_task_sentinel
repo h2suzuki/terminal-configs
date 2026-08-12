@@ -482,7 +482,10 @@ def log_lines(
                 if line.strip():
                     yield line
     except FileNotFoundError:
-        return  # まだ書かれていない log は、 途中で切れた view とは別のこと
+        # 辿れない link は「まだ書かれていない」 ではない — 短い view として申告する。
+        if dangling(log_path) and onerror is not None:
+            onerror()
+        return
     except OSError:
         # 途中で読めなくなった view は短い。 未完了 start を落として stall 抑止を
         # 消しうるので、 「読めた分」 を全量として扱わせない。
@@ -774,7 +777,8 @@ def artifact_ready(
             body = body[-MAX_ARTIFACT_BYTES:]
             after = os.fstat(f.fileno())
     except FileNotFoundError:
-        return False  # まだ書かれていない — 読めないのではなく、無い
+        # 辿れない link は entry が在る — 無いのではなく読めないので 3 値の None。
+        return None if dangling(path) else False
     except UnicodeDecodeError:
         # 置換して読むと、 binary の末尾行が token と一致して完成品に化ける。
         return False
@@ -2230,6 +2234,22 @@ class WatchTest(unittest.TestCase):
             self.assertNotEqual(
                 watch(self._watch_args(root, "task-x", once=True)), EXIT_NOT_COMPLETED
             )
+
+    def test_a_dangling_artifact_link_is_not_a_missing_deliverable(self):
+        """entry が在る以上「成果物なし」 とは言えない — 3 値の None で exit 14 へ送る。"""
+        root = tempfile.mkdtemp()
+        path = os.path.join(root, "report.md")
+        os.symlink(os.path.join(root, "gone.md"), path)
+        self.assertIsNone(artifact_ready(path, "DONE", time.time() - 60))
+
+    def test_a_dangling_log_link_is_not_an_unwritten_log(self):
+        """辿れない log を「まだ書かれていない」 と読むと、 短い view が全量に化ける。"""
+        root = tempfile.mkdtemp()
+        path = os.path.join(root, "job.log")
+        os.symlink(os.path.join(root, "gone.log"), path)
+        cut = []
+        self.assertEqual(list(log_lines(path, lambda: cut.append(1))), [])
+        self.assertTrue(cut)
 
     def test_a_dangling_ancestor_is_not_proof_the_record_is_absent(self):
         """辿れない link の先は読めていない — 「未登録」 とも「prune 済」 とも言えない。"""
