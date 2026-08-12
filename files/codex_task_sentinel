@@ -854,6 +854,12 @@ def artifact_view(
             seen_content = seen_content or bool(body.strip())
             body = body[-MAX_ARTIFACT_BYTES:]
             after = os.fstat(f.fileno())
+            # 読み終えた inode が今も その path か — 閉じてから stat すると、
+            # 解放された inode 番号を再利用した別 file と一致してしまう。
+            try:
+                named = os.stat(path)
+            except OSError:
+                named = None
     except FileNotFoundError:
         # 辿れない link は entry が在る — 無いのではなく読めないので 3 値の None。
         return (None if dangling(path) else False), None
@@ -864,14 +870,8 @@ def artifact_view(
         return None, stamp  # 在るのに読めない
     if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
         return False, stamp  # 読んでいる間に伸びた
-    try:
-        # 読み終えた inode が今も その path か — 読取中だけ在った成果物を ready に
-        # すると、 外側の「不在 → 不在」比較では変化として拾えない。
-        named = os.stat(path)
-    except OSError:
-        return False, stamp
-    if (named.st_dev, named.st_ino) != (after.st_dev, after.st_ino):
-        return False, stamp
+    if named is None or (named.st_dev, named.st_ino) != (after.st_dev, after.st_ino):
+        return False, stamp  # 読取中だけ在った成果物を ready にしない
     if after.st_mtime < since:
         return False, stamp  # a leftover from an earlier run
     if not token:
@@ -1104,29 +1104,28 @@ def evidence(
 
 def carrying_records(
     found: list[tuple[str, str]], job_id: str
-) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    """Candidates whose body claims the id, and those that could not be read at all.
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[tuple[str, str]]]:
+    """Candidates that claim the id, those unreadable, and those that moved mid-read.
 
-    Kept apart: an unreadable candidate is no evidence that it carries the id, so
-    counting it as one turns a single genuine job into an ambiguous pair.
+    Kept apart: an unreadable candidate is no evidence that it carries the id, and
+    one that moved is not a stable corrupt — each licenses a different verdict.
     """
     carried = []
     unknown = []
+    shifting = []
     for pair in found:
         before = record_stamp(pair[0])
         stamp, loaded = record_view(pair[0])
         # 判断に使った bytes そのものが、 前後どちらとも同じであることを要求する。
-        if (
-            loaded is None
-            or before[0] in ("absent", "unopenable")
-            or stamp != before
-            or record_stamp(pair[0]) != before
-        ):
+        if stamp != before or record_stamp(pair[0]) != before:
+            shifting.append(pair)
+            continue
+        if loaded is None or before[0] in ("absent", "unopenable"):
             unknown.append(pair)  # 読めなかっただけ — 名乗っていない証明にならない
             continue
         if loaded.get("id") == job_id:
             carried.append(pair)
-    return carried, unknown
+    return carried, unknown, shifting
 
 
 def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
@@ -1140,7 +1139,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         if found:
             # file 名の一致は所属の証明ではない — 本文が名乗るものだけを候補にする。
             # 読めなかった候補は「別 job」の証明にならないので、その回は絞らない。
-            carried, unknown = carrying_records(found, args.job_id)
+            carried, unknown, shifting = carrying_records(found, args.job_id)
+            complete = complete and not shifting  # 動いた候補は掴めていない
             if carried:
                 found, complete = carried, complete and not unknown
             else:
@@ -1228,7 +1228,14 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         return EXIT_TIMEOUT
     jobs_dir = os.path.dirname(record_path)
     # 同じ path が別 inode へ差し替わっても、 内容が同じなら record 比較では気付けない。
-    record_inode = (file_stat(record_path) or (None, None))[:2]
+    # 開いたまま持つ — 番号だけ覚えると、 解放後に再利用された別 file と一致する。
+    pinned = None
+    try:
+        pinned = open_regular(record_path)
+        pinned_stat = os.fstat(pinned.fileno())
+        record_inode = (pinned_stat.st_dev, pinned_stat.st_ino)
+    except OSError:
+        record_inode = (file_stat(record_path) or (None, None))[:2]
     last_report: tuple[str, str] | None = None
     while True:
         # 期限に達していたら新しい poll を始めない — 期限後の状態から出た verdict が
@@ -1274,10 +1281,12 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # 監視開始後に同じ id の record が増えても、 固定した path だけ見ていては気付けない。
         seen, scanned_all = find_jobs(args.job_id, roots)
         duplicates: list[tuple[str, str]] = []
+        candidates_shifted = False
         if seen:
-            carried, unknown = carrying_records(seen, args.job_id)
+            carried, unknown, shifting = carrying_records(seen, args.job_id)
             duplicates = carried if len(carried) > 1 else []
-            seen = carried or unknown
+            seen = carried or unknown or shifting
+            candidates_shifted = bool(shifting)
             scanned_all = scanned_all and not (carried and unknown)
         # plugin は record を completed に書いてから final output を append する。
         # その窓に入った poll は、 古い running のまま静穏を読んで stall と言える。
@@ -1312,7 +1321,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             else baseline_silence(jobs_dir, args.job_id, now, args.hang_seconds)
         )
         changed = (
-            log_changed
+            candidates_shifted
+            or log_changed
             or artifact_changed
             or record_changed
             or tree_changed
@@ -1366,6 +1376,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             record is not None
             and not record_moved
             and not scan_incomplete  # 唯一の record と示せていないなら先行確定しない
+            and not candidates_shifted  # 読取中に動いた候補は掴めていない
             and not record_changed
             and settled
             and settled not in ALIVE_STATUS
@@ -2432,11 +2443,11 @@ class WatchTest(unittest.TestCase):
         impostor = os.path.join(other, "task-x.json")
         with open(impostor, "w", encoding="utf-8") as f:
             json.dump({"id": "task-other", "status": "running"}, f)
-        carried, unknown = carrying_records(
+        carried, unknown, shifting = carrying_records(
             [(record, log), (impostor, impostor[: -len(".json")] + ".log")], "task-x"
         )
         self.assertEqual(carried, [(record, log)])
-        self.assertEqual(unknown, [])
+        self.assertEqual((unknown, shifting), ([], []))
 
     def test_a_record_turning_completed_does_not_ride_the_failed_fast_path(self):
         """先行確定は record が動いていない時だけ — 動いたなら古い status で答えない。"""
@@ -2534,9 +2545,9 @@ class WatchTest(unittest.TestCase):
             return view
 
         with mock.patch(__name__ + ".record_view", flipping):
-            carried, unknown = carrying_records([(record, log)], "task-x")
+            carried, _unknown, shifting = carrying_records([(record, log)], "task-x")
         self.assertEqual(carried, [])
-        self.assertEqual(unknown, [(record, log)])
+        self.assertEqual(shifting, [(record, log)])
 
     def test_a_baseline_that_stops_counting_mid_poll_discards_it(self):
         """(None, True) → (None, False) は第 1 要素では動いて見えない。"""
@@ -2583,6 +2594,113 @@ class WatchTest(unittest.TestCase):
             self.assertEqual(
                 baseline_silence(jobs, "task-live", time.time()), (None, False)
             )
+
+    def test_a_recycled_inode_is_not_the_pinned_record(self):
+        """番号だけ覚えると、 解放後に再利用された別 file と一致してしまう。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-x", "running")
+        args = self._watch_args(root, "task-x", once=True)
+        real_open, handles, held = open_regular, [], []
+
+        def tracking(path):
+            handle = real_open(path)
+            if path == record:
+                handles.append(handle)
+            return handle
+
+        def during_poll(*_a):
+            # 番号の再利用は kernel 次第なので、 番号を握る descriptor の保持を固定する。
+            held.append(any(not h.closed for h in handles))
+            return 900.0
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".open_regular", tracking),
+            mock.patch(__name__ + ".tree_age", during_poll),
+        ):
+            watch(args)
+        self.assertTrue(held and any(held))
+
+    def test_a_deliverable_recycled_during_the_read_is_not_ready(self):
+        """閉じてから名前を stat すると、 再利用された inode の別 file と一致する。"""
+        from unittest import mock
+
+        root = tempfile.mkdtemp()
+        path = os.path.join(root, "report.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("body\nDONE\n")
+        since = os.stat(path).st_mtime - 60
+        real, swapped = open_regular, []
+
+        def recycling(target):
+            handle = real(target)
+            if target == path and not swapped:
+                swapped.append(1)
+                os.unlink(path)  # descriptor は生きたまま名前だけ消す
+            return handle
+
+        with mock.patch(__name__ + ".open_regular", recycling):
+            self.assertFalse(artifact_ready(path, "DONE", since))
+        self.assertTrue(swapped)
+
+    def test_a_candidate_shifting_during_registration_is_not_accepted(self):
+        """登録解決の読取窓で動いた候補も、 掴めた record として採らない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-done", "completed")
+        args = self._watch_args(root, "task-done", once=True)
+        args.artifact = None
+        real, reads = record_view, []
+
+        def shifting(path, job_id=None):
+            if path == record and job_id is None:
+                reads.append(1)
+                if len(reads) == 2:  # 判断に使う read だけ別 bytes を見せる
+                    return ("shifted",), {"id": "task-done", "status": "running"}
+            return real(path, job_id)
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".record_view", shifting),
+            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+        ):
+            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
+        # 2 回目で不一致が確定するので、 3 回目の読み直しは短絡で起きない。
+        self.assertEqual(len(reads), 2)
+
+    def test_a_lone_shifting_candidate_discards_the_poll(self):
+        """候補が 1 件でも、 読取中に動いたなら掴めていない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-done", "completed")
+        args = self._watch_args(root, "task-done", once=True)
+        args.artifact = None
+        real, seen, in_poll = record_view, [], []
+
+        def shifting(path, job_id=None):
+            if job_id is not None:
+                in_poll.append(1)  # id 付きの read は poll でしか起きない
+            if path == record and job_id is None and in_poll:
+                seen.append(1)
+                # 判断に使う 2 回目の read だけ別 bytes を見せる (前後は disk のまま)。
+                if len(seen) == 2:
+                    return ("shifted",), {"id": "task-done", "status": "running"}
+            return real(path, job_id)
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".record_view", shifting),
+            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+        ):
+            self.assertNotEqual(watch(args), EXIT_DONE)
+        self.assertEqual(len(seen), 3)  # 3 read すべてが poll 内で起きた
 
     def test_a_replaced_record_is_not_called_unreadable(self):
         """差し替わった record は「読めなかった」 ではない — 理由を取り違えない。"""
@@ -3083,11 +3201,12 @@ class WatchTest(unittest.TestCase):
         broken = os.path.join(other, "task-x.json")
         with open(broken, "w", encoding="utf-8") as f:
             f.write("{not json")
-        carried, unknown = carrying_records(
+        carried, unknown, shifting = carrying_records(
             [(record, log), (broken, broken[: -len(".json")] + ".log")], "task-x"
         )
         self.assertEqual(carried, [(record, log)])
         self.assertEqual(unknown, [(broken, broken[: -len(".json")] + ".log")])
+        self.assertEqual(shifting, [])
 
     def test_an_unreadable_sibling_does_not_resolve_the_job_as_ambiguous(self):
         """登録解決でも、 読めなかった候補を 2 件目として数えない。"""
@@ -3380,9 +3499,9 @@ class WatchTest(unittest.TestCase):
             return view
 
         with mock.patch(__name__ + ".record_view", flickering):
-            carried, unknown = carrying_records([(record, log)], "task-x")
+            carried, _unknown, shifting = carrying_records([(record, log)], "task-x")
         self.assertEqual(carried, [])
-        self.assertEqual(unknown, [(record, log)])
+        self.assertEqual(shifting, [(record, log)])  # 読取窓の途中で動いた
 
     def test_a_same_size_rewrite_of_a_record_is_a_change(self):
         """metadata が同じでも本文が違えば別 — 指紋まで見ないと不変に化ける。"""
