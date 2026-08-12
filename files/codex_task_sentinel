@@ -477,7 +477,9 @@ def heartbeat_age(log_path: str, now: float) -> float | None:
 
 
 def log_lines(
-    log_path: str, onerror: Callable[[], None] | None = None
+    log_path: str,
+    onerror: Callable[[], None] | None = None,
+    stamp: list | None = None,
 ) -> Iterator[str]:
     """Non-empty log lines, newest last, left edge intact so events can be anchored.
 
@@ -489,6 +491,10 @@ def log_lines(
         # byte で読む — 置換後の文字列長で数えると、 消費 byte と一致せず
         # 上限が狂い、 未読を残したまま「全量を読んだ」 と扱いうる。
         with open_regular(log_path) as f:
+            if stamp is not None:
+                st = os.fstat(f.fileno())
+                # 判断に使った bytes の出どころ — 外側の path 比較では A→B→A が透過する。
+                stamp.append((st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size))
             # 開いた時点の size を上限にする — 動く EOF を追うと、 追記が読みより
             # 速い log で読み終わらず、 期限確認にすら戻れない。
             size = os.fstat(f.fileno()).st_size
@@ -534,7 +540,7 @@ def _tee(lines: Iterator[str], sink: collections.deque) -> Iterator[str]:
 
 def scan_log(
     log_path: str, count: int = 6, limit: int = 200
-) -> tuple[list[str], list[str], bool]:
+) -> tuple[list[str], list[str], bool, tuple | None]:
     """One pass giving (unfinished commands, bounded tail, whole log read) from one snapshot.
 
     Reading twice lets the runner append in between, so a verdict could rest on a
@@ -543,13 +549,19 @@ def scan_log(
     """
     tail: collections.deque = collections.deque(maxlen=count)
     whole = True
+    stamp: list = []
 
     def truncated() -> None:
         nonlocal whole
         whole = False
 
-    pending = pending_commands(_tee(log_lines(log_path, truncated), tail))
-    return pending, [ln.strip()[:limit] for ln in tail], whole
+    pending = pending_commands(_tee(log_lines(log_path, truncated, stamp), tail))
+    return (
+        pending,
+        [ln.strip()[:limit] for ln in tail],
+        whole,
+        stamp[0] if stamp else None,
+    )
 
 
 def command_text(line: str) -> str:
@@ -873,6 +885,9 @@ def companion_path() -> str | None:
 
 def cancel_command(job_id: str, root: str | None) -> str:
     """The cancel the operator would otherwise have to assemble, cwd included."""
+    # 完成した command を後から printable() に通すと quote の中身が別 argv になる。
+    if any(not ch.isprintable() and ch != " " for ch in job_id + (root or "")):
+        return f"control characters in the id or root — cancel {printable(job_id)} from the plugin"
     companion = companion_path()
     if companion is None:
         # 在りかを言えないなら、 動かない command を印字するより言えないと言う。
@@ -1198,7 +1213,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # 1 poll 1 走査 — verdict も evidence も同じ結果を使い、読み直さない。 走査の
         # 前後で観測対象が動いたら、 その poll は古い無音と新しい本文の混成になる。
         before_log, before_artifact = file_stat(log), file_stat(args.artifact)
-        unfinished, tail, whole_log = scan_log(log)
+        unfinished, tail, whole_log, log_view_stamp = scan_log(log)
         log_incomplete = not whole_log
         age = heartbeat_age(log, now)
         tree = tree_age((record or {}).get("workspaceRoot"), now)
@@ -1226,7 +1241,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         )
         # 何が動いたのかを分けて持つ — 畳むと「完了条件に関わる変化」 だけを
         # 要求する分岐が書けない。
-        log_changed = file_stat(log) != before_log
+        # parse が読んだ descriptor と、 前後の path 観測が同じでなければ判定しない。
+        log_changed = file_stat(log) != before_log or log_view_stamp != before_log
         artifact_changed = file_stat(args.artifact) != before_artifact
         # os.walk は snapshot ではないので、 列挙済み file への書き込みは
         # 走査し直さない限りこの poll から丸ごと抜け落ちる。
@@ -1284,7 +1300,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 settled,
                 age,
                 tree,
-                ready,
+                None if artifact_changed else ready,
                 threshold,
                 args.hang_seconds,
                 expects_artifact=args.artifact is not None,
@@ -1448,6 +1464,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def check_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     """NaN or a negative wait makes every deadline comparison false — refuse it up front."""
+    # 絶対 path は os.path.join の先行 component を捨てるので、 state root の外の
+    # file を job の record として採用できてしまう。
+    if args.job_id and (
+        os.path.basename(args.job_id) != args.job_id
+        or args.job_id in (".", "..")
+        or (os.altsep or os.sep) in args.job_id
+    ):
+        parser.error("job id must be a single file name, not a path")
     if args.token and not args.artifact:
         # 成果物が無ければ token を照合する相手がいない。 黙って無視すると、
         # 完了 token を指定した呼び手が「検査された」 と読んだまま exit 0 を受け取る。
@@ -2466,6 +2490,74 @@ class WatchTest(unittest.TestCase):
                 baseline_silence(jobs, "task-live", time.time()), (None, False)
             )
 
+    def test_a_job_id_that_is_a_path_is_refused(self):
+        """絶対 path は join の先行 component を捨て、 state root の外の file を掴む。"""
+        parser = build_parser()
+        for bad in ("/tmp/forged", "../escape", "ws/task-x", "."):
+            with self.assertRaises(SystemExit):
+                check_arguments(parser, parser.parse_args([bad]))
+
+    def test_a_log_swapped_around_the_parse_is_not_one_view(self):
+        """parse が読んだ descriptor と前後の観測が同じでなければ判定しない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, log = self._state("ws", "task-live", "running", log_age=900.0)
+        real = scan_log
+
+        def swapping(path, *a, **k):
+            out = real(path, *a, **k)
+            return out[0], out[1], out[2], (0, 0, 0, 0)  # 別 descriptor の指紋
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".scan_log", swapping),
+            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+        ):
+            args = self._watch_args(root, "task-live", once=True, trust_log=True)
+            self.assertNotEqual(watch(args), EXIT_STALL)
+
+    def test_a_failed_verdict_does_not_claim_a_changed_deliverable(self):
+        """変化を検知した成果物について、 現存を断定しない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-x", "failed")
+        # startedAt が無いと artifact_ready は読まずに False を返し、 fixture が空振りする。
+        with open(record, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "id": "task-x",
+                    "status": "failed",
+                    "startedAt": "2020-01-01T00:00:00Z",
+                },
+                f,
+            )
+        artifact = os.path.join(root, "report.md")
+        with open(artifact, "w", encoding="utf-8") as f:
+            f.write("body\nDONE\n")
+        args = self._watch_args(root, "task-x", once=True)
+        args.artifact, args.token = artifact, "DONE"
+        real = artifact_ready
+
+        def then_gone(path, token, since=None):
+            got = real(path, token, since)
+            os.unlink(path)  # 読んだ直後に消える
+            return got
+
+        self.assertTrue(artifact_ready(artifact, "DONE", 0.0))  # 空振り防止
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch(__name__ + ".artifact_ready", then_gone):
+            self.assertEqual(watch(args), EXIT_NOT_COMPLETED)
+        self.assertNotIn("deliverable is present", buf.getvalue())
+
+    def test_a_cancel_command_is_not_offered_for_a_control_character_id(self):
+        """貼れない command を出すくらいなら、 出せないと言う。"""
+        self.assertIn("from the plugin", cancel_command("task\nx", None))
+        self.assertNotIn("\n", cancel_command("task\nx", None))
+
     def test_a_record_without_an_id_is_corrupt_not_unregistered(self):
         """名前が一致する record が在る以上、 「未登録」 とは言えない。"""
         import io
@@ -3014,7 +3106,7 @@ class WatchTest(unittest.TestCase):
         args = self._watch_args(root, "task-x", once=True)
         with (
             redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".scan_log", lambda *a: ([], [], False)),
+            mock.patch(__name__ + ".scan_log", lambda *a: ([], [], False, None)),
         ):
             self.assertEqual(watch(args), EXIT_NOT_COMPLETED)
         self.assertTrue(os.path.exists(log))
@@ -3378,7 +3470,9 @@ class WatchTest(unittest.TestCase):
         with (
             redirect_stdout(io.StringIO()),
             mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
-            mock.patch(__name__ + ".scan_log", lambda *a, **k: ([], ["x"], False)),
+            mock.patch(
+                __name__ + ".scan_log", lambda *a, **k: ([], ["x"], False, None)
+            ),
         ):
             self.assertEqual(
                 watch(self._watch_args(root, "task-live", once=True)), EXIT_UNVERIFIABLE
@@ -3394,7 +3488,9 @@ class WatchTest(unittest.TestCase):
         with (
             redirect_stdout(io.StringIO()),
             mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
-            mock.patch(__name__ + ".scan_log", lambda *a, **k: ([], ["x"], False)),
+            mock.patch(
+                __name__ + ".scan_log", lambda *a, **k: ([], ["x"], False, None)
+            ),
         ):
             self.assertEqual(
                 watch(self._watch_args(root, "task-done", once=True)),
@@ -3667,7 +3763,7 @@ class WatchTest(unittest.TestCase):
             self.assertIn(expect, text)
 
     def _evidence(self, log, artifact=None, ready=False):
-        unfinished, tail, _whole = scan_log(log)  # watch() と同じ 1 走査の結果を渡す
+        unfinished, tail, _whole, _stamp = scan_log(log)  # watch() と同じ 1 走査
         return evidence(
             "task-x",
             {"status": "running", "workspaceRoot": "/w"},
@@ -3840,8 +3936,9 @@ class WatchTest(unittest.TestCase):
         """JSON は型を約束しない — list の workspaceRoot は走査で例外になる。"""
         p = os.path.join(tempfile.mkdtemp(), "task-x.json")
         with open(p, "w", encoding="utf-8") as f:
-            f.write('{"status": "running", "workspaceRoot": []}')
-        self.assertIsNone(job_record(p))
+            # id を入れる — 他の corrupt 条件があると型検査の変異が透過する。
+            f.write('{"id": "task-x", "status": "running", "workspaceRoot": []}')
+        self.assertIsNone(job_record(p, "task-x"))
 
     def test_unreadable_state_root_is_not_never_registered(self):
         """走査しきれていないなら「登録されていない」とは言えない。"""
@@ -4089,7 +4186,7 @@ class WatchTest(unittest.TestCase):
             "os.open",
             lambda p, *a, **k: (opens.append(p), real(p, *a, **k))[1],
         ):
-            pending, tail, _whole = scan_log(log)
+            pending, tail, _whole, _stamp = scan_log(log)
         self.assertEqual(opens.count(log), 1)
         self.assertEqual(pending, ["cargo test --all"])
         self.assertIn("cargo test --all", tail[-1])
