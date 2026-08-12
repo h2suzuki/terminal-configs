@@ -1309,6 +1309,9 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             baseline_after != baseline or not (counted_all and counted_all_after)
         )
         shown_record = {} if record_unstable else (record or {})
+        # 保留を告げる headline は record の語をそのまま出す — 言い切ると evidence と
+        # 食い違う。 headline へ直接入るので、 保持する時点で escape しておく。
+        recorded = printable(shown_record.get("status") or "不明")
         shown_tail = [] if log_changed else tail
         shown_unfinished = [] if log_changed else unfinished
         shown_whole = whole_log and not log_changed
@@ -1398,7 +1401,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     EXIT_ALIVE if args.once else EXIT_UNVERIFIABLE,
                     f"{'alive' if args.once else 'unverifiable'}: the job's state "
                     f"changed while it was being read, so no single observation backs "
-                    f"a verdict (record says {(record or {}).get('status') or '不明'})",
+                    f"a verdict (record says {recorded})",
                 )
             )
         if (
@@ -1411,10 +1414,6 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 f"over-estimate: {int(elapsed)}s elapsed against a {int(args.estimate_seconds)}s "
                 "estimate — read the log against the order before waiting further",
             )
-        # completed でもツリーが落ち着くまでは verdict を保留するので、 保留を告げる
-        # headline は record の語をそのまま出す — 言い切ると直下の evidence と食い違う。
-        # headline へそのまま入るので、 保持する時点で escape しておく。
-        recorded = printable(shown_record.get("status") or "不明")
         if out is None and args.once:
             out = (
                 EXIT_ALIVE,
@@ -2589,6 +2588,27 @@ class WatchTest(unittest.TestCase):
             args = self._watch_args(root, "task-x", once=True, stall_seconds=None)
             self.assertEqual(watch(args), EXIT_NOT_COMPLETED)
         self.assertNotIn("600", buf.getvalue())  # 200s * 3 の古い threshold
+
+    def test_a_discarded_poll_headline_does_not_quote_the_discarded_record(self):
+        """破棄した record の status を、 保留を告げる headline でも引用しない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-x", "running")
+        args = self._watch_args(root, "task-x", once=True)
+        args.artifact = None
+        real = record_view
+
+        def other_bytes(path, job_id=None):
+            if path != record or job_id is None:
+                return real(path, job_id)
+            return ("swapped",), {"id": "task-x", "status": "cancelled"}
+
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch(__name__ + ".record_view", other_bytes):
+            self.assertEqual(watch(args), EXIT_ALIVE)
+        self.assertNotIn("cancelled", buf.getvalue())
 
     def test_a_timeout_does_not_quote_a_discarded_record(self):
         """破棄した record の status や root を、 timeout の evidence で断定しない。"""
