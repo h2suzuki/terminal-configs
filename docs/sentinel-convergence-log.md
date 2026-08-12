@@ -60,7 +60,7 @@ test 数 / 指摘件数) を追記して commit する。発注書・報告書�
 |---|---|---|---|
 | 裁定の機械化 | 完了 | 2026-08-12 | `55c618e` で main へ取り込み (区分 B は refactor 後) |
 | 構造 refactor | 完了 | 2026-08-13 | 3 段完了: `c067c0b` / `0425a28` / `265ccfe`。256 tests |
-| TOCTOU harness | 未着手 | — | refactor 完了後 |
+| TOCTOU harness | 進行中 | 2026-08-13 | codex sol xhigh へ発注・走行中 |
 | 体制と収束認定 | 未着手 | — | 柱完了後に 54 巡目 |
 | 方法論 doc (`docs/adversarial-review-methodology.md`) | 完了 | 2026-08-13 | 発散機構 M1–M6 / 設計 G・L・R / モデル選定 / チェックリスト |
 | traceability 記録 (本 doc) | 進行中 | 2026-08-12 | 運用開始 |
@@ -380,3 +380,13 @@ reader からの fd 系 syscall 直呼びは meta-test で構造的に禁止さ�
 手書き 12 箇所 (→ finish() 1 箇所)・読取規律の 4 経路手配り (→ Observation 1 層)・表示出口
 (→ meta-test で pin) — がすべて単一 site + 機械検査になった。meta-test は柱 2 の 6 本 +
 柱 1 の 6 本 = **12 本**。裁定の実効区分: A 8 件 (3/9/47/18/21/27/20 入口/40 入口)。
+
+### 2026-08-13 — 柱 3 (TOCTOU enumerator) を発注
+
+- 発注書 `drafts/sentinel-p3-order.md` (lint rc=0・初回)。harness 契約を発注側が設計:
+  注入点 = Observation の syscall 入口 (test 側 shim のみ・実装 hook 不可) / 摂動 5 種 ×
+  観測 index の全列挙 (small-scope・silent cap 禁止) / oracle 4 条 (無例外・契約 exit・
+  確信的誤りなし [偽 exit 0 / 目撃後 exit 6 / 期限後の非 7]・決定性) / **shim の sanity
+  check を harness に内蔵** (空振り防止) / oracle 違反は修正せず「発見」節へ (裁定は発注側)
+- 起動: worktree `wt-p3` (HEAD `a1cc313`)、job `task-msqgjcm8-rvmmaa`、record で
+  sol / xhigh / write を確認。監視 sentinel (estimate 5400s) を background 実行
