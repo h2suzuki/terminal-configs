@@ -467,3 +467,15 @@ fix round: `drafts/sentinel-r54-fixes.md` — 縮小裁定と等値保持 (tie �
 レビュー報告書 path が報告書 path 検査と衝突) → スコープから外して rc=0。worktree
 `wt-r54fix` @ `5711e96`。job `task-msqk36tk-hqzhzn` (record 検証: sol / medium / write /
 fresh)。sentinel `bsl7v4i81` (estimate 1650s) を background 監視。
+
+### 2026-08-13 — r54 fix round 完了・main 取り込み (selftest 265・裁定 49)
+
+fix round は sentinel `bsl7v4i81` exit 0 (成果物 + token 確認)。報告書は red 確認
+(修正前 code で追加 test 3 件 fail) と変異 3/3 検出を同一 command の `Ran 265` 行付きで転記。
+受け入れ: 発注側 gates 再実行 (selftest 265 / 外部 11 / ruff / ty 全緑)、**独立変異 2 件**
+(数値比較→文字列比較へ戻す / `if explicit is not None:`→`if explicit:` へ戻す) を exact-string
+splice で再現し、いずれも当該 test のみ `FAILED (failures=1)` — codex 報告と一致。diff は
+sentinel 1 file 63+/11- のみ (scope 遵守)。wt 内 commit `764696f` → cherry-pick **`f748391`**
+で main へ。worktree / branch 削除・報告書退避。裁定 48 (数値比較・等値保持) と裁定 49
+(空 `--state-root` 拒否) を `docs/sentinel-rulings.md` へ正本化 (47 → **49 件**)。
+次: r55 = 認定 1 巡目のやり直しを新 HEAD から同型発注 (裁定数と test 数を更新)。

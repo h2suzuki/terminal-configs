@@ -60,6 +60,27 @@ Work file: `last-session-handoff.md` の同名 section (再開手順)、
 `drafts/sentinel-review-r{17..53}.md` (発注書)、`drafts/sentinel-review-r{17..30,52,53}-report.md` (報告書)
 
 
+### daily-stock-analyzer 依頼: codex launcher の本 repo 移管
+
+Goal: 隣 repo からの依頼 3 点 (launcher の移管・汎用化 / excludedCommands 登録 /
+roster の SessionStart 配信) を本 repo に land し、deploy と応答書の返送まで完了する。
+
+Exit Criteria:
+
+- [x] codex sol medium の実装納品を受け入れ検証 — 負経路 1〜8 + dry-run + gates 全緑 +
+  lang lint (`--allow` で内包日本語 prompt 受理)、2026-08-13 実測
+- [ ] opus 5 xhigh レビュー指摘の fix round 完了 (material 2: SessionStart が roster latch を
+  先取りし失敗時 roster が消える / 相対 `--git-common-dir` を cwd 基準で realpath し
+  subdir 起動が exit 1。minor 1: worktree 所属証明が main checkout の subdir を通す — 継承穴)
+- [ ] main へ commit (launcher 本体 / installer copy 行 / managed-settings / hook)
+- [ ] ユーザーの sudo deploy 後、deploy 先と `files/` の diff -q 一致
+- [ ] 応答書を `/home/h2suzuki/daily-stock-analyzer/drafts/` へ配置 (設計根拠 + 依頼元
+  tools/ 側の削除手順 + 受入条件 3 点の確認手順。依頼元 repo への write は応答書のみ)
+
+依頼書 = `/home/h2suzuki/daily-stock-analyzer/drafts/terminal-config-request-codex-launcher.md`。
+Work file: `drafts/launcher-order.md` / `drafts/launcher-report.md` (実装は wt-launcher に滞留中、
+fix round 後に land)。
+
 ## Medium
 
 ### 方法論の実証: 小規模ツール新規作成で敵対レビューの収束を実測する

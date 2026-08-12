@@ -459,6 +459,9 @@ codex sol xhigh で 2 巡連続」。
   新設機構は初巡を無傷で通過し、出たのは旧来 code の未疑前提のみ
 - fix round: `drafts/sentinel-r54-fixes.md` (縮小裁定を発注書に明記)。認定 counter は 0 に
   戻り、fix 取り込み後の r55 から再カウント
+- fix 取り込み: commit `f748391`。red 確認 (修正前 3 fail) + 受け入れ変異 3/3 検出 +
+  発注側の独立変異 2 件再現。selftest 259 → **265**。裁定 48 (数値比較・等値保持) と
+  裁定 49 (空 `--state-root` 拒否) を `docs/sentinel-rulings.md` に正本化 (47 → 49 件)
 
 ## 復元元
 
