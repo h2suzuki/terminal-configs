@@ -62,6 +62,20 @@ Work file: `last-session-handoff.md` の同名 section (再開手順)、
 
 ## Medium
 
+### 方法論の実証: 小規模ツール新規作成で敵対レビューの収束を実測する
+
+Goal: sentinel 級に小さな要件 (またはそこまでブレイクダウンした要件) の新規ツール作成を
+数ケース、方法論 (docs/adversarial-review-methodology.md の G/L/R) を適用して実施し、
+収束の成否・round 数・token を台帳で実測して最終成果を測る (2026-08-13 ユーザー指示)。
+
+Exit Criteria:
+
+- [ ] 前提: sentinel の収束対策 (柱 1〜3 + 収束認定) が完了している
+- [ ] ケース選定と成功基準 (収束 round 数の上限・material 残ゼロ・token 量) をユーザーと合意する
+- [ ] 各ケースの台帳 (由来列つき) を docs/ に記録し、結果を方法論 doc へ反映する
+
+Work file: `docs/adversarial-review-methodology.md` (§6 チェックリストを各ケースの入場 gate に使う)
+
 ### Handoff 強化 + 言語 lint 機構の deploy と実運用確認
 
 Goal: wind-down open-task 機構 (inject + block)・handoff cross-check step・session_resume_context pointer 化・claude_lang_lint を deploy し、実運用での駆動を確認する。

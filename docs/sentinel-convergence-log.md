@@ -310,3 +310,9 @@ meta-test 3 本で構造的に作れなくなった。裁定 18・21・27 が実
   典型。wt-p1s2 側には無し・mount table に該当なし・**tracked 内容への変更ゼロ**
   (`git diff HEAD` 空)。走行中 job の保護機構の可能性があるため削除は保留 —
   第 2 段の受け入れ時に消滅を確認し、残っていれば削除する
+- 訂正 (受け入れ時の再調査): これは disk 残骸ではなく **Bash sandbox の namespace 投影**と
+  判定。根拠: 呼び出しごとに git からの可視性が揺れ (untracked 21 個 → 0 個)、別の呼び出しでは
+  repo/.claude/ が `~/.claude` の実内容 (worktrees / scheduled_tasks.json 等) を見せた =
+  bind mount。削除 loop は 0 件削除で終了 (実 file への操作なし)。全 view で tracked 内容は
+  不変。bind 越しに実 `~/.claude` を触るリスクがあるため sandbox 内からの操作は凍結。
+  真の disk 状態はユーザーが sandbox 外の `git status` で確認できる
