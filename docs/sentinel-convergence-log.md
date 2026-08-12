@@ -149,3 +149,34 @@ test が捕捉するかを確かめる一式) の緑を確認する。一括変�
 - codex session 棚卸し: companion status running 0 件
 - opus 5 xhigh の敵対レビューを Workflow (`wf_d5afdae3-6f2`) で起動 — 健全性 (alias 迂回・
   _owners 帰属・非走査構文) / 分類の反証 / shadowing 検証 / scope 検証の 4 観点
+
+### 2026-08-12 — 裁定の機械化: 敵対レビュー結果と fix round
+
+opus 5 xhigh のレビュー (10.7 分・122k tokens) が **8 件 (material 3 / minor 5)** を、
+全件 replay した evidence 付きで返した:
+
+1. (material) splitlines 検査は receiver が Name の時しか捕まえない —
+   `handle.read().splitlines()` / alias / `(body or "").splitlines()` を素通し。
+   **実装者 (codex) の変異検証は「自分の検査が捕まえられる唯一の形」だけを試していた**
+   (自己確認バイアス。変異の選定を実装者に任せた発注側の課題でもある)
+2. (material) rulings doc の裁定 10 の担保 test が誤帰属 — 正しい test
+   (`test_an_uncounted_baseline_does_not_license_a_stall`) は実在するのに未引用
+3. (material) 裁定 34 も同型の誤帰属 (正しい test は実在・未引用)
+4. (minor) open 検査が io.open / codecs.open / Path().open を非走査
+5. (minor) patch.object 検査が「対象 object の属性」でなく module 名簿と突合 (現 3 site が
+   全て module 対象という偶然で緑) + import 束縛名が名簿に無く将来の正当 patch を誤 fail
+6. (minor) _owners の除外が名前一致 (`_state` 等) で、将来の production 同名関数を無条件免除
+7. (minor) 裁定 16・31・35 の担保が部分的 (16 は 4 上限中 1 つのみ引用等)
+8. (minor) 裁定 11 (strict UTF-8) は今の機構でそのまま機械化可能なのに (C) 止まり —
+   区分 (A) が発注書の名指し 3 件ちょうどで止まった
+
+レビューの checked: scope (186 行追加のみ・実装変更ゼロ) / 249 tests 重複なし /
+shadowing の意味変化なし — いずれも問題なしと独立確認。
+
+fix round 1 を同 thread resume で発注: `drafts/sentinel-pillar2-fixes.md`
+(codex_order_lint rc=0。初回 rc=1: 裁定列挙・kill-by-port 文言・command fence の 3 件を
+lint が検出し発注前に修正)。job `task-msq6fa1n-9zh2tb` (sol / medium / write 確認済)。
+今回から報告書終端の自己確認 (`tail -c 20`) を発注書の完了条件に追加。
+
+ユーザー指示 (同日): /simplify を都合のよいタイミングで実行する — fix round 受け入れ +
+commit 直後に予定 (走行中 codex との moving-target 回避)。
