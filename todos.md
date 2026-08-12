@@ -34,6 +34,14 @@ Exit Criteria:
   test 無しで閉じていた 2 件 (`pin_hold` の持ち越しと `resolved_unknown` の非クリア) に、53 巡で test が付いた。
   53 巡の発注書でその判断自体を開示して裁定を求めたところ、両方とも観測可能と返り、`complete=False` で
   周を跨がせる 3 周 fixture の作り方まで示された。**作れないと思ったものが、開示したら作れた**
+- [ ] **収束対策 4 本柱の採否をユーザーが判断し、決定した柱を実行する** — 2026-08-12 に立案済
+  (詳細は `last-session-handoff.md` 同 section)。柱: (1) 構造 refactor = watch() の return 22 箇所を
+  単一 finish() funnel に集約 + 4 読取経路の Observation 層統一 (裁定 21 は「1 点に集約」と言うが実体は
+  `deadline_reached()` 手書き 12 箇所と実測)、(2) 47 裁定の機械化 = AST/grep の決定的 meta-test 化 +
+  裁定本文の docs/ 移管、(3) TOCTOU enumerator harness、(4) 体制 = codex 実装 / opus 5 xhigh 巡内レビュー /
+  収束認定は codex sol xhigh 2 巡連続ゼロ。根拠: 179 件の 73% (forgot 85 + contradictory 34 +
+  unfinished 12) が per-site 手配り型で、閉じたクラスは全て機構化 or 全数突合によるもの。
+  **ユーザー判断待ち 2 点**: 柱 1 の refactor まで踏み込むか / refactor 実装を sol medium から xhigh に上げるか
 - [ ] **deploy が 23 巡分遅れている** — `/usr/local/bin/codex_task_sentinel` は 30 巡目相当。
   sandbox からは `sudo` も `/usr/local/bin` への書き込みも塞がれている (実行して確認済み) ので、
   ユーザー手動で `sudo install -m 755 files/codex_task_sentinel /usr/local/bin/` が要る
