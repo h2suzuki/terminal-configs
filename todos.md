@@ -19,20 +19,22 @@ Goal: 監視判定が plugin の実挙動と skill の 4 分岐に一致する�
 
 Exit Criteria:
 
-- [ ] レビューの新規 material 指摘がゼロで安定する — **52 巡完走、未達**。17〜52 巡で 174 件。
+- [ ] レビューの新規 material 指摘がゼロで安定する — **53 巡完走、未達**。17〜53 巡で 179 件。
   巡ごとの件数・処理ブロック・原因タイプ・由来・修正の効果は `docs/sentinel-review-analysis.md`
-  (毎巡ここへ追記する)。要点は 3 つ: self 率が 46〜52 巡で **86%**、修正が次巡に生んだ指摘が
-  **90 件 (52%)**、効果判定が **worsened 33 巡 / improved 0 巡**。件数自体は 12 (r19) → 2〜6 に
-  収束したが、中身が preexisting から自作欠陥に置き換わっただけである
+  (毎巡ここへ追記する)。要点は 3 つ: self 率が 46〜53 巡で **88%**、修正が次巡に生んだ指摘が
+  **93 件 (52%)**、効果判定が **worsened 34 巡 / improved 0 巡**。件数自体は 12 (r19) → 2〜6 に
+  収束したが、中身が preexisting から自作欠陥に置き換わっただけである。
+  なお 53 巡で分かったが、**自作欠陥は直前の巡のものとは限らない** — 5 件の出所は r52 が 3 件、
+  r34 が 1 件、r19 が 1 件で、34 巡ぶん残っていたものがある
 - [ ] **指摘を生成側の癖として潰す** — 5 つの形 (配り漏れ / comment が code を追い越す /
   虚偽の完了報告 / 再検査の半径不足 / 同一 commit 内の同型再発) を user memory の
   `feedback_reading_the_outside_world.md` に記録済み。それでも 52 巡目の指摘 1 は 48 巡目と
   同じ「期限 gate 外の early return」で、4 巡後の再演だった。**記録しただけでは止まっていない**
-- [ ] **test で守れていない修正が 2 件残る** — 52 巡目の指摘 2・3 (`pin_hold` の持ち越しと
-  `resolved_unknown` の非クリア、`6dcb92e`)。1 周目の unknown がその場で exit 13 を返すため
-  2 周目が来る入力を構成できない。51 巡目も同じ箇所を同じ理由で test 無しのまま閉じ、
-  52 巡目に「不十分」と再判定された
-- [ ] **deploy が 22 巡分遅れている** — `/usr/local/bin/codex_task_sentinel` は 30 巡目相当。
+- [x] **test で守れていない修正をゼロにする** — 51・52 巡と 2 巡続けて「差の出る fixture を作れない」として
+  test 無しで閉じていた 2 件 (`pin_hold` の持ち越しと `resolved_unknown` の非クリア) に、53 巡で test が付いた。
+  53 巡の発注書でその判断自体を開示して裁定を求めたところ、両方とも観測可能と返り、`complete=False` で
+  周を跨がせる 3 周 fixture の作り方まで示された。**作れないと思ったものが、開示したら作れた**
+- [ ] **deploy が 23 巡分遅れている** — `/usr/local/bin/codex_task_sentinel` は 30 巡目相当。
   sandbox からは `sudo` も `/usr/local/bin` への書き込みも塞がれている (実行して確認済み) ので、
   ユーザー手動で `sudo install -m 755 files/codex_task_sentinel /usr/local/bin/` が要る
 - [x] log 由来の曖昧さが正常 job の cancel を招かない — 既定で cancel 導線 (exit 4/3) を出さず、
@@ -45,7 +47,8 @@ Exit Criteria:
   (`_state_dirs` / `_oldest_record`)、worktree より古い state dir が残っていれば deny して
   `rm -rf` を指示する
 
-Work file: `docs/sentinel-review-analysis.md` (17 巡以降の全指摘の集計)、
+Work file: `last-session-handoff.md` の同名 section (再開手順)、
+`docs/sentinel-review-analysis.md` (17 巡以降の全指摘の集計)、
 `drafts/sentinel-review-r{17..53}.md` (発注書)、`drafts/sentinel-review-r{17..30,52,53}-report.md` (報告書)
 
 
