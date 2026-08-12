@@ -529,3 +529,20 @@ fix round は sentinel `by0g8233d` exit 0。納品は指示を超える良集約
 deploy 注記: `/usr/local/bin/codex_task_sentinel` は f748391 時点の deploy のまま →
 本 fix で再度 DIFFERS (認定完了時にまとめて再 deploy でも可)。
 次: r56 = 認定 1 巡目 (3 度目) を新 HEAD から発注 (裁定数 51・test 数 268 に更新)。
+
+### 2026-08-13 — r56 受領: material 3 + oracle 1 (全件確定) → fix round 発注
+
+r56 (`task-msqmjbxn-6mh6y0`・sol xhigh・write) は sentinel exit 0。gates 全緑転記 + 指摘 4 件。
+発注側裁定: 指摘 2 (全角 digit 受理・repro) / 指摘 3 (負 epoch -1.9・repro) / 指摘 4 (fixture の
+stat assert 欠如・確認) / 指摘 1 (重複 record の exit 14 誤り・該当コードの構造確認 — anonymous
+hold の `[0]` 比較が重複判定より先に return)。**指摘 2 は「裁定 51 の機械化を 1 site に留めて
+クラスへ配り漏れた」forgot 型** — fix 発注書に受理域クラスの全 site 列挙を義務化した。
+
+fix round: `drafts/sentinel-r56-fixes.md` (lint rc=0 初回)。worktree `wt-r56fix` @ `d165b74`。
+job `task-msqnaa9l-3iltdl` (record 検証: sol / medium / write: True / fresh)。sentinel
+`bl320xfui` (estimate 3000s)。認定 counter 0 のまま。
+
+観測: 件数は r54: 2 → r55: 3 → r56: 3+1 と横ばいだが、質が変わった — 53 巡時代の主因
+(手配り不変条件 73%) は 3 巡連続ゼロで、全指摘が「未疑前提」層 (Unicode 受理域・binary64・
+負 epoch・hold 順序・mtime 分解能)。単一障害点化した新設機構 (funnel / Observation /
+harness / ordered_events) への指摘もゼロを維持。

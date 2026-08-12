@@ -485,6 +485,25 @@ codex sol xhigh で 2 巡連続」。
   引き続き 0
 - fix round: `drafts/sentinel-r55-fixes.md` (exact 比較化・`isascii` guard・red 確認 +
   変異 3 件)。認定 counter は 0 のまま、fix 後の r56 から再カウント
+
+### r56 (認定 1 巡目・3 度目) — material 3 + oracle 1、認定不成立
+
+- **指摘 1 (採用・material)**: 登録待ち周回を跨いで走査順先頭に重複 record が増えると、
+  安定 2 件 (契約 = exit 9) の状況で exit 14。`carrying_records()` の hold が候補と対応の
+  無い scan 順 list で、`[0]` 同士の inode 比較が重複判定より先に return する — 構造確認
+- **指摘 2 (採用・material)**: `\d` の Unicode 受理 — 全角年の偽終了行が LOG_TS・strptime・
+  `int()` を全て通過して真正 event 化 (repro)。**裁定 51 を `version_key()` 1 site だけに
+  機械化し、同じ受理域クラス (LOG_TS / RECORD_TS) へ配り漏れた** — forgot 型が「裁定の
+  機械化」自体にも起きることの実証。r56 fix 発注書から「クラス全 site 列挙」を義務化
+- **指摘 3 (採用・material)**: 負 epoch の文字列連結 — `1969-12-31T23:59:59.9` が -1.9
+  (正 = -0.1) (repro)
+- **指摘 4 (採用・oracle)**: 1 ns stale fixture が `os.utime` 結果の `st_mtime_ns` 保持を
+  assert せず、粗い mtime 分解能では境界を検査しない — 確認
+- 4 件とも観点 1 (未疑前提: Unicode regex 受理域 / 負 epoch の floor / anonymous hold の
+  順序対応 / mtime 分解能)。新設機構そのものへの指摘は 3 巡連続でゼロ。件数は 2 → 3 →
+  3+1 と横ばいだが、53 巡時代の主因 (手配り不変条件の維持失敗 73%) は消え、残りは
+  すべて「疑われたことのない前提」層 — reviewer は enumerator として機能している
+- fix round: `drafts/sentinel-r56-fixes.md`。認定 counter は 0 のまま
 - fix 取り込み: commit `3746acb`。stamp parse を `ordered_events()` (Decimal exact・行あたり
   1 回) に集約 — `longest_silence` の二重 parse も同時に解消。鮮度比較は `st_mtime_ns` の
   exact 領域へ。red 確認 (修正前 2 fail + 1 error) + 変異 3/3 + 発注側の独立変異 2 件再現 +
