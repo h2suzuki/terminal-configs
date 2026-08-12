@@ -485,6 +485,11 @@ codex sol xhigh で 2 巡連続」。
   引き続き 0
 - fix round: `drafts/sentinel-r55-fixes.md` (exact 比較化・`isascii` guard・red 確認 +
   変異 3 件)。認定 counter は 0 のまま、fix 後の r56 から再カウント
+- fix 取り込み: commit `3746acb`。stamp parse を `ordered_events()` (Decimal exact・行あたり
+  1 回) に集約 — `longest_silence` の二重 parse も同時に解消。鮮度比較は `st_mtime_ns` の
+  exact 領域へ。red 確認 (修正前 2 fail + 1 error) + 変異 3/3 + 発注側の独立変異 2 件再現 +
+  元 repro 3 件の消滅を直接確認。selftest 265 → **268**。裁定 50 (exact 比較) と 51
+  (`isascii`∧`isdigit`) を正本化 (49 → 51 件)
 
 ### r56 (認定 1 巡目・3 度目) — material 3 + oracle 1、認定不成立
 
@@ -504,7 +509,7 @@ codex sol xhigh で 2 巡連続」。
   3+1 と横ばいだが、53 巡時代の主因 (手配り不変条件の維持失敗 73%) は消え、残りは
   すべて「疑われたことのない前提」層 — reviewer は enumerator として機能している
 - fix round: `drafts/sentinel-r56-fixes.md`。認定 counter は 0 のまま
-- fix 取り込み: commit `7bff802` (詳細は次節)。hold を候補対応付き tuple 化 (重複は inode 比較より先に
+- fix 取り込み: commit `7bff802`。hold を候補対応付き tuple 化 (重複は inode 比較より先に
   exit 9・比較は同一 path singleton 限定)、時刻 regex + CLI 数値引数を ASCII 限定 (site
   列挙表で受理域クラスの残 site ゼロを確認)、fraction を数値加算に集約 (`epoch_fraction()`)、
   ns fixture に `st_mtime_ns` 保持 assert。副次改善: 非採用候補の descriptor を周回内で即
@@ -531,11 +536,23 @@ codex sol xhigh で 2 巡連続」。
   `object_pairs_hook` で corrupt 化、stdout/stderr を backslashreplace に reconfigure。
   red 3/3 + 変異 3/3 + 発注側の独立変異 2 件再現 + repro 消滅 (dup-key None / ascii 実 CLI
   clean exit 6)。selftest 272 → **275**。裁定 52・53 を正本化、41 を拡張 (51 → 53 件)
-- fix 取り込み: commit `3746acb`。stamp parse を `ordered_events()` (Decimal exact・行あたり
-  1 回) に集約 — `longest_silence` の二重 parse も同時に解消。鮮度比較は `st_mtime_ns` の
-  exact 領域へ。red 確認 (修正前 2 fail + 1 error) + 変異 3/3 + 発注側の独立変異 2 件再現 +
-  元 repro 3 件の消滅を直接確認。selftest 265 → **268**。裁定 50 (exact 比較) と 51
-  (`isascii`∧`isdigit`) を正本化 (49 → 51 件)
+
+### r58 (認定 1 巡目・5 度目) — material 4、認定不成立
+
+- **指摘 1 (採用)**: Decimal 加算が context 精度 28 桁で丸め、18 桁超の小数の 1 ulp 後退が
+  等値化 (repro)。**r55 の Decimal 化が開けた窓** — exact の暗黙前提が「表現」から
+  「演算 context」へ 1 層降りた
+- **指摘 2 (採用)**: `(exit N)` 除去が start 行にも効き、command 自体が `(exit N)` で終わると
+  start/end の key が食い違い偽の未完了が永続 (repro: pending に `''` 残留)
+- **指摘 3 (採用)**: **r57 の backslashreplace が開けた窓** — 貼付用 cancel command の
+  非 ASCII argv が `\uXXXX` 化し別対象になる (repro)。裁定 30 の encoding 経路での再発
+- **指摘 4 (採用)**: MAX_PENDING 超過で捨てた start を忘れ、保持分の drain で「未完了なし」に
+  戻る (repro: 513 start + 512 end → pending 0)。抑制方向にだけ使う規律への違反
+- fix round: `drafts/sentinel-r58-fixes.md`。認定 counter は 0 のまま
+- 傾向: 認定 5 連続で material 2〜4 件。手配り型ゼロ・新設機構ゼロは維持される一方、
+  **修正が 1 層深い未疑前提を開ける連鎖** (Decimal→context、ASCII→出力 encode) が続く。
+  受理域を仕様で絞る (例: stamp の小数を 9 桁までに制限 — runner は 3 桁しか書かない) ことで
+  クラスごと閉じられる指摘が複数あり、材料は司令塔判断へ
 
 ## 復元元
 

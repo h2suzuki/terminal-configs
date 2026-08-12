@@ -584,3 +584,22 @@ reconfigure 無効化) を splice 再現し当該 test のみ fail。ctime 追�
 観測写し化ではない)。wt 内 commit `9eda285` → cherry-pick **`2498b67`**。worktree / branch
 削除・報告書退避。裁定 52 (重複キー corrupt)・53 (出力 encoding) を正本化、41 に ctime を
 明記 (51 → **53 件**)。次: r58 = 認定 1 巡目 (5 度目)。
+
+### 2026-08-13 — r58 受領: material 4 (全件 repro 確定) → fix round 発注
+
+r58 (`task-msqp5yzb-15dw08`・sol xhigh・write) は sentinel exit 0。指摘 4 件を発注側 repro で
+全件確定: (1) Decimal context 28 桁の丸めで 18 桁超小数の 1 ulp 後退が等値化 — **r55 の
+Decimal 化が開けた窓**、(2) `(exit N)` 除去が start 行にも効き偽の未完了が永続 (pending に
+`''` 残留)、(3) backslashreplace が貼付 cancel の非 ASCII argv を破壊 — **r57 の修正が開けた
+窓** (裁定 30 の encoding 経路再発)、(4) MAX_PENDING 超過 start の忘却で「未完了なし」へ復帰。
+
+fix round: `drafts/sentinel-r58-fixes.md` (context 非依存の exact 構築 / end 限定 suffix 除去 /
+strict encode 可否での貼付判定 / overflow flag)。worktree `wt-r58fix` @ `a3c5ce3`。job
+`task-msqptafr-ajumxg` (record 検証: sol / medium / write / fresh)。sentinel `beghowwuw`
+(estimate 2700s)。認定 counter 0 のまま。
+
+**傾向と司令塔判断の材料**: 認定 5 連続 (r54〜r58) で material 2〜4 件、ゼロ巡なし。
+手配り型ゼロ・新設機構への指摘ゼロは 5 巡維持 — 構造対策は効いている。残る供給源は
+「修正が 1 層深い未疑前提を開ける連鎖」と「受理域の広さ」。受理域を仕様で絞る裁定
+(例: stamp 小数 9 桁上限 — runner は 3 桁固定) でクラスごと閉じられる指摘が複数あり、
+認定条件の到達性はこの仕様裁定に依存する — ユーザー相談事項。
