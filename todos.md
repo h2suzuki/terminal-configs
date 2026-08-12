@@ -42,9 +42,9 @@ Exit Criteria:
   収束認定は codex sol xhigh 2 巡連続ゼロ。根拠: 179 件の 73% (forgot 85 + contradictory 34 +
   unfinished 12) が per-site 手配り型で、閉じたクラスは全て機構化 or 全数突合によるもの。
   **ユーザー判断待ち 2 点**: 柱 1 の refactor まで踏み込むか / refactor 実装を sol medium から xhigh に上げるか
-- [ ] **deploy が 23 巡分遅れている** — `/usr/local/bin/codex_task_sentinel` は 30 巡目相当。
-  sandbox からは `sudo` も `/usr/local/bin` への書き込みも塞がれている (実行して確認済み) ので、
-  ユーザー手動で `sudo install -m 755 files/codex_task_sentinel /usr/local/bin/` が要る
+- [x] **deploy の 23 巡分の遅れを解消する** — 2026-08-13 00:05 にユーザーが
+  `sudo install` を実行。`diff -q /usr/local/bin/codex_task_sentinel files/codex_task_sentinel`
+  IDENTICAL (meta-test 込みの `55c618e` 相当)・mode 0755 を確認済み
 - [x] log 由来の曖昧さが正常 job の cancel を招かない — 既定で cancel 導線 (exit 4/3) を出さず、
   exit 14 で evidence を示して判断を呼び手に渡す (206ce7a)。断定したい呼び手は `--trust-log`。
   12 巡目が 504 case の直積で「既定の exit 3/4 は 0 件」「`--trust-log` は旧判定と mismatch 0」を実測
