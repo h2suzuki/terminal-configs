@@ -436,6 +436,30 @@ r51 の欄を 2 から 3 に訂正した。51 巡時点では r52 発注書の�
   r26 発注書は「3 件が発注側の直前の修正」と書き、**資料どうしが食い違う**。
   `git log -S'whole_log'` で初出が 19 巡の c41f88e であることから self とした。
 
+## 8. 54 巡以降 — 収束認定体制での記録
+
+53 巡までと異なり、以降の巡は収束対策 (裁定機械化 / 構造 funnel / TOCTOU harness、
+`docs/sentinel-convergence-log.md` 参照) 後の体制で走る。認定条件は「material 指摘ゼロが
+codex sol xhigh で 2 巡連続」。
+
+### r54 (認定 1 巡目) — material 2、認定不成立
+
+- 発注: 新体制 (selftest 259) 初巡。観点 4 点 = 改造の縫い目 / 一度も疑われていない前提 /
+  test oracle の出所 / 裁定と実装の矛盾。報告書は gates 全緑を転記
+- **指摘 1 (縮小採用・material)**: `event_lines()` の時刻比較が文字列
+  (`files/codex_task_sentinel:814`)。レビューの機構説明 (辞書順で `.` < `Z`) は発注側 repro で
+  **不成立** — capture group は `Z` を含まず、「小数なし → 小数あり (同秒)」は実機で保持される。
+  ただし数値的に等しい表現差 (`.100` の直後の `.1`) を「過去」と誤認して落とす同類の実欠陥を
+  repro で確認。修正案 (数値比較) 自体は正しい。原因タイプ: 指摘の機構は imagined、実欠陥は
+  53 巡を生き延びた旧来 code — 発注書観点 2 (未疑の前提) が機能した初の実例
+- **指摘 2 (そのまま採用・material)**: `--state-root ""` が truthiness で「未指定」に畳まれ
+  既定 root 群を走査 (`state_roots()`:214。`check_arguments()` の空文字検査は artifact / token
+  のみ)。既存クラス「境界値の空文字」の残存 site
+- 分類メモ: 2 件とも改造の縫い目 (funnel / Observation / weld / harness) からの指摘は **0**。
+  新設機構は初巡を無傷で通過し、出たのは旧来 code の未疑前提のみ
+- fix round: `drafts/sentinel-r54-fixes.md` (縮小裁定を発注書に明記)。認定 counter は 0 に
+  戻り、fix 取り込み後の r55 から再カウント
+
 ## 復元元
 
 repo の実 path は `/home/scorer/terminal-configs` である (user 名変更前の `/home/h2suzuki/...` は現存しない

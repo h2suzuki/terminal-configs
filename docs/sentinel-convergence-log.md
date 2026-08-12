@@ -442,3 +442,28 @@ worktree / branch 削除・報告書 2 本退避。
 
 **全 build 柱が完了**: 裁定の機械化 `55c618e` / 構造 refactor 3 段 `c067c0b`・`0425a28`・
 `265ccfe` / TOCTOU harness `f109f59`。selftest 244 → **259**。残りは収束認定巡のみ。
+
+### 2026-08-13 — 収束認定 1 巡目 (r54): material 2 → fix round 発注
+
+r54 レビュー (job `task-msqje4ac-z67te6`・sol xhigh・read-only) は sentinel 完了検知、報告書
+退避済 (`drafts/sentinel-review-r54-report.md`)。報告書は gates 全緑 (selftest 259 / 外部 11 /
+ruff / ty) を転記し、**material 2 件**。発注側の実機 repro で裁定:
+
+1. **指摘 1 = 縮小採用**: レビューの機構説明 (辞書順で `.` < `Z`) は不成立 — `LOG_TS` の
+   capture group は `Z` を含まず、レビューが挙げた「小数なし → 小数あり (同秒)」の例は実機で
+   **保持される** (repro で確認)。ただし数値 tie の表現差 (`.100` 直後の `.1`) を文字列比較が
+   落とす同類の実欠陥を repro で確認 — 指し示した行の欠陥は実在し、修正案 (数値比較) も正しい。
+   **機構の説明が誤りでも行は正しい**事例で、裁定には発注側の決定的 repro が必須だった
+2. **指摘 2 = そのまま採用**: `state_roots("")` が既定 root 群を返すことを repro で確認。
+   `check_arguments()` の空文字検査に state_root が無いことも実コードで確認
+
+2 件とも旧来 code (53 巡 + 構造改造を生き延びた未疑前提)。新設の funnel / Observation /
+harness / weld への指摘は 0 — 発注書観点 2 (一度も疑われていない前提を洗え) の成果。
+認定 counter は 0 のまま (r54 不成立)。
+
+fix round: `drafts/sentinel-r54-fixes.md` — 縮小裁定と等値保持 (tie を落とす実装は不成立) を
+発注書の裁定節に明記、受け入れ変異 3 件 (文字列比較へ戻す / `if explicit:` へ戻す / 空検査
+削除) は発注側選定、red 確認 (修正前 fail) を完了条件化。lint 初回 rc=1 (スコープに挙げた
+レビュー報告書 path が報告書 path 検査と衝突) → スコープから外して rc=0。worktree
+`wt-r54fix` @ `5711e96`。job `task-msqk36tk-hqzhzn` (record 検証: sol / medium / write /
+fresh)。sentinel `bsl7v4i81` (estimate 1650s) を background 監視。
