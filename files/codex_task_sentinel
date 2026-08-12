@@ -1181,10 +1181,15 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             # file 名の一致は所属の証明ではない — 本文が名乗るものだけを候補にする。
             # 読めなかった候補は「別 job」の証明にならないので、その回は絞らない。
             fresh_hold: list = []
-            resolved_unknown = False
             carried, unknown, shifting = carrying_records(
                 found, args.job_id, hold=fresh_hold
             )
+            # 新旧の掴みが別 inode なら、 周回の間に差し替わっている。
+            if pin_hold and fresh_hold:
+                was = os.fstat(pin_hold[0].fileno())
+                now_id = os.fstat(fresh_hold[0].fileno())
+                if (was.st_dev, was.st_ino) != (now_id.st_dev, now_id.st_ino):
+                    complete = False
             # 新しい掴みを得てから前の周回を手放す — 間を空けると番号を再利用される。
             for handle in pin_hold:
                 handle.close()
@@ -1194,6 +1199,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             seen_pairs.update(shifting)
             if carried:
                 found, complete = carried, complete and not unknown
+                resolved_unknown = False  # 検証できた周回だけが旗を下ろす
             else:
                 # 唯一の候補が読めないだけなら、 corrupt 判定へ送る。
                 found, complete = unknown[:1], complete and len(unknown) <= 1
@@ -1430,7 +1436,10 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # 何が動いたのかを分けて持つ — 畳むと「完了条件に関わる変化」 だけを
         # 要求する分岐が書けない。
         # parse が読んだ descriptor と、 前後の path 観測が同じでなければ判定しない。
-        log_changed = file_stat(log) != before_log or log_view_stamp != before_log
+        # 開けなかった view は stamp を持たない — path が動いていないなら変化ではない。
+        log_changed = file_stat(log) != before_log or (
+            log_view_stamp is not None and log_view_stamp != before_log
+        )
         for handle in log_pin:
             handle.close()  # 比較が済むまで押さえていた
         # 読んだ descriptor も前後の観測と同じでなければ、 A→B→A が透過する。
@@ -2768,6 +2777,24 @@ class WatchTest(unittest.TestCase):
         ):
             self.assertNotEqual(watch(args), EXIT_NEVER_REGISTERED)
         self.assertNotIn("never-registered", buf.getvalue())
+
+    def test_an_unopenable_log_says_unread_not_changed(self):
+        """開けない log は stamp を持たないだけ — path が動いていないなら変化ではない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, log = self._state("ws", "task-x", "failed")
+        os.chmod(log, 0o000)
+        self.addCleanup(os.chmod, log, 0o644)
+        buf = io.StringIO()
+        with (
+            redirect_stdout(buf),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1, True)),
+        ):
+            watch(self._watch_args(root, "task-x", once=True))
+        self.assertIn("走査未完了", buf.getvalue())
+        self.assertNotIn("走査中に変化", buf.getvalue())
 
     def test_an_unvalidated_candidate_is_not_replaced_by_a_readable_one(self):
         """検証できなかった候補を、 後から読めた別 record で置き換えない。"""
