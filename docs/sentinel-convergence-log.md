@@ -304,3 +304,9 @@ meta-test 3 本で構造的に作れなくなった。裁定 18・21・27 が実
   発注側選定 (直 os.open / path 再 stat 指紋 / 解放順序逆転 / 3 値の畳み込み / 上限外し)
 - 起動: worktree `wt-p1s2` (HEAD `4288762`)、job `task-msqcff4e-0yn399`、record で
   sol / xhigh / write を確認。probe 5 秒。監視 sentinel (estimate 5400s / timeout 14400s)
+- 観察 (第 2 段起動と同時刻 02:08:44): main checkout 直下に 0 byte・read-only の untracked
+  file 群 (.bashrc / .gitconfig / .claude/{agents,hooks,settings.json,...} / .mcp.json 等
+  21 個) が出現。名前の集合は「write job が親 checkout へ実行可能設定を植えるのを防ぐ mask」の
+  典型。wt-p1s2 側には無し・mount table に該当なし・**tracked 内容への変更ゼロ**
+  (`git diff HEAD` 空)。走行中 job の保護機構の可能性があるため削除は保留 —
+  第 2 段の受け入れ時に消滅を確認し、残っていれば削除する
