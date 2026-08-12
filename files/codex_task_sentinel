@@ -749,23 +749,25 @@ def baseline_silence(
             peer_pin = open_regular(peer_log)  # 比較の間 inode を押さえる
         except OSError:
             peer_pin = None
-        before = file_stat(peer_log)
-        marked = file_stat(record_path)
-        if before is None or marked is None:
-            continue
-        if now - max(before[2], marked[2]) / 1e9 < settle_seconds:
-            continue
-        quiet, peer_log_stamp = longest_silence(peer_log)
-        # 対象 log と同じ理由で、 読んだ descriptor が前後の観測と同じかを確かめる。
-        if (
-            peer_log_stamp != before
-            or file_stat(peer_log) != before
-            or file_stat(record_path) != marked
-            or record_stamp(record_path) != peer_stamp
-        ):
-            continue  # 読んでいる間に伸びた peer は、この poll の手本にならない
-        if peer_pin is not None:
-            peer_pin.close()
+        try:
+            before = file_stat(peer_log)
+            marked = file_stat(record_path)
+            if before is None or marked is None:
+                continue
+            if now - max(before[2], marked[2]) / 1e9 < settle_seconds:
+                continue
+            quiet, peer_log_stamp = longest_silence(peer_log)
+            # 対象 log と同じ理由で、 読んだ descriptor が前後の観測と同じかを確かめる。
+            if (
+                peer_log_stamp != before
+                or file_stat(peer_log) != before
+                or file_stat(record_path) != marked
+                or record_stamp(record_path) != peer_stamp
+            ):
+                continue  # 読んでいる間に伸びた peer は、この poll の手本にならない
+        finally:
+            if peer_pin is not None:
+                peer_pin.close()  # continue で抜ける経路も必ず通る
         if quiet is not None and (worst is None or quiet > worst):
             worst = quiet
     return worst, True
@@ -2695,6 +2697,32 @@ class WatchTest(unittest.TestCase):
         ):
             watch(args)
         self.assertTrue(held and all(held))
+
+    def test_a_skipped_peer_still_releases_its_pin(self):
+        """continue で抜ける経路でも descriptor を離す — poll ごとに溜めない。"""
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-live", "running")
+        jobs = os.path.dirname(record)
+        for n in range(3):  # settle しない peer ばかりにして continue を通す
+            with open(
+                os.path.join(jobs, f"task-p{n}.json"), "w", encoding="utf-8"
+            ) as f:
+                json.dump({"id": f"task-p{n}", "status": "completed"}, f)
+            with open(os.path.join(jobs, f"task-p{n}.log"), "w", encoding="utf-8") as f:
+                f.write("[2026-08-09T00:00:00.000Z] a\n")
+        real_open, handles = open_regular, []
+
+        def tracking(path):
+            handle = real_open(path)
+            if path.endswith(".log"):
+                handles.append(handle)
+            return handle
+
+        with mock.patch(__name__ + ".open_regular", tracking):
+            baseline_silence(jobs, "task-live", time.time(), 300.0)
+        self.assertTrue(handles)
+        self.assertTrue(all(h.closed for h in handles))
 
     def test_a_peer_log_inode_is_held_while_it_is_compared(self):
         """peer log も対象 log と同じ理由で、 比較の間 descriptor で押さえる。"""
