@@ -603,3 +603,20 @@ strict encode 可否での貼付判定 / overflow flag)。worktree `wt-r58fix` @
 「修正が 1 層深い未疑前提を開ける連鎖」と「受理域の広さ」。受理域を仕様で絞る裁定
 (例: stamp 小数 9 桁上限 — runner は 3 桁固定) でクラスごと閉じられる指摘が複数あり、
 認定条件の到達性はこの仕様裁定に依存する — ユーザー相談事項。
+
+### 2026-08-13 — r58 fix round 完了 (selftest 280)・裁定 54 の実装発注
+
+r58 fix round は sentinel `beghowwuw` exit 0。受け入れ: gates 全緑 (selftest **280** / 外部 11 /
+ruff / ty)、repro 消滅 4 点を直接確認 (30 桁 1 ulp の順序保持 / start key `(exit 2)` 一致で
+pending 空 / overflow sentinel 残留 / 負 epoch -0.1 回帰維持)、独立変異 2 件 (context 依存
+加算戻し / overflow sentinel 除去) を splice 再現し当該 test のみ fail。`epoch_fraction()` は
+(sign, digits, exponent) tuple 直接構築で context 非依存化。wt 内 commit `6961128` →
+cherry-pick **`9575741`**。worktree / branch 削除・報告書退避。
+
+**裁定 54 を司令塔権限で確定** (declare-and-proceed 3-check 済・ユーザーは台帳 review で
+覆せる): stamp 小数部は 9 桁 (ns) 上限 — LOG_TS は超過を event でない本文として棄却、
+RECORD_TS は corrupt。根拠: runner は 3 桁固定・比較相手 `st_mtime_ns` は 9 桁が最大分解能・
+無制限受理が r55-1 / r58-1 の深掘り供給源。実装発注: `drafts/sentinel-domain-cap-order.md`
+(lint rc=0)。worktree `wt-domcap` @ `9575741`。job `task-msqqb6xe-169nyk` (record 検証:
+sol / medium / write / fresh)。sentinel `bq2fzxk4m` (estimate 1200s)。取り込み後に r59 =
+認定 1 巡目を発注する段取り。
