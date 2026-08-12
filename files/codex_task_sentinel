@@ -1296,8 +1296,9 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             log_incomplete or record_moved or not (counted_all and counted_all_after)
         )
         # cancel / 失敗は他を読めるかに依らず結果ではない — 静穏 gate より先に置く。
-        # 読取後に変化した成果物は、 headline でも evidence でも現存を断定しない。
+        # 読取後に変化した観測は、 headline でも evidence でも断定しない。
         shown_ready = None if artifact_changed else ready
+        shown_tree = None if tree_changed else tree
         settled = str((record or {}).get("status") or "")
         terminal_record = (
             record is not None
@@ -1419,7 +1420,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     record or {},
                     log,
                     age,
-                    tree,
+                    shown_tree,
                     threshold,
                     baseline,
                     args.artifact,
@@ -1437,7 +1438,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 record or {},
                 log,
                 age,
-                tree,
+                shown_tree,
                 threshold,
                 baseline,
                 args.artifact,
@@ -2513,6 +2514,24 @@ class WatchTest(unittest.TestCase):
             self.assertEqual(
                 baseline_silence(jobs, "task-live", time.time()), (None, False)
             )
+
+    def test_a_failed_verdict_does_not_claim_a_moved_tree(self):
+        """成果物と同じ理由で、 走査後に動いたツリーの age も evidence で断定しない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-x", "failed")
+        ages = [900.0, 5.0]
+        buf = io.StringIO()
+        with (
+            redirect_stdout(buf),
+            mock.patch(__name__ + ".tree_age", lambda *a: ages.pop(0) if ages else 5.0),
+        ):
+            self.assertEqual(
+                watch(self._watch_args(root, "task-x", once=True)), EXIT_NOT_COMPLETED
+            )
+        self.assertIn("ツリー : 不明", buf.getvalue())
 
     def test_timeout_evidence_does_not_claim_a_changed_deliverable(self):
         """timeout の evidence も同じ成果物状態を使う — headline だけ直しても足りない。"""
