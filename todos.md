@@ -60,7 +60,7 @@ Exit Criteria:
 - [x] 実 session で open Task を残した wind-down に inject + block が発火し、todos.md 転記 + close で通過することを確認 — **2026-08-08 04:26 に full loop を live 観測**: ユーザー発言「セッションを閉じます」に対し UserPromptSubmit で inject (open Task #7 を列挙) → ターン終了時に stop_checks が exit 2 で block (#7 を名指し) → todos.md へ転記済みのうえ Task を close して通過。以下は経緯: 2026-08-07 **inject は実 session で live 発火を観測** (ユーザーの「セッションは終わります」prompt に対し UserPromptSubmit で open Task 1 件を列挙、clean tree ゆえ未コミット節は出ず = 偽陽性修正も live 確認)。block 側は下記 shadow 欠陥を修正済 (40f89e8)。deploy 完了・canonical と diff 一致を確認済 (2026-08-07 ユーザー実行) で、deployed 版が実 transcript から人間 prompt を復元し harness entry 14 件を skip することも確認。残るは **live block の観測のみ** (実装は 3a6a2c5 で完了・deploy 済)。ユーザー指摘により設計から作り直した: Stop payload には prompt が無いため transcript を遡っていたが、これをやめ **prompt を受け取る UserPromptSubmit hook 側で判定し session 単位の控えに記録**、Stop 側はそれを読むだけにした。未処理項目は従来どおり Task store + mytask の両対応。transcript を読まなくなったので下記 2 段の不発原因は原因ごと消滅し、widen-once (75de34b) も削除。通し試験で「合図なし→素通り / 合図あり→block / 通常発言で上書き→素通り」を確認、deploy 後は本番 hook が実際に控えを書くことも確認済 (04:11)。
   - 旧原因の記録 (再発時の手がかり): (1) harness 生成 entry が人間 prompt を shadow、(2) `_load_tail` が末尾 128KB しか読まず長 session で人間 prompt に届かない、(3) `<system-reminder>` も harness 生成だが roster 未収載だった
 
-- [x] **発注書の規約適合を発注スクリプト内で deterministic に検査する** — `files/codex_order_lint` (17 tests・9 変異すべて catch・`47cbd29`) が節の有無・報告書 path の綴り・終端 token・調査しきい値の倍率・裁定の採番・kill-by-port 禁止を検査する。実在の発注書 36 本に当てると 48〜52 巡の 5 本が同じ採番ずれを 5 巡持ち越していた。**起動 flag の固定はまだ script 化していない** (下記 3 件の失敗はいまも手つきで防いでいる)。方針確定 (2026-08-12・ユーザー判断)。発注は結局スクリプト実行になるので、LLM の敵対レビューに頼らず**スクリプト側で決定的に検査して、規約違反なら発注を拒否する**
+- [x] **発注書の規約適合を発注スクリプト内で deterministic に検査する** — `files/codex_order_lint` (17 tests・9 変異すべて catch・`47cbd29`) が節の有無・報告書 path の綴り・終端 token・調査しきい値の倍率・裁定の採番・kill-by-port 禁止を検査する。実在の発注書 36 本に当てると 48〜52 巡の 5 本が同じ採番ずれを 5 巡持ち越していた。方針確定 (2026-08-12・ユーザー判断)。発注は結局スクリプト実行になるので、LLM の敵対レビューに頼らず**スクリプト側で決定的に検査して、規約違反なら発注を拒否する**
   - 却下した案 2 つ: (a) 「codex-delegation skill が active でない限り codex-companion の Bash を止める」hook — gate の state が agent 単位で subagent から見えず詰んでいた。(b) 発注書を codex に敵対レビューさせる — LLM 判定は確率的で、決定的にできるものを LLM に投げるのは `writing-code` の「deterministic transform を LLM に投げるな」に反する
   - 検査すべき規約は codex-delegation skill に既にある (worktree 隔離 / `--write` の扱い / running[]-empty monitor 禁止 等)。これらを発注スクリプトの引数・発注文から機械的に判定する
   - **起動そのものもスクリプトが担う**: 2026-08-12 の 2 回の発注で、起動側の失敗が 3 件出た。
@@ -86,6 +86,14 @@ Exit Criteria:
 - [x] `feedback_turn_end_continuation_claim.md` を MEMORY.md に載せ直すか retire するかを決める (内容判断・要ユーザー) — 2026-08-12 に復帰。MEMORY.md へ追記 (40 行) + `--upsert` で `entries_fts` 68 件。deploy 済 hook で `--rebuild` すると `rebuilt 33/33` かつ `dropped` 行が消え、roster 経由で落ちなくなったことを確認。tag は観測どおり `fable-5` のまま
   - 判断材料 (除外ゼロ走査): `継続します` / `自走` / `再開の種` / `continuation-claim` は user skill 33 本・managed skill 30 本・3 つの CLAUDE.md・repo の `files/` 全体で **0 hit**。`遂行宣言` は `stop_checks.py` の intent-without-task family にのみ存在するが、その是正は「Task を登録せよ」であって「未来形の主張をするな」ではない
   - よって本 entry の教訓を代替する skill / hook は存在せず、retire ではなく欠損として扱うのが妥当。なお本 session で intent-without-task から疑問形を除外して発火を弱めているため、この discipline の被覆は以前より薄い
+
+- [ ] **codex への発注そのものを script 化して起動 flag を固定する** — lint は発注書の中身を見るが、
+  起動の手つきは依然として手動である。2026-08-12 の 2 回の発注で起動側の失敗が 3 件出た:
+  (a) 同じ発注が 2 job 走り報告書 path が衝突しかけた (先発は default model)、
+  (b) `task --help` が flag と解されず本文として起動された、
+  (c) `--model` / `--effort` が job record に届かず default model で敵対レビューが走りかけた
+  (弱いレビューの「指摘ゼロ」は空の合格になる)。script が flag を固定し、起動直後に job record の
+  `request.model` / `request.effort` が指定と一致することを検証するところまでを含める
 
 Work file: `last-session-handoff.md` の同名 section
 
