@@ -58,7 +58,7 @@ test 数 / 指摘件数) を追記して commit する。発注書・報告書�
 
 | 対策 | 状態 | 直近更新 | 要約 |
 |---|---|---|---|
-| 裁定の機械化 | 進行中 | 2026-08-12 | 発注準備中 |
+| 裁定の機械化 | 進行中 | 2026-08-12 | codex へ発注済・走行中 |
 | 構造 refactor | 未着手 | — | 機械化の完了後 |
 | TOCTOU harness | 未着手 | — | refactor 完了後 |
 | 体制と収束認定 | 未着手 | — | 柱完了後に 54 巡目 |
@@ -113,3 +113,17 @@ test が捕捉するかを確かめる一式) の緑を確認する。一括変�
 1 回目は引数の truncation で不発、2 回目は追記指示を実行せず標準 cleanup のみ走った。
 追記は main 直接 Edit に切り替えた。skill 側の改善課題として残す
 (内容追記の指示形式が fork に伝わらない)。
+
+### 2026-08-12 — 裁定の機械化を codex へ発注
+
+- 発注書 `drafts/sentinel-pillar2-order.md` (codex_order_lint rc=0。初回 rc=1 —
+  「## 成果物」節と「触らない path」の欠落を lint が検出し、発注前に修正)
+- 内容: 47 裁定を A (今すぐ機械検査可能) / B (構造変更後に可能) / C (挙動 test) / D (プロセス) に
+  分類して `docs/sentinel-rulings.md` に収載 + 区分 A の meta-test (allowlist 方式・行番号付き
+  違反報告・最低 5 検査: splitlines 禁止 / EXIT_CONTRACT literal / time.time() allowlist /
+  open 系 allowlist / mock.patch 対象の実在) を selftest へ追加 + 1 検査 1 変異の検証。
+  実装の挙動変更・既存 test 変更は禁止
+- 起動: worktree `wt-p2` (HEAD `84b2f51`)、job `task-msq5cdku-8yvr2b`、
+  record の model / effort が `gpt-5.6-sol` / `medium` と発注どおりであることを起動直後に確認。
+  write probe は起動 5 秒で出現。監視は `files/codex_task_sentinel` (estimate 2700s /
+  stall 900s / timeout 7200s) を background 実行
