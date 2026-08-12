@@ -1283,7 +1283,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # その窓に入った poll は、 古い running のまま静穏を読んで stall と言える。
         scan_incomplete = not scanned_all
         record_moved = (
-            seen != [(record_path, log)]
+            # 列挙し切れていない走査の空集合は、 消えた証拠でも別 record の証拠でもない。
+            (scanned_all and seen != [(record_path, log)])
             # watch 全体の同一性 — mtime と size は heartbeat で動くのが正常である。
             or (file_stat(record_path) or (None, None))[:2] != record_inode
         )
@@ -1347,10 +1348,9 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         unscanned = frozenset(
             name
             for name, flag in (
+                # record は一意性を示せていない — 成果物と tree は読み切れている。
                 ("record", scan_incomplete),
                 ("baseline", baseline_incomplete),
-                ("artifact", scan_incomplete),
-                ("tree", scan_incomplete),
             )
             if flag and name not in moved
         )
@@ -2590,20 +2590,23 @@ class WatchTest(unittest.TestCase):
         from contextlib import redirect_stdout
         from unittest import mock
 
-        root, record, log = self._state("ws", "task-x", "running")
-        _e, peer, _p = self._state("ws", "task-x", "running")
+        root, record, _log = self._state("ws", "task-x", "running")
         args = self._watch_args(root, "task-x", once=True)
-        calls = []
+        real, swapped = record_view, []
 
-        def finding(job_id, roots):
-            calls.append(1)
-            # 登録は成立させ、 poll で別 path の record へ解決させる。
-            if len(calls) == 1:
-                return [(record, log)], True
-            return [(peer, peer[: -len(".json")] + ".log")], True
+        def replacing(path, job_id=None):
+            view = real(path, job_id)
+            # poll の read で 1 度だけ差し替える — 登録時に替えると inode 固定より前になり、
+            # 繰り返すと解放した inode 番号が再利用される。
+            if path == record and job_id is not None and not swapped:
+                swapped.append(1)
+                with open(record + ".new", "w", encoding="utf-8") as f:
+                    json.dump({"id": "task-x", "status": "running"}, f)
+                os.rename(record + ".new", record)
+            return view
 
         buf = io.StringIO()
-        with redirect_stdout(buf), mock.patch(__name__ + ".find_jobs", finding):
+        with redirect_stdout(buf), mock.patch(__name__ + ".record_view", replacing):
             watch(args)
         self.assertIn("replaced or resolved elsewhere", buf.getvalue())
         self.assertNotIn("could not be read in full", buf.getvalue())
@@ -2621,16 +2624,20 @@ class WatchTest(unittest.TestCase):
 
         def finding(job_id, roots):
             calls.append(1)
-            # 登録は成立させ、 poll 中の走査だけを不完全にする。
-            return [(record, log)], len(calls) == 1
+            # 登録は成立させ、 poll では root を列挙できず空集合 + 不完全を返す。
+            return ([(record, log)], True) if len(calls) == 1 else ([], False)
 
+        artifact = os.path.join(root, "report.md")
+        with open(artifact, "w", encoding="utf-8") as f:
+            f.write("body\nDONE\n")
+        args.artifact, args.token = artifact, "DONE"
         buf = io.StringIO()
         with redirect_stdout(buf), mock.patch(__name__ + ".find_jobs", finding):
             watch(args)
         shown = buf.getvalue()
-        self.assertIn("status=不明 (走査未完了)", shown)  # record 欄まで理由が届く
-        self.assertIn("ツリー : 不明 (走査未完了)", shown)
-        self.assertNotIn("走査中に変化", shown)
+        self.assertIn("status=不明 (走査未完了)", shown)  # 一意性を示せていない
+        self.assertNotIn("走査中に変化", shown)  # 列挙できないのは変化ではない
+        self.assertNotIn("成果物 : 不明", shown)  # 読み切れた観測は隠さない
 
     def test_a_moved_record_offers_no_pasteable_cancel(self):
         """root を裏付けられない poll から、 cwd 無しで動く command を出さない。"""
