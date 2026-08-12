@@ -504,12 +504,28 @@ codex sol xhigh で 2 巡連続」。
   3+1 と横ばいだが、53 巡時代の主因 (手配り不変条件の維持失敗 73%) は消え、残りは
   すべて「疑われたことのない前提」層 — reviewer は enumerator として機能している
 - fix round: `drafts/sentinel-r56-fixes.md`。認定 counter は 0 のまま
-- fix 取り込み: commit `7bff802`。hold を候補対応付き tuple 化 (重複は inode 比較より先に
+- fix 取り込み: commit `7bff802` (詳細は次節)。hold を候補対応付き tuple 化 (重複は inode 比較より先に
   exit 9・比較は同一 path singleton 限定)、時刻 regex + CLI 数値引数を ASCII 限定 (site
   列挙表で受理域クラスの残 site ゼロを確認)、fraction を数値加算に集約 (`epoch_fraction()`)、
   ns fixture に `st_mtime_ns` 保持 assert。副次改善: 非採用候補の descriptor を周回内で即
   release (旧実装は最終 view のみ解放)。red 4/4 + 変異 3/3 + 発注側の独立変異 2 件再現 +
   repro 消滅 5 点を直接確認。selftest 268 → **272**。裁定 23・44・50・51 の本文/担保を更新
+
+### r57 (認定 1 巡目・4 度目) — material 3、認定不成立
+
+- **指摘 1 (採用・material)**: 成果物指紋 `(dev, ino, mtime_ns, size)` は「同一 inode・
+  同 byte 数で token を壊し mtime を復元する」書換えを透過する — repro で mtime_ns 一致・
+  size 一致・ctime_ns のみ変化を確認。`st_ctime_ns` は userspace から復元不能で、指紋への
+  追加が最小修正 (裁定 41 の「全要素」の拡張)
+- **指摘 2 (採用・material)**: JSON 重複キーの後勝ち — `{"status":"running","status":
+  "completed"}` が completed として `_parse_record` を通過 (repro)。曖昧 record は corrupt が正
+- **指摘 3 (採用・material)**: `finish()` の `print` が stdout encoding を仮定 —
+  `PYTHONIOENCODING=ascii` 下で日本語 evidence が UnicodeEncodeError (repro rc 1)。
+  契約外の例外終了 class
+- 3 件とも観点 1 (未疑前提: stat tuple の要素選定 / `json.loads` の重複 semantics /
+  io encoding)。直近修正の縫い目 (候補対応 hold・exact 時刻・ASCII 境界) は「指摘なし」と
+  明記され、新設機構への指摘は 4 巡連続ゼロ
+- fix round: `drafts/sentinel-r57-fixes.md`。認定 counter は 0 のまま
 - fix 取り込み: commit `3746acb`。stamp parse を `ordered_events()` (Decimal exact・行あたり
   1 回) に集約 — `longest_silence` の二重 parse も同時に解消。鮮度比較は `st_mtime_ns` の
   exact 領域へ。red 確認 (修正前 2 fail + 1 error) + 変異 3/3 + 発注側の独立変異 2 件再現 +

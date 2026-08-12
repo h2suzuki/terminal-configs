@@ -559,3 +559,17 @@ site 列挙表 (6 分類) で残 site ゼロを確認。wt 内 commit `042510e` 
 worktree / branch 削除・報告書退避。裁定 23 (重複先行)・44 (singleton 限定)・50 (負 epoch +
 fixture 保持)・51 (クラス全 site) の本文と担保対応表を更新。
 次: r57 = 認定 1 巡目 (4 度目) を新 HEAD から発注。
+
+### 2026-08-13 — r57 受領: material 3 (全件 repro 確定) → fix round 発注
+
+r57 (`task-msqnvg7u-qqqg7g`・sol xhigh・write) は sentinel exit 0。gates 全緑転記 + 指摘 3 件。
+発注側 repro で全件確定: (1) 同 inode・同 size・mtime 復元の書換えが指紋 4 要素を透過
+(ctime_ns のみ変化 — 初回 repro は fixture が 1 byte ずれ、同長で再試行して確定)、
+(2) JSON 重複キー後勝ちで曖昧 record が completed 受理、(3) ascii stdout で日本語 evidence が
+UnicodeEncodeError (契約外の例外終了)。報告書は直近修正の縫い目 (候補対応 hold・exact 時刻・
+ASCII 境界) を「指摘なし」と明記 — 新設機構への指摘は 4 巡連続ゼロ。
+
+fix round: `drafts/sentinel-r57-fixes.md` (ctime 指紋の false-change 側は安全側で許容の裁定 /
+重複キーは corrupt へ / reconfigure は hasattr guard 付き)。lint rc=0 初回。worktree
+`wt-r57fix` @ `1190a66`。job `task-msqokt74-bt70h5` (record 検証: sol / medium / write / fresh)。
+sentinel `bajsgtv70` (estimate 2250s)。認定 counter 0 のまま。
