@@ -59,7 +59,7 @@ test 数 / 指摘件数) を追記して commit する。発注書・報告書�
 | 対策 | 状態 | 直近更新 | 要約 |
 |---|---|---|---|
 | 裁定の機械化 | 完了 | 2026-08-12 | `55c618e` で main へ取り込み (区分 B は refactor 後) |
-| 構造 refactor | 進行中 | 2026-08-13 | 第 1 段 `c067c0b`・第 2 段 `0425a28` 完了。第 3 段 (表示 funnel) へ |
+| 構造 refactor | 完了 | 2026-08-13 | 3 段完了: `c067c0b` / `0425a28` / `265ccfe`。256 tests |
 | TOCTOU harness | 未着手 | — | refactor 完了後 |
 | 体制と収束認定 | 未着手 | — | 柱完了後に 54 巡目 |
 | 方法論 doc (`docs/adversarial-review-methodology.md`) | 完了 | 2026-08-13 | 発散機構 M1–M6 / 設計 G・L・R / モデル選定 / チェックリスト |
@@ -363,3 +363,20 @@ reader からの fd 系 syscall 直呼びは meta-test で構造的に禁止さ�
   過大昇格をしない (裁定 31 の教訓)。変異 3 件は発注側選定・指定対象厳守
 - 起動: worktree `wt-p1s3` (HEAD `3f30e1b`)、job `task-msqfydo6-ll9ubx`、record で
   sol / xhigh / write を確認。監視 sentinel (estimate 2700s) を background 実行
+
+### 2026-08-13 — 第 3 段 完了・構造 refactor (柱 1) 全段完了
+
+- 第 3 段は最小納品で完了: audit の結果、**表示は既に finish() 1 site に集約済み** (第 1 段の
+  副産物) で、production 変更ゼロ・追加は audit 表 + meta-test 1 本 (9 行・`_bad_call_lines`
+  再利用)。裁定 30/32/33/36 は昇格なしで担保 3 分記 — 裁定 31 の過大昇格の教訓が実装側に
+  効いた。変異 3/3 catch (指定対象のまま)
+- 受け入れ: gates 全緑 (selftest **256** / 外部 11 / ruff / ty / lang lint)、発注側の独立変異
+  (別関数への print 追加) も catch。**この段のみ opus レビューを省略し発注側レビューで代替**
+  — 13 行の diff に単独レビュー round は不釣合いと判断 (認定巡が全体を掃く)。残余として
+  `os.write(1, ...)` 型の exotic 出力は meta-test の対象外 (audit で開示済みの設計判断)
+- commit `dc60c2f` → cherry-pick **`265ccfe`** で main へ、main 上でも 256 OK。worktree 削除
+
+**柱 1 の総括**: 3 段 × 各 2 round 以内で完了。53 巡ループの 3 大構造要因 — 期限 gate の
+手書き 12 箇所 (→ finish() 1 箇所)・読取規律の 4 経路手配り (→ Observation 1 層)・表示出口
+(→ meta-test で pin) — がすべて単一 site + 機械検査になった。meta-test は柱 2 の 6 本 +
+柱 1 の 6 本 = **12 本**。裁定の実効区分: A 8 件 (3/9/47/18/21/27/20 入口/40 入口)。
