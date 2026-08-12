@@ -430,20 +430,8 @@ def file_stat(path: str | None) -> tuple[int, int, int, int] | None:
 
 
 def record_stamp(path: str) -> tuple:
-    """What the record was, bytes included — metadata alone misses a same-size rewrite.
-
-    Never None: folding absent and unopenable into one value makes two different
-    failures compare equal, and that equality is read as "nothing changed".
-    """
-    try:
-        with open_regular(path) as f:
-            st = os.fstat(f.fileno())
-            raw = f.read(MAX_RECORD_BYTES + 1)
-    except FileNotFoundError:
-        return ("absent",)
-    except OSError as exc:
-        return ("unopenable", exc.errno)
-    return (st.st_dev, st.st_ino, st.st_size, hashlib.sha256(raw).digest())
+    """What the record was, bytes included — metadata alone misses a same-size rewrite."""
+    return record_view(path)[0]
 
 
 def dangling(path: str) -> bool:
@@ -1300,6 +1288,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             )
         if (
             out is None
+            and not observed_late
             and args.estimate_seconds
             and elapsed > args.estimate_seconds * 2
         ):
@@ -1312,7 +1301,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # headline は record の語をそのまま出す — 言い切ると直下の evidence と食い違う。
         # headline へそのまま入るので、 保持する時点で escape しておく。
         recorded = printable((record or {}).get("status") or "不明")
-        if out is None and args.once:
+        if out is None and args.once and not observed_late:
             out = (
                 EXIT_ALIVE,
                 f"alive: no terminal verdict yet after {int(elapsed)}s "
@@ -2354,9 +2343,12 @@ class WatchTest(unittest.TestCase):
 
         root, record, log = self._state("ws", "task-x", "running")
         stable = open(record, "rb").read()
-        real = record_view
+        real, calls = record_view, []
 
         def flipping(path, job_id=None):
+            calls.append(1)
+            if len(calls) != 2:  # 2 回目だけが判断に使う read
+                return real(path, job_id)
             with open(path, "wb") as f:
                 f.write(b'{"id": "task-x", "status": "completed"}')
             view = real(path, job_id)
@@ -2368,6 +2360,38 @@ class WatchTest(unittest.TestCase):
             carried, readable = carrying_records([(record, log)], "task-x")
         self.assertEqual(carried, [])
         self.assertFalse(readable)
+
+    def test_nothing_but_a_timeout_follows_a_late_observation(self):
+        """期限後の snapshot を捨てた後、 別の分岐が新しい終局を作り直してはならない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-x", "completed")
+        # --once は estimate 分岐の手前で返るので、 ここでは使わない。
+        args = self._watch_args(root, "task-x")
+        args.artifact = None
+        args.estimate_seconds = 0.001
+        real, crossed = time.monotonic, []
+        real_baseline = baseline_silence
+
+        def scanning(*a, **k):
+            crossed.append(1)
+            return real_baseline(*a, **k)
+
+        patches = (
+            mock.patch(__name__ + ".baseline_silence", scanning),
+            mock.patch(
+                "time.monotonic",
+                lambda: real() + (args.timeout_seconds + 1 if crossed else 0),
+            ),
+        )
+        with redirect_stdout(io.StringIO()), patches[0], patches[1]:
+            self.assertEqual(watch(args), EXIT_TIMEOUT)
+        crossed.clear()
+        args.once = True  # --once も期限後は alive でなく timeout を返す
+        with redirect_stdout(io.StringIO()), patches[0], patches[1]:
+            self.assertEqual(watch(args), EXIT_TIMEOUT)
 
     def test_a_poll_that_finds_nothing_still_returns_a_verdict(self):
         """走査が空でも watch は例外で終わらない — 判定を返せずに死ぬのが最悪である。"""
