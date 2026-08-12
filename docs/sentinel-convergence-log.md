@@ -390,3 +390,16 @@ reader からの fd 系 syscall 直呼びは meta-test で構造的に禁止さ�
   check を harness に内蔵** (空振り防止) / oracle 違反は修正せず「発見」節へ (裁定は発注側)
 - 起動: worktree `wt-p3` (HEAD `a1cc313`)、job `task-msqgjcm8-rvmmaa`、record で
   sol / xhigh / write を確認。監視 sentinel (estimate 5400s) を background 実行
+
+### 2026-08-13 — 柱 3 納品受領・full sweep・レビュー起動
+
+- 納品: harness 404 行 (test 側のみ・production 変更ゼロ)。shim = os.open/fstat/lstat/stat +
+  fdopen handle の read/readline を test 中だけ patch、sanity check 二重内蔵。4 scenario 族 ×
+  摂動 5 種、全 400 組合せのうち suite 所要制約 (3 倍規則) で 115 を選定実行 (**抑制 285 は
+  明記** — silent cap なし)。**発見 (oracle 違反) は実行分で 0 件**。変異 3/3 catch
+  (shim 無効化 → 116 fail = 空振り防止の実証)。逸脱開示 1 件 (開始時に repo root の entry
+  一覧を列挙 — 内容 read なし) は受理
+- 発注側検証: **scratch copy で選定を全 k に広げ full sweep 実行 — 400/400 組合せ・
+  oracle 違反 0・37 秒・258 tests OK**。抑制分も一度は検証済みとなった
+- opus 5 xhigh レビューを Workflow (`wf_b7050145-607`) で起動 — false-green 検査
+  (期待集合の緩さ・shim の syscall 網羅・fixture 現実性・選定 logic・決定性・scope) の 6 観点
