@@ -44,6 +44,12 @@ Combined Stop hook for org-managed Claude Code:
     作業遂行宣言 (「やります」「実施します」「修正します」等) を、同 turn 内に TaskCreate/TaskUpdate/TodoWrite が無ければ block。
     全作業項目を Task で追跡する org rule (CLAUDE.md §計画と遂行) の機械 proxy。speech-act 動詞 (確認/説明/報告/共有/提案) は除外し FP 抑制。deferral (warn) の deny 版。
 
+  continuation-claim (enforcement, exit 2):
+    turn 最終 assistant message の未来形遂行宣言 (「進めます」「続けます」等) を block。
+    発話時点で真偽が確定する 3 形式 (実行中 / 完了 / 停止) への書き直しを要求する。
+    fence / inline backtick 内とユーザー選択条件の提案は除外し、 background の有無は免除にしない。
+    payload の last_assistant_message 由来と確認できる final_text だけを enforcement 対象にする。
+
   open-tasks-at-wind-down (enforcement, exit 2):
     user prompt が wind-down phrase (check_uncommitted_at_handoff と同一 regex) で、
     session の Task store (native ~/.claude/tasks/<sid>/ + mytask drafts/tasks/<sid>.json)
@@ -139,7 +145,8 @@ Exit:
      retry was demoted to a pass (advise-once). warnings may be emitted on stderr
   2: an enforcement block family triggered (meta-announce-silence / hollow-claims /
      recognize-own-work / evaluative-terms / known-possible-denial / order-question-to-user /
-     confirm-routing-to-user / intent-without-task), on the turn's first Stop (stop_hook_active false)
+     confirm-routing-to-user / continuation-claim / intent-without-task), on the turn's first Stop
+     (stop_hook_active false)
 
 The advise-once gate lives in _run (shared), so it INTENTIONALLY demotes every
 block family — not just evaluative — to one-block-per-turn. All of them
@@ -742,11 +749,120 @@ INTENT_DECLARE_PATTERNS: list[str] = [
     r"deploy\s?します",
 ]
 # 疑問の終助詞 「か」 が続く形は user への問いかけ (declare-and-proceed の担当) で宣言ではない。
-_INTENT_QUESTION_TAIL = r"(?!(?:でしょう)?か(?:[?？。、,!！)\]」』]|\s|$))"
+_INTENT_QUESTION_TAIL = r"(?!(?:でしょう)?か[ねなよ]?(?:[?？。、,!！)\]」』]|\s|$))"
 INTENT_DECLARE_RE = re.compile(
     "(?:" + "|".join(INTENT_DECLARE_PATTERNS) + ")" + _INTENT_QUESTION_TAIL,
     re.IGNORECASE,
 )
+
+# --- Pattern: continuation-claim (block final assistant message on hit) ---
+CONTINUATION_CLAIM_PATTERNS: list[str] = [
+    r"継続します",
+    r"再開します",
+    r"進めます",
+    r"進みます",
+    r"続けます",
+    r"着手します",
+    r"実施します",
+    r"実装します",
+    r"取り掛かります",
+    r"対応します",
+    r"調整します",
+    r"やります",
+    r"修正します",
+    r"削除します",
+    r"追加します",
+    r"作成します",
+    r"変更します",
+    r"反映します",
+    r"統合します",
+    r"置換します",
+    r"コミットします",
+    r"commit\s?します",
+    r"デプロイします",
+    r"deploy\s?します",
+    r"自走を続け",
+    r"作業を続け",
+]
+CONTINUATION_CLAIM_RE = re.compile(
+    "(?:" + "|".join(CONTINUATION_CLAIM_PATTERNS) + ")" + _INTENT_QUESTION_TAIL,
+    re.IGNORECASE,
+)
+CONTINUATION_USER_CHOICE_RE = re.compile(
+    r"必要(?:なら|であれば|に応じて)|(?:ご希望|ご要望|お望み)"
+    r"(?:なら|であれば|の場合|に応じて|があれば)"
+)
+CONTINUATION_LIST_RE = re.compile(r"^\s*(?:[-*・]|\d+[.)])\s*")
+CONTINUATION_TABLE_RE = re.compile(r"^\s*\|")
+CONTINUATION_STOP_RE = re.compile(r"ここで停止|再開条件")
+CONTINUATION_SUBJECT_RE = re.compile(
+    r"^\s*(?:(?:[A-Za-z_][\w.-]*)|(?:(?:この|その|本)\s*\S+)|検出語)?\s*は"
+)
+
+
+def _continuation_line_is_explanatory(
+    line: str, match: re.Match[str]
+) -> bool:
+    """Whether a matching line is a fixture/list label or impersonal explanation."""
+    if CONTINUATION_TABLE_RE.search(line):
+        return True
+    marker = CONTINUATION_LIST_RE.match(line)
+    if marker and re.fullmatch(
+        rf"\s*(?:{CONTINUATION_CLAIM_RE.pattern})\s*[。.!！]?\s*",
+        line[marker.end() :],
+        re.IGNORECASE,
+    ):
+        return True
+    subject = CONTINUATION_SUBJECT_RE.search(line[: match.start()])
+    return bool(subject)
+
+
+def _conditional_continuation_proposal(text: str) -> bool:
+    """Whether user-choice wording precedes the claim (or heads a following list)."""
+    choice = CONTINUATION_USER_CHOICE_RE.search(text)
+    if not choice:
+        return False
+    claim = CONTINUATION_CLAIM_RE.search(text)
+    return claim is None or choice.start() < claim.start()
+
+
+def _continuation_claim(text: str) -> re.Match[str] | None:
+    """Return the first unconditional continuation claim in final-message prose."""
+    choice_list_scope = False
+    for line in strip_fences(text).splitlines():
+        is_list = bool(CONTINUATION_LIST_RE.search(line))
+        if choice_list_scope:
+            if is_list:
+                continue
+            choice_list_scope = False
+        if not line.strip():
+            continue
+        if CONTINUATION_STOP_RE.search(line) or CONTINUATION_TABLE_RE.search(line):
+            continue
+        if _conditional_continuation_proposal(line):
+            choice_list_scope = True
+        for sentence in re.split(r"。", line):
+            match = CONTINUATION_CLAIM_RE.search(sentence)
+            if not match:
+                continue
+            if _conditional_continuation_proposal(sentence):
+                continue
+            if _continuation_line_is_explanatory(sentence, match):
+                continue
+            return match
+    return None
+def _without_final_sentence_identities(text: str, final_text: str) -> str:
+    """Drop every turn sentence whose stripped identity occurs in final_text."""
+    final_units = {
+        unit.strip()
+        for unit in re.split(r"[。\n]", strip_fences(final_text))
+        if unit.strip()
+    }
+    return "\n".join(
+        unit
+        for unit in re.split(r"[。\n]", strip_fences(text))
+        if unit.strip() and unit.strip() not in final_units
+    )
 
 # --- Pattern: euphemism-for-error (block) ---
 # 自分の発言を 「誤解を招く X」 と評した時だけ捕まえる。 設計対象 (命名・ラベル・doc) への
@@ -1153,6 +1269,7 @@ def _check(
     cwd: str | None = None,
     worktree_warnings: list[str] | None = None,
     wind_down_open_tasks: list[str] | None = None,
+    final_text_authoritative: bool = True,
 ) -> tuple[int, list[str], list[str]]:
     """Return (exit_code, warnings, blocking)."""
     warnings: list[str] = []
@@ -1270,8 +1387,24 @@ def _check(
             "user の発言を引用する等で語そのものが要る場合は fence 内に置いてください。"
         )
 
+    # continuation-claim (block future performance claim in final assistant message)
+    continuation_match = (
+        _continuation_claim(final_text) if final_text_authoritative else None
+    )
+    if continuation_match:
+        blocking.append(
+            f"continuation-claim: 「{continuation_match.group(0)}」 — 未来形の遂行宣言。"
+            f"遂行文は 3 形式のみ — ①実行中 (検証可能な id/path 付き現在形) "
+            f"②完了 (証跡付き) ③停止 (「ここで停止。再開条件 = Y」)。"
+            f"発話時点で真偽が確定しない文は書かない。該当文を 3 形式のいずれかに書き直して"
+            f"再出力してください (これから作業するなら、宣言でなく実際に tool 呼び出しで開始して"
+            f"から ① の形で書く)"
+        )
+
     # intent-without-task (block if work-execution declaration without task tool)
-    m = INTENT_DECLARE_RE.search(stripped)
+    # final 文の identity は turn 内の全出現を落とし、中間文だけを従来どおり検査する。
+    intent_text = _without_final_sentence_identities(text, final_text)
+    m = INTENT_DECLARE_RE.search(intent_text)
     if m and not (tool_names & TASK_TOOLS):
         if _tasks_gated_off(model):
             mytask_recorded = bool(tool_names & MYTASK_MCP_TOOLS) or any(
@@ -1429,6 +1562,7 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
     # flush されていない (v2.1.47+ で payload に last_assistant_message が提供されたのはこの
     # gap を埋めるため)。 transcript 由来 text に concat して全 family の取りこぼしを防ぐ。
     last_msg = payload.get("last_assistant_message")
+    final_text_authoritative = isinstance(last_msg, str) and bool(last_msg)
     if isinstance(last_msg, str) and last_msg:
         text = (text + "\n" + last_msg) if text else last_msg
         final_text = last_msg
@@ -1456,6 +1590,7 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
         cwd=payload.get("cwd"),
         worktree_warnings=worktree_warnings,
         wind_down_open_tasks=wind_down_tasks,
+        final_text_authoritative=final_text_authoritative,
     )
     # advise-once: a stop_hook_active retry never re-blocks — demote to pass (see docstring turn-marker / Exit).
     if exit_code == 2 and payload.get("stop_hook_active"):
@@ -1954,6 +2089,7 @@ class EnforcementFamilyTest(unittest.TestCase):
         paths=None,
         commands=None,
         final_text=None,
+        final_text_authoritative=True,
         declare_active=False,
         model=None,
     ):
@@ -1967,10 +2103,183 @@ class EnforcementFamilyTest(unittest.TestCase):
             False,
             declare_active,
             model,
+            final_text_authoritative=final_text_authoritative,
         )
 
     def _blk(self, *a, **k):
         return self._c(*a, **k)[2]
+
+    # --- continuation-claim ---
+    def test_continuation_claim_blocks_declared_cases(self):
+        for value in (
+            "レビューが終わったら実装します",
+            "完了通知が来たら対応します",
+            "r57 が終わり次第、着手します",
+            "このまま自走を続けます",
+        ):
+            with self.subTest(value=value):
+                code, _warnings, blocking = self._c(value)
+                self.assertEqual(code, 2)
+                self.assertTrue(
+                    any("continuation-claim" in item for item in blocking)
+                )
+
+    def test_continuation_claim_allows_grounded_forms(self):
+        for value in (
+            "ここで停止します。再開条件 = 完了通知",
+            "実行中です (job task-x・sentinel abc)",
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(self._c(value)[0], 0)
+
+    def test_continuation_claim_allows_question_and_conditional_offer(self):
+        for value in (
+            "先に deploy しますか?",
+            "必要なら test を追加します",
+            "ご希望なら詳細を説明します",
+            "必要に応じて調整します",
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(self._c(value)[0], 0)
+
+    def test_continuation_claim_allows_multiline_choice_blocks(self):
+        for value in (
+            "必要に応じて以下を実施します:\n- test を追加します\n- doc を修正します",
+            "ご希望なら次を対応できます。\n1. lint を修正します\n2. README を追加します",
+            "必要なら:\n- test を追加します",
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(self._c(value)[0], 0)
+
+    def test_continuation_claim_does_not_treat_bare_choice_words_as_condition(self):
+        for value in (
+            "ご希望の通り、このまま自走を続けます",
+            "ご要望に沿って進めます",
+            "希望的観測は避けます — 検証は済んだので、このまま実装を進めます",
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(self._c(value)[0], 2)
+
+    def test_continuation_claim_duplicate_final_identity_is_removed_from_intent(self):
+        final = "必要なら test を追加します"
+        self.assertEqual(self._c(final + "\n" + final, final_text=final)[0], 0)
+
+    def test_continuation_claim_allows_stop_lines(self):
+        for value in (
+            "ここで停止します。再開条件 = 完了通知が来たら再開します",
+            "ここで停止します。再開条件 = r57 完了。その時点で着手します",
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(self._c(value)[0], 0)
+        self.assertEqual(self._c("再開します")[0], 2)
+
+    def test_continuation_claim_allows_explanations_tables_and_verb_lists(self):
+        values = (
+            "strip_fences は fence を空白に置換します",
+            "この hook は該当行を削除します",
+            "| input | result |\n|---|---|\n| x | 進めます |",
+            "1. 進めます\n2. 着手します\n3. 対応します",
+            "検出語は 進めます / 続けます / 着手します の 3 つです",
+        )
+        for value in values:
+            with self.subTest(value=value):
+                self.assertEqual(self._c(value)[0], 0)
+
+    def test_continuation_claim_question_tail_allows_sentence_particle(self):
+        self.assertEqual(self._c("先に deploy しますかね?")[0], 0)
+        blocking = self._blk(
+            "先に deploy しますかね?\n完了", final_text="完了"
+        )
+        self.assertFalse(any("intent-without-task" in item for item in blocking))
+
+    def test_continuation_claim_allows_inline_quote(self):
+        self.assertEqual(self._c("引用は `進めます` です")[0], 0)
+
+    def test_continuation_claim_uses_only_final_text(self):
+        blocking = self._blk(
+            "中間では実装します\n完了しました",
+            final_text="完了しました",
+        )
+        self.assertFalse(any("continuation-claim" in item for item in blocking))
+
+    def test_continuation_claim_final_identity_is_not_intent_duplicate(self):
+        blocking = self._blk("実装します")
+        self.assertEqual(
+            [item.split(":", 1)[0] for item in blocking],
+            ["continuation-claim"],
+        )
+
+    def test_continuation_claim_keeps_independent_intermediate_intent(self):
+        blocking = self._blk("まず修正します\n進めます", final_text="進めます")
+        families = [item.split(":", 1)[0] for item in blocking]
+        self.assertIn("continuation-claim", families)
+        self.assertIn("intent-without-task", families)
+
+    def test_continuation_claim_message_keeps_three_forms(self):
+        blocking = self._blk("このまま作業を続けます")
+        message = next(item for item in blocking if "continuation-claim" in item)
+        self.assertIn("①実行中", message)
+        self.assertIn("②完了", message)
+        self.assertIn("③停止", message)
+
+    def test_continuation_claim_advise_once(self):
+        import io
+        import tempfile
+        from contextlib import redirect_stderr
+
+        transcript = os.path.join(tempfile.mkdtemp(), "turn.jsonl")
+        entries = [
+            {"type": "user", "message": {"content": "continue"}},
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": "このまま自走を続けます"}]
+                },
+            },
+        ]
+        with open(transcript, "w", encoding="utf-8") as stream:
+            for entry in entries:
+                stream.write(json.dumps(entry) + "\n")
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            code = _run(
+                {
+                    "transcript_path": transcript,
+                    "stop_hook_active": True,
+                    "last_assistant_message": "このまま自走を続けます",
+                }
+            )[0]
+        self.assertEqual(code, 0)
+        self.assertIn("continuation-claim", stderr.getvalue())
+
+    def test_continuation_claim_requires_authoritative_last_message(self):
+        import io
+        import tempfile
+        from contextlib import redirect_stderr
+
+        transcript = os.path.join(tempfile.mkdtemp(), "turn.jsonl")
+        entries = [
+            {"type": "user", "message": {"content": "implement"}},
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "TaskCreate",
+                            "input": {"subject": "implementation"},
+                        },
+                        {"type": "text", "text": "では実装します"},
+                    ]
+                },
+            },
+        ]
+        with open(transcript, "w", encoding="utf-8") as stream:
+            for entry in entries:
+                stream.write(json.dumps(entry) + "\n")
+        with redirect_stderr(io.StringIO()):
+            code = _run({"transcript_path": transcript})[0]
+        self.assertEqual(code, 0)
 
     # --- H3: evaluative-terms (lost /tmp smoke, now tracked) ---
     def test_evaluative_blocks_without_evidence(self):
@@ -2228,7 +2537,9 @@ class EnforcementFamilyTest(unittest.TestCase):
 
     def test_intent_gated_without_mytask_blocks(self):
         with self._gate_config({"tengu_vellum_ash": ["opus-4-8"]}):
-            blk = self._blk("修正します", model="claude-opus-4-8")
+            blk = self._blk(
+                "修正します\n完了", final_text="完了", model="claude-opus-4-8"
+            )
         self.assertTrue(any("mytask skill" in b for b in blk))
 
     def test_intent_gated_with_mcp_tool_passes(self):
@@ -2251,11 +2562,13 @@ class EnforcementFamilyTest(unittest.TestCase):
 
     def test_intent_not_gated_keeps_taskcreate_message(self):
         with self._gate_config({"tengu_vellum_ash": ["sonnet-5"]}):
-            blk = self._blk("修正します", model="claude-opus-4-8")
+            blk = self._blk(
+                "修正します\n完了", final_text="完了", model="claude-opus-4-8"
+            )
         self.assertTrue(any("TaskCreate で作業を登録" in b for b in blk))
 
     def test_intent_declare_alone_blocks(self):
-        code, _w, blk = self._c("修正します")
+        code, _w, blk = self._c("修正します\n完了", final_text="完了")
         self.assertEqual(code, 2)
         self.assertTrue(any("intent-without-task" in b for b in blk))
 
@@ -2324,11 +2637,15 @@ class EnforcementFamilyTest(unittest.TestCase):
 
     def test_declaration_with_causal_kara_still_blocks(self):
         """除外は疑問の 「か」 だけに効き、 「〜ますから」 の宣言を落とさない。"""
-        blk = self._blk("先に修正しますから、その後で見てください。")
+        blk = self._blk(
+            "先に修正しますから、その後で見てください。\n完了", final_text="完了"
+        )
         self.assertTrue(any("intent-without-task" in b for b in blk))
 
     def test_declaration_alongside_question_still_blocks(self):
-        blk = self._blk("まず修正します。次はどれから進めますか?")
+        blk = self._blk(
+            "まず修正します。次はどれから進めますか?\n完了", final_text="完了"
+        )
         self.assertTrue(any("intent-without-task" in b for b in blk))
 
     def test_intent_fenced_not_fired(self):
@@ -2339,7 +2656,7 @@ class EnforcementFamilyTest(unittest.TestCase):
 
     def test_intent_independent_of_other_families(self):
         # intent-without-task fires on its own; other families are not required.
-        blk = self._blk("実装します")
+        blk = self._blk("実装します\n完了", final_text="完了")
         self.assertTrue(any("intent-without-task" in b for b in blk))
 
     def test_existing_block_families_still_fire(self):
