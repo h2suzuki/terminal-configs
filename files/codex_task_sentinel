@@ -1193,6 +1193,12 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 was = os.fstat(pin_hold[0].fileno())
                 now_id = os.fstat(fresh_hold[0].fileno())
                 if (was.st_dev, was.st_ino) != (now_id.st_dev, now_id.st_ino):
+                    if deadline_reached(deadline):
+                        print(
+                            f"timeout: {printable(args.job_id)} could not be resolved "
+                            f"within {int(args.timeout_seconds)}s"
+                        )
+                        return EXIT_TIMEOUT
                     print(
                         f"unverifiable: {printable(args.job_id)} resolved to a "
                         f"different record than the one seen earlier"
@@ -2813,6 +2819,36 @@ class WatchTest(unittest.TestCase):
         ):
             self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
         self.assertIn("different record", buf.getvalue())
+
+    def test_a_cross_round_replacement_past_the_deadline_is_a_timeout(self):
+        """周回間の差し替えも、 期限を跨いだら timeout として返す。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, log = self._state("ws", "task-x", "running")
+        args = self._watch_args(root, "task-x", timeout_seconds=0.5)
+        rounds, monotonic = [], time.monotonic
+
+        def finding(job_id, roots):
+            rounds.append(1)
+            if len(rounds) == 2:
+                with open(record + ".new", "w", encoding="utf-8") as f:
+                    json.dump({"id": "task-x", "status": "running"}, f)
+                os.rename(record + ".new", record)
+            return [(record, log)], len(rounds) != 1
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".find_jobs", finding),
+            mock.patch(
+                "time.monotonic",
+                lambda: (
+                    monotonic() + (args.timeout_seconds + 1 if len(rounds) > 1 else 0)
+                ),
+            ),
+        ):
+            self.assertEqual(watch(args), EXIT_TIMEOUT)
 
     def test_only_a_newline_ends_the_final_line(self):
         """splitlines は VT・FF・NEL・U+2028 も境界にする — token の後ろに置けば完成品に化ける。"""
