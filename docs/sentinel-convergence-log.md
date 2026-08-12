@@ -546,3 +546,16 @@ job `task-msqnaa9l-3iltdl` (record 検証: sol / medium / write: True / fresh)�
 (手配り不変条件 73%) は 3 巡連続ゼロで、全指摘が「未疑前提」層 (Unicode 受理域・binary64・
 負 epoch・hold 順序・mtime 分解能)。単一障害点化した新設機構 (funnel / Observation /
 harness / ordered_events) への指摘もゼロを維持。
+
+### 2026-08-13 — r56 fix round 完了・main 取り込み (selftest 272)
+
+fix round は sentinel `bl320xfui` exit 0。納品は指示 4 件 + 開示付き逸脱 2 件 (いずれも
+趣旨内で受理): CLI 数値引数の ASCII 検査 (`ascii_float()` — site 列挙が発見した追加 site) と
+非採用候補 descriptor の周回内 release (旧実装の解放漏れの同時修正)。受け入れ: gates 再実行
+(selftest **272** / 外部 11 / ruff / ty 全緑)、repro 消滅 5 点を直接確認 (全角 LOG_TS 不一致 /
+全角 record None / pre-epoch -0.1 / ascii_float 拒否と正常受理)、独立変異 2 件 (`re.ASCII`
+外し / 文字列連結戻し) を splice 再現し当該 test のみ fail — codex 報告と一致。受理域クラスの
+site 列挙表 (6 分類) で残 site ゼロを確認。wt 内 commit `042510e` → cherry-pick **`7bff802`**。
+worktree / branch 削除・報告書退避。裁定 23 (重複先行)・44 (singleton 限定)・50 (負 epoch +
+fixture 保持)・51 (クラス全 site) の本文と担保対応表を更新。
+次: r57 = 認定 1 巡目 (4 度目) を新 HEAD から発注。

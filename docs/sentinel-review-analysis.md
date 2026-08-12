@@ -504,6 +504,12 @@ codex sol xhigh で 2 巡連続」。
   3+1 と横ばいだが、53 巡時代の主因 (手配り不変条件の維持失敗 73%) は消え、残りは
   すべて「疑われたことのない前提」層 — reviewer は enumerator として機能している
 - fix round: `drafts/sentinel-r56-fixes.md`。認定 counter は 0 のまま
+- fix 取り込み: commit `7bff802`。hold を候補対応付き tuple 化 (重複は inode 比較より先に
+  exit 9・比較は同一 path singleton 限定)、時刻 regex + CLI 数値引数を ASCII 限定 (site
+  列挙表で受理域クラスの残 site ゼロを確認)、fraction を数値加算に集約 (`epoch_fraction()`)、
+  ns fixture に `st_mtime_ns` 保持 assert。副次改善: 非採用候補の descriptor を周回内で即
+  release (旧実装は最終 view のみ解放)。red 4/4 + 変異 3/3 + 発注側の独立変異 2 件再現 +
+  repro 消滅 5 点を直接確認。selftest 268 → **272**。裁定 23・44・50・51 の本文/担保を更新
 - fix 取り込み: commit `3746acb`。stamp parse を `ordered_events()` (Decimal exact・行あたり
   1 回) に集約 — `longest_silence` の二重 parse も同時に解消。鮮度比較は `st_mtime_ns` の
   exact 領域へ。red 確認 (修正前 2 fail + 1 error) + 変異 3/3 + 発注側の独立変異 2 件再現 +
