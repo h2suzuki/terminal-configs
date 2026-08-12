@@ -50,6 +50,7 @@ import calendar
 import codecs
 import collections
 import contextlib
+import errno
 import glob
 import hashlib
 import itertools
@@ -1234,10 +1235,17 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             if not complete or seen_pairs:
                 # 走査しきれていない、 または一度は見えた — どちらも
                 # 「登録されていない」 とは言えない。
+                if seen_pairs:
+                    # 一度見えた record があるなら、 期限に言えるのは timeout だけ。
+                    print(
+                        f"timeout: {printable(args.job_id)} was seen and then lost "
+                        f"within {int(args.timeout_seconds)}s"
+                    )
+                    print(f"  searched: {printable(', '.join(roots))}")
+                    return EXIT_TIMEOUT
                 print(
-                    f"unverifiable: the state tree could not be read in full or the "
-                    f"record was seen and then lost, so {printable(args.job_id)} "
-                    f"cannot be shown to be unregistered"
+                    f"unverifiable: the state tree could not be read in full, so "
+                    f"{printable(args.job_id)} cannot be shown to be unregistered"
                 )
                 print(f"  searched: {printable(', '.join(roots))}")
                 return EXIT_UNVERIFIABLE
@@ -1254,15 +1262,25 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         print(f"  job    : {printable(args.job_id)} record={printable(record_path)}")
         return EXIT_TIMEOUT
     jobs_dir = os.path.dirname(record_path)
-    # 開いたまま持つ — 番号だけ覚えると、 解放後に再利用された別 file と一致する。
+    # 検証と pin は同じ descriptor で行う — 別に開き直すと、 その間の差し替えを
+    # 検出できないまま別 record を掴む。
     pinned = None
     try:
         pinned = open_regular(record_path)
         pinned_stat = os.fstat(pinned.fileno())
+        # 掴んだ descriptor 自身から検証する — 別に開き直して確かめても、
+        # その間の差し替えは見えないまま別 record を掴むことになる。
+        if _parse_record(pinned.read(MAX_RECORD_BYTES + 1), args.job_id) is None:
+            raise OSError(errno.EIO, "the held view does not carry this job")
         record_inode = (pinned_stat.st_dev, pinned_stat.st_ino)
     except (FileNotFoundError, NotADirectoryError):
         # 掴めなかった理由を identity に化けさせない — 同じ名前が後で読めても、
         # それは登録解決で見た record と再同定できない。
+        if deadline_reached(deadline):
+            print(
+                f"timeout: the record could not be held within {int(args.timeout_seconds)}s"
+            )
+            return EXIT_TIMEOUT
         print(
             "vanished: the state record disappeared after registration — "
             "the plugin prunes old jobs, so this job's outcome is unknowable here"
@@ -1270,6 +1288,11 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         print(f"  job    : record={printable(record_path)}")
         return EXIT_VANISHED
     except OSError:
+        if deadline_reached(deadline):
+            print(
+                f"timeout: the record could not be held within {int(args.timeout_seconds)}s"
+            )
+            return EXIT_TIMEOUT
         print(
             "corrupt: the state record is present but unreadable — the job's "
             "outcome cannot be read from it, so do not treat this as a stall"
@@ -1320,7 +1343,12 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         log_pin: list = []
         unfinished, tail, whole_log, log_view_stamp = scan_log(log, hold=log_pin)
         log_incomplete = not whole_log
-        age = heartbeat_age(log, now)
+        # 無音も読んだ descriptor から — path を stat し直すと別 file の mtime になる。
+        age = (
+            now - log_view_stamp[2] / 1e9
+            if log_view_stamp is not None
+            else heartbeat_age(log, now)
+        )
         tree = tree_age((record or {}).get("workspaceRoot"), now)
         artifact_pin: list = []
         ready, artifact_stamp = artifact_view(
@@ -2339,7 +2367,10 @@ class WatchTest(unittest.TestCase):
                 lambda *a: seen.pop(0) if seen else ([], True),
             ),
         ):
-            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
+            code = watch(args)
+        # 一度見えた以上「未登録」 ではない。 期限に言えるのは timeout だけである。
+        self.assertNotEqual(code, EXIT_NEVER_REGISTERED)
+        self.assertEqual(code, EXIT_TIMEOUT)
 
     def test_a_record_that_changed_between_partial_scans_is_unverifiable(self):
         """A の後に B を見て B で確定できるなら、すり替えを許したままになる。"""
@@ -2691,6 +2722,52 @@ class WatchTest(unittest.TestCase):
         ):
             self.assertNotEqual(watch(args), EXIT_NEVER_REGISTERED)
         self.assertNotIn("never-registered", buf.getvalue())
+
+    def test_the_silence_comes_from_the_descriptor_that_read(self):
+        """path を stat し直すと、 読取後に戻された mtime を無音として使ってしまう。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-live", "running", log_age=900.0)
+        args = self._watch_args(root, "task-live", once=True, trust_log=True)
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            # 読んだ後だけ「たった今書かれた」 ように見える path 観測。
+            mock.patch(__name__ + ".heartbeat_age", lambda *a: 0.0),
+        ):
+            self.assertEqual(watch(args), EXIT_STALL)
+
+    def test_a_pin_failure_past_the_deadline_is_a_timeout(self):
+        """期限を跨いだ poll から返せるのは timeout だけ — pin 失敗も同じ gate を通す。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-x", "running")
+        args = self._watch_args(root, "task-x", once=True)
+        real, opens, jumped = open_regular, [], []
+        monotonic = time.monotonic
+
+        def flaky(path):
+            if path == record:
+                opens.append(1)
+                if len(opens) == 4:  # pin の呼び出しで落ち、 同時に期限を跨ぐ
+                    jumped.append(1)
+                    raise FileNotFoundError(path)
+            return real(path)
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".open_regular", flaky),
+            mock.patch(
+                "time.monotonic",
+                lambda: monotonic() + (args.timeout_seconds + 1 if jumped else 0),
+            ),
+        ):
+            self.assertEqual(watch(args), EXIT_TIMEOUT)
+        self.assertEqual(len(opens), 4)
 
     def test_a_record_that_could_not_be_pinned_is_not_replaced(self):
         """pin に失敗した後で同じ名前が読めても、 それは同じ record ではない。"""
