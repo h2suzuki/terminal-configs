@@ -1034,60 +1034,70 @@ def evidence(
     tail: list[str] | None = None,
     whole_log: bool = True,
     moved: frozenset[str] = frozenset(),
+    unscanned: frozenset[str] = frozenset(),
 ) -> str:
     """Everything the verdict rests on, so no follow-up investigation is needed.
 
     `moved` names the observations that changed during the scan. Their derived
     fields say so: substituting None or an empty list would read as "absent" or
     "nothing pending", which are different findings this poll did not make.
+    `unscanned` names those that could not be read in full — a different reason.
     """
-    unstable = "不明 (走査中に変化)"
-    log_unstable = "log" in moved
-    root = None if "record" in moved else record.get("workspaceRoot")
+
+    def why(key: str) -> str | None:
+        if key in moved:
+            return "不明 (走査中に変化)"
+        return "不明 (走査未完了)" if key in unscanned else None
+
+    log_unstable = why("log")
+    record_note = why("record")
+    root = None if record_note else record.get("workspaceRoot")
     # 「無い」 と 「走査中に動いた」 は別 — 畳むと読者が log なしと誤読する。
-    quiet = (
-        unstable if log_unstable else ("log なし" if age is None else f"{int(age)}s")
-    )
+    quiet = log_unstable or ("log なし" if age is None else f"{int(age)}s")
     versus = (
         f" (この workspace の完走 job の最長無音 {int(baseline)}s の "
         f"{age / baseline:.1f} 倍)"
-        if baseline and age and not (log_unstable or "baseline" in moved)
+        if baseline and age and not (log_unstable or why("baseline"))
         else ""
     )
-    bar = unstable if "baseline" in moved else f"{int(threshold)}s"
-    shown = [unstable] if log_unstable else (tail or ["(なし)"])
+    bar = why("baseline") or f"{int(threshold)}s"
+    shown = [log_unstable] if log_unstable else (tail or ["(なし)"])
     # exit 14 は ready を verdict へ畳むので、畳んだ値をここで戻さないと成果物あり / なしが読めない。
-    state = (
-        unstable
-        if "artifact" in moved
-        else ("unreadable" if ready is None else ("ready" if ready else "not ready"))
+    state = why("artifact") or (
+        "unreadable" if ready is None else ("ready" if ready else "not ready")
     )
     made = f"{state} {printable(artifact)}" if artifact else "指定なし"
     lines = [
         f"  job    : {printable(job_id)} "
-        f"status={printable(unstable if 'record' in moved else (record.get('status') or '不明'))} "
+        f"status={printable(record_note or record.get('status') or '不明')} "
         f"root={printable(root or '不明')}",
         # 読み切れなかった view の静穏と tail を、 完全なものとして見せない。
         f"  無音   : {quiet}{versus} / しきい値 {bar}"
-        + ("" if whole_log or log_unstable else " (log を最後まで読めず)"),
+        # 読了範囲も 3 値 — 動いた view の読了成否は、 空表示でなく不明と言う。
+        + (
+            f" (log の読了範囲は{log_unstable})"
+            if log_unstable
+            else ("" if whole_log else " (log を最後まで読めず)")
+        ),
         # None は 「静穏」 ではなく 「読めなかった」 — headline と強さを揃える。
-        f"  ツリー : {unstable if 'tree' in moved else ('不明 (workspaceRoot を読めないか対象 file なし)' if tree is None else f'最終書き込み {int(tree)}s 前')}",
+        f"  ツリー : {why('tree') or ('不明 (workspaceRoot を読めないか対象 file なし)' if tree is None else f'最終書き込み {int(tree)}s 前')}",
         f"  成果物 : {made}",
         f"  末尾   : {printable(shown[0])}",
         *(f"           {printable(ln)}" for ln in shown[1:]),
     ]
     if log_unstable:
-        lines.append(f"  未完了 : {unstable}")
+        lines.append(f"  未完了 : {log_unstable}")
     elif unfinished:
         rest = f" 他 {len(unfinished) - 5} 件" if len(unfinished) > 5 else ""
         lines.append(f"  未完了 : {printable(' / '.join(unfinished[:5]))}{rest}")
     # 失敗理由は record が持っている — 出さなければ呼び手が同じ file を手で開き直すだけ。
-    failure = None if "record" in moved else record.get("errorMessage")
+    failure = None if record_note else record.get("errorMessage")
     if isinstance(failure, str) and failure.strip():
         lines.append(f"  エラー : {printable(failure.strip()[:200])}")
     lines += [
         f"  log    : {printable(log)}",
-        f"  cancel : {printable(cancel_command(job_id, root if isinstance(root, str) else None))}",
+        # root を裏付けられない poll から、 cwd 無しで動く command を出さない。
+        f"  cancel : {record_note or printable(cancel_command(job_id, root if isinstance(root, str) else None))}",
     ]
     return "\n".join(lines)
 
@@ -1303,23 +1313,24 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         )
         # 「動いた」 と 「読めなかった」 は別の理由 — 畳むと headline がどちらも
         # 「読取中に変わった」 になり、 安定して読めない log が活動に化ける。
+        scan_incomplete = not scanned_all
         record_moved = (
-            not scanned_all
-            or seen != [(record_path, log)]
+            seen != [(record_path, log)]
             # watch 全体の同一性 — mtime と size は heartbeat で動くのが正常である。
             or (file_stat(record_path) or (None, None))[:2] != record_inode
         )
         # 数え切れなかったのは job の変化ではない — 読めなかった側に分類する。
+        baseline_incomplete = args.stall_seconds is None and not (
+            counted_all and counted_all_after
+        )
         unreadable = (
-            log_incomplete or record_moved or not (counted_all and counted_all_after)
+            log_incomplete or record_moved or scan_incomplete or baseline_incomplete
         )
         # cancel / 失敗は他を読めるかに依らず結果ではない — 静穏 gate より先に置く。
         # 走査後に動いた観測から作った表示値は、 全て「不明」 にする — verdict が
         # その観測に依らず確定できても、 evidence が古い値を断定してよい理由はない。
         record_unstable = record_changed or record_moved
-        baseline_unstable = args.stall_seconds is None and (
-            baseline_after != baseline or not (counted_all and counted_all_after)
-        )
+        baseline_unstable = args.stall_seconds is None and baseline_after != baseline
         # tree と成果物は record の workspaceRoot / startedAt から引いている。
         moved = frozenset(
             name
@@ -1332,6 +1343,17 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             )
             if flag
         )
+        # 読み切れていないのは変化ではない — 同じ語で報告すると別の主張になる。
+        unscanned = frozenset(
+            name
+            for name, flag in (
+                ("record", scan_incomplete),
+                ("baseline", baseline_incomplete),
+                ("artifact", scan_incomplete),
+                ("tree", scan_incomplete),
+            )
+            if flag and name not in moved
+        )
         # 保留を告げる headline は record の語をそのまま出す — 言い切ると evidence と
         # 食い違う。 headline へ直接入るので、 保持する時点で escape しておく。
         recorded = printable(
@@ -1343,6 +1365,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         terminal_record = (
             record is not None
             and not record_moved
+            and not scan_incomplete  # 唯一の record と示せていないなら先行確定しない
             and not record_changed
             and settled
             and settled not in ALIVE_STATUS
@@ -1465,6 +1488,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     tail,
                     whole_log,
                     moved,
+                    unscanned,
                 )
             )
             return code
@@ -1484,6 +1508,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 tail,
                 whole_log,
                 moved,
+                unscanned,
             ),
         )
         sleep_until(deadline, args.poll_seconds)
@@ -2553,6 +2578,51 @@ class WatchTest(unittest.TestCase):
                 baseline_silence(jobs, "task-live", time.time()), (None, False)
             )
 
+    def test_an_unreadable_peer_root_is_not_reported_as_a_change(self):
+        """走査しきれていないのは変化ではない — 別の理由として表示する。"""
+        import io
+        from contextlib import redirect_stdout
+
+        from unittest import mock
+
+        root, record, log = self._state("ws", "task-live", "running")
+        args = self._watch_args(root, "task-live", once=True)
+        calls = []
+
+        def finding(job_id, roots):
+            calls.append(1)
+            # 登録は成立させ、 poll 中の走査だけを不完全にする。
+            return [(record, log)], len(calls) == 1
+
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch(__name__ + ".find_jobs", finding):
+            watch(args)
+        shown = buf.getvalue()
+        self.assertIn("status=不明 (走査未完了)", shown)  # record 欄まで理由が届く
+        self.assertIn("ツリー : 不明 (走査未完了)", shown)
+        self.assertNotIn("走査中に変化", shown)
+
+    def test_a_moved_record_offers_no_pasteable_cancel(self):
+        """root を裏付けられない poll から、 cwd 無しで動く command を出さない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-x", "running")
+        args = self._watch_args(root, "task-x", once=True)
+        real = record_view
+
+        def other_bytes(path, job_id=None):
+            if path != record or job_id is None:
+                return real(path, job_id)
+            return ("swapped",), {"id": "task-x", "status": "running"}
+
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch(__name__ + ".record_view", other_bytes):
+            watch(args)
+        self.assertNotIn("cancel task-x --json", buf.getvalue())
+        self.assertIn("cancel : 不明 (走査中に変化)", buf.getvalue())
+
     def test_a_failed_verdict_does_not_claim_a_changed_log(self):
         """log が走査中に動いたなら、 無音・末尾・未完了 command を断定しない。"""
         import io
@@ -2591,6 +2661,7 @@ class WatchTest(unittest.TestCase):
         self.assertIn("末尾   : 不明 (走査中に変化)", shown)
         self.assertIn("未完了 : 不明 (走査中に変化)", shown)
         self.assertNotIn("最後まで読めず", shown)  # 読めなかったのではなく動いた
+        self.assertIn("読了範囲は不明 (走査中に変化)", shown)
         self.assertNotIn("倍)", shown)  # 動いた log から比を出さない
 
     def test_a_failed_verdict_does_not_claim_a_stale_baseline(self):
