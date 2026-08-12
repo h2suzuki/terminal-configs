@@ -101,6 +101,10 @@ MAX_PENDING = 512
 MAX_ARTIFACT_BYTES = 1 << 20
 # record は job 1 件のメタデータ — 実機の最大は 1.3KB で、 これを超えるのは異常。
 MAX_RECORD_BYTES = 1 << 20
+# 1 回の走査の消費上限 — 実 size を上限にすると巨大 file 1 つで期限へ戻れない。
+MAX_SCAN_BYTES = 64 << 20
+# 同じ理由で entry 数も抑える — 実機の worktree は 4 桁で、超えるのは別ツリーである。
+MAX_TREE_ENTRIES = 200_000
 
 EXIT_DONE = 0
 EXIT_DONE_HUNG = 3
@@ -224,32 +228,31 @@ def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], boo
         try:
             workspaces = sorted(os.listdir(root))
         except FileNotFoundError:
-            continue  # 未作成の root は「無い」で正しい — 走査漏れではない
+            # 未作成の root は「無い」で正しいが、 走査後に現れたなら見落としである。
+            if link_identity(root) is not None:
+                complete = False
+            continue
         except OSError:
             complete = False
             continue
+        observed = []
         for workspace in workspaces:
             record = os.path.join(root, workspace, "jobs", job_id + ".json")
+            # entry 自身を 1 度だけ見る — 壊れた symlink も「在る」 で、 不在ではない。
             try:
-                os.stat(record)
-            except (FileNotFoundError, NotADirectoryError):
-                # record 名の entry 自体が在る (壊れた symlink 等) なら不在ではない。
-                try:
-                    os.lstat(record)
-                except OSError:
-                    pass
-                else:
-                    found.append((record, record[: -len(".json")] + ".log"))
-                    continue
+                identity = link_identity(record)
+            except OSError:
+                complete = False
+                continue
+            observed.append((record, identity))
+            if identity is None:
                 # 通常 file なら jobs/ を抱えられないので空で正しい。 列挙後に entry が
                 # 消えたなら走査できていないので、 不在と断定しない。
                 try:
-                    os.lstat(os.path.join(root, workspace))
+                    if link_identity(os.path.join(root, workspace)) is None:
+                        complete = False
                 except OSError:
                     complete = False
-                continue
-            except OSError:
-                complete = False
                 continue
             found.append((record, record[: -len(".json")] + ".log"))
         try:
@@ -258,7 +261,23 @@ def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], boo
                 complete = False
         except OSError:
             complete = False
+        for record, identity in observed:
+            # 名前一覧は proxy — 材料にした record 自身を、見た粒度のまま見直す。
+            try:
+                if link_identity(record) != identity:
+                    complete = False
+            except OSError:
+                complete = False
     return found, complete
+
+
+def link_identity(path: str) -> tuple | None:
+    """The entry itself at the grain it was read, or None when nothing is there."""
+    try:
+        st = os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    return (st.st_dev, st.st_ino, st.st_mode, st.st_mtime_ns, st.st_size)
 
 
 def job_record(record_path: str, job_id: str | None = None) -> dict | None:
@@ -392,7 +411,13 @@ def log_lines(
         with open_regular(log_path) as f:
             # 開いた時点の size を上限にする — 動く EOF を追うと、 追記が読みより
             # 速い log で読み終わらず、 期限確認にすら戻れない。
-            budget = os.fstat(f.fileno()).st_size
+            size = os.fstat(f.fileno()).st_size
+            budget = min(size, MAX_SCAN_BYTES)
+            if budget < size:
+                # 全量を読むと期限へ戻れない。 末尾だけ見て、 部分と申告する。
+                f.seek(size - budget)
+                if onerror is not None:
+                    onerror()
             dropping = False
             while budget > 0:
                 chunk = f.readline(min(MAX_LOG_LINE, budget))
@@ -517,6 +542,7 @@ def tree_age(root: str | None, now: float) -> float | None:
         return None
     newest = None
     unreadable = False
+    budget = MAX_TREE_ENTRIES
 
     def unreadable_dir(error: OSError) -> None:
         nonlocal unreadable, newest
@@ -539,6 +565,9 @@ def tree_age(root: str | None, now: float) -> float | None:
             # lstat で entry 自身を測る — getmtime は link を辿るので、 tree の外の
             # 頻繁に更新される target が job の活動として数えられてしまう。 ただし
             # root 自身が symlink なら、 監視対象はその target dir そのものである。
+            budget -= 1
+            if budget < 0:
+                return None  # 走査しきれない広さ — 静穏を主張する根拠にならない
             try:
                 mtime = (os.stat(path) if path == root else os.lstat(path)).st_mtime
             except FileNotFoundError:
@@ -674,6 +703,8 @@ def artifact_ready(
             # 全体を先頭から strict decode するので途中の不正 byte も落ちる。 保持は
             # 末尾だけ — 全量を持つと巨大な成果物ひとつで MemoryError になる。
             # 読む総量は開いた時点の size まで — 動く EOF を追うと読み終わらない。
+            if before.st_size > MAX_SCAN_BYTES:
+                return None  # 読み切れない大きさ — 完成とも未完成とも言えない
             remaining = before.st_size
             while remaining > 0 and (
                 chunk := f.read(min(MAX_ARTIFACT_BYTES, remaining))
@@ -902,6 +933,23 @@ def evidence(
     return "\n".join(lines)
 
 
+def carrying_records(
+    found: list[tuple[str, str]], job_id: str
+) -> tuple[list[tuple[str, str]], bool]:
+    """Candidates whose body really claims the id, and whether all were readable."""
+    carried = []
+    readable = True
+    for pair in found:
+        before = file_stat(pair[0])
+        loaded = job_record(pair[0])
+        if loaded is None or file_stat(pair[0]) != before:
+            readable = False  # 読めなかっただけ — 名乗っていない証明にはならない
+            continue
+        if loaded.get("id") == job_id:
+            carried.append(pair)
+    return carried, readable
+
+
 def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
     roots = roots if roots is not None else state_roots(args.state_root)
     deadline = time.monotonic() + args.timeout_seconds
@@ -911,12 +959,17 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
     while not found:
         found, complete = find_jobs(args.job_id, roots)
         if len(found) > 1:
-            print(
-                f"ambiguous: {len(found)} records carry the id {printable(args.job_id)}"
-            )
-            for record, _log in found:
-                print(f"  {printable(record)}")
-            return EXIT_AMBIGUOUS
+            # file 名の一致は重複ではない — 単独候補と同じ本文 id 検証をここにも配る。
+            found, all_carried = carrying_records(found, args.job_id)
+            complete = complete and all_carried
+            if len(found) > 1:
+                print(
+                    f"ambiguous: {len(found)} records carry the id "
+                    f"{printable(args.job_id)}"
+                )
+                for record, _log in found:
+                    print(f"  {printable(record)}")
+                return EXIT_AMBIGUOUS
         if found and complete:
             # 「その 1 件が過去にも見えた」 では足りない — A→B と替わった後の B も通る。
             if seen_pairs - {found[0]}:
@@ -992,6 +1045,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # appended, so a baseline taken once can be missing that job's real gap.
         baseline = baseline_silence(jobs_dir, args.job_id, now, args.hang_seconds)
         threshold = stall_threshold(args.stall_seconds, baseline)
+        record_before = file_stat(record_path)
         record = job_record(record_path, args.job_id)
         # 1 poll 1 走査 — verdict も evidence も同じ結果を使い、読み直さない。 走査の
         # 前後で観測対象が動いたら、 その poll は古い無音と新しい本文の混成になる。
@@ -1009,16 +1063,22 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # 監視開始後に同じ id の record が増えても、 固定した path だけ見ていては気付けない。
         seen, scanned_all = find_jobs(args.job_id, roots)
         if len(seen) > 1:
-            print(
-                f"ambiguous: {len(seen)} records carry the id {printable(args.job_id)}"
-            )
-            for duplicate, _log in seen:
-                print(f"  {printable(duplicate)}")
-            return EXIT_AMBIGUOUS
+            seen, all_carried = carrying_records(seen, args.job_id)
+            scanned_all = scanned_all and all_carried
+            if len(seen) > 1:
+                print(
+                    f"ambiguous: {len(seen)} records carry the id "
+                    f"{printable(args.job_id)}"
+                )
+                for duplicate, _log in seen:
+                    print(f"  {printable(duplicate)}")
+                return EXIT_AMBIGUOUS
         # plugin は record を completed に書いてから final output を append する。
         # その窓に入った poll は、 古い running のまま静穏を読んで stall と言える。
         changed = (
             (file_stat(log), file_stat(args.artifact)) != before
+            # 読取失敗は皆 None ゆえ、値の比較だと別々の壊れ方が「不変」に化ける。
+            or file_stat(record_path) != record_before
             or job_record(record_path, args.job_id) != record
             # os.walk は snapshot ではないので、 列挙済み file への書き込みは
             # 走査し直さない限りこの poll から丸ごと抜け落ちる。
@@ -1030,11 +1090,21 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         )
         # 「動いた」 と 「読めなかった」 は別の理由 — 畳むと headline がどちらも
         # 「読取中に変わった」 になり、 安定して読めない log が活動に化ける。
-        unreadable = (
-            not whole_log
-            or not scanned_all
+        record_moved = (
+            not scanned_all
             or seen != [(record_path, log)]
+            # watch 全体の同一性 — mtime と size は heartbeat で動くのが正常である。
             or (file_stat(record_path) or (None, None))[:2] != record_inode
+        )
+        unreadable = not whole_log or record_moved
+        # cancel / 失敗は他を読めるかに依らず結果ではない — 静穏 gate より先に置く。
+        settled = str((record or {}).get("status") or "")
+        decided_by_record = (
+            record is not None
+            and not record_moved
+            and settled
+            and settled not in ALIVE_STATUS
+            and settled != BASELINE_STATUS
         )
         if record_gone(record_path):
             # The plugin prunes to its newest 50 jobs regardless of status, so a
@@ -1043,6 +1113,18 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 EXIT_VANISHED,
                 "vanished: the state record disappeared after registration — "
                 "the plugin prunes old jobs, so this job's outcome is unknowable here",
+            )
+        elif decided_by_record:
+            out = verdict(
+                settled,
+                age,
+                tree,
+                ready,
+                threshold,
+                args.hang_seconds,
+                expects_artifact=args.artifact is not None,
+                command_may_run=bool(unfinished),
+                trust_log=args.trust_log,
             )
         elif changed or unreadable:
             # 走査中に動いた観測は古い無音と新しい本文の混成 — その組で判定しない。
@@ -2011,6 +2093,137 @@ class WatchTest(unittest.TestCase):
         ):
             self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
 
+    def test_a_record_appearing_inside_a_scanned_workspace_is_incomplete(self):
+        """名前一覧は同じでも、 見た record が現れていれば単一 snapshot ではない。"""
+        from unittest import mock
+
+        root = tempfile.mkdtemp()
+        jobs = os.path.join(root, "ws", "jobs")
+        os.makedirs(jobs)
+        record = os.path.join(jobs, "task-x.json")
+        real = link_identity
+
+        def creating(path):
+            identity = real(path)
+            if path == record and identity is None:
+                with open(record, "w", encoding="utf-8") as f:
+                    json.dump({"id": "task-x", "status": "running"}, f)
+            return identity
+
+        with mock.patch(__name__ + ".link_identity", creating):
+            found, complete = find_jobs("task-x", [root])
+        self.assertEqual(found, [])
+        self.assertFalse(complete)
+
+    def test_a_root_created_during_the_scan_is_incomplete(self):
+        """走査を始めた時に無かった root が現れたなら、 その走査は全件を見ていない。"""
+        from unittest import mock
+
+        root = os.path.join(tempfile.mkdtemp(), "later")
+        real = os.listdir
+
+        def creating(path):
+            if path == root and not os.path.isdir(root):
+                os.makedirs(os.path.join(root, "ws", "jobs"))
+                raise FileNotFoundError(root)
+            return real(path)
+
+        with mock.patch("os.listdir", creating):
+            _found, complete = find_jobs("task-x", [root])
+        self.assertFalse(complete)
+
+    def test_only_records_that_claim_the_id_are_duplicates(self):
+        """file 名の一致は重複ではない — 本文が名乗るものだけが同じ job を主張する。"""
+        root, record, log = self._state("ws", "task-x", "running")
+        other = os.path.join(os.path.dirname(record), "..", "..", "ws2", "jobs")
+        os.makedirs(other)
+        impostor = os.path.join(other, "task-x.json")
+        with open(impostor, "w", encoding="utf-8") as f:
+            json.dump({"id": "task-other", "status": "running"}, f)
+        carried, readable = carrying_records(
+            [(record, log), (impostor, impostor[: -len(".json")] + ".log")], "task-x"
+        )
+        self.assertEqual(carried, [(record, log)])
+        self.assertTrue(readable)
+
+    def test_two_broken_reads_of_one_record_are_not_a_stable_corrupt(self):
+        """壊れ方が変わったなら record は動いている — corrupt を断定してよい状態でない。"""
+        import io
+        from contextlib import redirect_stdout
+
+        root, record, _log = self._state("ws", "task-x", "running")
+        with open(record, "w", encoding="utf-8") as f:
+            f.write("{partial")
+        real = job_record
+
+        def rewriting(path, job_id=None):
+            loaded = real(path, job_id)
+            if path == record:
+                with open(record, "w", encoding="utf-8") as f:
+                    f.write("{partial-differently")
+            return loaded
+
+        from unittest import mock
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".job_record", rewriting),
+        ):
+            self.assertNotEqual(
+                watch(self._watch_args(root, "task-x", once=True)), EXIT_CORRUPT
+            )
+
+    def test_a_failed_record_is_a_result_even_with_an_unreadable_log(self):
+        """cancel / 失敗は log を読めるかに関わらず結果ではない、 という契約を通す。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, log = self._state("ws", "task-x", "failed")
+        args = self._watch_args(root, "task-x", once=True)
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".scan_log", lambda *a: ([], [], False)),
+        ):
+            self.assertEqual(watch(args), EXIT_NOT_COMPLETED)
+        self.assertTrue(os.path.exists(log))
+
+    def test_a_log_too_large_to_read_is_not_a_whole_view(self):
+        """全量を読むと期限へ戻れない — 末尾だけ見て、 部分と申告する。"""
+        root, _rec, log = self._state("ws", "task-x", "running")
+        from unittest import mock
+
+        cut = []
+        with open(log, "w", encoding="utf-8") as f:
+            f.write("[2026-08-09T00:00:00.000Z] head\n" * 4)
+        with mock.patch(__name__ + ".MAX_SCAN_BYTES", 40):
+            lines = list(log_lines(log, lambda: cut.append(1)))
+        self.assertTrue(cut)
+        self.assertLess(len(lines), 4)
+
+    def test_a_tree_too_wide_to_walk_is_unknowable(self):
+        """走査しきれない広さから静穏は言えない — age でなく None を返す。"""
+        from unittest import mock
+
+        root = tempfile.mkdtemp()
+        with open(os.path.join(root, "f"), "w", encoding="utf-8") as f:
+            f.write("x")
+        with mock.patch(__name__ + ".MAX_TREE_ENTRIES", 1):
+            self.assertIsNone(tree_age(root, time.time()))
+
+    def test_an_artifact_too_large_to_decode_is_unknowable(self):
+        """strict decode は先頭から要る — 読み切れない大きさは 3 値の None である。"""
+        from unittest import mock
+
+        root = tempfile.mkdtemp()
+        path = os.path.join(root, "report.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("body\nDONE\n")
+        since = os.stat(path).st_mtime - 1
+        self.assertTrue(artifact_ready(path, "DONE", since))
+        with mock.patch(__name__ + ".MAX_SCAN_BYTES", 3):
+            self.assertIsNone(artifact_ready(path, "DONE", since))
+
     def test_a_workspace_list_that_changes_mid_scan_is_incomplete(self):
         """listdir は 1 度きりの snapshot ではない — 前後で顔ぶれが変われば単一結果でない。"""
         from unittest import mock
@@ -2348,12 +2561,14 @@ class WatchTest(unittest.TestCase):
         from unittest import mock
 
         root, _rec, _log = self._state("ws", "task-done", "completed")
+        # 本文が id を名乗る本物でなければ重複ではない — 名前だけの entry では作れない。
+        elsewhere, peer, _peer_log = self._state("ws", "task-done", "running")
         real, calls = find_jobs, []
 
         def gaining(job_id, roots):
             found, complete = real(job_id, roots)
             calls.append(1)
-            extra = [] if len(calls) == 1 else [("/elsewhere.json", "/elsewhere.log")]
+            extra = [] if len(calls) == 1 else [(peer, peer[: -len(".json")] + ".log")]
             return found + extra, complete
 
         buf = io.StringIO()
@@ -2361,7 +2576,7 @@ class WatchTest(unittest.TestCase):
             self.assertEqual(
                 watch(self._watch_args(root, "task-done", once=True)), EXIT_AMBIGUOUS
             )
-        self.assertIn("/elsewhere.json", buf.getvalue())
+        self.assertIn(elsewhere, buf.getvalue())
 
     def test_a_state_that_keeps_changing_is_not_a_timeout(self):
         """破棄した poll を流すと、混成した snapshot が timeout の evidence になる。"""
