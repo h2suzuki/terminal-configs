@@ -573,3 +573,14 @@ fix round: `drafts/sentinel-r57-fixes.md` (ctime 指紋の false-change 側は�
 重複キーは corrupt へ / reconfigure は hasattr guard 付き)。lint rc=0 初回。worktree
 `wt-r57fix` @ `1190a66`。job `task-msqokt74-bt70h5` (record 検証: sol / medium / write / fresh)。
 sentinel `bajsgtv70` (estimate 2250s)。認定 counter 0 のまま。
+
+### 2026-08-13 — r57 fix round 完了・main 取り込み (selftest 275・裁定 53)
+
+fix round は sentinel `bajsgtv70` exit 0。受け入れ: gates 再実行 (selftest **275** / 外部 11 /
+ruff / ty 全緑)、repro 消滅を直接確認 (重複キー record → None / `PYTHONIOENCODING=ascii` の
+実 CLI が evidence 完出力 + 正規 exit 6)、独立変異 2 件 (`object_pairs_hook` 除去 /
+reconfigure 無効化) を splice 再現し当該 test のみ fail。ctime 追加に伴う TOCTOU oracle 更新は
+「mtime 復元型摂動が不可視→検出に変わり stall→alive へ移る」導出で裁定整合を確認 (oracle の
+観測写し化ではない)。wt 内 commit `9eda285` → cherry-pick **`2498b67`**。worktree / branch
+削除・報告書退避。裁定 52 (重複キー corrupt)・53 (出力 encoding) を正本化、41 に ctime を
+明記 (51 → **53 件**)。次: r58 = 認定 1 巡目 (5 度目)。

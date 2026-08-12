@@ -526,6 +526,11 @@ codex sol xhigh で 2 巡連続」。
   io encoding)。直近修正の縫い目 (候補対応 hold・exact 時刻・ASCII 境界) は「指摘なし」と
   明記され、新設機構への指摘は 4 巡連続ゼロ
 - fix round: `drafts/sentinel-r57-fixes.md`。認定 counter は 0 のまま
+- fix 取り込み: commit `2498b67`。指紋 5 要素化 (`st_ctime_ns` 追加・TOCTOU oracle は
+  「不可視→検出」の摂動を stall→alive へ裁定導出で更新)、JSON 重複キーを
+  `object_pairs_hook` で corrupt 化、stdout/stderr を backslashreplace に reconfigure。
+  red 3/3 + 変異 3/3 + 発注側の独立変異 2 件再現 + repro 消滅 (dup-key None / ascii 実 CLI
+  clean exit 6)。selftest 272 → **275**。裁定 52・53 を正本化、41 を拡張 (51 → 53 件)
 - fix 取り込み: commit `3746acb`。stamp parse を `ordered_events()` (Decimal exact・行あたり
   1 回) に集約 — `longest_silence` の二重 parse も同時に解消。鮮度比較は `st_mtime_ns` の
   exact 領域へ。red 確認 (修正前 2 fail + 1 error) + 変異 3/3 + 発注側の独立変異 2 件再現 +
