@@ -58,8 +58,8 @@ test 数 / 指摘件数) を追記して commit する。発注書・報告書�
 
 | 対策 | 状態 | 直近更新 | 要約 |
 |---|---|---|---|
-| 裁定の機械化 | 進行中 | 2026-08-12 | 納品受領・受け入れレビュー中 |
-| 構造 refactor | 未着手 | — | 機械化の完了後 |
+| 裁定の機械化 | 完了 | 2026-08-12 | `55c618e` で main へ取り込み (区分 B は refactor 後) |
+| 構造 refactor | 未着手 | — | 次の柱 |
 | TOCTOU harness | 未着手 | — | refactor 完了後 |
 | 体制と収束認定 | 未着手 | — | 柱完了後に 54 巡目 |
 | 方法論 doc (`docs/adversarial-review-methodology.md`) | 未着手 | 2026-08-12 | 次ターン執筆 |
@@ -203,3 +203,17 @@ dead AnnAssign 除去 / SourceInvariantTest 分離 + 1 行溶接)、不適用 2 
 round 2 を同 thread resume で発注: `drafts/sentinel-pillar2-simplify.md` (lint rc=0・初回)。
 **受け入れ条件 = 全 12 変異の再検証** (整理が網を破っていない証明)。job
 `task-msq748d5-l3r8ta` (sol / medium / write 確認済)。
+
+### 2026-08-12 — 裁定の機械化: 完了・main 取り込み
+
+round 2 は sentinel exit 0。A〜H 全適用 (SourceInvariantTest 分離 + 1 行溶接 /
+`_bad_call_lines` 統一 / memo 化 / runtime 一本化ほか)、**12 変異すべて再 catch**。
+受け入れ再検証: gates 全緑 (selftest 250 / 外部 11 / ruff / ty / lang lint)、追加 hunk は
+指示した `import ast` 1 行と末尾 block のみ、発注側の独立変異 (12 件に無い `codecs.open`)
+も catch。commit `c8e0fb3` (wt-p2) → cherry-pick `55c618e` で main へ、main 上でも 250 OK。
+報告書 3 本を `drafts/` へ退避後、wt-p2 worktree と branch を削除。
+
+3 round の収支: 発注 1 + 敵対レビュー 1 (opus 5 xhigh・8 件) + fix 1 + /simplify 適用 1 で
+**指摘残ゼロ・網の後退ゼロ**のまま収束。53 巡ループとの対比: fix が新規指摘を生む前に
+同 round 内で変異検証 + 独立変異 + レビューを閉じる運用が機能した。deploy
+(`/usr/local/bin/codex_task_sentinel`) は依然ユーザー手動待ち (todos.md 既存 criterion)。
