@@ -67,6 +67,7 @@ import time
 import unittest
 from collections.abc import Callable, Iterator
 from decimal import Decimal, InvalidOperation
+from typing import cast
 
 STATE_ROOT = os.path.expanduser("~/.claude/plugins/data/codex-openai-codex/state")
 # The plugin resolves its state root from CLAUDE_PLUGIN_DATA and falls back to
@@ -426,6 +427,7 @@ class Observation:
                             descriptor.st_dev,
                             descriptor.st_ino,
                             descriptor.st_mtime_ns,
+                            descriptor.st_ctime_ns,
                             descriptor.st_size,
                         )
                     )
@@ -483,6 +485,7 @@ class Observation:
                     before.st_dev,
                     before.st_ino,
                     before.st_mtime_ns,
+                    before.st_ctime_ns,
                     before.st_size,
                 )
                 if before.st_size > scan_limit:
@@ -510,8 +513,9 @@ class Observation:
             return cls(cls.PRESENT, stamp=stamp, error=exc, reason="decode")
         except OSError as exc:
             return cls(cls.UNSTABLE, stamp=stamp, error=exc, reason="unreadable")
-        if (before.st_mtime_ns, before.st_size) != (
+        if (before.st_mtime_ns, before.st_ctime_ns, before.st_size) != (
             after.st_mtime_ns,
+            after.st_ctime_ns,
             after.st_size,
         ):
             return cls(cls.UNSTABLE, stamp=stamp, reason="changed")
@@ -606,10 +610,19 @@ def record_view(
 
 def _parse_record(raw: bytes, job_id: str | None = None) -> dict | None:
     """The record these bytes hold, or None when they do not hold a usable one."""
+
+    def unique_object(pairs):
+        loaded = {}
+        for name, value in pairs:
+            if name in loaded:
+                raise ValueError(f"duplicate object name: {name}")
+            loaded[name] = value
+        return loaded
+
     try:
         if len(raw) > MAX_RECORD_BYTES:
             return None
-        loaded = json.loads(raw.decode("utf-8"))
+        loaded = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object)
     except (ValueError, RecursionError, UnicodeDecodeError):
         # 深くネストした JSON は ValueError ではなく RecursionError で来る。
         return None
@@ -664,7 +677,7 @@ def record_gone(record_path: str) -> bool:
     return Observation.record_gone(record_path)
 
 
-def file_stat(path: str | None) -> tuple[int, int, int, int] | None:
+def file_stat(path: str | None) -> tuple[int, int, int, int, int] | None:
     """One snapshot of a file, identity included; None when it is absent.
 
     dev and ino are part of it because a replacement can carry the same mtime
@@ -676,7 +689,11 @@ def file_stat(path: str | None) -> tuple[int, int, int, int] | None:
         st = os.stat(path) if path else None
     except OSError:
         return None
-    return (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size) if st else None
+    return (
+        (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+        if st
+        else None
+    )
 
 
 def record_stamp(path: str) -> tuple:
@@ -2069,6 +2086,10 @@ def check_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace) -
 
 
 def main(argv: list[str]) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            reconfigure = cast(Callable[..., object], stream.reconfigure)
+            reconfigure(errors="backslashreplace")
     parser = build_parser()
     args = parser.parse_args(argv)
     check_arguments(parser, args)
@@ -3736,12 +3757,13 @@ class WatchTest(unittest.TestCase):
             stream.write(raw)
         with open(replacement, "wb") as stream:
             stream.write(b"replacement inode with a different size\n")
-        expected = os.stat(path)
+        expected = []
         real_open = open_regular
 
         def swap_after_open(opened_path):
             handle = real_open(opened_path)
             os.replace(replacement, opened_path)
+            expected.append(os.fstat(handle.fileno()))
             return handle
 
         stamps = []
@@ -3754,10 +3776,11 @@ class WatchTest(unittest.TestCase):
             stamps,
             [
                 (
-                    expected.st_dev,
-                    expected.st_ino,
-                    expected.st_mtime_ns,
-                    expected.st_size,
+                    expected[0].st_dev,
+                    expected[0].st_ino,
+                    expected[0].st_mtime_ns,
+                    expected[0].st_ctime_ns,
+                    expected[0].st_size,
                 )
             ],
         )
@@ -6843,20 +6866,20 @@ class WatchTest(WatchTest):
                 "replace-same": {17: 14},
             },
             "log": {
-                "unlink": {1: 11, 2: 14, 6: 4, 7: 11},
-                "replace-different": {2: 11, 6: 4, 7: 11},
-                "replace-same": {2: 11, 6: 4, 7: 11},
+                "unlink": {1: 11, 2: 14, 6: 11, 7: 11},
+                "replace-different": {2: 11, 6: 11, 7: 11},
+                "replace-same": {2: 11, 6: 11, 7: 11},
                 "unreadable": {2: 14},
-                "grow": {4: 11, 5: 4, 6: 4, 7: 11},
+                "grow": {4: 11, 5: 11, 6: 11, 7: 11},
                 "appear": {1: 4, 2: 11, 3: 14, 5: 11},
             },
-            "log-command": {"grow": {6: 14}},
+            "log-command": {"grow": {6: 11}},
             "artifact": {
-                "unlink": {4: 11, 7: 0, 8: 0, 9: 11},
-                "replace-different": {4: 11, 7: 0, 8: 0, 9: 11},
-                "replace-same": {4: 11, 7: 0, 8: 0, 9: 11},
-                "unreadable": {4: 14},
-                "grow": {7: 0, 8: 5, 9: 0},
+                "unlink": {4: 11, 7: 11, 8: 11, 9: 11},
+                "replace-different": {4: 11, 7: 11, 8: 11, 9: 11},
+                "replace-same": {4: 11, 7: 11, 8: 11, 9: 11},
+                "unreadable": {4: 11},
+                "grow": {7: 11, 8: 11, 9: 11},
                 "appear": {1: 0, 2: 11, 3: 11, 4: 11},
             },
             "peer": {
@@ -7064,6 +7087,112 @@ class WatchTest(WatchTest):
             f"executions={len(cases) + len(measured) + len(absent) + 14} "
             f"seconds={elapsed:.3f}"
         )
+
+
+class WatchTest(WatchTest):
+    """Regressions fixed in the 57th review round."""
+
+    def test_an_artifact_rewritten_with_restored_mtime_is_not_ready(self):
+        """A same-inode rewrite cannot hide behind restored mtime and size."""
+        from unittest import mock
+
+        root = tempfile.mkdtemp()
+        path = os.path.join(root, "report.md")
+        with open(path, "wb") as stream:
+            stream.write(b"body\nDONE")
+        before = os.stat(path)
+        real_descriptor_stat = Observation.descriptor_stat
+        calls = []
+
+        def rewrite_after_read(handle):
+            calls.append(1)
+            if len(calls) == 2:
+                with open(path, "r+b") as stream:
+                    stream.write(b"body\nNOPE")
+                os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+            return real_descriptor_stat(handle)
+
+        with mock.patch(
+            __name__ + ".Observation.descriptor_stat",
+            side_effect=rewrite_after_read,
+        ):
+            ready, _stamp = artifact_view(path, "DONE", Decimal(0))
+        after = os.stat(path)
+        self.assertEqual(after.st_ino, before.st_ino)
+        self.assertEqual(after.st_size, before.st_size)
+        self.assertEqual(after.st_mtime_ns, before.st_mtime_ns)
+        self.assertNotEqual(after.st_ctime_ns, before.st_ctime_ns)
+        self.assertFalse(ready)
+
+    def test_duplicate_record_fields_are_corrupt(self):
+        """Security-relevant record fields may not use JSON's last-name-wins rule."""
+        values = {
+            "id": ('"task-x"', '"task-x"'),
+            "status": ('"running"', '"completed"'),
+            "workspaceRoot": ('"/first"', '"/second"'),
+            "startedAt": (
+                '"2026-01-01T00:00:00Z"',
+                '"2026-01-02T00:00:00Z"',
+            ),
+        }
+        ordinary = {
+            "id": '"task-x"',
+            "status": '"completed"',
+            "workspaceRoot": '"/workspace"',
+            "startedAt": '"2026-01-01T00:00:00Z"',
+        }
+        for duplicated, pair in values.items():
+            fields = [
+                f'"{name}":{value}'
+                for name, value in ordinary.items()
+                if name != duplicated
+            ]
+            fields.extend(f'"{duplicated}":{value}' for value in pair)
+            with self.subTest(field=duplicated):
+                self.assertIsNone(_parse_record(("{" + ",".join(fields) + "}").encode()))
+        nested = b'{"id":"task-x","status":"completed","extra":{"x":1,"x":2}}'
+        self.assertIsNone(_parse_record(nested))
+
+    def test_ascii_stdout_preserves_the_terminal_exit_and_full_evidence(self):
+        """ASCII stdout escapes Japanese evidence instead of aborting the funnel."""
+        import subprocess
+
+        root = tempfile.mkdtemp()
+        jobs = os.path.join(root, "ws", "jobs")
+        os.makedirs(jobs)
+        with open(os.path.join(jobs, "task-x.json"), "w", encoding="utf-8") as stream:
+            json.dump(
+                {
+                    "id": "task-x",
+                    "status": "running",
+                    "workspaceRoot": root,
+                    "startedAt": "2026-01-01T00:00:00Z",
+                },
+                stream,
+            )
+        with open(os.path.join(jobs, "task-x.log"), "w", encoding="utf-8") as stream:
+            stream.write("still running\n")
+        result = subprocess.run(
+            [
+                sys.executable,
+                __file__,
+                "task-x",
+                "--state-root",
+                root,
+                "--once",
+                "--stall-seconds",
+                "999",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONIOENCODING": "ascii"},
+        )
+        self.assertEqual(result.returncode, EXIT_ALIVE, result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertIn(r"\u7121\u97f3", result.stdout)
+        self.assertIn(r"\u6210\u679c\u7269", result.stdout)
+        self.assertIn("  cancel :", result.stdout)
 
 
 class SourceInvariantTest(unittest.TestCase):
