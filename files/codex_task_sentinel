@@ -705,19 +705,24 @@ def baseline_silence(
     """
     worst = None
     peers = []
+    budget = MAX_PEERS
     # glob は候補名を一括で作るので、 数え切る前に 1 件ずつ受け取って打ち切る。
-    with os.scandir(jobs_dir) as entries:
-        for entry in entries:
-            if not entry.name.endswith(".json"):
-                continue
-            if len(peers) >= MAX_PEERS:
-                return None, False  # 数え切れない — 読めた分は全体の最大値ではない
-            peers.append(entry.path)
+    try:
+        with os.scandir(jobs_dir) as entries:
+            for entry in entries:
+                # suffix で選り分ける前に数える — 上限は保持量でなく I/O を囲う。
+                budget -= 1
+                if budget < 0:
+                    return None, False  # 読めた分は全体の最大値ではない
+                if entry.name.endswith(".json"):
+                    peers.append(entry.path)
+    except OSError:
+        return None, False  # 走査できなかった履歴は、 低い bar の言い訳にならない
     for record_path in sorted(peers):
         peer_id = os.path.basename(record_path)[: -len(".json")]
         if peer_id == exclude:
             continue
-        record = job_record(record_path, peer_id)
+        peer_stamp, record = record_view(record_path, peer_id)
         if record is None or record.get("status") != BASELINE_STATUS:
             continue
         peer_log = record_path[: -len(".json")] + ".log"
@@ -731,7 +736,11 @@ def baseline_silence(
         if now - max(before[2], marked[2]) / 1e9 < settle_seconds:
             continue
         quiet = longest_silence(peer_log)
-        if file_stat(peer_log) != before or file_stat(record_path) != marked:
+        if (
+            file_stat(peer_log) != before
+            or file_stat(record_path) != marked
+            or record_stamp(record_path) != peer_stamp
+        ):
             continue  # 読んでいる間に伸びた peer は、この poll の手本にならない
         if quiet is not None and (worst is None or quiet > worst):
             worst = quiet
@@ -1066,6 +1075,10 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             # 読めなかった候補は「別 job」の証明にならないので、その回は絞らない。
             carried, all_carried = carrying_records(found, args.job_id)
             found = carried if all_carried else found
+        # 候補を確かめ終えた時点で期限なら、 そこから終局を作らず timeout に委ねる。
+        if found and complete and deadline_reached(deadline):
+            break
+        if found:
             if len(found) > 1:
                 print(
                     f"ambiguous: {len(found)} records carry the id "
@@ -1189,8 +1202,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             or tree_age((record or {}).get("workspaceRoot"), now) != tree
             # threshold の出どころも同じ poll のもの — peer が後から伸びると、
             # 古い低い bar と新しい対象 snapshot の組で stall を断定できる。
-            or baseline_silence(jobs_dir, args.job_id, now, args.hang_seconds)[0]
-            != baseline
+            or baseline_silence(jobs_dir, args.job_id, now, args.hang_seconds)
+            != (baseline, counted_all)
         )
         # 「動いた」 と 「読めなかった」 は別の理由 — 畳むと headline がどちらも
         # 「読取中に変わった」 になり、 安定して読めない log が活動に化ける。
@@ -1264,8 +1277,6 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             for duplicate, _log in duplicates:
                 print(f"  {printable(duplicate)}")
             return EXIT_AMBIGUOUS
-        if out is not None and observed_late:
-            out = None  # 期限後に初めて見た状態は、 期限内の終局判定にならない
         # 破棄した poll をそのまま下の分岐へ流すと、 混成した snapshot が exit 12 / 7 / 11 の
         # evidence として出る。 期限前なら取り直し、 期限か --once なら理由を名指しで返す。
         if out is None and (changed or unreadable):
@@ -1288,7 +1299,6 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             )
         if (
             out is None
-            and not observed_late
             and args.estimate_seconds
             and elapsed > args.estimate_seconds * 2
         ):
@@ -1301,13 +1311,14 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # headline は record の語をそのまま出す — 言い切ると直下の evidence と食い違う。
         # headline へそのまま入るので、 保持する時点で escape しておく。
         recorded = printable((record or {}).get("status") or "不明")
-        if out is None and args.once and not observed_late:
+        if out is None and args.once:
             out = (
                 EXIT_ALIVE,
                 f"alive: no terminal verdict yet after {int(elapsed)}s "
                 f"(record says {recorded})",
             )
-        if out is None and deadline_reached(deadline):
+        # 期限を跨いだ poll から返せるのは timeout だけ — 分岐ごとに書くと必ず漏れる。
+        if observed_late or out is None and deadline_reached(deadline):
             out = (
                 EXIT_TIMEOUT,
                 f"timeout: no terminal verdict within {int(args.timeout_seconds)}s "
@@ -2361,6 +2372,108 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(carried, [])
         self.assertFalse(readable)
 
+    def test_a_baseline_that_stops_counting_mid_poll_discards_it(self):
+        """(None, True) → (None, False) は第 1 要素では動いて見えない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-live", "running", log_age=900.0)
+        answers = [(None, True), (None, False)]
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(
+                __name__ + ".baseline_silence",
+                lambda *a: answers.pop(0) if answers else (None, False),
+            ),
+        ):
+            args = self._watch_args(root, "task-live", once=True, trust_log=True)
+            self.assertEqual(watch(args), EXIT_ALIVE)
+        self.assertTrue(os.path.exists(record))
+
+    def test_an_unreadable_jobs_dir_is_not_a_low_bar(self):
+        """走査できなかった履歴から、 低い threshold を作ってはならない。"""
+        root, record, _log = self._state("ws", "task-live", "running")
+        jobs = os.path.dirname(record)
+        os.chmod(jobs, 0o000)
+        self.addCleanup(os.chmod, jobs, 0o755)
+        self.assertEqual(
+            baseline_silence(jobs, "task-live", time.time()), (None, False)
+        )
+
+    def test_the_peer_budget_counts_entries_not_just_records(self):
+        """上限は保持量でなく I/O を囲う — 選り分ける前に数えなければ効かない。"""
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-live", "running")
+        jobs = os.path.dirname(record)
+        for n in range(6):
+            with open(os.path.join(jobs, f"noise{n}.log"), "w", encoding="utf-8") as f:
+                f.write("x")
+        with mock.patch(__name__ + ".MAX_PEERS", 3):
+            self.assertEqual(
+                baseline_silence(jobs, "task-live", time.time()), (None, False)
+            )
+
+    def test_a_duplicate_resolved_after_the_deadline_is_a_timeout(self):
+        """登録解決も期限を跨いだら終局を作らない — 候補数で gate が変わってはならない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, log = self._state("ws", "task-x", "running")
+        _elsewhere, peer, _peer_log = self._state("ws", "task-x", "running")
+        args = self._watch_args(root, "task-x")
+        real, crossed = time.monotonic, []
+
+        def finding(job_id, roots):
+            crossed.append(1)
+            return [(record, log), (peer, peer[: -len(".json")] + ".log")], True
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".find_jobs", finding),
+            mock.patch(
+                "time.monotonic",
+                lambda: real() + (args.timeout_seconds + 1 if crossed else 0),
+            ),
+        ):
+            self.assertEqual(watch(args), EXIT_TIMEOUT)
+
+    def test_a_peer_completed_only_transiently_is_not_history(self):
+        """一瞬だけ completed だった peer を完走履歴として数えない。"""
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-live", "running")
+        jobs = os.path.dirname(record)
+        peer = os.path.join(jobs, "task-peer.json")
+        with open(os.path.join(jobs, "task-peer.log"), "w", encoding="utf-8") as f:
+            f.write("[2026-08-09T00:00:00.000Z] a\n[2026-08-09T00:05:00.000Z] b\n")
+        running = json.dumps({"id": "task-peer", "status": "running"}).encode()
+        with open(peer, "wb") as f:
+            f.write(running)
+        real, flipped = record_view, []
+
+        def flickering(path, job_id=None):
+            # 1 回目 (判断に使う read) だけ completed を見せ、 以降は disk のまま。
+            if path != peer or flipped:
+                return real(path, job_id)
+            flipped.append(1)
+            with open(path, "wb") as f:
+                f.write(json.dumps({"id": "task-peer", "status": "completed"}).encode())
+            view = real(path, job_id)
+            with open(path, "wb") as f:
+                f.write(running)
+            return view
+
+        with mock.patch(__name__ + ".record_view", flickering):
+            # settle 判定を通すため、 書き込みより十分後を now として渡す。
+            self.assertEqual(
+                baseline_silence(jobs, "task-live", time.time() + 3600)[0], None
+            )
+        self.assertTrue(flipped)
+
     def test_nothing_but_a_timeout_follows_a_late_observation(self):
         """期限後の snapshot を捨てた後、 別の分岐が新しい終局を作り直してはならない。"""
         import io
@@ -2473,7 +2586,7 @@ class WatchTest(unittest.TestCase):
                 lambda: real() + (args.timeout_seconds + 1 if len(crossed) > 1 else 0),
             ),
         ):
-            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
+            self.assertEqual(watch(args), EXIT_TIMEOUT)
         self.assertTrue(os.path.isdir(elsewhere))
 
     def test_a_dangling_artifact_link_is_not_a_missing_deliverable(self):
@@ -2929,7 +3042,7 @@ class WatchTest(unittest.TestCase):
             redirect_stdout(io.StringIO()),
             mock.patch(__name__ + ".tree_age", lambda *a: next(ages)),
         ):
-            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
+            self.assertEqual(watch(args), EXIT_TIMEOUT)
 
     def test_an_ancestor_turned_into_a_file_means_the_record_is_gone(self):
         """同じ例外を find_jobs は不在、record_gone は読取不能と読んでいた。"""
@@ -3067,7 +3180,7 @@ class WatchTest(unittest.TestCase):
             )
         self.assertIn(elsewhere, buf.getvalue())
 
-    def test_a_state_that_keeps_changing_is_not_a_timeout(self):
+    def test_a_state_that_keeps_changing_past_the_deadline_is_a_timeout(self):
         """破棄した poll を流すと、混成した snapshot が timeout の evidence になる。"""
         import io
         from contextlib import redirect_stdout
@@ -3081,7 +3194,7 @@ class WatchTest(unittest.TestCase):
         ):
             self.assertEqual(
                 watch(self._watch_args(root, "task-live", timeout_seconds=0.02)),
-                EXIT_UNVERIFIABLE,
+                EXIT_TIMEOUT,
             )
 
     def test_peer_growing_during_the_read_does_not_set_the_baseline(self):
