@@ -1183,7 +1183,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         record_view_stamp, record = record_view(record_path, args.job_id)
         # 1 poll 1 走査 — verdict も evidence も同じ結果を使い、読み直さない。 走査の
         # 前後で観測対象が動いたら、 その poll は古い無音と新しい本文の混成になる。
-        before = (file_stat(log), file_stat(args.artifact))
+        before_log, before_artifact = file_stat(log), file_stat(args.artifact)
         unfinished, tail, whole_log = scan_log(log)
         log_incomplete = not whole_log
         age = heartbeat_age(log, now)
@@ -1212,7 +1212,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         )
         # 何が動いたのかを分けて持つ — 畳むと「完了条件に関わる変化」 だけを
         # 要求する分岐が書けない。
-        artifact_changed = (file_stat(log), file_stat(args.artifact)) != before
+        log_changed = file_stat(log) != before_log
+        artifact_changed = file_stat(args.artifact) != before_artifact
         # os.walk は snapshot ではないので、 列挙済み file への書き込みは
         # 走査し直さない限りこの poll から丸ごと抜け落ちる。
         tree_changed = tree_age((record or {}).get("workspaceRoot"), now) != tree
@@ -1222,7 +1223,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             jobs_dir, args.job_id, now, args.hang_seconds
         )
         changed = (
-            artifact_changed
+            log_changed
+            or artifact_changed
             or record_changed
             or tree_changed
             or baseline_after != baseline
@@ -2443,6 +2445,29 @@ class WatchTest(unittest.TestCase):
             self.assertEqual(
                 baseline_silence(jobs, "task-live", time.time()), (None, False)
             )
+
+    def test_a_growing_log_does_not_hold_back_a_completed_record(self):
+        """log は完了条件ではない — 伸び続ける log で完了を保留しない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, log = self._state("ws", "task-done", "completed")
+        args = self._watch_args(root, "task-done", once=True)
+        args.artifact = None
+        real = scan_log
+
+        def appending(path, *a, **k):
+            with open(log, "a", encoding="utf-8") as f:
+                f.write("[2026-08-09T00:00:00.000Z] still writing\n")
+            return real(path, *a, **k)
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".scan_log", appending),
+            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+        ):
+            self.assertEqual(watch(args), EXIT_DONE)
 
     def test_a_completed_record_still_needs_a_settled_tree_and_artifact(self):
         """完了条件そのものが動いたなら、 record が安定でも終局にしない。"""
