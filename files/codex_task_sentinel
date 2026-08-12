@@ -230,8 +230,8 @@ def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], boo
     complete = True
     for root in roots:
         try:
-            workspaces = sorted(os.listdir(root))
-            if len(workspaces) > MAX_WORKSPACES:
+            workspaces = bounded_names(root)
+            if workspaces is None:
                 complete = False  # 数え切れない広さから「唯一」も「不在」も言えない
                 continue
         except FileNotFoundError:
@@ -270,7 +270,7 @@ def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], boo
             found.append((record, record[: -len(".json")] + ".log"))
         try:
             # 走査の前後で顔ぶれが変われば、 得た結果は 1 つの snapshot ではない。
-            if sorted(os.listdir(root)) != workspaces:
+            if bounded_names(root) != workspaces:
                 complete = False
         except OSError:
             complete = False
@@ -282,6 +282,21 @@ def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], boo
             except OSError:
                 complete = False
     return found, complete
+
+
+def bounded_names(root: str) -> list[str] | None:
+    """Sorted entry names, or None when there are more than the cap allows.
+
+    scandir one at a time: listdir materialises every name before any cap can
+    look at the count, which is the cost the cap exists to avoid.
+    """
+    names = []
+    with os.scandir(root) as entries:
+        for entry in entries:
+            if len(names) >= MAX_WORKSPACES:
+                return None
+            names.append(entry.name)
+    return sorted(names)
 
 
 def link_identity(path: str) -> tuple | None:
@@ -296,17 +311,38 @@ def link_identity(path: str) -> tuple | None:
 def job_record(record_path: str, job_id: str | None = None) -> dict | None:
     """The on-disk record, or None when it is there but unreadable — a corrupt
     record is an unknown outcome, not a quiet job."""
+    return record_view(record_path, job_id)[1]
+
+
+def record_view(path: str, job_id: str | None = None) -> tuple[tuple, dict | None]:
+    """The record and a fingerprint of the very bytes it was parsed from.
+
+    One open for both: comparing an outer fingerprint taken before and after a
+    separate parse proves nothing about the bytes the parse actually saw, so
+    A -> B -> A reads B's status as a stable snapshot of A.
+    """
     try:
-        with open_regular(record_path) as f:
+        with open_regular(path) as f:
+            st = os.fstat(f.fileno())
             # log / 成果物と同じく上限を置く — record だけ無制限だと、 巨大または
             # 伸び続ける JSON ひとつで監視が読み終わらない。
             raw = f.read(MAX_RECORD_BYTES + 1)
-            if len(raw) > MAX_RECORD_BYTES:
-                return None
-            loaded = json.loads(raw.decode("utf-8"))
-    except OSError:
-        return None
-    except (ValueError, RecursionError):
+    except FileNotFoundError:
+        return ("absent",), None
+    except OSError as exc:
+        # 失敗どうしを 1 つに畳むと、 別々の失敗が等しくなって「不変」に化ける。
+        return ("unopenable", exc.errno), None
+    stamp = (st.st_dev, st.st_ino, st.st_size, hashlib.sha256(raw).digest())
+    return stamp, _parse_record(raw, job_id)
+
+
+def _parse_record(raw: bytes, job_id: str | None = None) -> dict | None:
+    """The record these bytes hold, or None when they do not hold a usable one."""
+    try:
+        if len(raw) > MAX_RECORD_BYTES:
+            return None
+        loaded = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError, UnicodeDecodeError):
         # 深くネストした JSON は ValueError ではなく RecursionError で来る。
         return None
     if not isinstance(loaded, dict):
@@ -367,8 +403,12 @@ def record_gone(record_path: str) -> bool:
     except (FileNotFoundError, NotADirectoryError):
         # find_jobs と同じ意味で扱う — 祖先が file になったなら record は確かに無い。
         # ただし途中に辿れない link が在るなら、 消えたのではなく読めていない。
-        jobs = os.path.dirname(record_path)
-        return not (dangling(jobs) or dangling(os.path.dirname(jobs)))
+        path = os.path.dirname(record_path)
+        while path and path != os.path.dirname(path):
+            if dangling(path):
+                return False  # 途中が辿れない — 消えたのではなく読めていない
+            path = os.path.dirname(path)
+        return True
     except OSError:
         return False  # 読めないだけ — 消失 (exit 10) ではなく corrupt / 検証不能の側
     return False
@@ -669,18 +709,23 @@ def longest_silence(log_path: str) -> float | None:
 
 def baseline_silence(
     jobs_dir: str, exclude: str, now: float, settle_seconds: float = 0.0
-) -> float | None:
-    """Longest quiet spell among jobs that completed in THIS workspace; None with no history.
+) -> tuple[float | None, bool]:
+    """Longest quiet spell among completed jobs here, and whether all were counted.
 
     Scoped to one workspace on purpose: a slow job in an unrelated workspace
     would otherwise raise the threshold here and hide a real stall.
     """
     worst = None
-    # glob は全 path を一度に list 化するので、 数え切る前に上限で切る。
-    peers = sorted(
-        itertools.islice(glob.iglob(os.path.join(jobs_dir, "*.json")), MAX_PEERS)
-    )
-    for record_path in peers:
+    peers = []
+    # glob は候補名を一括で作るので、 数え切る前に 1 件ずつ受け取って打ち切る。
+    with os.scandir(jobs_dir) as entries:
+        for entry in entries:
+            if not entry.name.endswith(".json"):
+                continue
+            if len(peers) >= MAX_PEERS:
+                return None, False  # 数え切れない — 読めた分は全体の最大値ではない
+            peers.append(entry.path)
+    for record_path in sorted(peers):
         peer_id = os.path.basename(record_path)[: -len(".json")]
         if peer_id == exclude:
             continue
@@ -690,15 +735,19 @@ def baseline_silence(
         peer_log = record_path[: -len(".json")] + ".log"
         # completed と書かれてから最終 block が append されるまでの窓で読むと、
         # その peer の本当の gap を欠いた低い baseline になる。 落ち着くまで数えない。
+        # log だけ見ると、 古い log を持つ peer が今 completed になった窓を通す。
         before = file_stat(peer_log)
-        if before is None or now - before[2] / 1e9 < settle_seconds:  # [2] は mtime_ns
+        marked = file_stat(record_path)
+        if before is None or marked is None:
+            continue
+        if now - max(before[2], marked[2]) / 1e9 < settle_seconds:
             continue
         quiet = longest_silence(peer_log)
-        if file_stat(peer_log) != before:
+        if file_stat(peer_log) != before or file_stat(record_path) != marked:
             continue  # 読んでいる間に伸びた peer は、この poll の手本にならない
         if quiet is not None and (worst is None or quiet > worst):
             worst = quiet
-    return worst
+    return worst, True
 
 
 def stall_threshold(explicit: float | None, baseline: float | None) -> float:
@@ -1001,9 +1050,14 @@ def carrying_records(
     readable = True
     for pair in found:
         before = record_stamp(pair[0])
-        loaded = job_record(pair[0])
-        # 読取窓の途中だけ在った record は、 不在どうしの比較では変化に見えない。
-        if loaded is None or before[0] == "absent" or record_stamp(pair[0]) != before:
+        stamp, loaded = record_view(pair[0])
+        # 判断に使った bytes そのものが、 前後どちらとも同じであることを要求する。
+        if (
+            loaded is None
+            or before[0] in ("absent", "unopenable")
+            or stamp != before
+            or record_stamp(pair[0]) != before
+        ):
             readable = False  # 読めなかっただけ — 名乗っていない証明にはならない
             continue
         if loaded.get("id") == job_id:
@@ -1105,14 +1159,17 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # raise the bar here (a foreign 3600s gap once hid a two-hour stall). Read
         # it every poll — a peer's record goes completed before its last block is
         # appended, so a baseline taken once can be missing that job's real gap.
-        baseline = baseline_silence(jobs_dir, args.job_id, now, args.hang_seconds)
+        baseline, counted_all = baseline_silence(
+            jobs_dir, args.job_id, now, args.hang_seconds
+        )
         threshold = stall_threshold(args.stall_seconds, baseline)
         record_before = record_stamp(record_path)
-        record = job_record(record_path, args.job_id)
+        record_view_stamp, record = record_view(record_path, args.job_id)
         # 1 poll 1 走査 — verdict も evidence も同じ結果を使い、読み直さない。 走査の
         # 前後で観測対象が動いたら、 その poll は古い無音と新しい本文の混成になる。
         before = (file_stat(log), file_stat(args.artifact))
         unfinished, tail, whole_log = scan_log(log)
+        log_incomplete = not whole_log
         age = heartbeat_age(log, now)
         tree = tree_age((record or {}).get("workspaceRoot"), now)
         ready = artifact_ready(args.artifact, args.token, run_since(record or {}))
@@ -1124,23 +1181,18 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         )
         # 監視開始後に同じ id の record が増えても、 固定した path だけ見ていては気付けない。
         seen, scanned_all = find_jobs(args.job_id, roots)
-        # 走査が期限を跨いだなら、 その snapshot は「期限までに見えたもの」ではない。
-        observed_late = deadline_reached(deadline)
+        duplicates: list[tuple[str, str]] = []
         if seen:
             carried, all_carried = carrying_records(seen, args.job_id)
             seen = carried if all_carried else seen
-            if len(seen) > 1:
-                print(
-                    f"ambiguous: {len(seen)} records carry the id "
-                    f"{printable(args.job_id)}"
-                )
-                for duplicate, _log in seen:
-                    print(f"  {printable(duplicate)}")
-                return EXIT_AMBIGUOUS
+            duplicates = seen if len(seen) > 1 else []
         # plugin は record を completed に書いてから final output を append する。
         # その窓に入った poll は、 古い running のまま静穏を読んで stall と言える。
-        # 値の比較だけだと別々の壊れ方が「不変」に化けるので、 bytes まで見る。
-        record_changed = record_stamp(record_path) != record_before
+        # 前後一致は中間値との一致を証明しない — parse が見た bytes も同じと要求する。
+        record_changed = (
+            record_stamp(record_path) != record_before
+            or record_view_stamp != record_before
+        )
         changed = (
             (file_stat(log), file_stat(args.artifact)) != before
             or record_changed
@@ -1149,7 +1201,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             or tree_age((record or {}).get("workspaceRoot"), now) != tree
             # threshold の出どころも同じ poll のもの — peer が後から伸びると、
             # 古い低い bar と新しい対象 snapshot の組で stall を断定できる。
-            or baseline_silence(jobs_dir, args.job_id, now, args.hang_seconds)
+            or baseline_silence(jobs_dir, args.job_id, now, args.hang_seconds)[0]
             != baseline
         )
         # 「動いた」 と 「読めなかった」 は別の理由 — 畳むと headline がどちらも
@@ -1160,16 +1212,18 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             # watch 全体の同一性 — mtime と size は heartbeat で動くのが正常である。
             or (file_stat(record_path) or (None, None))[:2] != record_inode
         )
-        unreadable = not whole_log or record_moved
+        # 全ての read を終えた後に評価する — 途中の一時点では跨ぎを取りこぼす。
+        observed_late = deadline_reached(deadline)
+        unreadable = log_incomplete or record_moved or not counted_all
         # cancel / 失敗は他を読めるかに依らず結果ではない — 静穏 gate より先に置く。
         settled = str((record or {}).get("status") or "")
+        # 完了は「成果物 + disk の record」で決まる — log の可読性はその条件にない。
         decided_by_record = (
             record is not None
             and not record_moved
             and not record_changed
             and settled
             and settled not in ALIVE_STATUS
-            and settled != BASELINE_STATUS
         )
         if record_gone(record_path):
             # The plugin prunes to its newest 50 jobs regardless of status, so a
@@ -1214,6 +1268,14 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 command_may_run=bool(unfinished),
                 trust_log=args.trust_log,
             )
+        if duplicates and not observed_late:
+            print(
+                f"ambiguous: {len(duplicates)} records carry the id "
+                f"{printable(args.job_id)}"
+            )
+            for duplicate, _log in duplicates:
+                print(f"  {printable(duplicate)}")
+            return EXIT_AMBIGUOUS
         if out is not None and observed_late:
             out = None  # 期限後に初めて見た状態は、 期限内の終局判定にならない
         # 破棄した poll をそのまま下の分岐へ流すと、 混成した snapshot が exit 12 / 7 / 11 の
@@ -1785,8 +1847,8 @@ class WatchTest(unittest.TestCase):
             stamps=("2026-08-08T00:00:00", "2026-08-08T00:02:00"),
         )
         jobs = os.path.join(root, "ws", "jobs")
-        self.assertEqual(baseline_silence(jobs, "task-other", time.time()), 120.0)
-        self.assertIsNone(baseline_silence(jobs, "task-done", time.time()))
+        self.assertEqual(baseline_silence(jobs, "task-other", time.time())[0], 120.0)
+        self.assertIsNone(baseline_silence(jobs, "task-done", time.time())[0])
 
     def test_baseline_is_scoped_to_one_workspace(self):
         """別 workspace の遅い job で基準を上げない — 実 stall を隠す経路になる。"""
@@ -1805,7 +1867,7 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(
             baseline_silence(
                 os.path.join(root, "ws", "jobs"), "task-other", time.time()
-            ),
+            )[0],
             120.0,
         )
 
@@ -1822,7 +1884,7 @@ class WatchTest(unittest.TestCase):
             json.dump({"id": "task-stalled", "status": "cancelled"}, f)
         with open(os.path.join(jobs, "task-stalled.log"), "w", encoding="utf-8") as f:
             f.write("[2026-08-08T00:00:00Z] a\n[2026-08-08T00:40:00Z] b\n")
-        self.assertEqual(baseline_silence(jobs, "task-other", time.time()), 120.0)
+        self.assertEqual(baseline_silence(jobs, "task-other", time.time())[0], 120.0)
 
     def test_threshold_rises_past_observed_quiet_spells(self):
         """既定しきい値は履歴で決まる — 長考する runner に手で数字を渡さない。"""
@@ -2186,7 +2248,7 @@ class WatchTest(unittest.TestCase):
         from unittest import mock
 
         root = os.path.join(tempfile.mkdtemp(), "later")
-        real = os.listdir
+        real = bounded_names
 
         def creating(path):
             if path == root and not os.path.isdir(root):
@@ -2194,7 +2256,7 @@ class WatchTest(unittest.TestCase):
                 raise FileNotFoundError(root)
             return real(path)
 
-        with mock.patch("os.listdir", creating):
+        with mock.patch(__name__ + ".bounded_names", creating):
             _found, complete = find_jobs("task-x", [root])
         self.assertFalse(complete)
 
@@ -2234,6 +2296,161 @@ class WatchTest(unittest.TestCase):
             self.assertNotEqual(
                 watch(self._watch_args(root, "task-x", once=True)), EXIT_NOT_COMPLETED
             )
+
+    def test_an_uncounted_baseline_does_not_license_a_stall(self):
+        """読み切れなかった peer 集合の最大値は、 低すぎる bar かもしれない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-live", "running", log_age=900.0)
+        jobs = os.path.dirname(record)
+        for n in range(3):
+            with open(
+                os.path.join(jobs, f"task-p{n}.json"), "w", encoding="utf-8"
+            ) as f:
+                json.dump({"id": f"task-p{n}", "status": "completed"}, f)
+        with mock.patch(__name__ + ".MAX_PEERS", 1):
+            self.assertEqual(
+                baseline_silence(jobs, "task-live", time.time()), (None, False)
+            )
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".MAX_PEERS", 1),
+            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+        ):
+            args = self._watch_args(root, "task-live", once=True, trust_log=True)
+            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
+
+    def test_a_peer_completed_just_now_is_not_settled_by_an_old_log(self):
+        """log が古くても record が今 completed になったなら、 最終 block はまだ来ていない。"""
+        root, record, _log = self._state("ws", "task-live", "running")
+        jobs = os.path.dirname(record)
+        peer = os.path.join(jobs, "task-peer.json")
+        with open(os.path.join(jobs, "task-peer.log"), "w", encoding="utf-8") as f:
+            f.write("[2026-08-09T00:00:00.000Z] a\n[2026-08-09T00:01:00.000Z] b\n")
+        os.utime(
+            os.path.join(jobs, "task-peer.log"), (time.time() - 900, time.time() - 900)
+        )
+        with open(peer, "w", encoding="utf-8") as f:
+            json.dump({"id": "task-peer", "status": "completed"}, f)
+        self.assertEqual(
+            baseline_silence(jobs, "task-live", time.time(), 300.0)[0], None
+        )
+
+    def test_workspace_names_stop_at_the_cap_before_they_are_all_read(self):
+        """上限は高価な列挙の手前で効かなければ、 防ぐはずのコストを先に払う。"""
+        from unittest import mock
+
+        root = tempfile.mkdtemp()
+        for n in range(4):
+            os.makedirs(os.path.join(root, f"ws{n}"))
+        with mock.patch(__name__ + ".MAX_WORKSPACES", 2):
+            self.assertIsNone(bounded_names(root))
+
+    def test_a_transient_readable_record_is_not_a_stable_one(self):
+        """A→B→A の B を安定した snapshot として採らない。"""
+        from unittest import mock
+
+        root, record, log = self._state("ws", "task-x", "running")
+        stable = open(record, "rb").read()
+        real = record_view
+
+        def flipping(path, job_id=None):
+            with open(path, "wb") as f:
+                f.write(b'{"id": "task-x", "status": "completed"}')
+            view = real(path, job_id)
+            with open(path, "wb") as f:
+                f.write(stable)  # 判断の外側からは A→A に見える
+            return view
+
+        with mock.patch(__name__ + ".record_view", flipping):
+            carried, readable = carrying_records([(record, log)], "task-x")
+        self.assertEqual(carried, [])
+        self.assertFalse(readable)
+
+    def test_a_poll_that_finds_nothing_still_returns_a_verdict(self):
+        """走査が空でも watch は例外で終わらない — 判定を返せずに死ぬのが最悪である。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-x", "running")
+        real, calls = find_jobs, []
+
+        def emptying(job_id, roots):
+            calls.append(1)
+            return (real(job_id, roots)[0] if len(calls) == 1 else []), True
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".find_jobs", emptying),
+        ):
+            self.assertEqual(
+                watch(self._watch_args(root, "task-x", once=True)), EXIT_UNVERIFIABLE
+            )
+        self.assertTrue(os.path.exists(record))
+
+    def test_a_parse_of_other_bytes_is_not_this_polls_record(self):
+        """外側の前後一致は、 parse が見た bytes との一致を証明しない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-x", "running")
+        args = self._watch_args(root, "task-x", once=True)
+        args.artifact = None
+        real = record_view
+
+        def other_bytes(path, job_id=None):
+            if job_id is None:
+                return real(path, job_id)
+            return ("swapped",), {"id": "task-x", "status": "completed"}
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".record_view", other_bytes),
+            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+        ):
+            self.assertNotEqual(watch(args), EXIT_DONE)
+
+    def test_a_root_ancestor_that_cannot_be_followed_is_not_a_prune(self):
+        """root より上が辿れないだけなら、 record が prune されたとは言えない。"""
+        base = tempfile.mkdtemp()
+        link = os.path.join(base, "state")
+        os.symlink(os.path.join(base, "gone"), link)
+        self.assertFalse(record_gone(os.path.join(link, "ws", "jobs", "task-x.json")))
+
+    def test_a_duplicate_found_after_the_deadline_is_not_ambiguous(self):
+        """期限後に初めて見た重複も、 期限内の終局判定にはならない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, log = self._state("ws", "task-x", "running")
+        elsewhere, peer, _p = self._state("ws", "task-x", "running")
+        args = self._watch_args(root, "task-x")
+        args.artifact = None
+        real, crossed = time.monotonic, []
+        gaining = [
+            [(record, log)],
+            [(record, log), (peer, peer[: -len(".json")] + ".log")],
+        ]
+
+        def finding(job_id, roots):
+            crossed.append(1)
+            return (gaining.pop(0) if gaining else [(record, log)]), True
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".find_jobs", finding),
+            mock.patch(
+                "time.monotonic",
+                lambda: real() + (args.timeout_seconds + 1 if len(crossed) > 1 else 0),
+            ),
+        ):
+            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
+        self.assertTrue(os.path.isdir(elsewhere))
 
     def test_a_dangling_artifact_link_is_not_a_missing_deliverable(self):
         """entry が在る以上「成果物なし」 とは言えない — 3 値の None で exit 14 へ送る。"""
@@ -2372,22 +2589,22 @@ class WatchTest(unittest.TestCase):
         root, record, _log = self._state("ws", "task-x", "running")
         with open(record, "w", encoding="utf-8") as f:
             f.write("{partial")
-        real, rewrites = job_record, []
+        real, rewrites = record_view, []
 
         def rewriting(path, job_id=None):
-            loaded = real(path, job_id)
+            view = real(path, job_id)
             if path == record:
                 # 毎回違う壊れ方にする — 同じ本文を書き戻すと 2 度目から不変になる。
                 rewrites.append(1)
                 with open(record, "w", encoding="utf-8") as f:
                     f.write("{partial" + "!" * len(rewrites))
-            return loaded
+            return view
 
         from unittest import mock
 
         with (
             redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".job_record", rewriting),
+            mock.patch(__name__ + ".record_view", rewriting),
         ):
             self.assertNotEqual(
                 watch(self._watch_args(root, "task-x", once=True)), EXIT_CORRUPT
@@ -2458,7 +2675,8 @@ class WatchTest(unittest.TestCase):
         root, _rec, _log = self._state("ws", "task-x", "running")
         listings = [["ws"], ["ws", "later"]]
         with mock.patch(
-            "os.listdir", lambda _r: listings.pop(0) if listings else ["ws"]
+            __name__ + ".bounded_names",
+            lambda _r: listings.pop(0) if listings else ["ws"],
         ):
             _found, complete = find_jobs("task-x", [root])
         self.assertFalse(complete)
@@ -2593,6 +2811,9 @@ class WatchTest(unittest.TestCase):
                 self.asked.append(size)
                 return b"a" * (size if size else MAX_RECORD_BYTES * 4)
 
+            def fileno(self) -> int:
+                return 0
+
             def __enter__(self):
                 return self
 
@@ -2649,7 +2870,7 @@ class WatchTest(unittest.TestCase):
         with (
             redirect_stdout(io.StringIO()),
             mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
-            mock.patch(__name__ + ".baseline_silence", lambda *a: next(bars)),
+            mock.patch(__name__ + ".baseline_silence", lambda *a: (next(bars), True)),
         ):
             self.assertEqual(
                 watch(self._watch_args(root, "task-live", once=True, trust_log=True)),
@@ -2755,6 +2976,22 @@ class WatchTest(unittest.TestCase):
         from contextlib import redirect_stdout
         from unittest import mock
 
+        root, _rec, _log = self._state("ws", "task-live", "running", log_age=900.0)
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".scan_log", lambda *a, **k: ([], ["x"], False)),
+        ):
+            self.assertEqual(
+                watch(self._watch_args(root, "task-live", once=True)), EXIT_UNVERIFIABLE
+            )
+
+    def test_an_unreadable_log_does_not_block_a_completed_record(self):
+        """完了は「成果物 + disk の record」で決まる — log の可読性はその条件にない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
         root, _rec, _log = self._state("ws", "task-done", "completed", log_age=900.0)
         with (
             redirect_stdout(io.StringIO()),
@@ -2762,7 +2999,8 @@ class WatchTest(unittest.TestCase):
             mock.patch(__name__ + ".scan_log", lambda *a, **k: ([], ["x"], False)),
         ):
             self.assertEqual(
-                watch(self._watch_args(root, "task-done", once=True)), EXIT_UNVERIFIABLE
+                watch(self._watch_args(root, "task-done", once=True)),
+                EXIT_DONE,
             )
 
     def test_a_record_found_behind_an_unreadable_root_is_not_taken(self):
@@ -2842,7 +3080,7 @@ class WatchTest(unittest.TestCase):
             return quiet
 
         with mock.patch(__name__ + ".longest_silence", growing):
-            self.assertIsNone(baseline_silence(jobs, "task-live", time.time(), 0.0))
+            self.assertIsNone(baseline_silence(jobs, "task-live", time.time(), 0.0)[0])
 
     def test_token_without_a_deliverable_is_refused(self):
         """照合相手が無いまま受理すると、token を指定した呼び手が検査済みと読む。"""
@@ -3177,8 +3415,8 @@ class WatchTest(unittest.TestCase):
         with open(os.path.join(jobs, "task-peer.log"), "w", encoding="utf-8") as f:
             f.write("[2026-08-09T00:00:00.000Z] a\n[2026-08-09T00:01:00.000Z] b\n")
         now = time.time()
-        self.assertEqual(baseline_silence(jobs, "task-live", now, 0.0), 60.0)
-        self.assertIsNone(baseline_silence(jobs, "task-live", now, 300.0))
+        self.assertEqual(baseline_silence(jobs, "task-live", now, 0.0)[0], 60.0)
+        self.assertIsNone(baseline_silence(jobs, "task-live", now, 300.0)[0])
 
     def test_binary_body_with_a_matching_last_line_is_not_ready(self):
         """置換して読むと、 binary の末尾行が token と一致して完成品に化ける。"""
@@ -3425,10 +3663,10 @@ class WatchTest(unittest.TestCase):
             json.dump({"id": "task-peer", "status": "completed"}, f)
         with open(peer + ".log", "w", encoding="utf-8") as f:
             f.write("[2026-08-09T00:00:00.000Z] start\n")
-        self.assertIsNone(baseline_silence(jobs, "task-target", time.time()))
+        self.assertIsNone(baseline_silence(jobs, "task-target", time.time())[0])
         with open(peer + ".log", "a", encoding="utf-8") as f:
             f.write("[2026-08-09T00:03:00.000Z] Final output\n")
-        self.assertEqual(baseline_silence(jobs, "task-target", time.time()), 180.0)
+        self.assertEqual(baseline_silence(jobs, "task-target", time.time())[0], 180.0)
         self.assertEqual(stall_threshold(None, 180.0), 540.0)
 
     def test_evidence_calls_an_unreadable_tree_unknown_not_quiet(self):
@@ -3532,7 +3770,7 @@ class WatchTest(unittest.TestCase):
             json.dump({"id": "task-peer", "status": "completed"}, f)
         with open(os.path.join(jobs, "task-peer.log"), "w", encoding="utf-8") as f:
             f.write("[2026-08-09T00:00:00.000Z] a\n[9999-99-99T99:99:99.000Z] b\n")
-        self.assertIsNone(baseline_silence(jobs, "task-target", time.time()))
+        self.assertIsNone(baseline_silence(jobs, "task-target", time.time())[0])
 
     def test_pending_commands_names_the_unfinished_start(self):
         lines = [
