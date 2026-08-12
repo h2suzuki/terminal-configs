@@ -92,14 +92,13 @@ STALL_FLOOR_SECONDS = 420.0  # the skill's 7 min, used when history gives nothin
 STALL_BASELINE_FACTOR = 3.0
 # 1 回の sleep の上限 — 有限でも巨大な cadence は time.sleep が overflow する。
 MAX_SLEEP_SECONDS = 3600.0
-# 秒以降を緩く受けると、 本文の [.. 00:00:01:99Z] のような不正 stamp が event に化け、
-# 稼働中 command の start を偽の end で消してしまう。 runner はこの形しか書かない。
+# runner は小数 3 桁固定で比較相手の st_mtime_ns は 9 桁なので、小数部は 9 桁を上限にする。
 LOG_TS = re.compile(
-    r"^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:[0-5]\d(?:\.\d+)?)Z\]", re.ASCII
+    r"^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:[0-5]\d(?:\.\d{1,9})?)Z\]", re.ASCII
 )
-# record の stamp は UTC 表記。 末尾まで固定しないと offset 付きや junk 付きが通る。
+# runner は小数 3 桁固定で比較相手の st_mtime_ns は 9 桁なので、小数部は 9 桁を上限にする。
 RECORD_TS = re.compile(
-    r"(\d{4}-\d\d-\d\dT\d\d:\d\d:[0-5]\d)(\.\d+)?Z", re.ASCII
+    r"(\d{4}-\d\d-\d\dT\d\d:\d\d:[0-5]\d)(\.\d{1,9})?Z", re.ASCII
 )
 # A log line is an event line plus, at worst, one shortened command; a body that
 # runs longer than this is prose, and reading all of it only risks the verdict.
@@ -2386,12 +2385,12 @@ class WatchTest(unittest.TestCase):
         ]
         self.assertEqual([ln[-1] for ln in event_lines(lines)], ["a"])
 
-    def test_event_lines_drop_a_step_below_the_decimal_context_precision(self):
+    def test_event_lines_accept_nine_fraction_digits(self):
         lines = [
-            "[2026-08-09T00:00:00.123456789012345678901234567890Z] a",
-            "[2026-08-09T00:00:00.123456789012345678901234567889Z] quoted",
+            "[2026-08-09T00:00:00.123456788Z] a",
+            "[2026-08-09T00:00:00.123456789Z] b",
         ]
-        self.assertEqual([ln[-1] for ln in event_lines(lines)], ["a"])
+        self.assertEqual([ln[-1] for ln in event_lines(lines)], ["a", "b"])
 
     def test_epoch_fraction_does_not_depend_on_the_decimal_context(self):
         from decimal import localcontext
@@ -2412,6 +2411,13 @@ class WatchTest(unittest.TestCase):
         lines = [
             "[2026-08-09T00:00:00.100Z] Running command: cargo test",
             "[2026-08-09T00:00:00.099999999Z] Command completed: cargo test (exit 0)",
+        ]
+        self.assertEqual(pending_commands(lines), ["cargo test"])
+
+    def test_a_ten_digit_fake_end_does_not_finish_a_command(self):
+        lines = [
+            "[2026-08-09T00:00:00.123Z] Running command: cargo test",
+            "[2026-08-09T00:00:01.1234567890Z] Command completed: cargo test (exit 0)",
         ]
         self.assertEqual(pending_commands(lines), ["cargo test"])
 
@@ -2530,6 +2536,14 @@ class WatchTest(unittest.TestCase):
 
     def test_a_fullwidth_record_stamp_is_corrupt(self):
         self.assertIsNone(stamp_epoch("２０２６-08-08T11:43:06.921Z"))
+
+    def test_record_stamps_accept_nine_fraction_digits(self):
+        stamp = "2026-08-08T11:43:06.123456789Z"
+        whole = calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))
+        self.assertEqual(stamp_epoch(stamp), Decimal(whole) + Decimal("0.123456789"))
+
+    def test_a_ten_digit_record_stamp_is_corrupt(self):
+        self.assertIsNone(stamp_epoch("2026-08-08T11:43:06.1234567890Z"))
 
     def test_pre_epoch_fractions_move_forward_and_keep_artifacts_stale(self):
         early = exact_stamp("1969-12-31T23:59:59.9")
