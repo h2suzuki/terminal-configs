@@ -59,7 +59,7 @@ test 数 / 指摘件数) を追記して commit する。発注書・報告書�
 | 対策 | 状態 | 直近更新 | 要約 |
 |---|---|---|---|
 | 裁定の機械化 | 完了 | 2026-08-12 | `55c618e` で main へ取り込み (区分 B は refactor 後) |
-| 構造 refactor | 未着手 | — | 次の柱 |
+| 構造 refactor | 進行中 | 2026-08-13 | 第 1 段 (期限 gate funnel 化) を codex sol xhigh へ発注・走行中 |
 | TOCTOU harness | 未着手 | — | refactor 完了後 |
 | 体制と収束認定 | 未着手 | — | 柱完了後に 54 巡目 |
 | 方法論 doc (`docs/adversarial-review-methodology.md`) | 完了 | 2026-08-13 | 発散機構 M1–M6 / 設計 G・L・R / モデル選定 / チェックリスト |
@@ -232,3 +232,15 @@ round 2 は sentinel exit 0。A〜H 全適用 (SourceInvariantTest 分離 + 1 �
   pass 12 箇所 (jargon 初出定義・label 統一、内容不変)
 - deploy 完了 (ユーザー実行・2026-08-13 00:05): `/usr/local/bin/codex_task_sentinel` が
   canonical (meta-test 込み `55c618e`) と `diff -q` IDENTICAL・mode 0755 を確認
+
+### 2026-08-13 — 構造 refactor 第 1 段 (期限 gate funnel 化) を発注
+
+- 発注書 `drafts/sentinel-refactor-s1-order.md` (codex_order_lint rc=0・初回)。方法論を適用:
+  段を最小化 (funnel のみ・ついで restructure 禁止) / funnel の契約を発注書に明文化
+  (期限後は exit 7 のみ + 裁定 27 の exit 6 例外) / 12 site の差分は「黙って統一せず開示」/
+  変異 5 件は発注側が選定 (M4 対策) / 波及 10 test 超なら停止して報告 (r49 対策) /
+  正規表現一括置換の禁止 (r48 対策)。meta-test 2 本 (funnel 経由強制・gate 集約) で
+  裁定 18・21・27 を B→A 化する
+- 起動: worktree `wt-p1s1` (HEAD `fbda658`)、job `task-msqas0pl-36n734`、record で
+  **sol / xhigh / write** を確認 (refactor のみ xhigh へ昇格はユーザー承認済)。probe 5 秒。
+  監視 sentinel (estimate 4500s / stall 900s / timeout 10800s) を background 実行
