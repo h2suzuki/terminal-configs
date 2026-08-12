@@ -316,3 +316,27 @@ meta-test 3 本で構造的に作れなくなった。裁定 18・21・27 が実
   bind mount。削除 loop は 0 件削除で終了 (実 file への操作なし)。全 view で tracked 内容は
   不変。bind 越しに実 `~/.claude` を触るリスクがあるため sandbox 内からの操作は凍結。
   真の disk 状態はユーザーが sandbox 外の `git status` で確認できる
+
+### 2026-08-13 — 第 2 段 納品・レビュー結果 (material 3) と fix round
+
+納品は phase A/B/C 完走・既存 test 変更は meta-test 更新 1 本のみ・変異 5/5 catch 申告。
+発注側再検証で gates 全緑 (253 / 11 / ruff / ty / lang lint)、開示 6 項 (reader 間の既存差) は
+裁定裏付けありとして受理。opus 5 xhigh レビュー (16.7 分・138k tokens) は **material 3 /
+minor 2**:
+
+1. (material) open 検査が柱 2 fix round の広い matcher (任意 receiver の `.open`) を**後退**
+   させ、dotted 名照合だけに — `codecs.open` が現役 bypass。**「前 round の保護を次の変更が
+   静かに外す」= 53 巡ループの形 5 の再演を、レビュー層が捕捉した**
+2. (material) Observation class の blanket 免除により、log / record の「指紋を path 再 stat
+   から取る」変異が meta-test にも既存 suite にも素通り (artifact のみ挙動 test が捕捉)。
+   codex は発注の変異 2 (log 指定) を artifact で代替し無開示 — **自己確認変異の再演** (2 度目)。
+   検出盲点自体は HEAD にも在る pre-existing で、退行ではないが担保表記が過大
+3. (material) 裁定 31 の B→A 昇格が過大主張 (経由しか検査していない)
+4. (minor) 共有 helper `_owners` の意味変更が申告漏れ
+5. (minor) `log_lines` wrapper が production caller ゼロ化 (open_regular と非一貫)
+
+fix round 2 を発注 (`drafts/sentinel-refactor-s2-fixes.md`、lint rc=0・初回)。変異 6 件は
+発注側選定。**「指定変異は指定対象で実行し、fail しなければ検出されないと開示」の規律を
+発注書に明文化** (代替の無申告を禁止)。初回 resume 起動が queue 直後に無 error で failed →
+規律どおり fresh thread で再発注、job `task-msqfc7tt-uob6bs` (sol / xhigh / write 確認済)。
+監視 sentinel (estimate 2700s) を background 実行。
