@@ -513,3 +513,19 @@ flag と発注意図の一致まで確認)。sentinel `by0g8233d` (estimate 2400
 併記: 部分 deploy 検証 — sentinel / extensions.json / guard hook / codex-delegation skill は
 diff -q IDENTICAL。managed-settings.json は `codex_task_launch *` 行のみ除いた形で deploy
 (launcher 本体は採否合意待ち・ユーザー判断)。
+
+### 2026-08-13 — r55 fix round 完了・main 取り込み (selftest 268・裁定 51)
+
+fix round は sentinel `by0g8233d` exit 0。納品は指示を超える良集約: stamp parse を
+`ordered_events()` (Decimal exact・行あたり 1 回) に畳み、`longest_silence` に残っていた
+二重 parse (event 行を再 match して stamp を取り直す) も同時に消えた。受け入れ: gates 再実行
+(selftest **268** / 外部 11 / ruff / ty 全緑)、**元 repro 3 件の消滅を fix 後 code で直接確認**
+(偽終了行→pending 保持 / 1 ns stale→exact で stale / `²`→例外なし)、裁定 48 の tie 保持も
+維持を確認。独立変異 2 件 (鮮度 float 戻し / `isascii` 外し) を exact-splice で再現し、
+いずれも当該 test のみ fail — codex 報告と一致。wt 内 commit `ff6707e` → cherry-pick
+**`3746acb`** で main へ。worktree / branch 削除・報告書退避。裁定 50 (exact 比較)・51
+(`isascii`∧`isdigit`) を正本化 (49 → **51 件**)。
+
+deploy 注記: `/usr/local/bin/codex_task_sentinel` は f748391 時点の deploy のまま →
+本 fix で再度 DIFFERS (認定完了時にまとめて再 deploy でも可)。
+次: r56 = 認定 1 巡目 (3 度目) を新 HEAD から発注 (裁定数 51・test 数 268 に更新)。

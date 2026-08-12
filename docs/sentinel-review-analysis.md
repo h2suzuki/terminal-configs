@@ -485,6 +485,11 @@ codex sol xhigh で 2 巡連続」。
   引き続き 0
 - fix round: `drafts/sentinel-r55-fixes.md` (exact 比較化・`isascii` guard・red 確認 +
   変異 3 件)。認定 counter は 0 のまま、fix 後の r56 から再カウント
+- fix 取り込み: commit `3746acb`。stamp parse を `ordered_events()` (Decimal exact・行あたり
+  1 回) に集約 — `longest_silence` の二重 parse も同時に解消。鮮度比較は `st_mtime_ns` の
+  exact 領域へ。red 確認 (修正前 2 fail + 1 error) + 変異 3/3 + 発注側の独立変異 2 件再現 +
+  元 repro 3 件の消滅を直接確認。selftest 265 → **268**。裁定 50 (exact 比較) と 51
+  (`isascii`∧`isdigit`) を正本化 (49 → 51 件)
 
 ## 復元元
 
