@@ -293,3 +293,14 @@ ty / lang lint)。commit `b0ece2f` (wt-p1s1) → cherry-pick **`c067c0b`** で m
 第 1 段の総括: 発注 1 + レビュー 1 (material 0 / minor 5) + fix 1 の **2 round で完了**。
 期限 gate 外 return (53 巡ループ最頻クラスの 1 つ・7 件再発) は `finish()` funnel +
 meta-test 3 本で構造的に作れなくなった。裁定 18・21・27 が実体のある区分 A になった。
+
+### 2026-08-13 — 第 2 段 (Observation 層) を発注
+
+- 発注書 `drafts/sentinel-refactor-s2-order.md` (lint rc=0・初回)。設計の契約: 読取規律
+  (open・pin/hold・bounded read・指紋・3 値・dangling 祖先・解放順序) を単一 primitive へ、
+  reader は内容解釈のみ (fd 系 syscall 直呼び禁止 → meta-test を fd 全般へ拡張)。
+  公開 signature と戻り値の形は不変 = 既存 test 無改変が挙動保存の証拠。内部 phase A/B/C
+  (record → log 系 → artifact) ごとに selftest 確認、失敗 10 本超で停止。変異 5 件は
+  発注側選定 (直 os.open / path 再 stat 指紋 / 解放順序逆転 / 3 値の畳み込み / 上限外し)
+- 起動: worktree `wt-p1s2` (HEAD `4288762`)、job `task-msqcff4e-0yn399`、record で
+  sol / xhigh / write を確認。probe 5 秒。監視 sentinel (estimate 5400s / timeout 14400s)
