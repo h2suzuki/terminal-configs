@@ -806,14 +806,22 @@ def stamp_epoch(stamp: object) -> float | None:
 def artifact_ready(
     path: str | None, token: str | None, since: float | None = None
 ) -> bool | None:
-    """Whether the deliverable is this run's finished output; None when it cannot be read.
+    """Whether the deliverable is this run's finished output; None when unreadable."""
+    return artifact_view(path, token, since)[0]
+
+
+def artifact_view(
+    path: str | None, token: str | None, since: float | None = None
+) -> tuple[bool | None, tuple | None]:
+    """The same answer, plus the fingerprint of the descriptor it was read from.
 
     `since` is the earliest instant this run could have written. With no floor
     there is nothing separating this run's output from an earlier run's, so the
     answer is no rather than a guess.
     """
     if not path or since is None:
-        return False
+        return False, None
+    stamp = None
     decoder = codecs.getincrementaldecoder("utf-8")()
     body = ""
     # 保持するのは末尾だけなので、 「どこかに中身があったか」 は読みながら覚えておく。
@@ -823,11 +831,17 @@ def artifact_ready(
         # 置換された別 inode の mtime が古い本文の完了 token と組になりうる。
         with open_regular(path) as f:
             before = os.fstat(f.fileno())
+            stamp = (
+                before.st_dev,
+                before.st_ino,
+                before.st_mtime_ns,
+                before.st_size,
+            )
             # 全体を先頭から strict decode するので途中の不正 byte も落ちる。 保持は
             # 末尾だけ — 全量を持つと巨大な成果物ひとつで MemoryError になる。
             # 読む総量は開いた時点の size まで — 動く EOF を追うと読み終わらない。
             if before.st_size > MAX_SCAN_BYTES:
-                return None  # 読み切れない大きさ — 完成とも未完成とも言えない
+                return None, stamp  # 読み切れない大きさ
             remaining = before.st_size
             while remaining > 0 and (
                 chunk := f.read(min(MAX_ARTIFACT_BYTES, remaining))
@@ -842,29 +856,29 @@ def artifact_ready(
             after = os.fstat(f.fileno())
     except FileNotFoundError:
         # 辿れない link は entry が在る — 無いのではなく読めないので 3 値の None。
-        return None if dangling(path) else False
+        return (None if dangling(path) else False), None
     except UnicodeDecodeError:
         # 置換して読むと、 binary の末尾行が token と一致して完成品に化ける。
-        return False
+        return False, stamp
     except OSError:
-        return None  # 在るのに読めない — 「成果物なし」と断定してよい根拠がない
+        return None, stamp  # 在るのに読めない
     if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
-        return False  # 読んでいる間に伸びた = まだ書かれている最中
+        return False, stamp  # 読んでいる間に伸びた
     try:
         # 読み終えた inode が今も その path か — 読取中だけ在った成果物を ready に
         # すると、 外側の「不在 → 不在」比較では変化として拾えない。
         named = os.stat(path)
     except OSError:
-        return False
+        return False, stamp
     if (named.st_dev, named.st_ino) != (after.st_dev, after.st_ino):
-        return False
+        return False, stamp
     if after.st_mtime < since:
-        return False  # a leftover from an earlier run is not this run's output
+        return False, stamp  # a leftover from an earlier run
     if not token:
-        return seen_content
+        return seen_content, stamp
     # The order says the final line IS the token: no padding, no trailing blanks.
     lines = body.splitlines()
-    return bool(lines) and lines[-1] == token
+    return (bool(lines) and lines[-1] == token), stamp
 
 
 def version_key(path: str) -> tuple[int, ...]:
@@ -1220,7 +1234,9 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         log_incomplete = not whole_log
         age = heartbeat_age(log, now)
         tree = tree_age((record or {}).get("workspaceRoot"), now)
-        ready = artifact_ready(args.artifact, args.token, run_since(record or {}))
+        ready, artifact_stamp = artifact_view(
+            args.artifact, args.token, run_since(record or {})
+        )
         # Elapsed runs from the job's own start so re-arming does not reset the clock;
         # without that stamp it is this watch's own elapsed, which no clock change moves.
         job_started = stamp_epoch((record or {}).get("startedAt"))
@@ -1246,7 +1262,10 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # 要求する分岐が書けない。
         # parse が読んだ descriptor と、 前後の path 観測が同じでなければ判定しない。
         log_changed = file_stat(log) != before_log or log_view_stamp != before_log
-        artifact_changed = file_stat(args.artifact) != before_artifact
+        # 読んだ descriptor も前後の観測と同じでなければ、 A→B→A が透過する。
+        artifact_changed = file_stat(args.artifact) != before_artifact or (
+            artifact_stamp is not None and artifact_stamp != before_artifact
+        )
         # os.walk は snapshot ではないので、 列挙済み file への書き込みは
         # 走査し直さない限りこの poll から丸ごと抜け落ちる。
         tree_changed = tree_age((record or {}).get("workspaceRoot"), now) != tree
@@ -1277,6 +1296,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             log_incomplete or record_moved or not (counted_all and counted_all_after)
         )
         # cancel / 失敗は他を読めるかに依らず結果ではない — 静穏 gate より先に置く。
+        # 読取後に変化した成果物は、 headline でも evidence でも現存を断定しない。
+        shown_ready = None if artifact_changed else ready
         settled = str((record or {}).get("status") or "")
         terminal_record = (
             record is not None
@@ -1303,7 +1324,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 settled,
                 age,
                 tree,
-                None if artifact_changed else ready,
+                shown_ready,
                 threshold,
                 args.hang_seconds,
                 expects_artifact=args.artifact is not None,
@@ -1402,7 +1423,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     threshold,
                     baseline,
                     args.artifact,
-                    ready,
+                    shown_ready,
                     unfinished,
                     tail,
                     whole_log,
@@ -1420,7 +1441,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 threshold,
                 baseline,
                 args.artifact,
-                ready,
+                shown_ready,
                 unfinished,
                 tail,
                 whole_log,
@@ -2493,6 +2514,62 @@ class WatchTest(unittest.TestCase):
                 baseline_silence(jobs, "task-live", time.time()), (None, False)
             )
 
+    def test_timeout_evidence_does_not_claim_a_changed_deliverable(self):
+        """timeout の evidence も同じ成果物状態を使う — headline だけ直しても足りない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-live", "running")
+        artifact = os.path.join(root, "report.md")
+        with open(artifact, "w", encoding="utf-8") as f:
+            f.write("body\nDONE\n")
+        args = self._watch_args(root, "task-live")
+        args.artifact, args.token = artifact, "DONE"
+        real, crossed = time.monotonic, []
+
+        def foreign(path, token, since=None):
+            return True, (0, 0, 0, 0)  # 別 descriptor で読んだ ready
+
+        buf = io.StringIO()
+        with (
+            redirect_stdout(buf),
+            mock.patch(__name__ + ".artifact_view", foreign),
+            mock.patch(__name__ + ".sleep_until", lambda *a: crossed.append(1)),
+            mock.patch(
+                "time.monotonic",
+                lambda: real() + (args.timeout_seconds + 1 if crossed else 0),
+            ),
+        ):
+            self.assertEqual(watch(args), EXIT_TIMEOUT)
+        self.assertTrue(crossed)
+        self.assertNotIn("成果物 : ready", buf.getvalue())
+
+    def test_an_artifact_swapped_around_the_read_is_not_done(self):
+        """成果物も、 読んだ descriptor が前後の観測と同じでなければ完了にしない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-done", "completed")
+        artifact = os.path.join(root, "report.md")
+        with open(artifact, "w", encoding="utf-8") as f:
+            f.write("body\n")  # disk 上は未完成のまま
+        args = self._watch_args(root, "task-done", once=True)
+        args.artifact, args.token = artifact, "DONE"
+        real = artifact_view
+
+        def foreign(path, token, since=None):
+            real(path, token, since)
+            return True, (0, 0, 0, 0)  # 別 descriptor で完成を読んだことにする
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".artifact_view", foreign),
+            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+        ):
+            self.assertNotEqual(watch(args), EXIT_DONE)
+
     def test_a_peer_log_swapped_around_the_parse_is_not_history(self):
         """peer log にも対象 log と同じ理由で descriptor の一致を要る。"""
         from unittest import mock
@@ -2565,18 +2642,21 @@ class WatchTest(unittest.TestCase):
             f.write("body\nDONE\n")
         args = self._watch_args(root, "task-x", once=True)
         args.artifact, args.token = artifact, "DONE"
-        real = artifact_ready
+        real, fired = artifact_view, []
 
         def then_gone(path, token, since=None):
             got = real(path, token, since)
+            fired.append(path)
             os.unlink(path)  # 読んだ直後に消える
             return got
 
         self.assertTrue(artifact_ready(artifact, "DONE", 0.0))  # 空振り防止
         buf = io.StringIO()
-        with redirect_stdout(buf), mock.patch(__name__ + ".artifact_ready", then_gone):
+        with redirect_stdout(buf), mock.patch(__name__ + ".artifact_view", then_gone):
             self.assertEqual(watch(args), EXIT_NOT_COMPLETED)
         self.assertNotIn("deliverable is present", buf.getvalue())
+        self.assertNotIn("成果物 : ready", buf.getvalue())
+        self.assertEqual(fired, [artifact])  # patch が実際に発火したことまで固定する
 
     def test_a_cancel_command_is_not_offered_for_a_control_character_id(self):
         """貼れない command を出すくらいなら、 出せないと言う。"""
