@@ -14,8 +14,7 @@
       "node *codex-companion.mjs*",
       "agent-browser *",
       "claude --bg *",
-      "claude agents *",
-      "codex_task_launch *"
+      "claude agents *"
     ],
     "filesystem": {
       "allowWrite": ["~/.claude/plugins/data", "/var/lib/claude-rag-memory"],
