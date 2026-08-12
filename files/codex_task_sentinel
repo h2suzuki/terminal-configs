@@ -93,9 +93,13 @@ STALL_BASELINE_FACTOR = 3.0
 MAX_SLEEP_SECONDS = 3600.0
 # 秒以降を緩く受けると、 本文の [.. 00:00:01:99Z] のような不正 stamp が event に化け、
 # 稼働中 command の start を偽の end で消してしまう。 runner はこの形しか書かない。
-LOG_TS = re.compile(r"^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:[0-5]\d(?:\.\d+)?)Z\]")
+LOG_TS = re.compile(
+    r"^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:[0-5]\d(?:\.\d+)?)Z\]", re.ASCII
+)
 # record の stamp は UTC 表記。 末尾まで固定しないと offset 付きや junk 付きが通る。
-RECORD_TS = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:[0-5]\d)(\.\d+)?Z")
+RECORD_TS = re.compile(
+    r"(\d{4}-\d\d-\d\dT\d\d:\d\d:[0-5]\d)(\.\d+)?Z", re.ASCII
+)
 # A log line is an event line plus, at worst, one shortened command; a body that
 # runs longer than this is prose, and reading all of it only risks the verdict.
 MAX_LOG_LINE = 8192
@@ -783,12 +787,17 @@ def command_text(line: str) -> str:
     return re.sub(r"\s*\(exit -?\d+\)\s*$", "", body).strip()
 
 
+def epoch_fraction(whole: int, fraction: str | None) -> Decimal:
+    """An integral epoch second plus its non-negative decimal fraction."""
+    return Decimal(whole) + Decimal("0" + (fraction or ""))
+
+
 def exact_stamp(stamp: str) -> Decimal | None:
     """An exact UTC epoch value for a log stamp, or None when invalid."""
     try:
         whole = calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))
         fraction = stamp[19:].rstrip("Z")
-        return Decimal(f"{whole}{fraction}")
+        return epoch_fraction(whole, fraction)
     except (InvalidOperation, ValueError, OverflowError):
         return None
 
@@ -1032,7 +1041,7 @@ def stamp_epoch(stamp: object) -> Decimal | None:
         )
     except ValueError:
         return None
-    return Decimal(f"{whole}{matched.group(2) or ''}")
+    return epoch_fraction(whole, matched.group(2))
 
 
 def artifact_ready(
@@ -1088,6 +1097,13 @@ def version_key(path: str) -> tuple[int, ...]:
     """The version directory of a cached plugin path, ordered numerically not lexically."""
     part = path.split(os.sep)[-3] if path.count(os.sep) >= 3 else ""
     return tuple(int(x) if x.isascii() and x.isdigit() else 0 for x in part.split("."))
+
+
+def ascii_float(value: str) -> float:
+    """An argparse float whose numeric spelling is limited to ASCII."""
+    if not value.isascii():
+        raise argparse.ArgumentTypeError("number must use ASCII characters")
+    return float(value)
 
 
 def companion_path() -> str | None:
@@ -1323,17 +1339,28 @@ def carrying_records(
         # 判断に使った bytes そのものが、 前後どちらとも同じであることを要求する。
         if stamp != before or record_stamp(pair[0]) != before:
             shifting.append(pair)
+            Observation.release(view)
             continue
         if loaded is None or before[0] in ("absent", "unopenable"):
             unknown.append(pair)  # 読めなかっただけ — 名乗っていない証明にならない
+            Observation.release(view)
             continue
         if loaded.get("id") == job_id:
             carried.append(pair)
             if hold is not None and view:
-                hold.extend(view)
+                hold.append((pair, view))
                 view = []
-    Observation.release(view)  # 採らなかった候補の descriptor は持たない
+        Observation.release(view)  # 採らなかった候補の descriptor は持たない
     return carried, unknown, shifting
+
+
+def replace_candidate_holds(previous: list, fresh: list) -> list:
+    """Install candidate-bound descriptor holds, then release the old set."""
+    if not fresh:
+        return previous
+    for _pair, descriptors in previous:
+        Observation.release(descriptors)
+    return fresh
 
 
 def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
@@ -1353,10 +1380,16 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             carried, unknown, shifting = carrying_records(
                 found, args.job_id, hold=fresh_hold
             )
-            # 周回の間に別 inode へ替わったなら、 同じ path でも同じ record ではない。
-            if pin_hold and fresh_hold:
-                was = Observation.descriptor_stat(pin_hold[0])
-                now_id = Observation.descriptor_stat(fresh_hold[0])
+            # 周回間 inode 比較は同じ path の単独候補だけに限る。重複は下の
+            # cardinality 判定へ送り、走査順の違う候補同士を比較しない。
+            if (
+                len(carried) == 1
+                and len(pin_hold) == 1
+                and len(fresh_hold) == 1
+                and pin_hold[0][0] == fresh_hold[0][0]
+            ):
+                was = Observation.descriptor_stat(pin_hold[0][1][0])
+                now_id = Observation.descriptor_stat(fresh_hold[0][1][0])
                 if (was.st_dev, was.st_ino) != (now_id.st_dev, now_id.st_ino):
                     return finish(
                         deadline,
@@ -1374,7 +1407,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             # 新しい掴みを得られた時だけ入れ替える — 読めない周回で手放すと、
             # 後から現れた inode と比べる相手が無くなる。
             if fresh_hold:
-                pin_hold = Observation.replace_hold(pin_hold, fresh_hold)
+                pin_hold = replace_candidate_holds(pin_hold, fresh_hold)
             complete = complete and not shifting  # 動いた候補は掴めていない
             # 動いた候補も「一度は見えた」 — 忘れると後で未登録と断定できてしまう。
             seen_pairs.update(shifting)
@@ -1547,7 +1580,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
     try:
         # 登録解決で検証した descriptor をそのまま使う。 読み手を差し替えた呼び手
         # (test の stub 等) では手元に無いので、 その時だけ開き直して自己検証する。
-        pinned = pin_hold[0] if pin_hold else open_regular(record_path)
+        pinned = pin_hold[0][1][0] if pin_hold else open_regular(record_path)
         pinned_stat = Observation.descriptor_stat(pinned)
         if _parse_record(
             Observation.read_held(pinned, MAX_RECORD_BYTES + 1), args.job_id
@@ -1975,15 +2008,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--token", help="final token the deliverable must end with")
     p.add_argument(
         "--stall-seconds",
-        type=float,
+        type=ascii_float,
         help="quiet time that counts as stalled; default is derived from this workspace's history",
     )
-    p.add_argument("--hang-seconds", type=float, default=300.0)
-    p.add_argument("--poll-seconds", type=float, default=30.0)
-    p.add_argument("--timeout-seconds", type=float, default=3300.0)
+    p.add_argument("--hang-seconds", type=ascii_float, default=300.0)
+    p.add_argument("--poll-seconds", type=ascii_float, default=30.0)
+    p.add_argument("--timeout-seconds", type=ascii_float, default=3300.0)
     p.add_argument(
         "--estimate-seconds",
-        type=float,
+        type=ascii_float,
         help="expected run time; twice this without a verdict exits for investigation",
     )
     p.add_argument("--state-root", help="override where plugin state is searched")
@@ -2322,6 +2355,13 @@ class WatchTest(unittest.TestCase):
         ]
         self.assertEqual(pending_commands(lines), ["cargo test"])
 
+    def test_a_fullwidth_year_cannot_finish_a_pending_command(self):
+        lines = [
+            "[2026-08-09T00:00:00Z] Running command: cargo test",
+            "[２０２６-08-09T00:00:01Z] Command completed: cargo test (exit 0)",
+        ]
+        self.assertEqual(pending_commands(lines), ["cargo test"])
+
     def test_command_text_ignores_the_exit_suffix(self):
         self.assertEqual(
             command_text("[2026-08-09T00:00:00.000Z] Running command: ls -la"), "ls -la"
@@ -2420,6 +2460,24 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(stamp_epoch(stamp), Decimal(whole) + Decimal("0.921"))
         self.assertEqual(stamp_epoch("2026-08-08T11:43:06Z"), Decimal(whole))
 
+    def test_a_fullwidth_record_stamp_is_corrupt(self):
+        self.assertIsNone(stamp_epoch("２０２６-08-08T11:43:06.921Z"))
+
+    def test_pre_epoch_fractions_move_forward_and_keep_artifacts_stale(self):
+        early = exact_stamp("1969-12-31T23:59:59.9")
+        late = stamp_epoch("1969-12-31T23:59:59.95Z")
+        assert early is not None and late is not None
+        self.assertEqual(early, Decimal("-0.1"))
+        self.assertEqual(late, Decimal("-0.05"))
+        self.assertLess(early, late)
+
+        p = os.path.join(tempfile.mkdtemp(), "report.md")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("body\nREPORT_COMPLETE\n")
+        os.utime(p, ns=(-100_000_000, -100_000_000))
+        self.assertEqual(os.stat(p).st_mtime_ns, -100_000_000)
+        self.assertFalse(artifact_ready(p, "REPORT_COMPLETE", since=late))
+
     def test_an_artifact_one_nanosecond_before_the_run_is_stale(self):
         import tempfile
 
@@ -2430,6 +2488,7 @@ class WatchTest(unittest.TestCase):
         assert start is not None
         artifact_ns = int(start * 1_000_000_000) - 1
         os.utime(p, ns=(artifact_ns, artifact_ns))
+        self.assertEqual(os.stat(p).st_mtime_ns, artifact_ns)
         self.assertFalse(artifact_ready(p, "REPORT_COMPLETE", since=start))
 
     def test_same_second_leftover_is_still_stale(self):
@@ -2474,6 +2533,8 @@ class WatchTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 args = parser.parse_args(["task-x", "--poll-seconds", bad])
                 check_arguments(parser, args)
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["task-x", "--poll-seconds", "１２"])
 
     def test_silences_measure_gaps_between_log_lines(self):
         _root, _rec, log = self._state(
@@ -3154,6 +3215,33 @@ class WatchTest(unittest.TestCase):
             self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
         self.assertIn("different record", buf.getvalue())
 
+    def test_a_cross_round_duplicate_precedes_the_inode_comparison(self):
+        """A new scan-order head still leaves two records ambiguous, not replaced."""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record_b, log_b = self._state("zzz", "task-x", "running")
+        _other, record_a, log_a = self._state("aaa", "task-x", "running")
+        rounds = []
+
+        def finding(job_id, roots):
+            rounds.append(1)
+            if len(rounds) == 1:
+                return [(record_b, log_b)], False
+            return [(record_a, log_a), (record_b, log_b)], True
+
+        buf = io.StringIO()
+        with (
+            redirect_stdout(buf),
+            mock.patch(__name__ + ".find_jobs", finding),
+        ):
+            self.assertEqual(
+                watch(self._watch_args(root, "task-x", timeout_seconds=0.5)),
+                EXIT_AMBIGUOUS,
+            )
+        self.assertIn("ambiguous: 2 records", buf.getvalue())
+
     def test_a_cross_round_replacement_past_the_deadline_is_a_timeout(self):
         """周回間の差し替えも、 期限を跨いだら timeout として返す。"""
         import io
@@ -3399,7 +3487,7 @@ class WatchTest(unittest.TestCase):
             if len(rounds) == 2:
                 return [], [], [pair]  # 新しい掴みを得られない周
             if hold is not None:
-                hold.append(open(record, "rb"))
+                hold.append((pair, [open(record, "rb")]))
             return [pair], [], []
 
         def swapping(job_id, roots):
