@@ -211,7 +211,7 @@ COMMAND_END = re.compile(r"^\[[^\]]+\]\s+Command \w+:")
 
 def state_roots(explicit: str | None = None) -> list[str]:
     """Every root the plugin may have written to, in the order it resolves them."""
-    if explicit:
+    if explicit is not None:
         return [explicit]
     roots = []
     plugin_data = os.environ.get(PLUGIN_DATA_ENV)
@@ -806,14 +806,17 @@ def event_lines(lines: Iterator[str] | list[str]) -> Iterator[str]:
     quotes an earlier log line carries that older stamp, which is what separates
     the quote from the event it otherwise looks exactly like.
     """
-    high = ""
+    high: float | None = None
     for line in lines:
         m = LOG_TS.match(line)
-        if not m or stamp_seconds(m.group(1)) is None:
-            continue  # 形だけ日付に見える本文 — 採用すると以降の event を丸ごと落とす
-        if m.group(1) < high:
+        if not m:
             continue
-        high = m.group(1)
+        stamp = stamp_seconds(m.group(1))
+        if stamp is None:
+            continue  # 形だけ日付に見える本文 — 採用すると以降の event を丸ごと落とす
+        if high is not None and stamp < high:
+            continue
+        high = stamp
         yield line
 
 
@@ -1997,9 +2000,11 @@ def check_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace) -
         parser.error("job id must be a single file name, not a path")
     # 明示された空文字を truthiness で畳むと、 指定した呼び手には「未指定」 と
     # 同じ扱いになり、 照合されないまま exit 0 が返る。
-    for name in ("artifact", "token"):
+    for name in ("artifact", "token", "state_root"):
         if getattr(args, name) == "":
-            parser.error(f"--{name} needs a value, not an empty string")
+            parser.error(
+                f"--{name.replace('_', '-')} needs a value, not an empty string"
+            )
     if args.token and not args.artifact:
         # 成果物が無ければ token を照合する相手がいない。 黙って無視すると、
         # 完了 token を指定した呼び手が「検査された」 と読んだまま exit 0 を受け取る。
@@ -2086,6 +2091,10 @@ class WatchTest(unittest.TestCase):
         self.assertIn(os.path.join(tempfile.gettempdir(), "codex-companion"), roots)
         self.assertIn(STATE_ROOT, roots)
         self.assertEqual(state_roots("/only"), ["/only"])
+
+    def test_an_explicit_empty_state_root_stays_explicit(self):
+        """An explicit root never expands the caller's requested search scope."""
+        self.assertEqual(state_roots(""), [""])
 
     def test_queued_counts_as_alive(self):
         """companion の生存語彙は queued / running の 2 つ (source と実データで確認)。"""
@@ -2256,13 +2265,41 @@ class WatchTest(unittest.TestCase):
 
     def test_event_lines_keep_forward_stamps_only(self):
         lines = [
-            "[2026-08-09T00:00:00.000Z] a",
-            "[2026-08-09T00:00:05.000Z] b",
-            "[2026-08-09T00:00:01.000Z] quoted",
-            "[2026-08-09T00:00:06.000Z] c",
+            "[2026-08-09T00:00:00.9Z] a",
+            "[2026-08-09T00:00:01Z] b",
+            "[2026-08-09T00:00:00.95Z] quoted",
+            "[2026-08-09T00:00:02.1Z] c",
             "no stamp at all",
         ]
         self.assertEqual([ln[-1] for ln in event_lines(lines)], ["a", "b", "c"])
+
+    def test_event_lines_keep_no_fraction_then_fraction_in_the_same_second(self):
+        lines = [
+            "[2026-08-09T00:00:00Z] a",
+            "[2026-08-09T00:00:00.1Z] b",
+        ]
+        self.assertEqual([ln[-1] for ln in event_lines(lines)], ["a", "b"])
+
+    def test_event_lines_keep_equal_stamps_with_different_spellings(self):
+        lines = [
+            "[2026-08-09T00:00:00.100Z] a",
+            "[2026-08-09T00:00:00.1Z] b",
+        ]
+        self.assertEqual([ln[-1] for ln in event_lines(lines)], ["a", "b"])
+
+    def test_event_lines_drop_a_fractional_step_backwards(self):
+        lines = [
+            "[2026-08-09T00:00:00.1Z] a",
+            "[2026-08-09T00:00:00.05Z] quoted",
+        ]
+        self.assertEqual([ln[-1] for ln in event_lines(lines)], ["a"])
+
+    def test_event_lines_drop_no_fraction_after_a_fraction(self):
+        lines = [
+            "[2026-08-09T00:00:00.5Z] a",
+            "[2026-08-09T00:00:00Z] quoted",
+        ]
+        self.assertEqual([ln[-1] for ln in event_lines(lines)], ["a"])
 
     def test_command_text_ignores_the_exit_suffix(self):
         self.assertEqual(
@@ -3404,6 +3441,21 @@ class WatchTest(unittest.TestCase):
                     ["task-x", "--state-root", empty, "--timeout-seconds", "0.01"]
                     + extra
                 )
+
+    def test_an_empty_state_root_is_a_usage_error(self):
+        """An empty override must not widen the search to the default roots."""
+        import io
+
+        error = io.StringIO()
+        with (
+            self.assertRaises(SystemExit) as raised,
+            contextlib.redirect_stderr(error),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            main(["task-x", "--state-root", "", "--timeout-seconds", "0.01"])
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("usage:", error.getvalue())
+        self.assertIn("--state-root needs a value", error.getvalue())
 
     def test_an_unreadable_log_says_unread_not_changed(self):
         """安定して読めない log は「変化」 ではなく「読み切れていない」 である。"""
