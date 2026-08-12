@@ -354,3 +354,12 @@ main 上でも 255 OK。報告書 2 本退避後、worktree / branch 削除、co
 最大クラス (読取規律の配り漏れ・forgot 系) の発生源が Observation 層 1 箇所に集約され、
 reader からの fd 系 syscall 直呼びは meta-test で構造的に禁止された。レビューが「前 round の
 保護の後退」と「自己確認変異」を round 内で捕捉した — 方法論 M4 / 形 5 の対策が機能した実測。
+
+### 2026-08-13 — 第 3 段 (表示 funnel・柱 1 最終段) を発注
+
+- 発注書 `drafts/sentinel-refactor-s3-order.md` (lint rc=0・初回)。stdout / stderr 出力 site の
+  全数 audit → 正当な出口へ集約 → print / write 系の allowlist meta-test で pin。裁定 30・32・
+  33・36 の担保を 3 分記 (内容 = 挙動 test / 出力 site = meta-test / 残余 = レビュー観点) し、
+  過大昇格をしない (裁定 31 の教訓)。変異 3 件は発注側選定・指定対象厳守
+- 起動: worktree `wt-p1s3` (HEAD `3f30e1b`)、job `task-msqfydo6-ll9ubx`、record で
+  sol / xhigh / write を確認。監視 sentinel (estimate 2700s) を background 実行
