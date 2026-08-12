@@ -1337,7 +1337,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         recorded = printable(
             "不明" if record_unstable else ((record or {}).get("status") or "不明")
         )
-        shown_ready = None if (artifact_changed or record_unstable) else ready
+        # この分岐は record が安定な時しか通らないので、 見るのは成果物の変化だけでよい。
+        shown_ready = None if artifact_changed else ready
         settled = str((record or {}).get("status") or "")
         terminal_record = (
             record is not None
