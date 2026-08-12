@@ -470,6 +470,25 @@ def deadline_reached(deadline: float, margin: float = 0.0) -> bool:
     return time.monotonic() + margin > deadline
 
 
+def finish(
+    deadline: float,
+    code: int,
+    output: tuple[str, ...],
+    timeout_output: tuple[str, ...],
+    *,
+    allow_empty_scan_after_deadline: bool = False,
+) -> int:
+    """Emit and return one terminal verdict after applying the deadline gate."""
+    if code != EXIT_TIMEOUT and deadline_reached(deadline) and not (
+        allow_empty_scan_after_deadline and code == EXIT_NEVER_REGISTERED
+    ):
+        code = EXIT_TIMEOUT
+        output = timeout_output
+    for line in output:
+        print(line)
+    return code
+
+
 def sleep_until(deadline: float, poll_seconds: float) -> None:
     """Wait one cadence at most, and never past the deadline the caller was promised.
 
@@ -1200,18 +1219,19 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 was = os.fstat(pin_hold[0].fileno())
                 now_id = os.fstat(fresh_hold[0].fileno())
                 if (was.st_dev, was.st_ino) != (now_id.st_dev, now_id.st_ino):
-                    if deadline_reached(deadline):
-                        print(
+                    return finish(
+                        deadline,
+                        EXIT_UNVERIFIABLE,
+                        (
+                            f"unverifiable: {printable(args.job_id)} resolved to a "
+                            f"different record than the one seen earlier",
+                            f"  {printable(found[0][0])}",
+                        ),
+                        (
                             f"timeout: {printable(args.job_id)} could not be resolved "
-                            f"within {int(args.timeout_seconds)}s"
-                        )
-                        return EXIT_TIMEOUT
-                    print(
-                        f"unverifiable: {printable(args.job_id)} resolved to a "
-                        f"different record than the one seen earlier"
+                            f"within {int(args.timeout_seconds)}s",
+                        ),
                     )
-                    print(f"  {printable(found[0][0])}")
-                    return EXIT_UNVERIFIABLE
             # 新しい掴みを得られた時だけ入れ替える — 読めない周回で手放すと、
             # 後から現れた inode と比べる相手が無くなる。
             if fresh_hold:
@@ -1230,105 +1250,162 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 # 検証できなかった候補を後発の record で置き換えられる。
                 resolved_unknown = resolved_unknown or bool(found)
         # 候補を確かめ終えた時点で期限なら、 そこから終局を作らない。
-        if found and deadline_reached(deadline):
+        if found and finish(deadline, EXIT_ALIVE, (), ()) == EXIT_TIMEOUT:
             if len(found) == 1 and complete:
                 break  # 単一候補なら post-loop の timeout が record を名指しできる
-            print(
-                f"timeout: {printable(args.job_id)} was not resolved to a single "
-                f"record within {int(args.timeout_seconds)}s"
+            return finish(
+                deadline,
+                EXIT_TIMEOUT,
+                (
+                    f"timeout: {printable(args.job_id)} was not resolved to a single "
+                    f"record within {int(args.timeout_seconds)}s",
+                    f"  searched: {printable(', '.join(roots))}",
+                ),
+                (),
             )
-            print(f"  searched: {printable(', '.join(roots))}")
-            return EXIT_TIMEOUT
         if found:
             if len(found) > 1:
-                print(
-                    f"ambiguous: {len(found)} records carry the id "
-                    f"{printable(args.job_id)}"
+                return finish(
+                    deadline,
+                    EXIT_AMBIGUOUS,
+                    (
+                        f"ambiguous: {len(found)} records carry the id "
+                        f"{printable(args.job_id)}",
+                        *(f"  {printable(record)}" for record, _log in found),
+                    ),
+                    (
+                        f"timeout: {printable(args.job_id)} was not resolved to a single "
+                        f"record within {int(args.timeout_seconds)}s",
+                        f"  searched: {printable(', '.join(roots))}",
+                    ),
                 )
-                for record, _log in found:
-                    print(f"  {printable(record)}")
-                return EXIT_AMBIGUOUS
         if found and complete:
             # 「その 1 件が過去にも見えた」 では足りない — A→B と替わった後の B も通る。
             if seen_pairs - {found[0]}:
                 # 前に見たのと別の record — 同じ id でも同じ job とは限らない。
-                print(
-                    f"unverifiable: {printable(args.job_id)} resolved to a different "
-                    f"record than the one seen earlier"
+                return finish(
+                    deadline,
+                    EXIT_UNVERIFIABLE,
+                    (
+                        f"unverifiable: {printable(args.job_id)} resolved to a different "
+                        f"record than the one seen earlier",
+                        *(
+                            f"  {printable(pair[0])}"
+                            for pair in sorted(seen_pairs | {found[0]})
+                        ),
+                    ),
+                    (
+                        f"timeout: {printable(args.job_id)} could not be resolved "
+                        f"within {int(args.timeout_seconds)}s",
+                        f"  searched: {printable(', '.join(roots))}",
+                    ),
                 )
-                for pair in sorted(seen_pairs | {found[0]}):
-                    print(f"  {printable(pair[0])}")
-                return EXIT_UNVERIFIABLE
             break
         # 走査しきれていない 1 件は「唯一」の証明にならないが、 どれを見たかは事実。
         # bool に畳むと、 後から別 path の同名 record へ黙ってすり替わる。
         seen_pairs.update(found)
         found = []
-        if args.once and deadline_reached(deadline):
-            # 1 cadence が期限を跨いだなら、 その走査から未登録は言えない。
-            print(
-                f"timeout: {printable(args.job_id)} was not resolved within "
-                f"{int(args.timeout_seconds)}s"
-            )
-            print(f"  searched: {printable(', '.join(roots))}")
-            return EXIT_TIMEOUT
         if args.once:
             # --once は 1 cadence で返す約束。 ただし走査が不完全、 または一度でも
             # record を見ているなら 「未登録」 とは言えない。
             if complete and not seen_pairs:
-                print(f"alive: {printable(args.job_id)} is not registered yet")
-                print(f"  searched: {printable(', '.join(roots))}")
-                return EXIT_ALIVE
-            print(
-                f"unverifiable: {printable(args.job_id)} could not be shown "
-                f"unregistered in one cadence"
+                return finish(
+                    deadline,
+                    EXIT_ALIVE,
+                    (
+                        f"alive: {printable(args.job_id)} is not registered yet",
+                        f"  searched: {printable(', '.join(roots))}",
+                    ),
+                    (
+                        f"timeout: {printable(args.job_id)} was not resolved within "
+                        f"{int(args.timeout_seconds)}s",
+                        f"  searched: {printable(', '.join(roots))}",
+                    ),
+                )
+            return finish(
+                deadline,
+                EXIT_UNVERIFIABLE,
+                (
+                    f"unverifiable: {printable(args.job_id)} could not be shown "
+                    f"unregistered in one cadence",
+                    f"  searched: {printable(', '.join(roots))}",
+                ),
+                (
+                    f"timeout: {printable(args.job_id)} was not resolved within "
+                    f"{int(args.timeout_seconds)}s",
+                    f"  searched: {printable(', '.join(roots))}",
+                ),
             )
-            print(f"  searched: {printable(', '.join(roots))}")
-            return EXIT_UNVERIFIABLE
         # 終局は実期限で決める — margin を足すと、 待つと約束した時間内の登録を取り逃す。
-        if deadline_reached(deadline):
+        if finish(deadline, EXIT_ALIVE, (), ()) == EXIT_TIMEOUT:
             if not complete or seen_pairs:
                 # 走査しきれていない、 または一度は見えた — どちらも
                 # 「登録されていない」 とは言えない。
                 if seen_pairs:
                     # 一度見えた record があるなら、 期限に言えるのは timeout だけ。
-                    print(
-                        f"timeout: {printable(args.job_id)} was seen and then lost "
-                        f"within {int(args.timeout_seconds)}s"
+                    return finish(
+                        deadline,
+                        EXIT_TIMEOUT,
+                        (
+                            f"timeout: {printable(args.job_id)} was seen and then lost "
+                            f"within {int(args.timeout_seconds)}s",
+                            f"  searched: {printable(', '.join(roots))}",
+                        ),
+                        (),
                     )
-                    print(f"  searched: {printable(', '.join(roots))}")
-                    return EXIT_TIMEOUT
                 # 期限に言えるのは timeout — 例外は完全な空走査の exit 6 だけである。
-                print(
-                    f"timeout: {printable(args.job_id)} could not be resolved within "
-                    f"{int(args.timeout_seconds)}s"
+                return finish(
+                    deadline,
+                    EXIT_TIMEOUT,
+                    (
+                        f"timeout: {printable(args.job_id)} could not be resolved within "
+                        f"{int(args.timeout_seconds)}s",
+                        f"  searched: {printable(', '.join(roots))}",
+                    ),
+                    (),
                 )
-                print(f"  searched: {printable(', '.join(roots))}")
-                return EXIT_TIMEOUT
-            print(f"never-registered: no state record for {printable(args.job_id)}")
-            print(f"  searched: {printable(', '.join(roots))}")
-            return EXIT_NEVER_REGISTERED
+            return finish(
+                deadline,
+                EXIT_NEVER_REGISTERED,
+                (
+                    f"never-registered: no state record for {printable(args.job_id)}",
+                    f"  searched: {printable(', '.join(roots))}",
+                ),
+                (),
+                allow_empty_scan_after_deadline=True,
+            )
         sleep_until(deadline, args.poll_seconds)
     record_path, log = found[0]
-    if deadline_reached(deadline):
+    if finish(deadline, EXIT_ALIVE, (), ()) == EXIT_TIMEOUT:
         # 登録待ちを抜けた時点で期限なら、 1 度も観測せずに新しい poll を始めない。
-        print(
-            f"timeout: registered but not observed within {int(args.timeout_seconds)}s"
+        return finish(
+            deadline,
+            EXIT_TIMEOUT,
+            (
+                f"timeout: registered but not observed within {int(args.timeout_seconds)}s",
+                f"  job    : {printable(args.job_id)} record={printable(record_path)}",
+            ),
+            (),
         )
-        print(f"  job    : {printable(args.job_id)} record={printable(record_path)}")
-        return EXIT_TIMEOUT
     jobs_dir = os.path.dirname(record_path)
     # 検証と pin は同じ descriptor で行う — 別に開き直すと、 その間の差し替えを
     # 検出できないまま別 record を掴む。
     if resolved_unknown and not record_gone(record_path):
         # 検証できなかった候補を、 後から読めた別 record で置き換えない。
         # 消えている場合は別 — それは exit 10 が答えなので下の pin へ委ねる。
-        print(
-            "corrupt: the state record is present but unreadable — the job's "
-            "outcome cannot be read from it, so do not treat this as a stall"
+        return finish(
+            deadline,
+            EXIT_CORRUPT,
+            (
+                "corrupt: the state record is present but unreadable — the job's "
+                "outcome cannot be read from it, so do not treat this as a stall",
+                f"  job    : record={printable(record_path)}",
+            ),
+            (
+                f"timeout: registered but not observed within {int(args.timeout_seconds)}s",
+                f"  job    : {printable(args.job_id)} record={printable(record_path)}",
+            ),
         )
-        print(f"  job    : record={printable(record_path)}")
-        return EXIT_CORRUPT
     pinned = None
     try:
         # 登録解決で検証した descriptor をそのまま使う。 読み手を差し替えた呼び手
@@ -1342,56 +1419,66 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
     except (FileNotFoundError, NotADirectoryError):
         # 掴めなかった理由を identity に化けさせない — 同じ名前が後で読めても、
         # それは登録解決で見た record と再同定できない。
-        if deadline_reached(deadline):
-            print(
-                f"timeout: the record could not be held within {int(args.timeout_seconds)}s"
-            )
-            return EXIT_TIMEOUT
-        print(
-            "vanished: the state record disappeared after registration — "
-            "the plugin prunes old jobs, so this job's outcome is unknowable here"
+        return finish(
+            deadline,
+            EXIT_VANISHED,
+            (
+                "vanished: the state record disappeared after registration — "
+                "the plugin prunes old jobs, so this job's outcome is unknowable here",
+                f"  job    : record={printable(record_path)}",
+            ),
+            (
+                f"timeout: the record could not be held within {int(args.timeout_seconds)}s",
+            ),
         )
-        print(f"  job    : record={printable(record_path)}")
-        return EXIT_VANISHED
     except OSError:
-        if deadline_reached(deadline):
-            print(
-                f"timeout: the record could not be held within {int(args.timeout_seconds)}s"
-            )
-            return EXIT_TIMEOUT
-        print(
-            "corrupt: the state record is present but unreadable — the job's "
-            "outcome cannot be read from it, so do not treat this as a stall"
+        return finish(
+            deadline,
+            EXIT_CORRUPT,
+            (
+                "corrupt: the state record is present but unreadable — the job's "
+                "outcome cannot be read from it, so do not treat this as a stall",
+                f"  job    : record={printable(record_path)}",
+            ),
+            (
+                f"timeout: the record could not be held within {int(args.timeout_seconds)}s",
+            ),
         )
-        print(f"  job    : record={printable(record_path)}")
-        return EXIT_CORRUPT
     # 掴めたなら、 それが今もその path か — 登録解決の read との間で差し替わりうる。
     if record_inode is not None:
         named_now = file_stat(record_path)
         if named_now is not None and named_now[:2] != record_inode:
-            if deadline_reached(deadline):
-                print(
-                    f"timeout: the record could not be held within {int(args.timeout_seconds)}s"
-                )
-                return EXIT_TIMEOUT
-            print(
-                f"unverifiable: {printable(args.job_id)} could not be pinned to one "
-                f"record, so nothing observed after this is about one job"
+            return finish(
+                deadline,
+                EXIT_UNVERIFIABLE,
+                (
+                    f"unverifiable: {printable(args.job_id)} could not be pinned to one "
+                    f"record, so nothing observed after this is about one job",
+                    f"  job    : record={printable(record_path)}",
+                ),
+                (
+                    f"timeout: the record could not be held within {int(args.timeout_seconds)}s",
+                ),
             )
-            print(f"  job    : record={printable(record_path)}")
-            return EXIT_UNVERIFIABLE
     last_report: tuple[str, str] | None = None
     while True:
         # 期限に達していたら新しい poll を始めない — 期限後の状態から出た verdict が
         # timeout に勝ってしまう。 一貫した poll が 1 度も無い場合は下の破棄分岐が
         # 理由付きの exit 14 を返すので、 ここは判定を持てた場合だけを引き受ける。
-        if last_report is not None and deadline_reached(deadline):
-            print(
-                f"timeout: no terminal verdict within {int(args.timeout_seconds)}s "
-                f"(record says {last_report[0]})"
+        if (
+            last_report is not None
+            and finish(deadline, EXIT_ALIVE, (), ()) == EXIT_TIMEOUT
+        ):
+            return finish(
+                deadline,
+                EXIT_TIMEOUT,
+                (
+                    f"timeout: no terminal verdict within {int(args.timeout_seconds)}s "
+                    f"(record says {last_report[0]})",
+                    last_report[1],
+                ),
+                (),
             )
-            print(last_report[1])
-            return EXIT_TIMEOUT
         now = time.time()
         # Scope the baseline to this job's own workspace: a slow neighbour must not
         # raise the bar here (a foreign 3600s gap once hid a two-hour stall). Read
@@ -1607,18 +1694,43 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 command_may_run=bool(unfinished),
                 trust_log=args.trust_log,
             )
-        if duplicates and not deadline_reached(deadline):
-            print(
-                f"ambiguous: {len(duplicates)} records carry the id "
-                f"{printable(args.job_id)}"
+        if duplicates:
+            return finish(
+                deadline,
+                EXIT_AMBIGUOUS,
+                (
+                    f"ambiguous: {len(duplicates)} records carry the id "
+                    f"{printable(args.job_id)}",
+                    *(f"  {printable(duplicate)}" for duplicate, _log in duplicates),
+                ),
+                (
+                    f"timeout: no terminal verdict within {int(args.timeout_seconds)}s "
+                    f"(record says {recorded})",
+                    evidence(
+                        args.job_id,
+                        record or {},
+                        log,
+                        age,
+                        tree,
+                        threshold,
+                        baseline,
+                        args.artifact,
+                        ready,
+                        unfinished,
+                        tail,
+                        whole_log,
+                        moved,
+                        unscanned,
+                    ),
+                ),
             )
-            for duplicate, _log in duplicates:
-                print(f"  {printable(duplicate)}")
-            return EXIT_AMBIGUOUS
         # 破棄した poll をそのまま下の分岐へ流すと、 混成した snapshot が exit 12 / 7 / 11 の
         # evidence として出る。 期限前なら取り直し、 期限か --once なら理由を名指しで返す。
         if out is None and (changed or unreadable):
-            if not (args.once or deadline_reached(deadline)):
+            if (
+                not args.once
+                and finish(deadline, EXIT_ALIVE, (), ()) != EXIT_TIMEOUT
+            ):
                 sleep_until(deadline, args.poll_seconds)
                 continue
             out = (
@@ -1657,9 +1769,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 f"alive: no terminal verdict yet after {int(elapsed)}s "
                 f"(record says {recorded})",
             )
-        # 期限を跨いだ poll から返せるのは timeout だけ — 分岐ごとに書くと必ず漏れる。
-        # out の有無で短絡させない: 直前の分岐が期限後に作った終局もここで潰す。
-        if deadline_reached(deadline):
+        # out の有無で短絡させない: 直前の分岐が期限後に作った終局も funnel で潰す。
+        if finish(deadline, EXIT_ALIVE, (), ()) == EXIT_TIMEOUT:
             out = (
                 EXIT_TIMEOUT,
                 f"timeout: no terminal verdict within {int(args.timeout_seconds)}s "
@@ -1667,26 +1778,34 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             )
         if out is not None:
             code, headline = out
-            print(printable(headline))
-            print(
-                evidence(
-                    args.job_id,
-                    record or {},
-                    log,
-                    age,
-                    tree,
-                    threshold,
-                    baseline,
-                    args.artifact,
-                    ready,
-                    unfinished,
-                    tail,
-                    whole_log,
-                    moved,
-                    unscanned,
-                )
+            report = evidence(
+                args.job_id,
+                record or {},
+                log,
+                age,
+                tree,
+                threshold,
+                baseline,
+                args.artifact,
+                ready,
+                unfinished,
+                tail,
+                whole_log,
+                moved,
+                unscanned,
             )
-            return code
+            return finish(
+                deadline,
+                code,
+                (printable(headline), report),
+                (
+                    printable(
+                        f"timeout: no terminal verdict within "
+                        f"{int(args.timeout_seconds)}s (record says {recorded})"
+                    ),
+                    report,
+                ),
+            )
         last_report = (
             recorded,
             evidence(
@@ -6010,6 +6129,70 @@ class SourceInvariantTest(unittest.TestCase):
                 ):
                     bad.append(row.elts[0].lineno)
         self.assertFalse(bad, f"non-literal EXIT_CONTRACT codes at lines {bad}")
+
+    def test_watch_returns_only_through_finish(self):
+        """Every return in watch must be an emitting ``return finish(...)``."""
+        tree = self._source_tree()
+        watches = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "watch"
+        ]
+        bad = []
+        if len(watches) != 1:
+            bad.append(1)
+        else:
+            bad.extend(
+                node.lineno
+                for node in ast.walk(watches[0])
+                if isinstance(node, ast.Return)
+                and not (
+                    isinstance(node.value, ast.Call)
+                    and self._call_name(node.value.func) == "finish"
+                    and len(node.value.args) >= 3
+                    and not (
+                        isinstance(node.value.args[2], ast.Tuple)
+                        and not node.value.args[2].elts
+                    )
+                )
+            )
+        self.assertFalse(bad, f"watch returns outside emitting finish at lines {bad}")
+
+    def test_empty_scan_deadline_exception_is_unique_and_narrow(self):
+        """Ruling 27 permits at most one exit-6 deadline exception."""
+        tree = self._source_tree()
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and self._call_name(node.func) == "finish"
+            and any(
+                keyword.arg == "allow_empty_scan_after_deadline"
+                for keyword in node.keywords
+            )
+        ]
+        bad = [node.lineno for node in calls] if len(calls) > 1 else []
+        bad.extend(
+            node.lineno
+            for node in calls
+            if len(node.args) < 2
+            or not (
+                isinstance(node.args[1], ast.Name)
+                and node.args[1].id == "EXIT_NEVER_REGISTERED"
+            )
+        )
+        self.assertFalse(
+            sorted(set(bad)),
+            f"invalid empty-scan deadline exceptions at lines {sorted(set(bad))}",
+        )
+
+    def test_deadline_reached_call_sites_are_allowlisted(self):
+        """Terminal deadline checks belong only to the finish funnel."""
+        allowed = {("deadline_reached", "finish")}
+        bad = self._bad_call_lines(
+            lambda node: self._call_name(node.func) == "deadline_reached", allowed
+        )
+        self.assertFalse(bad, f"non-allowlisted deadline gates at lines {bad}")
 
     def test_wall_clock_call_sites_are_allowlisted(self):
         """Ruling 9 reserves wall time for age and elapsed observations."""
