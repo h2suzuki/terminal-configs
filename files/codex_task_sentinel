@@ -66,6 +66,7 @@ import tempfile
 import time
 import unittest
 from collections.abc import Callable, Iterator
+from decimal import Decimal, InvalidOperation
 
 STATE_ROOT = os.path.expanduser("~/.claude/plugins/data/codex-openai-codex/state")
 # The plugin resolves its state root from CLAUDE_PLUGIN_DATA and falls back to
@@ -782,6 +783,16 @@ def command_text(line: str) -> str:
     return re.sub(r"\s*\(exit -?\d+\)\s*$", "", body).strip()
 
 
+def exact_stamp(stamp: str) -> Decimal | None:
+    """An exact UTC epoch value for a log stamp, or None when invalid."""
+    try:
+        whole = calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))
+        fraction = stamp[19:].rstrip("Z")
+        return Decimal(f"{whole}{fraction}")
+    except (InvalidOperation, ValueError, OverflowError):
+        return None
+
+
 def stamp_seconds(stamp: str) -> float | None:
     """Epoch seconds for a log stamp, or None when it only looks like a date.
 
@@ -789,14 +800,26 @@ def stamp_seconds(stamp: str) -> float | None:
     verbatim, so a fixture like [9999-99-99T99:99:99.000Z] is ordinary input.
     Parsing it where the caller cannot see costs the whole watch.
     """
-    try:
-        # 末尾 Z のとおり UTC — mktime は local time として読むため、 DST 境界を挟む
-        # 2 点の差がその分ずれ、 baseline と stall 判定が動く。
-        whole = calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))
-        # 小数を捨てると gap が最大 1 秒短くなり、 その 3 倍だけ threshold が下がる。
-        return whole + float("0" + stamp[19:].rstrip("Z") or 0)
-    except (ValueError, OverflowError):
-        return None
+    exact = exact_stamp(stamp)
+    return float(exact) if exact is not None else None
+
+
+def ordered_events(
+    lines: Iterator[str] | list[str],
+) -> Iterator[tuple[str, Decimal]]:
+    """Runner event lines paired with their once-parsed exact stamps."""
+    high: Decimal | None = None
+    for line in lines:
+        matched = LOG_TS.match(line)
+        if not matched:
+            continue
+        stamp = exact_stamp(matched.group(1))
+        if stamp is None:
+            continue  # 形だけ日付に見える本文 — 採用すると以降の event を丸ごと落とす
+        if high is not None and stamp < high:
+            continue
+        high = stamp
+        yield line, stamp
 
 
 def event_lines(lines: Iterator[str] | list[str]) -> Iterator[str]:
@@ -806,17 +829,7 @@ def event_lines(lines: Iterator[str] | list[str]) -> Iterator[str]:
     quotes an earlier log line carries that older stamp, which is what separates
     the quote from the event it otherwise looks exactly like.
     """
-    high: float | None = None
-    for line in lines:
-        m = LOG_TS.match(line)
-        if not m:
-            continue
-        stamp = stamp_seconds(m.group(1))
-        if stamp is None:
-            continue  # 形だけ日付に見える本文 — 採用すると以降の event を丸ごと落とす
-        if high is not None and stamp < high:
-            continue
-        high = stamp
+    for line, _stamp in ordered_events(lines):
         yield line
 
 
@@ -830,7 +843,7 @@ def pending_commands(lines: Iterator[str] | list[str]) -> list[str]:
     enough to pass the per-line bound while the list itself grows without one.
     """
     pending: list[str] = []
-    for line in event_lines(lines):
+    for line, _stamp in ordered_events(lines):
         if COMMAND_START.match(line):
             if len(pending) < MAX_PENDING:
                 pending.append(command_text(line))
@@ -917,15 +930,13 @@ def longest_silence(
         nonlocal whole  # 短い view の最大 gap は、その log の最大 gap ではない
         whole = False
 
-    for line in event_lines(log_lines(log_path, truncated, view, hold)):
-        m = LOG_TS.match(line)
-        stamp = stamp_seconds(m.group(1)) if m else None
-        if stamp is None:
-            continue
+    for _line, stamp in ordered_events(log_lines(log_path, truncated, view, hold)):
         if previous is not None and (worst is None or stamp - previous > worst):
             worst = stamp - previous
         previous = stamp
-    return (worst if whole else None), (view[0] if view else None)
+    return (float(worst) if whole and worst is not None else None), (
+        view[0] if view else None
+    )
 
 
 def baseline_silence(
@@ -995,7 +1006,7 @@ def stall_threshold(explicit: float | None, baseline: float | None) -> float:
     return max(STALL_FLOOR_SECONDS, baseline * STALL_BASELINE_FACTOR)
 
 
-def run_since(record: dict) -> float | None:
+def run_since(record: dict) -> Decimal | None:
     """The earliest instant this run could have written anything; None before it ran.
 
     startedAt is added when the worker picks the job up, so a job still queued has
@@ -1005,7 +1016,7 @@ def run_since(record: dict) -> float | None:
     return stamp_epoch(record.get("startedAt"))
 
 
-def stamp_epoch(stamp: object) -> float | None:
+def stamp_epoch(stamp: object) -> Decimal | None:
     """An ISO UTC stamp as epoch seconds, fraction kept; None when unusable.
 
     Keeps the fraction: truncating to the second lets a file written earlier in
@@ -1016,16 +1027,16 @@ def stamp_epoch(stamp: object) -> float | None:
     if not matched:
         return None  # 末尾まで見ないと +09:00 や junk 付きを UTC として採ってしまう
     try:  # the record stamps UTC, so read it as UTC rather than through local time
-        whole = float(
-            calendar.timegm(time.strptime(matched.group(1), "%Y-%m-%dT%H:%M:%S"))
+        whole = calendar.timegm(
+            time.strptime(matched.group(1), "%Y-%m-%dT%H:%M:%S")
         )
     except ValueError:
         return None
-    return whole + float(matched.group(2)) if matched.group(2) else whole
+    return Decimal(f"{whole}{matched.group(2) or ''}")
 
 
 def artifact_ready(
-    path: str | None, token: str | None, since: float | None = None
+    path: str | None, token: str | None, since: Decimal | float | None = None
 ) -> bool | None:
     """Whether the deliverable is this run's finished output; None when unreadable."""
     return artifact_view(path, token, since)[0]
@@ -1034,7 +1045,7 @@ def artifact_ready(
 def artifact_view(
     path: str | None,
     token: str | None,
-    since: float | None = None,
+    since: Decimal | float | None = None,
     hold: list | None = None,
 ) -> tuple[bool | None, tuple | None]:
     """The same answer, plus the fingerprint of the descriptor it was read from.
@@ -1057,7 +1068,8 @@ def artifact_view(
     if observed.reason == "decode":
         return False, observed.stamp
     assert observed.descriptor is not None
-    if observed.descriptor.st_mtime < since:
+    floor = since if isinstance(since, Decimal) else Decimal.from_float(since)
+    if Decimal(observed.descriptor.st_mtime_ns) / Decimal(1_000_000_000) < floor:
         return False, observed.stamp  # a leftover from an earlier run
     if not token:
         return observed.seen_content, observed.stamp
@@ -1075,7 +1087,7 @@ def artifact_view(
 def version_key(path: str) -> tuple[int, ...]:
     """The version directory of a cached plugin path, ordered numerically not lexically."""
     part = path.split(os.sep)[-3] if path.count(os.sep) >= 3 else ""
-    return tuple(int(x) if x.isdigit() else 0 for x in part.split("."))
+    return tuple(int(x) if x.isascii() and x.isdigit() else 0 for x in part.split("."))
 
 
 def companion_path() -> str | None:
@@ -1645,7 +1657,9 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # without that stamp it is this watch's own elapsed, which no clock change moves.
         job_started = stamp_epoch((record or {}).get("startedAt"))
         elapsed = (
-            now - job_started if job_started is not None else time.monotonic() - started
+            now - float(job_started)
+            if job_started is not None
+            else time.monotonic() - started
         )
         # 監視開始後に同じ id の record が増えても、 固定した path だけ見ていては気付けない。
         seen, scanned_all = find_jobs(args.job_id, roots)
@@ -2301,6 +2315,13 @@ class WatchTest(unittest.TestCase):
         ]
         self.assertEqual([ln[-1] for ln in event_lines(lines)], ["a"])
 
+    def test_a_one_nanosecond_older_fake_end_does_not_finish_a_command(self):
+        lines = [
+            "[2026-08-09T00:00:00.100Z] Running command: cargo test",
+            "[2026-08-09T00:00:00.099999999Z] Command completed: cargo test (exit 0)",
+        ]
+        self.assertEqual(pending_commands(lines), ["cargo test"])
+
     def test_command_text_ignores_the_exit_suffix(self):
         self.assertEqual(
             command_text("[2026-08-09T00:00:00.000Z] Running command: ls -la"), "ls -la"
@@ -2395,9 +2416,21 @@ class WatchTest(unittest.TestCase):
         self.assertIsNone(stamp_epoch(None))
         self.assertIsNone(stamp_epoch("nonsense"))
         stamp = "2026-08-08T11:43:06.921Z"
-        whole = float(calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S")))
-        self.assertEqual(stamp_epoch(stamp), whole + 0.921)
-        self.assertEqual(stamp_epoch("2026-08-08T11:43:06Z"), whole)
+        whole = calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))
+        self.assertEqual(stamp_epoch(stamp), Decimal(whole) + Decimal("0.921"))
+        self.assertEqual(stamp_epoch("2026-08-08T11:43:06Z"), Decimal(whole))
+
+    def test_an_artifact_one_nanosecond_before_the_run_is_stale(self):
+        import tempfile
+
+        p = os.path.join(tempfile.mkdtemp(), "report.md")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("body\nREPORT_COMPLETE\n")
+        start = stamp_epoch("2026-08-08T11:43:06.921000001Z")
+        assert start is not None
+        artifact_ns = int(start * 1_000_000_000) - 1
+        os.utime(p, ns=(artifact_ns, artifact_ns))
+        self.assertFalse(artifact_ready(p, "REPORT_COMPLETE", since=start))
 
     def test_same_second_leftover_is_still_stale(self):
         """秒で切り捨てると、同じ秒に書かれた前 run の成果物を今回の物として受理する。"""
@@ -2408,7 +2441,8 @@ class WatchTest(unittest.TestCase):
             f.write("body\nREPORT_COMPLETE\n")
         start = stamp_epoch("2026-08-08T11:43:06.921Z")
         assert start is not None
-        os.utime(p, (start - 0.5, start - 0.5))
+        old = float(start - Decimal("0.5"))
+        os.utime(p, (old, old))
         self.assertFalse(artifact_ready(p, "REPORT_COMPLETE", since=start))
 
     def test_final_line_must_be_exactly_the_token(self):
@@ -5989,6 +6023,22 @@ class WatchTest(unittest.TestCase):
         ):
             self.assertIsNone(companion_path())
             self.assertIn("not found", cancel_command("task-x", None))
+
+    def test_a_non_ascii_digit_version_does_not_break_companion_selection(self):
+        from unittest import mock
+
+        cached = [
+            os.path.expanduser(
+                f"~/.claude/plugins/cache/openai-codex/codex/{v}/scripts/x.mjs"
+            )
+            for v in ("²", "1.0.10")
+        ]
+        with (
+            mock.patch("glob.glob", return_value=cached),
+            mock.patch("os.path.isfile", return_value=True),
+            mock.patch("os.access", return_value=True),
+        ):
+            self.assertEqual(companion_path(), cached[1])
 
     def test_deadline_ignores_the_wall_clock(self):
         """時計合わせで待ち時間が変わってはいけない — 期限は経過時間であって時刻ではない。"""
