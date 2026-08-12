@@ -60,29 +60,6 @@ Work file: `last-session-handoff.md` の同名 section (再開手順)、
 `drafts/sentinel-review-r{17..53}.md` (発注書)、`drafts/sentinel-review-r{17..30,52,53}-report.md` (報告書)
 
 
-### daily-stock-analyzer 依頼: codex 起動経路の裁定と roster 配信
-
-Goal: 隣 repo からの依頼 3 点を裁定どおりに決着させる — launcher 方式は不採用 (既存
-exclusion + 短文 prompt / prompt-file 慣行へ一本化)、roster の SessionStart 配信は land・
-deploy し、応答書を返送する。
-
-Exit Criteria:
-
-- [x] launcher の採否合意 — 2026-08-13 ユーザー裁定「不採用 + revert」。理由 3 点 (plugin
-  との版結合 / exclusion 重複 / 命名不統一) は応答書と commit message に記録
-- [x] revert 完了 — `9ee961b` (launcher 本体・installer copy 行 2・exclusion 1 行を撤去。
-  roster SessionStart 配信と guard latch 修正は残置)。移管実装の受け入れ・レビュー・fix
-  round の記録は `746ef2e` と drafts/launcher-*.md に履歴として残る
-- [x] 代替慣行の成文化 — codex-delegation skill 起動節に「companion 直接起動 + 長い日本語
-  prompt の直書き禁止 (短文または prompt-file)」を追記 (`9ee961b` 同梱)
-- [x] 応答書の差し替え — terminal-config-response-codex-launcher.md を不採用裁定版に全面
-  更新 (受入 3 点の読み替え + 依頼元 tools/ 削除手順、2026-08-13)
-- [x] 残 deploy の sudo 実行と diff -q 一致 — 2026-08-13 ユーザー deploy 後に検証:
-  managed-settings.json / codex-delegation SKILL.md / codex_task_sentinel = 全て IDENTICAL
-  (roster 系 guard hook / extensions.json は先行 deploy 済・exec bit 755 も確認)
-
-依頼書 = `/home/h2suzuki/daily-stock-analyzer/drafts/terminal-config-request-codex-launcher.md`。
-
 ## Medium
 
 ### 方法論の実証: 小規模ツール新規作成で敵対レビューの収束を実測する
