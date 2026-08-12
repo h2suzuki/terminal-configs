@@ -463,6 +463,29 @@ codex sol xhigh で 2 巡連続」。
   発注側の独立変異 2 件再現。selftest 259 → **265**。裁定 48 (数値比較・等値保持) と
   裁定 49 (空 `--state-root` 拒否) を `docs/sentinel-rulings.md` に正本化 (47 → 49 件)
 
+### r55 (認定 1 巡目・再) — material 3、認定不成立
+
+- 起動事故 1 件 (発注側): 初回起動で `--write` を落とし、レビュー完走後に報告書を書けず
+  sentinel exit 5。fresh + `--write` で再発注 (countermeasure は codex-delegation skill の
+  起動節に成文化)
+- **指摘 1 (採用・material)**: event 時刻を binary64 epoch 秒に落とすと 2026 年付近の刻みは
+  約 238 ns で、1 ns 後退の偽 `Command completed:` 行が等値として `event_lines()` を通過し
+  `pending_commands()` から実行中 command が消える (repro 済)。**54 巡修正が開けた窓** —
+  旧文字列比較はこの偽行を落としていた。形 5 (修正が次巡の指摘を生む) の新体制での初例。
+  なお等値 stamp の偽行はどの版でも filter の保証外 (裁定 1 の envelope) で、本指摘の実体は
+  「後退棄却という契約が sub-ULP で破れる」こと
+- **指摘 2 (採用・material)**: 成果物鮮度の `st_mtime` (float) vs `stamp_epoch` (float)
+  比較が同じ 238 ns 刻みで潰れ、run 開始より 1 ns 古い成果物を fresh と誤認 (repro 済)
+- **指摘 3 (採用・material)**: `version_key()` が `isdigit()` = `int()` 可を仮定。
+  superscript two の版 directory 名で evidence 構築中に ValueError → exit 契約を破る例外
+  終了 (repro 済 — 発注側の初回 repro は path 形の誤りで空振りし、正しい形で再現)
+- 3 件とも発注書観点 1「一度も疑われていない前提」から: (1) binary64 が全小数桁の順序を
+  保つ、(2) `isdigit` と `int` の受理集合が一致、(3) record stamp と mtime の比較精度が
+  一致 — の 3 前提を独立に洗った成果。新設 funnel / Observation / harness への指摘は
+  引き続き 0
+- fix round: `drafts/sentinel-r55-fixes.md` (exact 比較化・`isascii` guard・red 確認 +
+  変異 3 件)。認定 counter は 0 のまま、fix 後の r56 から再カウント
+
 ## 復元元
 
 repo の実 path は `/home/scorer/terminal-configs` である (user 名変更前の `/home/h2suzuki/...` は現存しない

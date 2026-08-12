@@ -492,3 +492,24 @@ countermeasure: codex-delegation skill の起動節に「報告書を成果物�
 レビューでも `--write` で起動し、record 検証で write flag と発注意図の一致まで見る」を追加
 (source 更新済・deploy はユーザー sudo 待ち)。起動時の第一動作も「報告書 file に見出し
 1 行を書いて write を確認する」に変更した。
+
+### 2026-08-13 — r55 受領: material 3 (全件 repro 確定) → fix round 発注
+
+r55 再走行 (`task-msql6vwz-suqt2l`・sol xhigh・write) は sentinel exit 0。報告書は gates 全緑
+(selftest 265 / 外部 11 / ruff / ty) を転記し **material 3 件**。発注側 repro で全件確定:
+
+1. **1 ns 後退の偽終了行が float 等値で通過** — `stamp_seconds` の binary64 刻み (238 ns @
+   2026 年) が後退を等値に潰す。repro: 等値 True・偽 `Command completed:` 通過・pending 空。
+   **r54 修正が開けた窓** (旧文字列比較は落としていた) = 形 5 の新体制初例として台帳へ記録
+2. **成果物鮮度の float 比較が 1 ns stale を fresh 誤認** — repro: `st_mtime < since` False
+3. **`version_key()` の `isdigit`≠`int` 受理集合** — repro: `²` 入り path で ValueError。
+   発注側の初回 repro は path 形の誤りで空振り → 正しい形で再現 (repro 自体も検証対象)
+
+fix round: `drafts/sentinel-r55-fixes.md` (exact 十進比較・`st_mtime_ns`・`isascii` guard、
+red 確認 + 発注側選定の変異 3 件)。lint rc=0 初回。worktree `wt-r55fix` @ `767b54d`。
+job `task-msqlxf65-ynx4tx` (record 検証: sol / medium / **write: True** — 新 rule どおり
+flag と発注意図の一致まで確認)。sentinel `by0g8233d` (estimate 2400s)。
+
+併記: 部分 deploy 検証 — sentinel / extensions.json / guard hook / codex-delegation skill は
+diff -q IDENTICAL。managed-settings.json は `codex_task_launch *` 行のみ除いた形で deploy
+(launcher 本体は採否合意待ち・ユーザー判断)。

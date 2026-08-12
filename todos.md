@@ -73,7 +73,13 @@ Exit Criteria:
   + 変異 3/3 検出、発注側で fixture 検証 A/B/C と latch 変異を独立再現 (2026-08-13)
 - [x] main へ commit — `746ef2e` (launcher 本体 / installer copy 行 / managed-settings /
   extensions hooks 節 / guard hook、6 files 163+)
-- [ ] ユーザーの sudo deploy 後、deploy 先と `files/` の diff -q 一致
+- [ ] launcher の採否をユーザーと合意する — 2026-08-13 ユーザー懸念 3 点: plugin / skill と
+  の関係 (companion glob・allowlist・prompt 雛形の複製)、`node *codex-companion.mjs*`
+  exclusion との重複、`_launch` の命名不統一。採用 / 縮小 / revert の選択肢を提示済み
+- [ ] 合意の結果に応じて deploy 完了 — 2026-08-13 時点で部分 deploy 済み (sentinel /
+  extensions.json / guard hook / codex-delegation skill = diff -q IDENTICAL。
+  managed-settings.json は `codex_task_launch *` 行のみ除いた形で deploy、launcher 本体は
+  未 deploy = 合意待ち)
 - [x] 応答書を `/home/h2suzuki/daily-stock-analyzer/drafts/` へ配置 —
   terminal-config-response-codex-launcher.md (設計変更 2 点の根拠 + 削除手順 + 受入 3 点の
   確認手順。依頼元 repo への write は応答書のみ、2026-08-13)
