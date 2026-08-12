@@ -316,7 +316,9 @@ def job_record(record_path: str, job_id: str | None = None) -> dict | None:
     return record_view(record_path, job_id)[1]
 
 
-def record_view(path: str, job_id: str | None = None) -> tuple[tuple, dict | None]:
+def record_view(
+    path: str, job_id: str | None = None, hold: list | None = None
+) -> tuple[tuple, dict | None]:
     """The record and a fingerprint of the very bytes it was parsed from.
 
     One open for both: comparing an outer fingerprint taken before and after a
@@ -324,7 +326,12 @@ def record_view(path: str, job_id: str | None = None) -> tuple[tuple, dict | Non
     A -> B -> A reads B's status as a stable snapshot of A.
     """
     try:
-        with open_regular(path) as f:
+        with contextlib.ExitStack() as opened:
+            f = open_regular(path)
+            if hold is None:
+                opened.enter_context(f)
+            else:
+                hold.append(f)  # 検証した descriptor をそのまま呼び手へ渡す
             st = os.fstat(f.fileno())
             # log / 成果物と同じく上限を置く — record だけ無制限だと、 巨大または
             # 伸び続ける JSON ひとつで監視が読み終わらない。
@@ -642,10 +649,10 @@ def command_may_be_running(lines: Iterator[str] | list[str]) -> bool:
     return bool(pending_commands(lines))
 
 
-def tree_age(root: str | None, now: float) -> float | None:
+def tree_age(root: str | None, now: float) -> tuple[float | None, int]:
     """Seconds since the newest write under the job's tree; None when unknowable."""
     if not isinstance(root, str) or not root or not os.path.isdir(root):
-        return None
+        return None, 0
     newest = None
     unreadable = False
     budget = MAX_TREE_ENTRIES
@@ -660,7 +667,7 @@ def tree_age(root: str | None, now: float) -> float | None:
                 for entry in entries:
                     budget -= 1
                     if budget < 0:
-                        return None  # 走査しきれない広さ — 静穏の根拠にならない
+                        return None, budget  # 走査しきれない広さ
                     if entry.name == ".git":
                         continue
                     measured.append(entry.path)
@@ -687,8 +694,8 @@ def tree_age(root: str | None, now: float) -> float | None:
         if newest is None or mtime > newest:
             newest = mtime
     if unreadable:
-        return None
-    return None if newest is None else now - newest
+        return None, len(measured)
+    return (None if newest is None else now - newest), len(measured)
 
 
 def longest_silence(
@@ -1129,7 +1136,7 @@ def evidence(
 
 
 def carrying_records(
-    found: list[tuple[str, str]], job_id: str
+    found: list[tuple[str, str]], job_id: str, hold: list | None = None
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[tuple[str, str]]]:
     """Candidates that claim the id, those unreadable, and those that moved mid-read.
 
@@ -1141,7 +1148,8 @@ def carrying_records(
     shifting = []
     for pair in found:
         before = record_stamp(pair[0])
-        stamp, loaded = record_view(pair[0])
+        view: list = []
+        stamp, loaded = record_view(pair[0], hold=view if hold is not None else None)
         # 判断に使った bytes そのものが、 前後どちらとも同じであることを要求する。
         if stamp != before or record_stamp(pair[0]) != before:
             shifting.append(pair)
@@ -1151,6 +1159,11 @@ def carrying_records(
             continue
         if loaded.get("id") == job_id:
             carried.append(pair)
+            if hold is not None and view:
+                hold.extend(view)
+                view = []
+    for handle in view:
+        handle.close()  # 採らなかった候補の descriptor は持たない
     return carried, unknown, shifting
 
 
@@ -1159,13 +1172,19 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
     deadline = time.monotonic() + args.timeout_seconds
     started = time.monotonic()
     found: list[tuple[str, str]] = []
+    pin_hold: list = []
     seen_pairs: set[tuple[str, str]] = set()
     while not found:
         found, complete = find_jobs(args.job_id, roots)
         if found:
             # file 名の一致は所属の証明ではない — 本文が名乗るものだけを候補にする。
             # 読めなかった候補は「別 job」の証明にならないので、その回は絞らない。
-            carried, unknown, shifting = carrying_records(found, args.job_id)
+            for handle in pin_hold:
+                handle.close()  # 前の周回で掴んだものは持ち越さない
+            pin_hold = []
+            carried, unknown, shifting = carrying_records(
+                found, args.job_id, hold=pin_hold
+            )
             complete = complete and not shifting  # 動いた候補は掴めていない
             # 動いた候補も「一度は見えた」 — 忘れると後で未登録と断定できてしまう。
             seen_pairs.update(shifting)
@@ -1243,12 +1262,13 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     )
                     print(f"  searched: {printable(', '.join(roots))}")
                     return EXIT_TIMEOUT
+                # 期限に言えるのは timeout — 例外は完全な空走査の exit 6 だけである。
                 print(
-                    f"unverifiable: the state tree could not be read in full, so "
-                    f"{printable(args.job_id)} cannot be shown to be unregistered"
+                    f"timeout: {printable(args.job_id)} could not be resolved within "
+                    f"{int(args.timeout_seconds)}s"
                 )
                 print(f"  searched: {printable(', '.join(roots))}")
-                return EXIT_UNVERIFIABLE
+                return EXIT_TIMEOUT
             print(f"never-registered: no state record for {printable(args.job_id)}")
             print(f"  searched: {printable(', '.join(roots))}")
             return EXIT_NEVER_REGISTERED
@@ -1266,10 +1286,11 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
     # 検出できないまま別 record を掴む。
     pinned = None
     try:
-        pinned = open_regular(record_path)
+        # 登録解決で検証した descriptor をそのまま使う。 読み手を差し替えた呼び手
+        # (test の stub 等) では手元に無いので、 その時だけ開き直して自己検証する。
+        pinned = pin_hold[0] if pin_hold else open_regular(record_path)
         pinned_stat = os.fstat(pinned.fileno())
-        # 掴んだ descriptor 自身から検証する — 別に開き直して確かめても、
-        # その間の差し替えは見えないまま別 record を掴むことになる。
+        pinned.seek(0)
         if _parse_record(pinned.read(MAX_RECORD_BYTES + 1), args.job_id) is None:
             raise OSError(errno.EIO, "the held view does not carry this job")
         record_inode = (pinned_stat.st_dev, pinned_stat.st_ino)
@@ -1303,6 +1324,11 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
     if record_inode is not None:
         named_now = file_stat(record_path)
         if named_now is not None and named_now[:2] != record_inode:
+            if deadline_reached(deadline):
+                print(
+                    f"timeout: the record could not be held within {int(args.timeout_seconds)}s"
+                )
+                return EXIT_TIMEOUT
             print(
                 f"unverifiable: {printable(args.job_id)} could not be pinned to one "
                 f"record, so nothing observed after this is about one job"
@@ -1343,13 +1369,10 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         log_pin: list = []
         unfinished, tail, whole_log, log_view_stamp = scan_log(log, hold=log_pin)
         log_incomplete = not whole_log
-        # 無音も読んだ descriptor から — path を stat し直すと別 file の mtime になる。
-        age = (
-            now - log_view_stamp[2] / 1e9
-            if log_view_stamp is not None
-            else heartbeat_age(log, now)
-        )
-        tree = tree_age((record or {}).get("workspaceRoot"), now)
+        # 無音も読んだ descriptor から — 無ければ「読んでいない」 であって、
+        # path を開き直して別 file の mtime を無音に使ってよい理由にはならない。
+        age = now - log_view_stamp[2] / 1e9 if log_view_stamp is not None else None
+        tree, tree_entries = tree_age((record or {}).get("workspaceRoot"), now)
         artifact_pin: list = []
         ready, artifact_stamp = artifact_view(
             args.artifact, args.token, run_since(record or {}), hold=artifact_pin
@@ -1402,7 +1425,11 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             handle.close()  # 比較が済むまで押さえていた
         # os.walk は snapshot ではないので、 列挙済み file への書き込みは
         # 走査し直さない限りこの poll から丸ごと抜け落ちる。
-        tree_changed = tree_age((record or {}).get("workspaceRoot"), now) != tree
+        # 最大 mtime だけでは、 entry の入れ替わった別 tree を同じ snapshot と読む。
+        tree_changed = tree_age((record or {}).get("workspaceRoot"), now) != (
+            tree,
+            tree_entries,
+        )
         # threshold の出どころも同じ poll のもの — peer が後から伸びると、
         # 古い低い bar と新しい対象 snapshot の組で stall を断定できる。
         baseline_after, counted_all_after = (
@@ -2169,10 +2196,10 @@ class WatchTest(unittest.TestCase):
             f.write("x\n")
         for path in (os.path.join(root, "src.py"), root):
             os.utime(path, (time.time() - 90, time.time() - 90))
-        age = tree_age(root, time.time())
+        age = tree_age(root, time.time())[0]
         assert age is not None
         self.assertAlmostEqual(age, 90, delta=5)
-        self.assertIsNone(tree_age("/nonexistent", time.time()))
+        self.assertIsNone(tree_age("/nonexistent", time.time())[0])
 
     def test_a_broken_log_read_is_reported_to_every_reader(self):
         """短い view は未完了 start を落とし、その log の最大 gap でもない。"""
@@ -2200,7 +2227,7 @@ class WatchTest(unittest.TestCase):
         ages = itertools.chain([5.0, 5.0], itertools.cycle([900.0, 5.0]))
         with (
             redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".tree_age", lambda *a: next(ages)),
+            mock.patch(__name__ + ".tree_age", lambda *a: (next(ages), 1)),
         ):
             self.assertEqual(watch(args), EXIT_TIMEOUT)
 
@@ -2278,7 +2305,7 @@ class WatchTest(unittest.TestCase):
         root = tempfile.mkdtemp()
         os.symlink(outside, os.path.join(root, "linked"))
         os.utime(root, (0, 0))
-        age = tree_age(root, time.time())
+        age = tree_age(root, time.time())[0]
         if age is None:
             self.fail("走査不能と判定された")
         self.assertLess(age, 5.0)  # link 作成は今の活動
@@ -2297,7 +2324,7 @@ class WatchTest(unittest.TestCase):
         ages = itertools.chain([5.0, 5.0], itertools.repeat(900.0))
         with (
             redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".tree_age", lambda *a: next(ages)),
+            mock.patch(__name__ + ".tree_age", lambda *a: (next(ages), 1)),
         ):
             self.assertEqual(watch(args), EXIT_TIMEOUT)
 
@@ -2410,7 +2437,7 @@ class WatchTest(unittest.TestCase):
             return real(path)
 
         with mock.patch("os.scandir", removing):
-            age = tree_age(root, time.time())
+            age = tree_age(root, time.time())[0]
         if age is None:
             self.fail("消えた dir が走査不能として扱われた")
         self.assertLess(age, 5.0)
@@ -2485,7 +2512,7 @@ class WatchTest(unittest.TestCase):
         with (
             redirect_stdout(io.StringIO()),
             mock.patch(__name__ + ".scan_log", swap),
-            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1)),
         ):
             self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
 
@@ -2585,7 +2612,7 @@ class WatchTest(unittest.TestCase):
         with (
             redirect_stdout(io.StringIO()),
             mock.patch(__name__ + ".MAX_PEERS", 1),
-            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1)),
         ):
             args = self._watch_args(
                 root, "task-live", once=True, trust_log=True, stall_seconds=None
@@ -2626,7 +2653,7 @@ class WatchTest(unittest.TestCase):
         stable = open(record, "rb").read()
         real, calls = record_view, []
 
-        def flipping(path, job_id=None):
+        def flipping(path, job_id=None, hold=None):
             calls.append(1)
             if len(calls) != 2:  # 2 回目だけが判断に使う read
                 return real(path, job_id)
@@ -2652,7 +2679,7 @@ class WatchTest(unittest.TestCase):
         answers = [(None, True), (None, False)]
         with (
             redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1)),
             mock.patch(
                 __name__ + ".baseline_silence",
                 lambda *a: answers.pop(0) if answers else (None, False),
@@ -2698,7 +2725,7 @@ class WatchTest(unittest.TestCase):
         args = self._watch_args(root, "task-x", timeout_seconds=0.05)
         real, reads = record_view, []
 
-        def shifting(path, job_id=None):
+        def shifting(path, job_id=None, hold=None):
             if path == record and job_id is None:
                 reads.append(1)
                 if len(reads) == 2:  # 判断に使う read だけ別 bytes を見せる
@@ -2723,6 +2750,95 @@ class WatchTest(unittest.TestCase):
             self.assertNotEqual(watch(args), EXIT_NEVER_REGISTERED)
         self.assertNotIn("never-registered", buf.getvalue())
 
+    def test_a_pin_mismatch_past_the_deadline_is_a_timeout(self):
+        """掴めなかった判定も、 期限を跨いだら timeout として返す。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-x", "running")
+        args = self._watch_args(root, "task-x", once=True)
+        real, moved = file_stat, []
+        monotonic = time.monotonic
+
+        def elsewhere(path):
+            got = real(path)
+            if path == record and got and not moved:
+                moved.append(1)  # pin の後、 その path は別 inode を指す
+                return (got[0], got[1] + 1, got[2], got[3])
+            return got
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".file_stat", elsewhere),
+            mock.patch(
+                "time.monotonic",
+                lambda: monotonic() + (args.timeout_seconds + 1 if moved else 0),
+            ),
+        ):
+            self.assertEqual(watch(args), EXIT_TIMEOUT)
+        self.assertTrue(moved)
+
+    def test_an_incomplete_scan_at_the_deadline_is_a_timeout(self):
+        """期限に言えるのは timeout — 例外は完全な空走査の exit 6 だけである。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root = tempfile.mkdtemp()
+        args = self._watch_args(root, "task-absent", timeout_seconds=0.03)
+        buf = io.StringIO()
+        with (
+            redirect_stdout(buf),
+            mock.patch(__name__ + ".find_jobs", lambda *a: ([], False)),
+        ):
+            self.assertEqual(watch(args), EXIT_TIMEOUT)
+        self.assertNotIn("unverifiable", buf.getvalue())
+
+    def test_a_log_seen_only_between_the_reads_is_not_the_silence(self):
+        """読んでいない file の mtime を無音に使わない — 不在なら不明である。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, log = self._state("ws", "task-live", "running")
+        os.unlink(log)  # 走査時も前後も不在
+        args = self._watch_args(root, "task-live", once=True, trust_log=True)
+        buf = io.StringIO()
+        with (
+            redirect_stdout(buf),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1)),
+            # 読取の合間にだけ現れた別 file を観測する path 側の呼び出し。
+            mock.patch(__name__ + ".heartbeat_age", lambda *a: 9000.0),
+        ):
+            watch(args)
+        # 読んでいない file の mtime を数字として出さない。
+        self.assertIn("無音   : log なし", buf.getvalue())
+        self.assertNotIn("9000", buf.getvalue())
+
+    def test_a_tree_with_the_same_newest_mtime_but_other_entries_moved(self):
+        """最大 mtime だけでは、 entry の入れ替わった別 tree を同じ snapshot と読む。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-done", "completed")
+        with open(record, "w", encoding="utf-8") as f:
+            json.dump(
+                {"id": "task-done", "status": "completed", "workspaceRoot": root}, f
+            )
+        args = self._watch_args(root, "task-done", once=True)
+        args.artifact = None
+        answers = [(900.0, 12), (900.0, 13)]  # 最大 mtime は同じ、 entry 数だけ違う
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(
+                __name__ + ".tree_age",
+                lambda *a: answers.pop(0) if answers else (900.0, 13),
+            ),
+        ):
+            self.assertNotEqual(watch(args), EXIT_DONE)
+
     def test_the_silence_comes_from_the_descriptor_that_read(self):
         """path を stat し直すと、 読取後に戻された mtime を無音として使ってしまう。"""
         import io
@@ -2733,7 +2849,7 @@ class WatchTest(unittest.TestCase):
         args = self._watch_args(root, "task-live", once=True, trust_log=True)
         with (
             redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1)),
             # 読んだ後だけ「たった今書かれた」 ように見える path 観測。
             mock.patch(__name__ + ".heartbeat_age", lambda *a: 0.0),
         ):
@@ -2758,8 +2874,14 @@ class WatchTest(unittest.TestCase):
                     raise FileNotFoundError(path)
             return real(path)
 
+        real_view = record_view
+
+        def no_hold(path, job_id=None, hold=None):
+            return real_view(path, job_id)  # hold を返さない呼び手
+
         with (
             redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".record_view", no_hold),
             mock.patch(__name__ + ".open_regular", flaky),
             mock.patch(
                 "time.monotonic",
@@ -2787,8 +2909,17 @@ class WatchTest(unittest.TestCase):
                     raise FileNotFoundError(path)
             return real(path)
 
+        real_view = record_view
+
+        def no_hold(path, job_id=None, hold=None):
+            return real_view(path, job_id)  # hold を返さない呼び手
+
         buf = io.StringIO()
-        with redirect_stdout(buf), mock.patch(__name__ + ".open_regular", flaky):
+        with (
+            redirect_stdout(buf),
+            mock.patch(__name__ + ".record_view", no_hold),
+            mock.patch(__name__ + ".open_regular", flaky),
+        ):
             self.assertEqual(watch(args), EXIT_VANISHED)
         self.assertEqual(len(opens), 4)  # pin の呼び出しで落ちた
 
@@ -2810,10 +2941,16 @@ class WatchTest(unittest.TestCase):
                     raise PermissionError(path)
             return real(path)
 
+        real_view = record_view
+
+        def no_hold(path, job_id=None, hold=None):
+            return real_view(path, job_id)  # hold を返さない呼び手
+
         with (
             redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".record_view", no_hold),
             mock.patch(__name__ + ".open_regular", flaky),
-            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1)),
         ):
             self.assertEqual(watch(args), EXIT_CORRUPT)
         self.assertEqual(len(opens), 4)  # pin の後は読み直していない
@@ -2856,7 +2993,7 @@ class WatchTest(unittest.TestCase):
             redirect_stdout(io.StringIO()),
             mock.patch(__name__ + ".open_regular", tracking),
             mock.patch(__name__ + ".file_stat", during_compare),
-            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1)),
         ):
             watch(args)
         self.assertTrue(held and held[-1])  # 後置比較の時点で開いている
@@ -2942,7 +3079,7 @@ class WatchTest(unittest.TestCase):
             redirect_stdout(buf),
             mock.patch(__name__ + ".open_regular", unlinking),
             mock.patch(__name__ + ".file_stat", unchanged),
-            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1)),
         ):
             watch(args)
         self.assertIn("成果物 : 不明 (走査中に変化)", buf.getvalue())
@@ -3113,7 +3250,7 @@ class WatchTest(unittest.TestCase):
         def during_poll(*_a):
             # 番号の再利用は kernel 次第なので、 番号を握る descriptor の保持を固定する。
             held.append(any(not h.closed for h in handles))
-            return 900.0
+            return 900.0, 1
 
         with (
             redirect_stdout(io.StringIO()),
@@ -3156,7 +3293,7 @@ class WatchTest(unittest.TestCase):
         args.artifact = None
         real, reads = record_view, []
 
-        def shifting(path, job_id=None):
+        def shifting(path, job_id=None, hold=None):
             if path == record and job_id is None:
                 reads.append(1)
                 if len(reads) == 2:  # 判断に使う read だけ別 bytes を見せる
@@ -3166,7 +3303,7 @@ class WatchTest(unittest.TestCase):
         with (
             redirect_stdout(io.StringIO()),
             mock.patch(__name__ + ".record_view", shifting),
-            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1)),
         ):
             self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
         # 2 回目で不一致が確定するので、 3 回目の読み直しは短絡で起きない。
@@ -3183,7 +3320,7 @@ class WatchTest(unittest.TestCase):
         args.artifact = None
         real, seen, in_poll = record_view, [], []
 
-        def shifting(path, job_id=None):
+        def shifting(path, job_id=None, hold=None):
             if job_id is not None:
                 in_poll.append(1)  # id 付きの read は poll でしか起きない
             if path == record and job_id is None and in_poll:
@@ -3196,7 +3333,7 @@ class WatchTest(unittest.TestCase):
         with (
             redirect_stdout(io.StringIO()),
             mock.patch(__name__ + ".record_view", shifting),
-            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1)),
         ):
             self.assertNotEqual(watch(args), EXIT_DONE)
         self.assertEqual(len(seen), 3)  # 3 read すべてが poll 内で起きた
@@ -3211,7 +3348,7 @@ class WatchTest(unittest.TestCase):
         args = self._watch_args(root, "task-x", once=True)
         real, swapped = record_view, []
 
-        def replacing(path, job_id=None):
+        def replacing(path, job_id=None, hold=None):
             view = real(path, job_id)
             # poll の read で 1 度だけ差し替える — 登録時に替えると inode 固定より前になり、
             # 繰り返すと解放した inode 番号が再利用される。
@@ -3266,7 +3403,7 @@ class WatchTest(unittest.TestCase):
         args = self._watch_args(root, "task-x", once=True)
         real = record_view
 
-        def other_bytes(path, job_id=None):
+        def other_bytes(path, job_id=None, hold=None):
             if path != record or job_id is None:
                 return real(path, job_id)
             return ("swapped",), {"id": "task-x", "status": "running"}
@@ -3353,7 +3490,7 @@ class WatchTest(unittest.TestCase):
         args.artifact = None
         real = record_view
 
-        def other_bytes(path, job_id=None):
+        def other_bytes(path, job_id=None, hold=None):
             if path != record or job_id is None:
                 return real(path, job_id)
             return ("swapped",), {"id": "task-x", "status": "cancelled"}
@@ -3379,7 +3516,7 @@ class WatchTest(unittest.TestCase):
         args.artifact, args.token = artifact, "DONE"
         real, crossed = record_view, []
 
-        def other_bytes(path, job_id=None):
+        def other_bytes(path, job_id=None, hold=None):
             if path != record or job_id is None:
                 return real(path, job_id)
             crossed.append(1)
@@ -3418,7 +3555,9 @@ class WatchTest(unittest.TestCase):
         buf = io.StringIO()
         with (
             redirect_stdout(buf),
-            mock.patch(__name__ + ".tree_age", lambda *a: ages.pop(0) if ages else 5.0),
+            mock.patch(
+                __name__ + ".tree_age", lambda *a: (ages.pop(0) if ages else 5.0, 1)
+            ),
         ):
             self.assertEqual(
                 watch(self._watch_args(root, "task-x", once=True)), EXIT_NOT_COMPLETED
@@ -3477,7 +3616,7 @@ class WatchTest(unittest.TestCase):
         with (
             redirect_stdout(io.StringIO()),
             mock.patch(__name__ + ".artifact_view", foreign),
-            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1)),
         ):
             self.assertNotEqual(watch(args), EXIT_DONE)
 
@@ -3526,7 +3665,7 @@ class WatchTest(unittest.TestCase):
         with (
             redirect_stdout(io.StringIO()),
             mock.patch(__name__ + ".scan_log", swapping),
-            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1)),
         ):
             args = self._watch_args(root, "task-live", once=True, trust_log=True)
             self.assertNotEqual(watch(args), EXIT_STALL)
@@ -3625,7 +3764,7 @@ class WatchTest(unittest.TestCase):
         with (
             redirect_stdout(io.StringIO()),
             mock.patch(__name__ + ".MAX_PEERS", 1),
-            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1)),
         ):
             args = self._watch_args(root, "task-live", once=True, trust_log=True)
             self.assertEqual(watch(args), EXIT_STALL)
@@ -3649,7 +3788,7 @@ class WatchTest(unittest.TestCase):
         with (
             redirect_stdout(io.StringIO()),
             mock.patch(__name__ + ".scan_log", appending),
-            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1)),
         ):
             self.assertEqual(watch(args), EXIT_DONE)
 
@@ -3665,7 +3804,9 @@ class WatchTest(unittest.TestCase):
         ages = [900.0, 5.0]
         with (
             redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".tree_age", lambda *a: ages.pop(0) if ages else 5.0),
+            mock.patch(
+                __name__ + ".tree_age", lambda *a: (ages.pop(0) if ages else 5.0, 1)
+            ),
         ):
             self.assertNotEqual(watch(args), EXIT_DONE)
 
@@ -3680,7 +3821,7 @@ class WatchTest(unittest.TestCase):
         buf = io.StringIO()
         with (
             redirect_stdout(buf),
-            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1)),
             mock.patch(
                 __name__ + ".baseline_silence",
                 lambda *a: answers.pop(0) if answers else (None, False),
@@ -3748,7 +3889,7 @@ class WatchTest(unittest.TestCase):
         with (
             redirect_stdout(io.StringIO()),
             mock.patch(__name__ + ".find_jobs", finding),
-            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1)),
         ):
             self.assertNotEqual(watch(args), EXIT_DONE)
 
@@ -3816,7 +3957,7 @@ class WatchTest(unittest.TestCase):
             f.write(running)
         real, flipped = record_view, []
 
-        def flickering(path, job_id=None):
+        def flickering(path, job_id=None, hold=None):
             # 1 回目 (判断に使う read) だけ completed を見せ、 以降は disk のまま。
             if path != peer or flipped:
                 return real(path, job_id)
@@ -3900,7 +4041,7 @@ class WatchTest(unittest.TestCase):
         args.artifact = None
         real = record_view
 
-        def other_bytes(path, job_id=None):
+        def other_bytes(path, job_id=None, hold=None):
             if job_id is None:
                 return real(path, job_id)
             return ("swapped",), {"id": "task-x", "status": "completed"}
@@ -3908,7 +4049,7 @@ class WatchTest(unittest.TestCase):
         with (
             redirect_stdout(io.StringIO()),
             mock.patch(__name__ + ".record_view", other_bytes),
-            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1)),
         ):
             self.assertNotEqual(watch(args), EXIT_DONE)
 
@@ -3985,7 +4126,7 @@ class WatchTest(unittest.TestCase):
         os.unlink(record)
         real, restored = record_view, []
 
-        def flickering(path, job_id=None):
+        def flickering(path, job_id=None, hold=None):
             # 判断に使う read (2 回目) の間だけ在る — 前後は不在のまま。
             if path != record or len(restored) != 1:
                 restored.append(1)
@@ -4094,7 +4235,7 @@ class WatchTest(unittest.TestCase):
             f.write("{partial")
         real, rewrites = record_view, []
 
-        def rewriting(path, job_id=None):
+        def rewriting(path, job_id=None, hold=None):
             view = real(path, job_id)
             if path == record:
                 # 毎回違う壊れ方にする — 同じ本文を書き戻すと 2 度目から不変になる。
@@ -4155,7 +4296,7 @@ class WatchTest(unittest.TestCase):
             mock.patch(__name__ + ".MAX_TREE_ENTRIES", 1),
             mock.patch("os.lstat", lambda p: stats.append(p) or real(p)),
         ):
-            self.assertIsNone(tree_age(root, time.time()))
+            self.assertIsNone(tree_age(root, time.time())[0])
         self.assertEqual(stats, [])  # 上限を超えた entry は stat すらしない
 
     def test_an_artifact_too_large_to_decode_is_unknowable(self):
@@ -4233,7 +4374,7 @@ class WatchTest(unittest.TestCase):
         link = os.path.join(tempfile.mkdtemp(), "root")
         os.symlink(target, link)
         os.utime(link, (0, 0), follow_symlinks=False)
-        age = tree_age(link, time.time())
+        age = tree_age(link, time.time())[0]
         if age is None:
             self.fail("走査不能と判定された")
         self.assertLess(age, 5.0)  # target dir は今作られた
@@ -4345,7 +4486,7 @@ class WatchTest(unittest.TestCase):
         os.symlink(outside, link)
         os.utime(link, (0, 0), follow_symlinks=False)
         os.utime(root, (0, 0))
-        age = tree_age(root, time.time())
+        age = tree_age(root, time.time())[0]
         if age is None:
             self.fail("走査不能と判定された")
         self.assertGreater(age, 1000.0)
@@ -4372,7 +4513,7 @@ class WatchTest(unittest.TestCase):
         bars = itertools.cycle([60.0, 900.0])
         with (
             redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1)),
             mock.patch(__name__ + ".baseline_silence", lambda *a: (next(bars), True)),
         ):
             self.assertEqual(
@@ -4410,7 +4551,7 @@ class WatchTest(unittest.TestCase):
         )
         with (
             redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".tree_age", lambda *a: next(ages)),
+            mock.patch(__name__ + ".tree_age", lambda *a: (next(ages), 1)),
         ):
             self.assertEqual(watch(args), EXIT_TIMEOUT)
 
@@ -4486,7 +4627,7 @@ class WatchTest(unittest.TestCase):
         root, _rec, _log = self._state("ws", "task-live", "running", log_age=900.0)
         with (
             redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1)),
             mock.patch(
                 __name__ + ".scan_log", lambda *a, **k: ([], ["x"], False, None)
             ),
@@ -4504,7 +4645,7 @@ class WatchTest(unittest.TestCase):
         root, _rec, _log = self._state("ws", "task-done", "completed", log_age=900.0)
         with (
             redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1)),
             mock.patch(
                 __name__ + ".scan_log", lambda *a, **k: ([], ["x"], False, None)
             ),
@@ -4564,7 +4705,7 @@ class WatchTest(unittest.TestCase):
         ages = itertools.cycle([900.0, 5.0])
         with (
             redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".tree_age", lambda *a: next(ages)),
+            mock.patch(__name__ + ".tree_age", lambda *a: (next(ages), 1)),
         ):
             self.assertEqual(
                 watch(self._watch_args(root, "task-live", timeout_seconds=0.02)),
@@ -4618,7 +4759,7 @@ class WatchTest(unittest.TestCase):
             mock.patch("os.path.getmtime", side_effect=FileNotFoundError),
             mock.patch("os.lstat", side_effect=PermissionError),
         ):
-            self.assertIsNone(tree_age(root, time.time()))
+            self.assertIsNone(tree_age(root, time.time())[0])
 
     def test_unreadable_deliverable_never_becomes_a_stall(self):
         """running でも、読めない成果物から cancel を指示する根拠は出ない。"""
@@ -4660,7 +4801,7 @@ class WatchTest(unittest.TestCase):
         for path in (os.path.join(root, "old"), root):
             os.utime(path, (time.time() - 900, time.time() - 900))
         os.makedirs(os.path.join(root, "made"))  # 空 dir — file の mtime は動かない
-        age = tree_age(root, time.time())
+        age = tree_age(root, time.time())[0]
         if age is None:
             self.fail("走査不能と判定された")
         self.assertLess(age, 5.0)
@@ -4882,7 +5023,7 @@ class WatchTest(unittest.TestCase):
         os.makedirs(closed)
         os.chmod(closed, 0o000)
         self.addCleanup(os.chmod, closed, 0o755)
-        self.assertIsNone(tree_age(root, time.time()))
+        self.assertIsNone(tree_age(root, time.time())[0])
 
     def test_file_vanishing_during_the_walk_is_activity(self):
         """走査中に消えた file は静穏の証拠ではない — 消えたこと自体が今の書き込みである。"""
@@ -4896,7 +5037,7 @@ class WatchTest(unittest.TestCase):
             mock.patch("os.path.getmtime", side_effect=FileNotFoundError),
             mock.patch("os.lstat", side_effect=FileNotFoundError),
         ):
-            age = tree_age(root, time.time())
+            age = tree_age(root, time.time())[0]
         if age is None:
             self.fail("消えた file が観測不能として扱われた")
         self.assertLess(age, 1.0)
@@ -4911,7 +5052,7 @@ class WatchTest(unittest.TestCase):
         ages = iter([900.0, 5.0])
         with (
             redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".tree_age", lambda *a: next(ages, 5.0)),
+            mock.patch(__name__ + ".tree_age", lambda *a: (next(ages, 5.0), 1)),
         ):
             self.assertEqual(
                 watch(self._watch_args(root, "task-live", once=True)), EXIT_ALIVE
@@ -4989,7 +5130,7 @@ class WatchTest(unittest.TestCase):
         os.symlink(os.path.join(root, "gone"), link)
         os.utime(link, (0, 0), follow_symlinks=False)
         os.utime(root, (0, 0))  # dir 自身の活動と link の扱いを分けて見る
-        age = tree_age(root, time.time())
+        age = tree_age(root, time.time())[0]
         if age is None:
             self.fail("dangling symlink で走査不能と判定された")
         self.assertGreater(age, 1000.0)
@@ -5048,7 +5189,7 @@ class WatchTest(unittest.TestCase):
         root, record, _log = self._state("ws", "task-live", "running")
         real, injected = record_view, []
 
-        def one_bad_read(path, job_id=None):
+        def one_bad_read(path, job_id=None, hold=None):
             # 判断に使う read だけを 1 度失敗させる — 前後は読める。
             if path == record and not injected:
                 injected.append(path)
