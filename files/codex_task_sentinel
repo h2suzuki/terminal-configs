@@ -302,13 +302,275 @@ def bounded_names(root: str) -> list[str] | None:
     return sorted(names)
 
 
+class Observation:
+    """Descriptor-backed file observation shared by every content reader.
+
+    The primitive owns acquisition, bounded reads, descriptor fingerprints,
+    absence classification, and hold replacement. Readers receive bytes and
+    interpret them without issuing descriptor syscalls themselves.
+    """
+
+    PRESENT = "present"
+    ABSENT = "absent"
+    UNSTABLE = "unstable"
+
+    def __init__(
+        self,
+        state: str,
+        *,
+        content: bytes = b"",
+        stamp: tuple | None = None,
+        error: BaseException | None = None,
+        reason: str | None = None,
+        text: str = "",
+        seen_content: bool = False,
+        descriptor=None,
+    ) -> None:
+        self.state = state
+        self.content = content
+        self.stamp = stamp
+        self.error = error
+        self.reason = reason
+        self.text = text
+        self.seen_content = seen_content
+        self.descriptor = descriptor
+
+    @staticmethod
+    def open_regular(path: str):
+        """Open and validate a regular-file descriptor without a path re-stat."""
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise OSError(f"{path} is not a regular file")
+            os.set_blocking(descriptor, True)
+        except BaseException:
+            os.close(descriptor)
+            raise
+        return os.fdopen(descriptor, "rb")
+
+    @staticmethod
+    def descriptor_stat(handle):
+        """Metadata from the descriptor whose bytes are being observed."""
+        return os.fstat(handle.fileno())
+
+    @staticmethod
+    def read_held(handle, limit: int) -> bytes:
+        """Re-read a held descriptor from its start, within the caller's cap."""
+        handle.seek(0)
+        return handle.read(limit)
+
+    @staticmethod
+    def release(handles: list) -> None:
+        """Release held descriptors in their existing order."""
+        for handle in handles:
+            handle.close()
+
+    @classmethod
+    def replace_hold(cls, previous: list, fresh: list) -> list:
+        """Install a newly acquired hold before releasing the previous one."""
+        if not fresh:
+            return previous
+        cls.release(previous)
+        return fresh
+
+    @classmethod
+    def record(cls, path: str, limit: int, hold: list | None = None) -> Observation:
+        """One bounded record read and the fingerprint of those exact bytes."""
+        try:
+            with contextlib.ExitStack() as opened:
+                handle = open_regular(path)
+                if hold is None:
+                    opened.enter_context(handle)
+                else:
+                    hold.append(handle)
+                descriptor = cls.descriptor_stat(handle)
+                raw = handle.read(limit)
+        except FileNotFoundError:
+            # view の従来分類は祖先を見ず、 gone だけが下で祖先を見る。
+            return cls(cls.ABSENT)
+        except OSError as exc:
+            return cls(cls.UNSTABLE, error=exc)
+        stamp = (
+            descriptor.st_dev,
+            descriptor.st_ino,
+            descriptor.st_size,
+            hashlib.sha256(raw).digest(),
+        )
+        return cls(cls.PRESENT, content=raw, stamp=stamp)
+
+    @classmethod
+    def log_lines(
+        cls,
+        path: str,
+        onerror: Callable[[], None] | None = None,
+        stamp: list | None = None,
+        hold: list | None = None,
+    ) -> Iterator[str]:
+        """Yield a bounded descriptor view as the log reader's text lines."""
+        try:
+            with contextlib.ExitStack() as opened:
+                handle = open_regular(path)
+                if hold is None:
+                    opened.enter_context(handle)
+                else:
+                    hold.append(handle)
+                if stamp is not None:
+                    descriptor = cls.descriptor_stat(handle)
+                    stamp.append(
+                        (
+                            descriptor.st_dev,
+                            descriptor.st_ino,
+                            descriptor.st_mtime_ns,
+                            descriptor.st_size,
+                        )
+                    )
+                size = cls.descriptor_stat(handle).st_size
+                budget = min(size, MAX_SCAN_BYTES)
+                if budget < size:
+                    handle.seek(size - budget)
+                    if onerror is not None:
+                        onerror()
+                dropping = False
+                while budget > 0:
+                    chunk = handle.readline(min(MAX_LOG_LINE, budget))
+                    if not chunk:
+                        return
+                    budget -= len(chunk)
+                    whole = chunk.endswith(b"\n")
+                    if dropping:
+                        dropping = not whole
+                        continue
+                    dropping = not whole
+                    line = chunk.rstrip(b"\n").decode("utf-8", "replace")
+                    if line.strip():
+                        yield line
+        except FileNotFoundError:
+            if cls.unreachable(path) and onerror is not None:
+                onerror()
+            return
+        except OSError:
+            if onerror is not None:
+                onerror()
+            return
+
+    @classmethod
+    def artifact(
+        cls,
+        path: str,
+        scan_limit: int,
+        chunk_limit: int,
+        hold: list | None = None,
+    ) -> Observation:
+        """One bounded strict-text artifact view with descriptor stability checks."""
+        stamp = None
+        decoder = codecs.getincrementaldecoder("utf-8")()
+        body = ""
+        seen_content = False
+        try:
+            with contextlib.ExitStack() as opened:
+                handle = open_regular(path)
+                if hold is None:
+                    opened.enter_context(handle)
+                else:
+                    hold.append(handle)
+                before = cls.descriptor_stat(handle)
+                stamp = (
+                    before.st_dev,
+                    before.st_ino,
+                    before.st_mtime_ns,
+                    before.st_size,
+                )
+                if before.st_size > scan_limit:
+                    return cls(cls.UNSTABLE, stamp=stamp, reason="bounded")
+                remaining = before.st_size
+                while remaining > 0 and (
+                    chunk := handle.read(min(chunk_limit, remaining))
+                ):
+                    remaining -= len(chunk)
+                    body += decoder.decode(chunk)
+                    seen_content = seen_content or bool(body.strip())
+                    body = body[-chunk_limit:]
+                body += decoder.decode(b"", True)
+                seen_content = seen_content or bool(body.strip())
+                body = body[-chunk_limit:]
+                after = cls.descriptor_stat(handle)
+                try:
+                    named = os.stat(path)
+                except OSError:
+                    named = None
+        except FileNotFoundError:
+            state = cls.UNSTABLE if cls.unreachable(path) else cls.ABSENT
+            return cls(state, stamp=("absent",), reason="missing")
+        except UnicodeDecodeError as exc:
+            return cls(cls.PRESENT, stamp=stamp, error=exc, reason="decode")
+        except OSError as exc:
+            return cls(cls.UNSTABLE, stamp=stamp, error=exc, reason="unreadable")
+        if (before.st_mtime_ns, before.st_size) != (
+            after.st_mtime_ns,
+            after.st_size,
+        ):
+            return cls(cls.UNSTABLE, stamp=stamp, reason="changed")
+        if named is None or (named.st_dev, named.st_ino) != (
+            after.st_dev,
+            after.st_ino,
+        ):
+            return cls(cls.UNSTABLE, stamp=("moved",), reason="moved")
+        return cls(
+            cls.PRESENT,
+            stamp=stamp,
+            text=body,
+            seen_content=seen_content,
+            descriptor=after,
+        )
+
+    @staticmethod
+    def entry_identity(path: str) -> tuple | None:
+        """The named entry itself, without following its final symlink."""
+        try:
+            st = os.lstat(path)
+        except (FileNotFoundError, NotADirectoryError):
+            return None
+        return (st.st_dev, st.st_ino, st.st_mode, st.st_mtime_ns, st.st_size)
+
+    @classmethod
+    def dangling(cls, path: str) -> bool:
+        """Whether an entry is a symlink whose target cannot be reached."""
+        try:
+            identity = cls.entry_identity(path)
+        except OSError:
+            return True
+        if identity is None or not stat.S_ISLNK(identity[2]):
+            return False
+        try:
+            os.stat(path)
+        except OSError:
+            return True
+        return False
+
+    @classmethod
+    def unreachable(cls, path: str) -> bool:
+        """Whether an entry or any ancestor is a link that cannot be followed."""
+        while path and path != os.path.dirname(path):
+            if cls.dangling(path):
+                return True
+            path = os.path.dirname(path)
+        return False
+
+    @classmethod
+    def record_gone(cls, path: str) -> bool:
+        """Whether a record is stably absent under its historical policy."""
+        try:
+            identity = cls.entry_identity(path)
+        except OSError:
+            return False
+        if identity is None:
+            return not cls.unreachable(os.path.dirname(path))
+        return False
+
+
 def link_identity(path: str) -> tuple | None:
     """The entry itself at the grain it was read, or None when nothing is there."""
-    try:
-        st = os.lstat(path)
-    except (FileNotFoundError, NotADirectoryError):
-        return None
-    return (st.st_dev, st.st_ino, st.st_mode, st.st_mtime_ns, st.st_size)
+    return Observation.entry_identity(path)
 
 
 def job_record(record_path: str, job_id: str | None = None) -> dict | None:
@@ -326,24 +588,15 @@ def record_view(
     separate parse proves nothing about the bytes the parse actually saw, so
     A -> B -> A reads B's status as a stable snapshot of A.
     """
-    try:
-        with contextlib.ExitStack() as opened:
-            f = open_regular(path)
-            if hold is None:
-                opened.enter_context(f)
-            else:
-                hold.append(f)  # 検証した descriptor をそのまま呼び手へ渡す
-            st = os.fstat(f.fileno())
-            # log / 成果物と同じく上限を置く — record だけ無制限だと、 巨大または
-            # 伸び続ける JSON ひとつで監視が読み終わらない。
-            raw = f.read(MAX_RECORD_BYTES + 1)
-    except FileNotFoundError:
+    observed = Observation.record(path, MAX_RECORD_BYTES + 1, hold)
+    if observed.state == Observation.ABSENT:
         return ("absent",), None
-    except OSError as exc:
+    if observed.state == Observation.UNSTABLE:
         # 失敗どうしを 1 つに畳むと、 別々の失敗が等しくなって「不変」に化ける。
-        return ("unopenable", exc.errno), None
-    stamp = (st.st_dev, st.st_ino, st.st_size, hashlib.sha256(raw).digest())
-    return stamp, _parse_record(raw, job_id)
+        assert isinstance(observed.error, OSError)
+        return ("unopenable", observed.error.errno), None
+    assert observed.stamp is not None
+    return observed.stamp, _parse_record(observed.content, job_id)
 
 
 def _parse_record(raw: bytes, job_id: str | None = None) -> dict | None:
@@ -398,27 +651,12 @@ def open_regular(path: str):
     rather than the name a second time — swapping the path between a stat and an
     open is exactly how a check on the name gets bypassed.
     """
-    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
-    try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise OSError(f"{path} is not a regular file")
-        os.set_blocking(descriptor, True)
-    except BaseException:
-        os.close(descriptor)
-        raise
-    return os.fdopen(descriptor, "rb")
+    return Observation.open_regular(path)
 
 
 def record_gone(record_path: str) -> bool:
     """Whether the record is really absent — os.path.exists calls unreadable absent too."""
-    try:
-        os.lstat(record_path)
-    except (FileNotFoundError, NotADirectoryError):
-        # find_jobs と同じ意味で扱う — 祖先が file になったなら record は確かに無い。
-        return not unreachable(os.path.dirname(record_path))
-    except OSError:
-        return False  # 読めないだけ — 消失 (exit 10) ではなく corrupt / 検証不能の側
-    return False
+    return Observation.record_gone(record_path)
 
 
 def file_stat(path: str | None) -> tuple[int, int, int, int] | None:
@@ -443,26 +681,7 @@ def record_stamp(path: str) -> tuple:
 
 def dangling(path: str) -> bool:
     """Whether the entry is a link whose target cannot be reached."""
-    try:
-        identity = link_identity(path)
-    except OSError:
-        return True  # entry の種別すら読めない — 不在の証明にはならない
-    if identity is None or not stat.S_ISLNK(identity[2]):
-        return False
-    try:
-        os.stat(path)
-    except OSError:
-        return True
-    return False
-
-
-def unreachable(path: str) -> bool:
-    """Whether the entry or any ancestor is a link that cannot be followed."""
-    while path and path != os.path.dirname(path):
-        if dangling(path):
-            return True  # 途中が辿れない — 消えたのではなく読めていない
-        path = os.path.dirname(path)
-    return False
+    return Observation.dangling(path)
 
 
 def deadline_reached(deadline: float, margin: float = 0.0) -> bool:
@@ -520,54 +739,8 @@ def log_lines(
     bodies with no size limit, so one agent turn can be a single line larger than
     the memory this tool may use, and a verdict lost to MemoryError helps nobody.
     """
-    try:
-        # byte で読む — 置換後の文字列長で数えると、 消費 byte と一致せず
-        # 上限が狂い、 未読を残したまま「全量を読んだ」 と扱いうる。
-        # hold を渡されたら閉じない — 比較が済むまで inode を押さえるのは呼び手。
-        with contextlib.ExitStack() as opened:
-            f = open_regular(log_path)
-            if hold is None:
-                opened.enter_context(f)
-            else:
-                hold.append(f)
-            if stamp is not None:
-                st = os.fstat(f.fileno())
-                # 判断に使った bytes の出どころ — 外側の path 比較では A→B→A が透過する。
-                stamp.append((st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size))
-            # 開いた時点の size を上限にする — 動く EOF を追うと、 追記が読みより
-            # 速い log で読み終わらず、 期限確認にすら戻れない。
-            size = os.fstat(f.fileno()).st_size
-            budget = min(size, MAX_SCAN_BYTES)
-            if budget < size:
-                # 全量を読むと期限へ戻れない。 末尾だけ見て、 部分と申告する。
-                f.seek(size - budget)
-                if onerror is not None:
-                    onerror()
-            dropping = False
-            while budget > 0:
-                chunk = f.readline(min(MAX_LOG_LINE, budget))
-                if not chunk:
-                    return
-                budget -= len(chunk)
-                whole = chunk.endswith(b"\n")
-                if dropping:  # 長すぎる行の残り — 頭の 1 片だけを 1 行として扱う
-                    dropping = not whole
-                    continue
-                dropping = not whole
-                line = chunk.rstrip(b"\n").decode("utf-8", "replace")
-                if line.strip():
-                    yield line
-    except FileNotFoundError:
-        # 辿れない link は祖先も含めて「まだ書かれていない」 ではない — 短い view と申告する。
-        if unreachable(log_path) and onerror is not None:
-            onerror()
-        return
-    except OSError:
-        # 途中で読めなくなった view は短い。 未完了 start を落として stall 抑止を
-        # 消しうるので、 「読めた分」 を全量として扱わせない。
-        if onerror is not None:
-            onerror()
-        return
+    # byte で数え、動く EOF は追わず、長い 1 行も primitive 内で切る。
+    yield from Observation.log_lines(log_path, onerror, stamp, hold)
 
 
 def _tee(lines: Iterator[str], sink: collections.deque) -> Iterator[str]:
@@ -804,8 +977,7 @@ def baseline_silence(
             ):
                 continue  # 読んでいる間に伸びた peer は、この poll の手本にならない
         finally:
-            for handle in peer_pin:
-                handle.close()  # continue で抜ける経路も必ず通る
+            Observation.release(peer_pin)  # continue で抜ける経路も必ず通る
         if quiet is not None and (worst is None or quiet > worst):
             worst = quiet
     return worst, True
@@ -870,78 +1042,31 @@ def artifact_view(
     """
     if not path or since is None:
         return False, None
-    stamp = None
-    decoder = codecs.getincrementaldecoder("utf-8")()
-    body = ""
-    # 保持するのは末尾だけなので、 「どこかに中身があったか」 は読みながら覚えておく。
-    seen_content = False
-    try:
-        # 本文と鮮度は同じ descriptor の同じ瞬間から取る — path で stat し直すと、
-        # 置換された別 inode の mtime が古い本文の完了 token と組になりうる。
-        with contextlib.ExitStack() as opened:
-            f = open_regular(path)
-            if hold is None:
-                opened.enter_context(f)
-            else:
-                hold.append(f)  # 比較が済むまで inode を押さえるのは呼び手
-            before = os.fstat(f.fileno())
-            stamp = (
-                before.st_dev,
-                before.st_ino,
-                before.st_mtime_ns,
-                before.st_size,
-            )
-            # 全体を先頭から strict decode するので途中の不正 byte も落ちる。 保持は
-            # 末尾だけ — 全量を持つと巨大な成果物ひとつで MemoryError になる。
-            # 読む総量は開いた時点の size まで — 動く EOF を追うと読み終わらない。
-            if before.st_size > MAX_SCAN_BYTES:
-                return None, stamp  # 読み切れない大きさ
-            remaining = before.st_size
-            while remaining > 0 and (
-                chunk := f.read(min(MAX_ARTIFACT_BYTES, remaining))
-            ):
-                remaining -= len(chunk)
-                body += decoder.decode(chunk)
-                seen_content = seen_content or bool(body.strip())
-                body = body[-MAX_ARTIFACT_BYTES:]
-            body += decoder.decode(b"", True)
-            seen_content = seen_content or bool(body.strip())
-            body = body[-MAX_ARTIFACT_BYTES:]
-            after = os.fstat(f.fileno())
-            # 読み終えた inode が今も その path か — 閉じてから stat すると、
-            # 解放された inode 番号を再利用した別 file と一致してしまう。
-            try:
-                named = os.stat(path)
-            except OSError:
-                named = None
-    except FileNotFoundError:
-        # 辿れない link は祖先も含めて entry が在る — 無いのではなく読めない。
-        # 指紋は「不在」 を名乗る — 前後に在るなら読取窓の中だけ消えたことになる。
-        return (None if unreachable(path) else False), ("absent",)
-    except UnicodeDecodeError:
-        # 置換して読むと、 binary の末尾行が token と一致して完成品に化ける。
-        return False, stamp
-    except OSError:
-        return None, stamp  # 在るのに読めない
-    if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
-        return False, stamp  # 読んでいる間に伸びた
-    if named is None or (named.st_dev, named.st_ino) != (after.st_dev, after.st_ino):
-        # 「無い」 ではなく「今その path に在るのが同じ file か言えない」。 指紋も
-        # 別値にして、 呼び手の前後比較が「動いた」 として拾えるようにする。
-        return None, ("moved",)
-    if after.st_mtime < since:
-        return False, stamp  # a leftover from an earlier run
+    observed = Observation.artifact(
+        path, MAX_SCAN_BYTES, MAX_ARTIFACT_BYTES, hold
+    )
+    if observed.state == Observation.ABSENT:
+        return False, observed.stamp
+    if observed.state == Observation.UNSTABLE:
+        if observed.reason == "changed":
+            return False, observed.stamp
+        return None, observed.stamp
+    if observed.reason == "decode":
+        return False, observed.stamp
+    assert observed.descriptor is not None
+    if observed.descriptor.st_mtime < since:
+        return False, observed.stamp  # a leftover from an earlier run
     if not token:
-        return seen_content, stamp
+        return observed.seen_content, observed.stamp
     # The order says the final line IS the token: no padding, no trailing blanks.
     # LF だけで分ける — splitlines は VT・FF・NEL・U+2028 も境界として消すので、
     # token の後ろにそれらが付いた成果物まで完成品になる。
-    segments = body.split("\n")
+    segments = observed.text.split("\n")
     # CR を落とすのは LF を消費した行だけ — EOF 直前の裸 CR は行末ではなく本文である。
     lines = [s.removesuffix("\r") for s in segments[:-1]] + segments[-1:]
     if lines[-1] == "":
         lines.pop()  # 末尾の LF は行終端であって空行ではない
-    return (bool(lines) and lines[-1] == token), stamp
+    return (bool(lines) and lines[-1] == token), observed.stamp
 
 
 def version_key(path: str) -> tuple[int, ...]:
@@ -1192,8 +1317,7 @@ def carrying_records(
             if hold is not None and view:
                 hold.extend(view)
                 view = []
-    for handle in view:
-        handle.close()  # 採らなかった候補の descriptor は持たない
+    Observation.release(view)  # 採らなかった候補の descriptor は持たない
     return carried, unknown, shifting
 
 
@@ -1216,8 +1340,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             )
             # 周回の間に別 inode へ替わったなら、 同じ path でも同じ record ではない。
             if pin_hold and fresh_hold:
-                was = os.fstat(pin_hold[0].fileno())
-                now_id = os.fstat(fresh_hold[0].fileno())
+                was = Observation.descriptor_stat(pin_hold[0])
+                now_id = Observation.descriptor_stat(fresh_hold[0])
                 if (was.st_dev, was.st_ino) != (now_id.st_dev, now_id.st_ino):
                     return finish(
                         deadline,
@@ -1235,9 +1359,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             # 新しい掴みを得られた時だけ入れ替える — 読めない周回で手放すと、
             # 後から現れた inode と比べる相手が無くなる。
             if fresh_hold:
-                for handle in pin_hold:
-                    handle.close()
-                pin_hold = fresh_hold
+                pin_hold = Observation.replace_hold(pin_hold, fresh_hold)
             complete = complete and not shifting  # 動いた候補は掴めていない
             # 動いた候補も「一度は見えた」 — 忘れると後で未登録と断定できてしまう。
             seen_pairs.update(shifting)
@@ -1411,9 +1533,10 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # 登録解決で検証した descriptor をそのまま使う。 読み手を差し替えた呼び手
         # (test の stub 等) では手元に無いので、 その時だけ開き直して自己検証する。
         pinned = pin_hold[0] if pin_hold else open_regular(record_path)
-        pinned_stat = os.fstat(pinned.fileno())
-        pinned.seek(0)
-        if _parse_record(pinned.read(MAX_RECORD_BYTES + 1), args.job_id) is None:
+        pinned_stat = Observation.descriptor_stat(pinned)
+        if _parse_record(
+            Observation.read_held(pinned, MAX_RECORD_BYTES + 1), args.job_id
+        ) is None:
             raise OSError(errno.EIO, "the held view does not carry this job")
         record_inode = (pinned_stat.st_dev, pinned_stat.st_ino)
     except (FileNotFoundError, NotADirectoryError):
@@ -1556,8 +1679,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         log_changed = file_stat(log) != before_log or (
             log_view_stamp is not None and log_view_stamp != before_log
         )
-        for handle in log_pin:
-            handle.close()  # 比較が済むまで押さえていた
+        Observation.release(log_pin)  # 比較が済むまで押さえていた
         # 読んだ descriptor も前後の観測と同じでなければ、 A→B→A が透過する。
         # 外側が不在なら ("absent",) だけが一致する — 実体を読めたなら、
         # その file は読取窓の中だけ現れていたことになる。
@@ -1566,8 +1688,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             and artifact_stamp
             != (("absent",) if before_artifact is None else before_artifact)
         )
-        for handle in artifact_pin:
-            handle.close()  # 比較が済むまで押さえていた
+        Observation.release(artifact_pin)  # 比較が済むまで押さえていた
         # os.walk は snapshot ではないので、 列挙済み file への書き込みは
         # 走査し直さない限りこの poll から丸ごと抜け落ちる。
         # 最大 mtime だけでは、 entry の入れ替わった別 tree を同じ snapshot と読む。
@@ -3428,6 +3549,77 @@ class WatchTest(unittest.TestCase):
             mock.patch(__name__ + ".heartbeat_age", lambda *a: 0.0),
         ):
             self.assertEqual(watch(args), EXIT_STALL)
+
+    def test_log_lines_fingerprint_comes_from_the_descriptor_that_was_read(self):
+        """The log fingerprint belongs to the descriptor kept across a path swap."""
+        from unittest import mock
+
+        base = tempfile.mkdtemp()
+        path = os.path.join(base, "job.log")
+        replacement = os.path.join(base, "replacement.log")
+        raw = b"old descriptor\n"
+        with open(path, "wb") as stream:
+            stream.write(raw)
+        with open(replacement, "wb") as stream:
+            stream.write(b"replacement inode with a different size\n")
+        expected = os.stat(path)
+        real_open = open_regular
+
+        def swap_after_open(opened_path):
+            handle = real_open(opened_path)
+            os.replace(replacement, opened_path)
+            return handle
+
+        stamps = []
+        with mock.patch(__name__ + ".open_regular", swap_after_open):
+            self.assertEqual(
+                list(Observation.log_lines(path, stamp=stamps)),
+                ["old descriptor"],
+            )
+        self.assertEqual(
+            stamps,
+            [
+                (
+                    expected.st_dev,
+                    expected.st_ino,
+                    expected.st_mtime_ns,
+                    expected.st_size,
+                )
+            ],
+        )
+
+    def test_record_fingerprint_comes_from_the_descriptor_that_was_read(self):
+        """The record fingerprint belongs to the descriptor kept across a path swap."""
+        from unittest import mock
+
+        base = tempfile.mkdtemp()
+        path = os.path.join(base, "job.json")
+        replacement = os.path.join(base, "replacement.json")
+        raw = b'{"id":"old"}'
+        with open(path, "wb") as stream:
+            stream.write(raw)
+        with open(replacement, "wb") as stream:
+            stream.write(b'{"id":"replacement-with-a-different-size"}')
+        expected = os.stat(path)
+        real_open = open_regular
+
+        def swap_after_open(opened_path):
+            handle = real_open(opened_path)
+            os.replace(replacement, opened_path)
+            return handle
+
+        with mock.patch(__name__ + ".open_regular", swap_after_open):
+            observed = Observation.record(path, MAX_RECORD_BYTES)
+        self.assertEqual(observed.content, raw)
+        self.assertEqual(
+            observed.stamp,
+            (
+                expected.st_dev,
+                expected.st_ino,
+                expected.st_size,
+                hashlib.sha256(raw).digest(),
+            ),
+        )
 
     def test_a_pin_failure_past_the_deadline_is_a_timeout(self):
         """期限を跨いだ poll から返せるのは timeout だけ — pin 失敗も同じ gate を通す。"""
@@ -6042,13 +6234,16 @@ class SourceInvariantTest(unittest.TestCase):
         if cls._owner_map is not None:
             return cls._owner_map
         owners = {}
+        module_classes = {
+            id(node) for node in tree.body if isinstance(node, ast.ClassDef)
+        }
 
         class Owner(ast.NodeVisitor):
             def __init__(self):
                 self.stack = []
 
             def visit_scope(self, node, kind):
-                self.stack.append((kind, node.name))
+                self.stack.append((kind, node.name, id(node) in module_classes))
                 self.generic_visit(node)
                 self.stack.pop()
 
@@ -6061,16 +6256,22 @@ class SourceInvariantTest(unittest.TestCase):
             visit_AsyncFunctionDef = visit_FunctionDef
 
             def visit_Call(self, node):
-                in_class = bool(self.stack and self.stack[0][0] == "class")
+                classes = [scope for scope in self.stack if scope[0] == "class"]
+                # 関数内・class 内の nested class は test class 免除にしない。
+                owner_class = (
+                    classes[0][1]
+                    if len(classes) == 1 and classes[0][2]
+                    else None
+                )
                 function = next(
                     (
                         name
-                        for kind, name in reversed(self.stack)
+                        for kind, name, _module_level in reversed(self.stack)
                         if kind == "function"
                     ),
                     "<module>",
                 )
-                owners[node] = (in_class, function)
+                owners[node] = (owner_class, function)
                 self.generic_visit(node)
 
         Owner().visit(tree)
@@ -6084,7 +6285,7 @@ class SourceInvariantTest(unittest.TestCase):
             node.lineno
             for node in ast.walk(tree)
             if isinstance(node, ast.Call)
-            and not owners[node][0]
+            and owners[node][0] not in {"WatchTest", "SourceInvariantTest"}
             and matches(node)
             and (self._call_name(node.func), owners[node][1]) not in allowed
         ]
@@ -6204,16 +6405,66 @@ class SourceInvariantTest(unittest.TestCase):
         self.assertFalse(bad, f"non-allowlisted time.time calls at lines {bad}")
 
     def test_file_open_call_sites_are_allowlisted(self):
-        """Production file opens enter through the descriptor-checking reader."""
-        allowed = {("os.open", "open_regular")}
-        bad = self._bad_call_lines(
-            lambda node: (
+        """Content readers enter through Observation; fd syscalls stay in that layer."""
+        fd_calls = {
+            "os.open",
+            "os.fstat",
+            "os.close",
+            "os.fdopen",
+            "os.lstat",
+            "os.stat",
+            "os.set_blocking",
+        }
+        # path の外側比較と tree 走査だけを Observation 外の残存 site とする。
+        allowed = {
+            ("os.stat", "file_stat"),
+            ("os.lstat", "tree_age"),
+            ("os.stat", "tree_age"),
+        }
+        tree = self._source_tree()
+        owners = self._owners(tree)
+        bad = [
+            node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and (
                 (isinstance(node.func, ast.Name) and node.func.id == "open")
                 or (isinstance(node.func, ast.Attribute) and node.func.attr == "open")
-            ),
-            allowed,
+                or self._call_name(node.func) in fd_calls
+            )
+            and owners[node][0] not in {"Observation", "WatchTest", "SourceInvariantTest"}
+            and (self._call_name(node.func), owners[node][1]) not in allowed
+        ]
+        functions = {
+            node.name: node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name
+            in {
+                "record_view",
+                "log_lines",
+                "scan_log",
+                "longest_silence",
+                "artifact_view",
+            }
+        }
+        routes = {
+            "record_view": "Observation.record",
+            "log_lines": "Observation.log_lines",
+            "scan_log": "log_lines",
+            "longest_silence": "log_lines",
+            "artifact_view": "Observation.artifact",
+        }
+        bad.extend(
+            functions[name].lineno if name in functions else 1
+            for name, route in routes.items()
+            if name not in functions
+            or not any(
+                isinstance(node, ast.Call) and self._call_name(node.func) == route
+                for node in ast.walk(functions[name])
+            )
         )
-        self.assertFalse(bad, f"non-allowlisted file opens at lines {bad}")
+        self.assertFalse(bad, f"non-Observation file I/O at lines {sorted(bad)}")
 
     def test_lossy_decode_call_sites_are_allowlisted(self):
         """Ruling 11 permits lossy conversion only for untrusted log display."""
