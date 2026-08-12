@@ -19,54 +19,34 @@ Goal: 監視判定が plugin の実挙動と skill の 4 分岐に一致する�
 
 Exit Criteria:
 
-- [ ] レビューの新規 material 指摘がゼロで安定する — 4〜7 巡目は連続ゼロ。exit 14 導入の検証を
-  論点にした 12 巡目で 2 件、13 巡目でさらに 2 件。いずれも直前の巡の修正が生んだ欠陥で、全て修正済み。
-  14 巡目は 4 回発注して 3 回失敗 (provider の content filter 2 回・plugin state dir 再利用 1 回)。
-  中断した 2 回の最終出力が示した欠陥 (baseline の list 化 / timeout headline) は自力で確認し修正した。
-  4 回目が完走して 4 件 (completed + 活動中ツリーで exit 5 を早出し / 判定と evidence が別 snapshot /
-  同期 test が runtime 定数と繋がっていない / 本文の不正 stamp で監視が例外終了) — すべて修正済み。
-  15 巡目は 3 件 (mktime が Z stamp を local 時刻として読む / silence age を log 再読より前に取る /
-  exit table を数値集合で比較するため定数入替が通る)、16 巡目は 4 件 (contract が検査対象の定数を
-  自分の出典にする / completed 直後の record と log で snapshot race 2 件 / 読めない tree に
-  「書き込みなし」と表示) — いずれも修正済み (a0a6ace / b1d8ed7)。**17 巡目は 5 件、
-  全件が既出クラスの別サイトで新種クラスは 0**。報告書 `drafts/sentinel-review-r17-report.md`。
-  **18 巡目は 10 件** (`drafts/sentinel-review-r18-report.md`) — **うち 3 件は 17 巡目の修正で
-  私が作った欠陥** (movement guard に tree を入れ忘れ / `errors="replace"` で binary を完成品と受理 /
-  消えた entry 扱いが dangling symlink を恒久 active 化)、1 件は発注前に修正済み、
-  残る 6 件は走査漏れ。全件修正し、9 変異とも該当 test が落ちることを確認済み。
-  **`log_lines()` の途中読み取り失敗だけは未着手**として commit に明記した (19 巡目で判断する)
-- [ ] **指摘を生成側の癖として潰す** — 14〜17 巡の 16 件は 5 クラスに収まる。各クラスと、
-  それを産む私の書き方:
-
-  | クラス | 件数 | 私が何を書いたか |
-  |---|---|---|
-  | 同一対象を別時点で 2 度読む (snapshot race) | 5 | 観測を必要になった箇所で個別に呼び、poll ごとの入力を 1 つに束ねない |
-  | 不可知を断定として表示 | 4 | 失敗を握って scalar を返し、「読めなかった」を戻り値の型に残さない |
-  | 検査が検査対象を出典にする | 3 | test の期待値を最も入手しやすい実装の symbol から取る |
-  | 時刻 (UTC・単調性) | 2 | 期限と記録に同じ wall clock を使い、値の意味を問わない |
-  | 敵対入力で例外終了 | 2 | 外来 text を strict parse し、想定した例外型だけ捕まえる |
-
-  12・13 巡の指摘は直前の巡の修正が生んだもの、15 巡の時刻バグは 14 巡の修正の副産物、
-  16 巡の race 2 件は 15 巡で直した race と同じ形。**個別サイトを直すのをやめ、
-  クラスの不変条件を全走査で pin してから次を発注する**。
-  検査の出典クラスだけは既に memory entry (2026-08-11) が覆っており、3 件とも entry 作成前の
-  コードである。残り 4 クラスは未 cover
+- [ ] レビューの新規 material 指摘がゼロで安定する — **52 巡完走、未達**。17〜52 巡で 174 件。
+  巡ごとの件数・処理ブロック・原因タイプ・由来・修正の効果は `docs/sentinel-review-analysis.md`
+  (毎巡ここへ追記する)。要点は 3 つ: self 率が 46〜52 巡で **86%**、修正が次巡に生んだ指摘が
+  **90 件 (52%)**、効果判定が **worsened 33 巡 / improved 0 巡**。件数自体は 12 (r19) → 2〜6 に
+  収束したが、中身が preexisting から自作欠陥に置き換わっただけである
+- [ ] **指摘を生成側の癖として潰す** — 5 つの形 (配り漏れ / comment が code を追い越す /
+  虚偽の完了報告 / 再検査の半径不足 / 同一 commit 内の同型再発) を user memory の
+  `feedback_reading_the_outside_world.md` に記録済み。それでも 52 巡目の指摘 1 は 48 巡目と
+  同じ「期限 gate 外の early return」で、4 巡後の再演だった。**記録しただけでは止まっていない**
+- [ ] **test で守れていない修正が 2 件残る** — 52 巡目の指摘 2・3 (`pin_hold` の持ち越しと
+  `resolved_unknown` の非クリア、`6dcb92e`)。1 周目の unknown がその場で exit 13 を返すため
+  2 周目が来る入力を構成できない。51 巡目も同じ箇所を同じ理由で test 無しのまま閉じ、
+  52 巡目に「不十分」と再判定された
+- [ ] **deploy が 22 巡分遅れている** — `/usr/local/bin/codex_task_sentinel` は 30 巡目相当。
+  sandbox からは `sudo` も `/usr/local/bin` への書き込みも塞がれている (実行して確認済み) ので、
+  ユーザー手動で `sudo install -m 755 files/codex_task_sentinel /usr/local/bin/` が要る
 - [x] log 由来の曖昧さが正常 job の cancel を招かない — 既定で cancel 導線 (exit 4/3) を出さず、
   exit 14 で evidence を示して判断を呼び手に渡す (206ce7a)。断定したい呼び手は `--trust-log`。
   12 巡目が 504 case の直積で「既定の exit 3/4 は 0 件」「`--trust-log` は旧判定と mismatch 0」を実測
-
-13 巡のレビュー (gpt-5.6-sol / xhigh) の指摘はすべて修正済み
-(a746ef5 / b9f32d0 / fabe928 / bb56980 / 7c4d532 / 2607f1d / 890349a / 1f37e46 / 206ce7a /
-13832d2 / d8b1781 / 87cc3e0 / 6ccb4b4)。内容は commit message に要約してある。
-
-- [ ] **worktree を作り直したときの plugin state dir 掃除を機構化する**: 同じ path で
+- [x] **worktree を作り直したときの plugin state dir 掃除を機構化する**: 同じ path で
   `git worktree add` し直すと `plugin data/state/<worktree>-<hash>/` が再利用され、job が
-  `failed to load configuration: No such file or directory` で即死する。codex-delegation skill に
-  rule はあるが、worktree 再作成の時点では skill を invoke していないので発火しなかった
-  (2026-08-09 に実際に踏んだ)。`codex_worktree_gate.py` は既に codex の Bash を検査しているので、
-  起動時に「workspaceRoot の state dir があるのに worktree の作成時刻の方が新しい」を検出して
-  警告するのが素直。sentinel 側は `errorMessage` を evidence に出すようにして (87cc3e0)
-  「手で record を開き直す」までは消えている
+  `failed to load configuration: No such file or directory` で即死する (2026-08-09 に実際に踏んだ)。
+  `files/claude_managed-hooks/codex_worktree_gate.py` が plugin と同じ規則で state dir を導き
+  (`_state_dirs` / `_oldest_record`)、worktree より古い state dir が残っていれば deny して
+  `rm -rf` を指示する
+
+Work file: `docs/sentinel-review-analysis.md` (17 巡以降の全指摘の集計)、
+`drafts/sentinel-review-r{17..53}.md` (発注書)、`drafts/sentinel-review-r{17..30,52,53}-report.md` (報告書)
 
 
 ## Medium
@@ -80,7 +60,7 @@ Exit Criteria:
 - [x] 実 session で open Task を残した wind-down に inject + block が発火し、todos.md 転記 + close で通過することを確認 — **2026-08-08 04:26 に full loop を live 観測**: ユーザー発言「セッションを閉じます」に対し UserPromptSubmit で inject (open Task #7 を列挙) → ターン終了時に stop_checks が exit 2 で block (#7 を名指し) → todos.md へ転記済みのうえ Task を close して通過。以下は経緯: 2026-08-07 **inject は実 session で live 発火を観測** (ユーザーの「セッションは終わります」prompt に対し UserPromptSubmit で open Task 1 件を列挙、clean tree ゆえ未コミット節は出ず = 偽陽性修正も live 確認)。block 側は下記 shadow 欠陥を修正済 (40f89e8)。deploy 完了・canonical と diff 一致を確認済 (2026-08-07 ユーザー実行) で、deployed 版が実 transcript から人間 prompt を復元し harness entry 14 件を skip することも確認。残るは **live block の観測のみ** (実装は 3a6a2c5 で完了・deploy 済)。ユーザー指摘により設計から作り直した: Stop payload には prompt が無いため transcript を遡っていたが、これをやめ **prompt を受け取る UserPromptSubmit hook 側で判定し session 単位の控えに記録**、Stop 側はそれを読むだけにした。未処理項目は従来どおり Task store + mytask の両対応。transcript を読まなくなったので下記 2 段の不発原因は原因ごと消滅し、widen-once (75de34b) も削除。通し試験で「合図なし→素通り / 合図あり→block / 通常発言で上書き→素通り」を確認、deploy 後は本番 hook が実際に控えを書くことも確認済 (04:11)。
   - 旧原因の記録 (再発時の手がかり): (1) harness 生成 entry が人間 prompt を shadow、(2) `_load_tail` が末尾 128KB しか読まず長 session で人間 prompt に届かない、(3) `<system-reminder>` も harness 生成だが roster 未収載だった
 
-- [ ] **発注書の規約適合を発注スクリプト内で deterministic に検査する** — **方針確定 (2026-08-12・ユーザー判断)**。発注は結局スクリプト実行になるので、LLM の敵対レビューに頼らず**スクリプト側で決定的に検査して、規約違反なら発注を拒否する**
+- [x] **発注書の規約適合を発注スクリプト内で deterministic に検査する** — `files/codex_order_lint` (17 tests・9 変異すべて catch・`47cbd29`) が節の有無・報告書 path の綴り・終端 token・調査しきい値の倍率・裁定の採番・kill-by-port 禁止を検査する。実在の発注書 36 本に当てると 48〜52 巡の 5 本が同じ採番ずれを 5 巡持ち越していた。**起動 flag の固定はまだ script 化していない** (下記 3 件の失敗はいまも手つきで防いでいる)。方針確定 (2026-08-12・ユーザー判断)。発注は結局スクリプト実行になるので、LLM の敵対レビューに頼らず**スクリプト側で決定的に検査して、規約違反なら発注を拒否する**
   - 却下した案 2 つ: (a) 「codex-delegation skill が active でない限り codex-companion の Bash を止める」hook — gate の state が agent 単位で subagent から見えず詰んでいた。(b) 発注書を codex に敵対レビューさせる — LLM 判定は確率的で、決定的にできるものを LLM に投げるのは `writing-code` の「deterministic transform を LLM に投げるな」に反する
   - 検査すべき規約は codex-delegation skill に既にある (worktree 隔離 / `--write` の扱い / running[]-empty monitor 禁止 等)。これらを発注スクリプトの引数・発注文から機械的に判定する
   - **起動そのものもスクリプトが担う**: 2026-08-12 の 2 回の発注で、起動側の失敗が 3 件出た。
