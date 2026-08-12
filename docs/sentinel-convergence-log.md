@@ -62,7 +62,7 @@ test 数 / 指摘件数) を追記して commit する。発注書・報告書�
 | 構造 refactor | 未着手 | — | 次の柱 |
 | TOCTOU harness | 未着手 | — | refactor 完了後 |
 | 体制と収束認定 | 未着手 | — | 柱完了後に 54 巡目 |
-| 方法論 doc (`docs/adversarial-review-methodology.md`) | 未着手 | 2026-08-12 | 次ターン執筆 |
+| 方法論 doc (`docs/adversarial-review-methodology.md`) | 完了 | 2026-08-13 | 発散機構 M1–M6 / 設計 G・L・R / モデル選定 / チェックリスト |
 | traceability 記録 (本 doc) | 進行中 | 2026-08-12 | 運用開始 |
 
 状態が変わるたびこの表と実行ログの両方を更新する。
@@ -217,3 +217,18 @@ round 2 は sentinel exit 0。A〜H 全適用 (SourceInvariantTest 分離 + 1 �
 **指摘残ゼロ・網の後退ゼロ**のまま収束。53 巡ループとの対比: fix が新規指摘を生む前に
 同 round 内で変異検証 + 独立変異 + レビューを閉じる運用が機能した。deploy
 (`/usr/local/bin/codex_task_sentinel`) は依然ユーザー手動待ち (todos.md 既存 criterion)。
+
+### 2026-08-13 — 方法論 doc の確立と deploy 完了
+
+- `docs/adversarial-review-methodology.md` を執筆 (Fable・effort max)。構成: 実測対比
+  (53 巡 vs 3 round) / 発散機構 M1–M6 (スペックのレビュー内発見・site 多重度・
+  sampler/enumerator 混同・検証の自己設計・tripwire 不在・自作自演起点) / 収束設計
+  (gate G1–G4・運用 L1–L6・役割 R1–R3) / opus 5 の扱い (交絡の明示と write/review path
+  分離の測定設計) / UI project への移植 / チェックリスト 11 項
+- 品質保証: 数値照合 agent が定量主張 約 69 件を典拠 2 doc + git 実測と突合 — 63 件一致、
+  修正 4 件 (所要 2.5h→約 1h [commit 時刻実測] / 「毎巡 2–6 件」を終盤 15 巡に限定 /
+  逃げ道 4→3 / 規模数値の典拠を git 実測と明記)。典拠側の内部不整合 1 件 (「self 率は単調
+  上昇」— 実表は 73%→50% の谷あり) の引き写しを端点表記に修正。document-editor cleanup
+  pass 12 箇所 (jargon 初出定義・label 統一、内容不変)
+- deploy 完了 (ユーザー実行・2026-08-13 00:05): `/usr/local/bin/codex_task_sentinel` が
+  canonical (meta-test 込み `55c618e`) と `diff -q` IDENTICAL・mode 0755 を確認
