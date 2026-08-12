@@ -1041,10 +1041,14 @@ def evidence(
 
 def carrying_records(
     found: list[tuple[str, str]], job_id: str
-) -> tuple[list[tuple[str, str]], bool]:
-    """Candidates whose body really claims the id, and whether all were readable."""
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Candidates whose body claims the id, and those that could not be read at all.
+
+    Kept apart: an unreadable candidate is no evidence that it carries the id, so
+    counting it as one turns a single genuine job into an ambiguous pair.
+    """
     carried = []
-    readable = True
+    unknown = []
     for pair in found:
         before = record_stamp(pair[0])
         stamp, loaded = record_view(pair[0])
@@ -1055,11 +1059,11 @@ def carrying_records(
             or stamp != before
             or record_stamp(pair[0]) != before
         ):
-            readable = False  # 読めなかっただけ — 名乗っていない証明にはならない
+            unknown.append(pair)  # 読めなかっただけ — 名乗っていない証明にならない
             continue
         if loaded.get("id") == job_id:
             carried.append(pair)
-    return carried, readable
+    return carried, unknown
 
 
 def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
@@ -1073,11 +1077,22 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         if found:
             # file 名の一致は所属の証明ではない — 本文が名乗るものだけを候補にする。
             # 読めなかった候補は「別 job」の証明にならないので、その回は絞らない。
-            carried, all_carried = carrying_records(found, args.job_id)
-            found = carried if all_carried else found
-        # 候補を確かめ終えた時点で期限なら、 そこから終局を作らず timeout に委ねる。
-        if found and complete and deadline_reached(deadline):
-            break
+            carried, unknown = carrying_records(found, args.job_id)
+            if carried:
+                found, complete = carried, complete and not unknown
+            else:
+                # 唯一の候補が読めないだけなら、 corrupt 判定へ送る。
+                found, complete = unknown[:1], complete and len(unknown) <= 1
+        # 候補を確かめ終えた時点で期限なら、 そこから終局を作らない。
+        if found and deadline_reached(deadline):
+            if len(found) == 1 and complete:
+                break  # 単一候補なら post-loop の timeout が record を名指しできる
+            print(
+                f"timeout: {printable(args.job_id)} was not resolved to a single "
+                f"record within {int(args.timeout_seconds)}s"
+            )
+            print(f"  searched: {printable(', '.join(roots))}")
+            return EXIT_TIMEOUT
         if found:
             if len(found) > 1:
                 print(
@@ -1184,9 +1199,10 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         seen, scanned_all = find_jobs(args.job_id, roots)
         duplicates: list[tuple[str, str]] = []
         if seen:
-            carried, all_carried = carrying_records(seen, args.job_id)
-            seen = carried if all_carried else seen
-            duplicates = seen if len(seen) > 1 else []
+            carried, unknown = carrying_records(seen, args.job_id)
+            duplicates = carried if len(carried) > 1 else []
+            seen = carried or unknown
+            scanned_all = scanned_all and not (carried and unknown)
         # plugin は record を completed に書いてから final output を append する。
         # その窓に入った poll は、 古い running のまま静穏を読んで stall と言える。
         # 前後一致は中間値との一致を証明しない — parse が見た bytes も同じと要求する。
@@ -1194,16 +1210,22 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             record_stamp(record_path) != record_before
             or record_view_stamp != record_before
         )
+        # 何が動いたのかを分けて持つ — 畳むと「完了条件に関わる変化」 だけを
+        # 要求する分岐が書けない。
+        artifact_changed = (file_stat(log), file_stat(args.artifact)) != before
+        # os.walk は snapshot ではないので、 列挙済み file への書き込みは
+        # 走査し直さない限りこの poll から丸ごと抜け落ちる。
+        tree_changed = tree_age((record or {}).get("workspaceRoot"), now) != tree
+        # threshold の出どころも同じ poll のもの — peer が後から伸びると、
+        # 古い低い bar と新しい対象 snapshot の組で stall を断定できる。
+        baseline_after, counted_all_after = baseline_silence(
+            jobs_dir, args.job_id, now, args.hang_seconds
+        )
         changed = (
-            (file_stat(log), file_stat(args.artifact)) != before
+            artifact_changed
             or record_changed
-            # os.walk は snapshot ではないので、 列挙済み file への書き込みは
-            # 走査し直さない限りこの poll から丸ごと抜け落ちる。
-            or tree_age((record or {}).get("workspaceRoot"), now) != tree
-            # threshold の出どころも同じ poll のもの — peer が後から伸びると、
-            # 古い低い bar と新しい対象 snapshot の組で stall を断定できる。
-            or baseline_silence(jobs_dir, args.job_id, now, args.hang_seconds)
-            != (baseline, counted_all)
+            or tree_changed
+            or baseline_after != baseline
         )
         # 「動いた」 と 「読めなかった」 は別の理由 — 畳むと headline がどちらも
         # 「読取中に変わった」 になり、 安定して読めない log が活動に化ける。
@@ -1213,18 +1235,23 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             # watch 全体の同一性 — mtime と size は heartbeat で動くのが正常である。
             or (file_stat(record_path) or (None, None))[:2] != record_inode
         )
-        # 全ての read を終えた後に評価する — 途中の一時点では跨ぎを取りこぼす。
-        observed_late = deadline_reached(deadline)
-        unreadable = log_incomplete or record_moved or not counted_all
+        # 数え切れなかったのは job の変化ではない — 読めなかった側に分類する。
+        unreadable = (
+            log_incomplete or record_moved or not (counted_all and counted_all_after)
+        )
         # cancel / 失敗は他を読めるかに依らず結果ではない — 静穏 gate より先に置く。
         settled = str((record or {}).get("status") or "")
-        # 完了は「成果物 + disk の record」で決まる — log の可読性はその条件にない。
-        decided_by_record = (
+        terminal_record = (
             record is not None
             and not record_moved
             and not record_changed
             and settled
             and settled not in ALIVE_STATUS
+        )
+        # 完了は「成果物 + settled tree + record」で決まる — log の可読性はその条件に
+        # 無いが、 成果物と tree は条件そのものなので安定を要る。
+        decided_by_record = terminal_record and (
+            settled != BASELINE_STATUS or not (artifact_changed or tree_changed)
         )
         if record_gone(record_path):
             # The plugin prunes to its newest 50 jobs regardless of status, so a
@@ -1269,7 +1296,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 command_may_run=bool(unfinished),
                 trust_log=args.trust_log,
             )
-        if duplicates and not observed_late:
+        if duplicates and not deadline_reached(deadline):
             print(
                 f"ambiguous: {len(duplicates)} records carry the id "
                 f"{printable(args.job_id)}"
@@ -1318,7 +1345,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 f"(record says {recorded})",
             )
         # 期限を跨いだ poll から返せるのは timeout だけ — 分岐ごとに書くと必ず漏れる。
-        if observed_late or out is None and deadline_reached(deadline):
+        # out の有無で短絡させない: 直前の分岐が期限後に作った終局もここで潰す。
+        if deadline_reached(deadline):
             out = (
                 EXIT_TIMEOUT,
                 f"timeout: no terminal verdict within {int(args.timeout_seconds)}s "
@@ -2268,11 +2296,11 @@ class WatchTest(unittest.TestCase):
         impostor = os.path.join(other, "task-x.json")
         with open(impostor, "w", encoding="utf-8") as f:
             json.dump({"id": "task-other", "status": "running"}, f)
-        carried, readable = carrying_records(
+        carried, unknown = carrying_records(
             [(record, log), (impostor, impostor[: -len(".json")] + ".log")], "task-x"
         )
         self.assertEqual(carried, [(record, log)])
-        self.assertTrue(readable)
+        self.assertEqual(unknown, [])
 
     def test_a_record_turning_completed_does_not_ride_the_failed_fast_path(self):
         """先行確定は record が動いていない時だけ — 動いたなら古い status で答えない。"""
@@ -2368,9 +2396,9 @@ class WatchTest(unittest.TestCase):
             return view
 
         with mock.patch(__name__ + ".record_view", flipping):
-            carried, readable = carrying_records([(record, log)], "task-x")
+            carried, unknown = carrying_records([(record, log)], "task-x")
         self.assertEqual(carried, [])
-        self.assertFalse(readable)
+        self.assertEqual(unknown, [(record, log)])
 
     def test_a_baseline_that_stops_counting_mid_poll_discards_it(self):
         """(None, True) → (None, False) は第 1 要素では動いて見えない。"""
@@ -2389,7 +2417,7 @@ class WatchTest(unittest.TestCase):
             ),
         ):
             args = self._watch_args(root, "task-live", once=True, trust_log=True)
-            self.assertEqual(watch(args), EXIT_ALIVE)
+            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
         self.assertTrue(os.path.exists(record))
 
     def test_an_unreadable_jobs_dir_is_not_a_low_bar(self):
@@ -2415,6 +2443,127 @@ class WatchTest(unittest.TestCase):
             self.assertEqual(
                 baseline_silence(jobs, "task-live", time.time()), (None, False)
             )
+
+    def test_a_completed_record_still_needs_a_settled_tree_and_artifact(self):
+        """完了条件そのものが動いたなら、 record が安定でも終局にしない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-done", "completed")
+        args = self._watch_args(root, "task-done", once=True)
+        args.artifact = None
+        ages = [900.0, 5.0]
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".tree_age", lambda *a: ages.pop(0) if ages else 5.0),
+        ):
+            self.assertNotEqual(watch(args), EXIT_DONE)
+
+    def test_an_incomplete_second_baseline_is_unreadable_not_a_change(self):
+        """判明したのは peer を読み切れなかったこと — job が変化した証拠ではない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-live", "running", log_age=900.0)
+        answers = [(None, True), (None, False)]
+        buf = io.StringIO()
+        with (
+            redirect_stdout(buf),
+            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+            mock.patch(
+                __name__ + ".baseline_silence",
+                lambda *a: answers.pop(0) if answers else (None, False),
+            ),
+        ):
+            args = self._watch_args(root, "task-live", once=True, trust_log=True)
+            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
+        self.assertIn("could not be read in full", buf.getvalue())
+
+    def test_an_unreadable_sibling_does_not_make_a_lone_record_ambiguous(self):
+        """読めなかった候補は「id を名乗る record」 ではない — 2 件と数えない。"""
+        root, record, log = self._state("ws", "task-x", "running")
+        other = os.path.join(os.path.dirname(record), "..", "..", "ws2", "jobs")
+        os.makedirs(other)
+        broken = os.path.join(other, "task-x.json")
+        with open(broken, "w", encoding="utf-8") as f:
+            f.write("{not json")
+        carried, unknown = carrying_records(
+            [(record, log), (broken, broken[: -len(".json")] + ".log")], "task-x"
+        )
+        self.assertEqual(carried, [(record, log)])
+        self.assertEqual(unknown, [(broken, broken[: -len(".json")] + ".log")])
+
+    def test_an_unreadable_sibling_does_not_resolve_the_job_as_ambiguous(self):
+        """登録解決でも、 読めなかった候補を 2 件目として数えない。"""
+        import io
+        from contextlib import redirect_stdout
+
+        root, record, _log = self._state("ws", "task-x", "running")
+        other = os.path.join(root, "ws2", "jobs")
+        os.makedirs(other)
+        with open(os.path.join(other, "task-x.json"), "w", encoding="utf-8") as f:
+            f.write("{not json")
+        args = self._watch_args(root, "task-x", timeout_seconds=0.02)
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(watch(args), EXIT_TIMEOUT)
+        self.assertTrue(os.path.exists(record))
+
+    def test_an_unreadable_sibling_mid_watch_discards_the_poll(self):
+        """監視中に読めない同名 record が現れたら、 その poll では判定しない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, log = self._state("ws", "task-done", "completed")
+        args = self._watch_args(root, "task-done", once=True)
+        args.artifact = None
+        other = os.path.join(root, "ws2", "jobs")
+        os.makedirs(other)
+        broken = os.path.join(other, "task-done.json")
+        with open(broken, "w", encoding="utf-8") as f:
+            f.write("{not json")
+        calls = []
+
+        def finding(job_id, roots):
+            calls.append(1)
+            pairs = [(record, log)]
+            if len(calls) > 1:
+                pairs.append((broken, broken[: -len(".json")] + ".log"))
+            return pairs, True
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".find_jobs", finding),
+            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+        ):
+            self.assertNotEqual(watch(args), EXIT_DONE)
+
+    def test_a_late_duplicate_in_an_incomplete_scan_is_a_timeout(self):
+        """走査の完全性に関わらず、 期限後の重複から終局を作らない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, log = self._state("ws", "task-x", "running")
+        _e, peer, _p = self._state("ws", "task-x", "running")
+        args = self._watch_args(root, "task-x")
+        real, crossed = time.monotonic, []
+
+        def finding(job_id, roots):
+            crossed.append(1)
+            return [(record, log), (peer, peer[: -len(".json")] + ".log")], False
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".find_jobs", finding),
+            mock.patch(
+                "time.monotonic",
+                lambda: real() + (args.timeout_seconds + 1 if crossed else 0),
+            ),
+        ):
+            self.assertEqual(watch(args), EXIT_TIMEOUT)
 
     def test_a_duplicate_resolved_after_the_deadline_is_a_timeout(self):
         """登録解決も期限を跨いだら終局を作らない — 候補数で gate が変わってはならない。"""
@@ -2620,21 +2769,26 @@ class WatchTest(unittest.TestCase):
         from unittest import mock
 
         root, record, log = self._state("ws", "task-x", "running")
-        body = open(record, encoding="utf-8").read()
+        body = open(record, "rb").read()
         os.unlink(record)
-        real = job_record
+        real, restored = record_view, []
 
         def flickering(path, job_id=None):
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(body)  # open の瞬間だけ在る
-            loaded = real(path, job_id)
+            # 判断に使う read (2 回目) の間だけ在る — 前後は不在のまま。
+            if path != record or len(restored) != 1:
+                restored.append(1)
+                return real(path, job_id)
+            restored.append(1)
+            with open(path, "wb") as f:
+                f.write(body)
+            view = real(path, job_id)
             os.unlink(path)
-            return loaded
+            return view
 
-        with mock.patch(__name__ + ".job_record", flickering):
-            carried, readable = carrying_records([(record, log)], "task-x")
+        with mock.patch(__name__ + ".record_view", flickering):
+            carried, unknown = carrying_records([(record, log)], "task-x")
         self.assertEqual(carried, [])
-        self.assertFalse(readable)
+        self.assertEqual(unknown, [(record, log)])
 
     def test_a_same_size_rewrite_of_a_record_is_a_change(self):
         """metadata が同じでも本文が違えば別 — 指紋まで見ないと不変に化ける。"""
@@ -3152,9 +3306,9 @@ class WatchTest(unittest.TestCase):
         args = self._watch_args(root, "task-live", timeout_seconds=0.02)
         buf = io.StringIO()
         with redirect_stdout(buf):
-            self.assertEqual(watch(args, roots=[blocked, root]), EXIT_UNVERIFIABLE)
+            self.assertEqual(watch(args, roots=[blocked, root]), EXIT_TIMEOUT)
         # 登録待ちで止まること — poll に入ってから変化として拾うのとは別の主張。
-        self.assertIn("cannot be shown to be unregistered", buf.getvalue())
+        self.assertIn("not resolved to a single record", buf.getvalue())
 
     def test_a_duplicate_appearing_after_the_start_is_ambiguous(self):
         """契約では 2 件は exit 9 — 変化として畳むと path も verdict も失われる。"""
