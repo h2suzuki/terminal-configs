@@ -826,7 +826,10 @@ def artifact_ready(
 
 
 def artifact_view(
-    path: str | None, token: str | None, since: float | None = None
+    path: str | None,
+    token: str | None,
+    since: float | None = None,
+    hold: list | None = None,
 ) -> tuple[bool | None, tuple | None]:
     """The same answer, plus the fingerprint of the descriptor it was read from.
 
@@ -844,7 +847,12 @@ def artifact_view(
     try:
         # 本文と鮮度は同じ descriptor の同じ瞬間から取る — path で stat し直すと、
         # 置換された別 inode の mtime が古い本文の完了 token と組になりうる。
-        with open_regular(path) as f:
+        with contextlib.ExitStack() as opened:
+            f = open_regular(path)
+            if hold is None:
+                opened.enter_context(f)
+            else:
+                hold.append(f)  # 比較が済むまで inode を押さえるのは呼び手
             before = os.fstat(f.fileno())
             stamp = (
                 before.st_dev,
@@ -1158,6 +1166,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             # 読めなかった候補は「別 job」の証明にならないので、その回は絞らない。
             carried, unknown, shifting = carrying_records(found, args.job_id)
             complete = complete and not shifting  # 動いた候補は掴めていない
+            # 動いた候補も「一度は見えた」 — 忘れると後で未登録と断定できてしまう。
+            seen_pairs.update(shifting)
             if carried:
                 found, complete = carried, complete and not unknown
             else:
@@ -1250,10 +1260,22 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         pinned = open_regular(record_path)
         pinned_stat = os.fstat(pinned.fileno())
         record_inode = (pinned_stat.st_dev, pinned_stat.st_ino)
+    except (FileNotFoundError, NotADirectoryError):
+        # 掴めなかった理由を identity に化けさせない — 同じ名前が後で読めても、
+        # それは登録解決で見た record と再同定できない。
+        print(
+            "vanished: the state record disappeared after registration — "
+            "the plugin prunes old jobs, so this job's outcome is unknowable here"
+        )
+        print(f"  job    : record={printable(record_path)}")
+        return EXIT_VANISHED
     except OSError:
-        # 掴めなかった理由を identity に化けさせない — 消失は exit 10、
-        # 開けないままなら exit 13 と、 poll 側の分岐が本来の答えを持っている。
-        pinned, record_inode = None, None
+        print(
+            "corrupt: the state record is present but unreadable — the job's "
+            "outcome cannot be read from it, so do not treat this as a stall"
+        )
+        print(f"  job    : record={printable(record_path)}")
+        return EXIT_CORRUPT
     # 掴めたなら、 それが今もその path か — 登録解決の read との間で差し替わりうる。
     if record_inode is not None:
         named_now = file_stat(record_path)
@@ -1300,8 +1322,9 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         log_incomplete = not whole_log
         age = heartbeat_age(log, now)
         tree = tree_age((record or {}).get("workspaceRoot"), now)
+        artifact_pin: list = []
         ready, artifact_stamp = artifact_view(
-            args.artifact, args.token, run_since(record or {})
+            args.artifact, args.token, run_since(record or {}), hold=artifact_pin
         )
         # Elapsed runs from the job's own start so re-arming does not reset the clock;
         # without that stamp it is this watch's own elapsed, which no clock change moves.
@@ -1347,6 +1370,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         artifact_changed = file_stat(args.artifact) != before_artifact or (
             artifact_stamp is not None and artifact_stamp != before_artifact
         )
+        for handle in artifact_pin:
+            handle.close()  # 比較が済むまで押さえていた
         # os.walk は snapshot ではないので、 列挙済み file への書き込みは
         # 走査し直さない限りこの poll から丸ごと抜け落ちる。
         tree_changed = tree_age((record or {}).get("workspaceRoot"), now) != tree
@@ -2632,6 +2657,134 @@ class WatchTest(unittest.TestCase):
                 baseline_silence(jobs, "task-live", time.time()), (None, False)
             )
 
+    def test_a_shifting_candidate_is_remembered_as_seen(self):
+        """一度見えた record を忘れると、 後で「未登録」 と断定できてしまう。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, log = self._state("ws", "task-x", "running")
+        args = self._watch_args(root, "task-x", timeout_seconds=0.05)
+        real, reads = record_view, []
+
+        def shifting(path, job_id=None):
+            if path == record and job_id is None:
+                reads.append(1)
+                if len(reads) == 2:  # 判断に使う read だけ別 bytes を見せる
+                    return ("shifted",), {"id": "task-x", "status": "running"}
+            return real(path, job_id)
+
+        gone = []
+
+        def finding(job_id, roots):
+            # 1 度目は動く候補、 以降は完全な空走査 — 「見えた」 事実だけが残る。
+            if gone:
+                return [], True
+            gone.append(1)
+            return [(record, log)], True
+
+        buf = io.StringIO()
+        with (
+            redirect_stdout(buf),
+            mock.patch(__name__ + ".record_view", shifting),
+            mock.patch(__name__ + ".find_jobs", finding),
+        ):
+            self.assertNotEqual(watch(args), EXIT_NEVER_REGISTERED)
+        self.assertNotIn("never-registered", buf.getvalue())
+
+    def test_a_record_that_could_not_be_pinned_is_not_replaced(self):
+        """pin に失敗した後で同じ名前が読めても、 それは同じ record ではない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-x", "running")
+        args = self._watch_args(root, "task-x", once=True)
+        real, opens = open_regular, []
+
+        def flaky(path):
+            if path == record:
+                opens.append(1)
+                # 登録解決の read が終わった後、 pin の瞬間だけ読めない。
+                if len(opens) == 4:
+                    raise FileNotFoundError(path)
+            return real(path)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch(__name__ + ".open_regular", flaky):
+            self.assertEqual(watch(args), EXIT_VANISHED)
+        self.assertEqual(len(opens), 4)  # pin の呼び出しで落ちた
+
+    def test_a_record_readable_again_after_a_failed_pin_is_not_adopted(self):
+        """pin に失敗した後で読めるようになった record は、 同じ record ではない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-done", "completed")
+        args = self._watch_args(root, "task-done", once=True)
+        args.artifact = None
+        real, opens = open_regular, []
+
+        def flaky(path):
+            if path == record:
+                opens.append(1)
+                if len(opens) == 4:  # pin の呼び出しだけ EACCES
+                    raise PermissionError(path)
+            return real(path)
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".open_regular", flaky),
+            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+        ):
+            self.assertEqual(watch(args), EXIT_CORRUPT)
+        self.assertEqual(len(opens), 4)  # pin の後は読み直していない
+
+    def test_the_artifact_inode_is_held_until_the_comparison(self):
+        """成果物も、 呼び手の後置比較が済むまで読んだ descriptor で押さえる。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-done", "completed")
+        with open(record, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "id": "task-done",
+                    "status": "completed",
+                    "startedAt": "2020-01-01T00:00:00Z",
+                },
+                f,
+            )
+        artifact = os.path.join(root, "report.md")
+        with open(artifact, "w", encoding="utf-8") as f:
+            f.write("body\nDONE\n")
+        args = self._watch_args(root, "task-done", once=True)
+        args.artifact, args.token = artifact, "DONE"
+        real_open, real_stat, handles, held = open_regular, file_stat, [], []
+
+        def tracking(path):
+            handle = real_open(path)
+            if path == artifact:
+                handles.append(handle)
+            return handle
+
+        def during_compare(path):
+            if path == artifact:
+                held.append(any(not h.closed for h in handles))
+            return real_stat(path)
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".open_regular", tracking),
+            mock.patch(__name__ + ".file_stat", during_compare),
+            mock.patch(__name__ + ".tree_age", lambda *a: 900.0),
+        ):
+            watch(args)
+        self.assertTrue(held and held[-1])  # 後置比較の時点で開いている
+        self.assertTrue(all(h.closed for h in handles))
+
     def test_a_record_pruned_after_the_pin_is_vanished_not_unpinnable(self):
         """prune は canonical に exit 10 — 掴んだ後の消失でも同じ答えにする。"""
         import io
@@ -3209,7 +3362,7 @@ class WatchTest(unittest.TestCase):
         args.artifact, args.token = artifact, "DONE"
         real, crossed = time.monotonic, []
 
-        def foreign(path, token, since=None):
+        def foreign(path, token, since=None, hold=None):
             return True, (0, 0, 0, 0)  # 別 descriptor で読んだ ready
 
         buf = io.StringIO()
@@ -3240,7 +3393,7 @@ class WatchTest(unittest.TestCase):
         args.artifact, args.token = artifact, "DONE"
         real = artifact_view
 
-        def foreign(path, token, since=None):
+        def foreign(path, token, since=None, hold=None):
             real(path, token, since)
             return True, (0, 0, 0, 0)  # 別 descriptor で完成を読んだことにする
 
@@ -3325,7 +3478,7 @@ class WatchTest(unittest.TestCase):
         args.artifact, args.token = artifact, "DONE"
         real, fired = artifact_view, []
 
-        def then_gone(path, token, since=None):
+        def then_gone(path, token, since=None, hold=None):
             got = real(path, token, since)
             fired.append(path)
             os.unlink(path)  # 読んだ直後に消える
