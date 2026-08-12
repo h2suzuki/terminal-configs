@@ -180,3 +180,26 @@ lint が検出し発注前に修正)。job `task-msq6fa1n-9zh2tb` (sol / medium 
 
 ユーザー指示 (同日): /simplify を都合のよいタイミングで実行する — fix round 受け入れ +
 commit 直後に予定 (走行中 codex との moving-target 回避)。
+
+### 2026-08-12 — 裁定の機械化: fix round 受け入れと /simplify
+
+fix round 1 は sentinel **exit 0** で完了 (終端 token の自己確認手順が機能し、前回の
+exit 5 と同種の逸脱は再発せず)。受け入れ検証: diff は末尾 1 hunk のまま (計 273 行追加・
+削除 0)、selftest **250** (新検査 `test_lossy_decode_call_sites_are_allowlisted` 追加) /
+外部 11 / ruff / ty / lang lint 全緑を自己再実行で確認。rulings doc の誤帰属 (裁定 10・34)・
+部分担保 (16・31・35) の訂正を列単位で確認。**発注側の独立変異** (codex の list に無い
+「呼び出しを伴わない `str.splitlines` 参照」) も catch — 検査の網は列挙形を超えて機能する。
+opus 指摘の minor 2 件 (patch.object resolver / _owners) は「誤検出方向にしか壊れない
+(fail loud)」ため受容して close。
+
+/simplify (ユーザー指示) を commit 前に実行 — 4 観点並列 (Reuse / Simplification /
+Efficiency / Altitude、計 176k tokens)。所見は強く収束: 適用 8 件 (memo 化 / ast 配管廃止 /
+allowlist 3 本の骨格統一 / _owners 縮約 / 恒真 assert 削除 / patch-target の runtime 一本化 /
+dead AnnAssign 除去 / SourceInvariantTest 分離 + 1 行溶接)、不適用 2 件 (walk 統合は診断価値
+優先で efficiency 観点自身が現状維持推奨 / patch.object 非 self-module 分岐の削除は opus
+指摘 5 の修正を逆転するため保持)。恒真 assert 2 行は発注書が明示要求したものだが、
+独立レビュー 2 観点が「情報量ゼロ」で一致したため削除を裁定 (意図は comment 化)。
+
+round 2 を同 thread resume で発注: `drafts/sentinel-pillar2-simplify.md` (lint rc=0・初回)。
+**受け入れ条件 = 全 12 変異の再検証** (整理が網を破っていない証明)。job
+`task-msq748d5-l3r8ta` (sol / medium / write 確認済)。
