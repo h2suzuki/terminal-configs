@@ -958,10 +958,11 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
     seen_pairs: set[tuple[str, str]] = set()
     while not found:
         found, complete = find_jobs(args.job_id, roots)
-        if len(found) > 1:
-            # file 名の一致は重複ではない — 単独候補と同じ本文 id 検証をここにも配る。
-            found, all_carried = carrying_records(found, args.job_id)
-            complete = complete and all_carried
+        if found:
+            # file 名の一致は所属の証明ではない — 本文が名乗るものだけを候補にする。
+            # 読めなかった候補は「別 job」の証明にならないので、その回は絞らない。
+            carried, all_carried = carrying_records(found, args.job_id)
+            found = carried if all_carried else found
             if len(found) > 1:
                 print(
                     f"ambiguous: {len(found)} records carry the id "
@@ -1062,9 +1063,9 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         )
         # 監視開始後に同じ id の record が増えても、 固定した path だけ見ていては気付けない。
         seen, scanned_all = find_jobs(args.job_id, roots)
-        if len(seen) > 1:
-            seen, all_carried = carrying_records(seen, args.job_id)
-            scanned_all = scanned_all and all_carried
+        if seen:
+            carried, all_carried = carrying_records(seen, args.job_id)
+            seen = carried if all_carried else seen
             if len(seen) > 1:
                 print(
                     f"ambiguous: {len(seen)} records carry the id "
@@ -2145,6 +2146,34 @@ class WatchTest(unittest.TestCase):
         )
         self.assertEqual(carried, [(record, log)])
         self.assertTrue(readable)
+
+    def test_a_lone_record_naming_another_job_is_not_this_job(self):
+        """本文が別 job を名乗るなら、 file 名が一致してもこの job の record ではない。"""
+        import io
+        from contextlib import redirect_stdout
+
+        root, record, _log = self._state("ws", "task-x", "running")
+        with open(record, "w", encoding="utf-8") as f:
+            json.dump({"id": "task-other", "status": "running"}, f)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(
+                watch(self._watch_args(root, "task-x", once=True)), EXIT_ALIVE
+            )
+        self.assertIn("not registered yet", buf.getvalue())
+
+    def test_a_lone_unreadable_record_is_still_the_corrupt_verdict(self):
+        """読めない候補を「別 job」と決めつけると、 exit 13 がどこからも出せなくなる。"""
+        import io
+        from contextlib import redirect_stdout
+
+        root, record, _log = self._state("ws", "task-x", "running")
+        with open(record, "w", encoding="utf-8") as f:
+            f.write("{not json")
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(
+                watch(self._watch_args(root, "task-x", once=True)), EXIT_CORRUPT
+            )
 
     def test_two_broken_reads_of_one_record_are_not_a_stable_corrupt(self):
         """壊れ方が変わったなら record は動いている — corrupt を断定してよい状態でない。"""
