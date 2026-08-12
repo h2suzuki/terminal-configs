@@ -59,7 +59,7 @@ test 数 / 指摘件数) を追記して commit する。発注書・報告書�
 | 対策 | 状態 | 直近更新 | 要約 |
 |---|---|---|---|
 | 裁定の機械化 | 完了 | 2026-08-12 | `55c618e` で main へ取り込み (区分 B は refactor 後) |
-| 構造 refactor | 進行中 | 2026-08-13 | 第 1 段 (期限 funnel) 完了 `c067c0b`。第 2 段 (Observation 層) へ |
+| 構造 refactor | 進行中 | 2026-08-13 | 第 1 段 `c067c0b`・第 2 段 `0425a28` 完了。第 3 段 (表示 funnel) へ |
 | TOCTOU harness | 未着手 | — | refactor 完了後 |
 | 体制と収束認定 | 未着手 | — | 柱完了後に 54 巡目 |
 | 方法論 doc (`docs/adversarial-review-methodology.md`) | 完了 | 2026-08-13 | 発散機構 M1–M6 / 設計 G・L・R / モデル選定 / チェックリスト |
@@ -340,3 +340,17 @@ fix round 2 を発注 (`drafts/sentinel-refactor-s2-fixes.md`、lint rc=0・初�
 発注書に明文化** (代替の無申告を禁止)。初回 resume 起動が queue 直後に無 error で failed →
 規律どおり fresh thread で再発注、job `task-msqfc7tt-uob6bs` (sol / xhigh / write 確認済)。
 監視 sentinel (estimate 2700s) を background 実行。
+
+### 2026-08-13 — 第 2 段 完了・main 取り込み
+
+fix round 2 は sentinel exit 0。5 件全修正 + **指定 6 変異が指定対象のまま全 catch** (代替なし・
+新規の挙動 test 2 本 = log / record の descriptor 指紋 pin を含む)。裁定 31 は B へ戻し担保を
+3 分記 (経由 = 構造検査 / 指紋 = 挙動 test / 全数性 = レビュー観点)。受け入れ再検証: gates 全緑
+(selftest **255** / 外部 11 / ruff / ty / lang lint)、発注側の独立変異 (`os.fdopen` 直呼び —
+codex の 6 件に無い形) も catch。commit `9c3e795` → cherry-pick **`0425a28`** で main へ、
+main 上でも 255 OK。報告書 2 本退避後、worktree / branch 削除、codex session 残存 0。
+
+第 2 段の総括: 発注 + レビュー (material 3 / minor 2) + fix の **2 round で完了**。53 巡ループ
+最大クラス (読取規律の配り漏れ・forgot 系) の発生源が Observation 層 1 箇所に集約され、
+reader からの fd 系 syscall 直呼びは meta-test で構造的に禁止された。レビューが「前 round の
+保護の後退」と「自己確認変異」を round 内で捕捉した — 方法論 M4 / 形 5 の対策が機能した実測。
