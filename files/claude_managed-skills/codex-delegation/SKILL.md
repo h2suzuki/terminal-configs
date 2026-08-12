@@ -86,6 +86,7 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
 
 - **完了後 hang（DONE_HUNG_RUNNER）を成果物で検出する**: 報告書が終端トークンまで完成 ∧ job log 凍結 5 分超 ∧ ツリー静穏 は「作業完了・runner の deregister 失敗」であり stall と別分岐 — running[] 消滅を待たず成果物検証（gates ログ + 発注側の build/test 再実行 + ツリー照合）へ進み、runner は companion cancel で回収する。監視は完了・完了後 hang・stall・生存の 4 分岐になる（報告書完成後 31 分 running[] 残存の実例 2026-07-29）
 - **監視 loop は登録確認直後に独立で張る**: forwarder subagent の Bash 完了通知に依存しない — hang した companion コマンドを待つ Bash からは通知が永遠に来ない（監視対象と通知チャネルが同一障害点を共有した実例 2026-07-29）
+- **subagent 経由の委譲 (rescue 系の調査 task 含む) でも独立 monitor を張る**: subagent が「task を background へ移した。完了時に通知される」と報告したら、その報告を通知経路として信頼せず、その場で job id または成果物 / output path への独立 monitor（sentinel / until-loop）を張る。subagent が先に終了すると、その配下で background 化した task の完了通知は親 session に届かない（孤児化 — 調査 task の完了が 1.5 時間気づかれなかった実例 2026-08-13。結果は output file の直接確認で回収できた）
 - **server を抱える run は hang-proof な実行レシピで発注する**: 長命 server（vite / dev server 等）を含む run の発注文には次の 3 点を必須で含める。(1) hang しうる step（テスト・probe）は `timeout <上限>` で有限化する — trap は crash 用で hang には無力、timeout が exit を保証し exit が trap を発火させる 2 段構え。(2) server 起動直後に `trap 'kill "$PID" 2>/dev/null' EXIT INT TERM` を張る（kill は起動 PID 個別。pkill / fuser / port 指定 kill は禁止のまま）。(3) run 終了後、worktree path で scope した `pgrep -af "$PWD"` の残存検査を行い、残存 PID を個別 kill してから完了報告する — task の完了条件に含める。cleanup trap が書かれていても hang した probe が EXIT への到達を阻み、session 放置と重なって vite を抱えた sandbox tree が 1 日以上滞留した（4 tree・port 5278-5282 占有の実測 2026-08-06）
 
 ## Related
