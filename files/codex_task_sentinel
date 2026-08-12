@@ -414,13 +414,7 @@ def record_gone(record_path: str) -> bool:
         os.lstat(record_path)
     except (FileNotFoundError, NotADirectoryError):
         # find_jobs と同じ意味で扱う — 祖先が file になったなら record は確かに無い。
-        # ただし途中に辿れない link が在るなら、 消えたのではなく読めていない。
-        path = os.path.dirname(record_path)
-        while path and path != os.path.dirname(path):
-            if dangling(path):
-                return False  # 途中が辿れない — 消えたのではなく読めていない
-            path = os.path.dirname(path)
-        return True
+        return not unreachable(os.path.dirname(record_path))
     except OSError:
         return False  # 読めないだけ — 消失 (exit 10) ではなく corrupt / 検証不能の側
     return False
@@ -458,6 +452,15 @@ def dangling(path: str) -> bool:
         os.stat(path)
     except OSError:
         return True
+    return False
+
+
+def unreachable(path: str) -> bool:
+    """Whether the entry or any ancestor is a link that cannot be followed."""
+    while path and path != os.path.dirname(path):
+        if dangling(path):
+            return True  # 途中が辿れない — 消えたのではなく読めていない
+        path = os.path.dirname(path)
     return False
 
 
@@ -535,8 +538,8 @@ def log_lines(
                 if line.strip():
                     yield line
     except FileNotFoundError:
-        # 辿れない link は「まだ書かれていない」 ではない — 短い view として申告する。
-        if dangling(log_path) and onerror is not None:
+        # 辿れない link は祖先も含めて「まだ書かれていない」 ではない — 短い view と申告する。
+        if unreachable(log_path) and onerror is not None:
             onerror()
         return
     except OSError:
@@ -892,9 +895,9 @@ def artifact_view(
             except OSError:
                 named = None
     except FileNotFoundError:
-        # 辿れない link は entry が在る — 無いのではなく読めないので 3 値の None。
+        # 辿れない link は祖先も含めて entry が在る — 無いのではなく読めない。
         # 指紋は「不在」 を名乗る — 前後に在るなら読取窓の中だけ消えたことになる。
-        return (None if dangling(path) else False), ("absent",)
+        return (None if unreachable(path) else False), ("absent",)
     except UnicodeDecodeError:
         # 置換して読むと、 binary の末尾行が token と一致して完成品に化ける。
         return False, stamp
@@ -913,8 +916,10 @@ def artifact_view(
     # The order says the final line IS the token: no padding, no trailing blanks.
     # LF だけで分ける — splitlines は VT・FF・NEL・U+2028 も境界として消すので、
     # token の後ろにそれらが付いた成果物まで完成品になる。
-    lines = [line.removesuffix("\r") for line in body.split("\n")]
-    if lines and lines[-1] == "":
+    segments = body.split("\n")
+    # CR を落とすのは LF を消費した行だけ — EOF 直前の裸 CR は行末ではなく本文である。
+    lines = [s.removesuffix("\r") for s in segments[:-1]] + segments[-1:]
+    if lines[-1] == "":
         lines.pop()  # 末尾の LF は行終端であって空行ではない
     return (bool(lines) and lines[-1] == token), stamp
 
@@ -1220,7 +1225,9 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             else:
                 # 唯一の候補が読めないだけなら、 corrupt 判定へ送る。
                 found, complete = unknown[:1], complete and len(unknown) <= 1
-                resolved_unknown = bool(found)
+                # 一度立てたら消さない — 間に別状態を挟むと消える旗では、
+                # 検証できなかった候補を後発の record で置き換えられる。
+                resolved_unknown = resolved_unknown or bool(found)
         # 候補を確かめ終えた時点で期限なら、 そこから終局を作らない。
         if found and deadline_reached(deadline):
             if len(found) == 1 and complete:
@@ -1464,10 +1471,12 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         for handle in log_pin:
             handle.close()  # 比較が済むまで押さえていた
         # 読んだ descriptor も前後の観測と同じでなければ、 A→B→A が透過する。
+        # 外側が不在なら ("absent",) だけが一致する — 実体を読めたなら、
+        # その file は読取窓の中だけ現れていたことになる。
         artifact_changed = file_stat(args.artifact) != before_artifact or (
             artifact_stamp is not None
-            and before_artifact is not None
-            and artifact_stamp != before_artifact
+            and artifact_stamp
+            != (("absent",) if before_artifact is None else before_artifact)
         )
         for handle in artifact_pin:
             handle.close()  # 比較が済むまで押さえていた
@@ -1745,6 +1754,11 @@ def check_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace) -
         or (os.altsep or os.sep) in args.job_id
     ):
         parser.error("job id must be a single file name, not a path")
+    # 明示された空文字を truthiness で畳むと、 指定した呼び手には「未指定」 と
+    # 同じ扱いになり、 照合されないまま exit 0 が返る。
+    for name in ("artifact", "token"):
+        if getattr(args, name) == "":
+            parser.error(f"--{name} needs a value, not an empty string")
     if args.token and not args.artifact:
         # 成果物が無ければ token を照合する相手がいない。 黙って無視すると、
         # 完了 token を指定した呼び手が「検査された」 と読んだまま exit 0 を受け取る。
@@ -2960,6 +2974,35 @@ class WatchTest(unittest.TestCase):
             f.write("body\r\nDONE\r\n")  # CRLF は従来どおり行終端
         self.assertTrue(artifact_ready(path, "DONE", 0.0))
 
+    def test_a_bare_cr_at_the_end_is_content_not_a_line_ending(self):
+        """LF を伴わない CR は行末ではない — 消すと token でないものが token になる。"""
+        root = tempfile.mkdtemp()
+        path = os.path.join(root, "report.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("body\nDONE\r")
+        self.assertFalse(artifact_ready(path, "DONE", 0.0))
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("body\nDONE\r\n")  # LF を消費した CR は行終端の一部
+        self.assertTrue(artifact_ready(path, "DONE", 0.0))
+
+    def test_a_log_behind_a_dangling_ancestor_is_a_short_read(self):
+        """途中の link が辿れないなら、 log は「まだ書かれていない」 ではない。"""
+        root = tempfile.mkdtemp()
+        os.symlink(os.path.join(root, "nowhere"), os.path.join(root, "link"))
+        self.assertFalse(scan_log(os.path.join(root, "link", "task.log"))[2])
+        self.assertTrue(scan_log(os.path.join(root, "real", "task.log"))[2])
+
+    def test_an_artifact_behind_a_dangling_ancestor_is_unreadable_not_absent(self):
+        """途中の link が辿れないなら成果物は「無い」 のではなく読めていない。"""
+        root = tempfile.mkdtemp()
+        os.symlink(os.path.join(root, "nowhere"), os.path.join(root, "link"))
+        self.assertIsNone(
+            artifact_ready(os.path.join(root, "link", "report.md"), "DONE", 0.0)
+        )
+        self.assertFalse(
+            artifact_ready(os.path.join(root, "real", "report.md"), "DONE", 0.0)
+        )
+
     def test_an_unopenable_log_says_unread_not_changed(self):
         """開けない log は stamp を持たないだけ — path が動いていないなら変化ではない。"""
         import io
@@ -3001,6 +3044,125 @@ class WatchTest(unittest.TestCase):
             self.assertEqual(
                 watch(self._watch_args(root, "task-x", once=True)), EXIT_CORRUPT
             )
+
+    def test_an_unvalidated_candidate_survives_a_round_that_is_neither(self):
+        """unknown → どちらでもない周 → carried の 3 周でも、 未検証の事実は残る。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, log = self._state("ws", "task-x", "completed")
+        pair, rounds = (record, log), []
+
+        def scripted(found, job_id, hold=None):
+            rounds.append(1)
+            if len(rounds) == 1:
+                return [], [pair], []  # 読めなかった唯一の候補
+            if len(rounds) == 2:
+                return [], [], [pair]  # carried でも unknown でもない周
+            return [pair], [], []  # 後から読めた record
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".carrying_records", scripted),
+            mock.patch(__name__ + ".find_jobs", lambda *a: ([pair], len(rounds) >= 2)),
+        ):
+            self.assertEqual(
+                watch(self._watch_args(root, "task-x", timeout_seconds=5.0)),
+                EXIT_CORRUPT,
+            )
+        self.assertGreaterEqual(len(rounds), 3)
+
+    def test_a_hold_kept_through_an_unheld_round_still_sees_the_swap(self):
+        """掴みを持ち越せば、 掴めない周を挟んでも別 inode を別 record と言える。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, log = self._state("ws", "task-x", "completed")
+        pair, rounds = (record, log), []
+
+        def scripted(found, job_id, hold=None):
+            rounds.append(1)
+            if len(rounds) == 2:
+                return [], [], [pair]  # 新しい掴みを得られない周
+            if hold is not None:
+                hold.append(open(record, "rb"))
+            return [pair], [], []
+
+        def swapping(job_id, roots):
+            if len(rounds) == 2:
+                # 3 周目の前に、 同じ path を別 inode へ差し替える。
+                with open(record + ".new", "w", encoding="utf-8") as f:
+                    json.dump({"id": "task-x", "status": "completed"}, f)
+                os.replace(record + ".new", record)
+            return [pair], len(rounds) >= 2
+
+        buf = io.StringIO()
+        with (
+            redirect_stdout(buf),
+            mock.patch(__name__ + ".carrying_records", scripted),
+            mock.patch(__name__ + ".find_jobs", swapping),
+        ):
+            self.assertEqual(
+                watch(self._watch_args(root, "task-x", timeout_seconds=5.0)),
+                EXIT_UNVERIFIABLE,
+            )
+        # exit 14 は他の理由でも返る — 差し替えを名指しした行まで確かめる。
+        self.assertIn("resolved to a different record", buf.getvalue())
+
+    def test_an_artifact_seen_only_inside_the_read_is_a_change(self):
+        """外側で不在の成果物を読取窓の中だけ読めたなら、 完成ではなく変化である。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-done", "completed")
+        with open(record, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "id": "task-done",
+                    "status": "completed",
+                    "startedAt": "2020-01-01T00:00:00Z",
+                },
+                f,
+            )
+        artifact = os.path.join(root, "report.md")
+        with open(artifact, "w", encoding="utf-8") as f:
+            f.write("body\nDONE\n")
+        args = self._watch_args(root, "task-done", once=True)
+        args.artifact, args.token = artifact, "DONE"
+        real_stat = file_stat
+
+        buf = io.StringIO()
+        with (
+            redirect_stdout(buf),
+            # 外側の観測だけが不在 — 読取窓の外で作られて消えた成果物と同じ形。
+            mock.patch(
+                __name__ + ".file_stat",
+                lambda path: None if path == artifact else real_stat(path),
+            ),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1, True)),
+        ):
+            self.assertNotEqual(watch(args), EXIT_DONE)
+        self.assertIn("成果物 : 不明 (走査中に変化)", buf.getvalue())
+
+    def test_an_empty_token_is_refused_not_read_as_unset(self):
+        """明示された空文字を未指定に畳むと、 照合されないまま exit 0 が返る。"""
+        import io
+
+        # 弾かれなければ watch へ落ちる — 空の state root と短い期限で即座に返させる。
+        empty = tempfile.mkdtemp()
+        for extra in (["--token", ""], ["--artifact", ""]):
+            with (
+                self.assertRaises(SystemExit, msg=" ".join(extra)),
+                contextlib.redirect_stderr(io.StringIO()),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                main(
+                    ["task-x", "--state-root", empty, "--timeout-seconds", "0.01"]
+                    + extra
+                )
 
     def test_an_unreadable_log_says_unread_not_changed(self):
         """安定して読めない log は「変化」 ではなく「読み切れていない」 である。"""
