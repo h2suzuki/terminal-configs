@@ -620,3 +620,11 @@ RECORD_TS は corrupt。根拠: runner は 3 桁固定・比較相手 `st_mtime_
 (lint rc=0)。worktree `wt-domcap` @ `9575741`。job `task-msqqb6xe-169nyk` (record 検証:
 sol / medium / write / fresh)。sentinel `bq2fzxk4m` (estimate 1200s)。取り込み後に r59 =
 認定 1 巡目を発注する段取り。
+
+### 2026-08-13 — 裁定 54 取り込み (selftest 283)・r59 発注へ
+
+domain-cap は sentinel `bq2fzxk4m` exit 0。受け入れ: gates 全緑 (selftest **283** / 外部 11 /
+ruff / ty)、境界 repro 5 点 (9 桁受理両側・10 桁棄却両側・10 桁偽終了が pending を消さない)、
+独立変異 (LOG_TS 無制限戻し) 再現。r58 で追加した `epoch_fraction()` の context 非依存 unit
+test は保持され、置き換えは regex 受理側の 30 桁 test のみ (裁定 54 との矛盾解消) — 妥当。
+wt 内 commit `1f13523` → cherry-pick **`a3c7d07`**。裁定 54 を正本化 (53 → **54 件**)。
