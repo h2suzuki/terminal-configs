@@ -1205,16 +1205,17 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     )
                     print(f"  {printable(found[0][0])}")
                     return EXIT_UNVERIFIABLE
-            # 新しい掴みを得てから前の周回を手放す — 間を空けると番号を再利用される。
-            for handle in pin_hold:
-                handle.close()
-            pin_hold = fresh_hold
+            # 新しい掴みを得られた時だけ入れ替える — 読めない周回で手放すと、
+            # 後から現れた inode と比べる相手が無くなる。
+            if fresh_hold:
+                for handle in pin_hold:
+                    handle.close()
+                pin_hold = fresh_hold
             complete = complete and not shifting  # 動いた候補は掴めていない
             # 動いた候補も「一度は見えた」 — 忘れると後で未登録と断定できてしまう。
             seen_pairs.update(shifting)
             if carried:
                 found, complete = carried, complete and not unknown
-                resolved_unknown = False  # 検証できた周回だけが旗を下ろす
             else:
                 # 唯一の候補が読めないだけなら、 corrupt 判定へ送る。
                 found, complete = unknown[:1], complete and len(unknown) <= 1
