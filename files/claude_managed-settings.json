@@ -2,6 +2,32 @@
   "env": {
     "CLAUDE_CODE_RETRY_WATCHDOG": "1"
   },
+  "permissions": {
+    "deny": [
+      "Read(~/.aws/**)",
+      "Read(~/.config/gcloud/application_default_credentials.json)",
+      "Read(~/.config/gcloud/credentials.db)",
+      "Read(~/.config/gcloud/access_tokens.db)",
+      "Read(~/.config/gcloud/legacy_credentials/**)",
+      "Read(~/.ssh/**)",
+      "Read(~/.config/gh/hosts.yml)",
+      "Read(~/.git-credentials)",
+      "Read(~/.netrc)",
+      "Read(~/.pypirc)",
+      "Read(~/.claude/.credentials.json)",
+      "Read(~/.codex/auth.json)",
+      "Read(~/.agent-browser/**)",
+      "Read(~/.local/share/com.vercel.cli/**)",
+      "Read(~/.config/vercel-plugin/**)",
+      "Read(~/.claude/daemon/control.key)",
+      "Read(~/.config/google-chrome/**/Cookies*)",
+      "Read(~/.config/google-chrome/**/Login Data*)",
+      "Read(~/.config/google-chrome/**/Web Data*)",
+      "Read(~/.config/google-chrome/**/Local State)",
+      "Read(~/.local/share/pki/**)",
+      "Read(//mnt/c/Users/**)"
+    ]
+  },
   "sandbox": {
     "enabled": true,
     "failIfUnavailable": true,
