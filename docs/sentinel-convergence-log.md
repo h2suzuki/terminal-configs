@@ -262,3 +262,23 @@ round 2 は sentinel exit 0。A〜H 全適用 (SourceInvariantTest 分離 + 1 �
 - opus 5 xhigh の敵対レビューを Workflow (`wf_9730ce10-9d3`) で起動 — 12 site の意味保存 /
   finish() の pass-through と表示順 / probe の使われ方 / 例外 flag の閉じ / 終局経路の全数 /
   meta-test の AST 強度、の 6 観点。発注側の裁定済み 3 件は指摘対象から除外指定
+
+### 2026-08-13 — 第 1 段 レビュー結果 (material 0) と fix round
+
+opus 5 xhigh レビュー (13.7 分・140k tokens) は **material 0 / minor 5**。checked が厚い —
+12 site の 1 対 1 対応表・probe 6 箇所の比較演算子・終局経路の全数 (return 17 箇所すべて
+funnel 経由・raise/sys.exit なし)・meta-test の AST 判定を 10 形で in-memory 実測・
+表示順の不変・scope、まで独立確認され、**挙動保存はレビューアの実測で確証**。minor 5 件:
+
+1. 期限 gate が旧 code に無かった site は開示された 1 件でなく 3 件 (ambiguous /
+   seen-earlier / resolved_unknown) — 2 件の新設文面が未開示で、うち 1 件は `searched:` 行を
+   欠き site 間で不揃い
+2. probe 使用の開示が 5 件 (実際は 6 件 — site 12 の 1772 が漏れ)
+3. 裁定 27 の B→A 昇格に実体なし (exit 6 例外を 1 site に閉じる AST 検査が無い)
+4. meta-test 1 が probe 形 return (無音終局) を素通し — 将来の複写事故の穴
+5. finish の parameter 名 `verdict` が module 関数 verdict() を shadow
+
+全 5 件の fix round を同 thread resume で発注 (`drafts/sentinel-refactor-s1-fixes.md`、
+lint rc=0・初回)。変異 2 件 (probe 形 return / 例外 flag の複製) は発注側選定。
+job `task-msqc0nus-w6owj8` (sol / xhigh / write 確認済)。レビューアの指摘 1 と 2 は
+「実装者の開示が不完全でもレビューアが全数を数え直す」二重化が機能した実例として記録する。
