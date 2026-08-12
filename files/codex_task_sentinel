@@ -1033,14 +1033,20 @@ def evidence(
     unfinished: list[str] | None = None,
     tail: list[str] | None = None,
     whole_log: bool = True,
+    log_unstable: bool = False,
 ) -> str:
     """Everything the verdict rests on, so no follow-up investigation is needed."""
     root = record.get("workspaceRoot")
-    quiet = "log なし" if age is None else f"{int(age)}s"
+    # 「無い」 と 「走査中に動いた」 は別 — 畳むと読者が log なしと誤読する。
+    quiet = (
+        "不明 (走査中に変化)"
+        if log_unstable
+        else ("log なし" if age is None else f"{int(age)}s")
+    )
     versus = (
         f" (この workspace の完走 job の最長無音 {int(baseline)}s の "
         f"{age / baseline:.1f} 倍)"
-        if baseline and age
+        if baseline and age and not log_unstable
         else ""
     )
     shown = tail or ["(なし)"]
@@ -1296,9 +1302,21 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             log_incomplete or record_moved or not (counted_all and counted_all_after)
         )
         # cancel / 失敗は他を読めるかに依らず結果ではない — 静穏 gate より先に置く。
-        # 読取後に変化した観測は、 headline でも evidence でも断定しない。
-        shown_ready = None if artifact_changed else ready
-        shown_tree = None if tree_changed else tree
+        # 走査後に動いた観測から作った表示値は、 全て「不明」 にする — verdict が
+        # その観測に依らず確定できても、 evidence が古い値を断定してよい理由はない。
+        record_unstable = record_changed or record_moved
+        baseline_unstable = args.stall_seconds is None and (
+            baseline_after != baseline or not (counted_all and counted_all_after)
+        )
+        shown_record = {} if record_unstable else (record or {})
+        shown_tail = [] if log_changed else tail
+        shown_unfinished = [] if log_changed else unfinished
+        shown_whole = whole_log and not log_changed
+        # tree と成果物は record の workspaceRoot / startedAt から引いている。
+        shown_ready = None if (artifact_changed or record_unstable) else ready
+        shown_tree = None if (tree_changed or record_unstable) else tree
+        shown_baseline = None if baseline_unstable else baseline
+        shown_threshold = stall_threshold(args.stall_seconds, shown_baseline)
         settled = str((record or {}).get("status") or "")
         terminal_record = (
             record is not None
@@ -1396,7 +1414,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # completed でもツリーが落ち着くまでは verdict を保留するので、 保留を告げる
         # headline は record の語をそのまま出す — 言い切ると直下の evidence と食い違う。
         # headline へそのまま入るので、 保持する時点で escape しておく。
-        recorded = printable((record or {}).get("status") or "不明")
+        recorded = printable(shown_record.get("status") or "不明")
         if out is None and args.once:
             out = (
                 EXIT_ALIVE,
@@ -1417,17 +1435,18 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             print(
                 evidence(
                     args.job_id,
-                    record or {},
+                    shown_record,
                     log,
                     age,
                     shown_tree,
-                    threshold,
-                    baseline,
+                    shown_threshold,
+                    shown_baseline,
                     args.artifact,
                     shown_ready,
-                    unfinished,
-                    tail,
-                    whole_log,
+                    shown_unfinished,
+                    shown_tail,
+                    shown_whole,
+                    log_changed,
                 )
             )
             return code
@@ -1435,17 +1454,18 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             recorded,
             evidence(
                 args.job_id,
-                record or {},
+                shown_record,
                 log,
                 age,
                 shown_tree,
-                threshold,
-                baseline,
+                shown_threshold,
+                shown_baseline,
                 args.artifact,
                 shown_ready,
-                unfinished,
-                tail,
-                whole_log,
+                shown_unfinished,
+                shown_tail,
+                shown_whole,
+                log_changed,
             ),
         )
         sleep_until(deadline, args.poll_seconds)
@@ -2514,6 +2534,103 @@ class WatchTest(unittest.TestCase):
             self.assertEqual(
                 baseline_silence(jobs, "task-live", time.time()), (None, False)
             )
+
+    def test_a_failed_verdict_does_not_claim_a_changed_log(self):
+        """log が走査中に動いたなら、 無音・末尾・未完了 command を断定しない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, log = self._state("ws", "task-x", "failed", log_age=900.0)
+        with open(log, "w", encoding="utf-8") as f:
+            f.write("[2026-08-09T00:00:00.000Z] Running command: cargo test\n")
+        os.utime(log, (time.time() - 900, time.time() - 900))
+        # 履歴を持たせる — baseline があって初めて「何倍」 の表示が出る。
+        jobs = os.path.dirname(record)
+        peer = os.path.join(jobs, "task-peer.json")
+        with open(peer, "w", encoding="utf-8") as f:
+            json.dump({"id": "task-peer", "status": "completed"}, f)
+        peer_log = os.path.join(jobs, "task-peer.log")
+        with open(peer_log, "w", encoding="utf-8") as f:
+            f.write("[2026-08-09T00:00:00.000Z] a\n[2026-08-09T00:05:00.000Z] b\n")
+        # log と record の両方が落ち着いていないと peer は数えられない。
+        for path in (peer_log, peer):
+            os.utime(path, (time.time() - 900, time.time() - 900))
+        real = scan_log
+
+        def foreign(path, *a, **k):
+            out = real(path, *a, **k)
+            return out[0], out[1], out[2], (0, 0, 0, 0)  # 別 descriptor の指紋
+
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch(__name__ + ".scan_log", foreign):
+            args = self._watch_args(root, "task-x", once=True, stall_seconds=None)
+            self.assertEqual(watch(args), EXIT_NOT_COMPLETED)
+        self.assertNotIn("cargo test", buf.getvalue())
+        self.assertIn("無音   : 不明", buf.getvalue())
+        self.assertNotIn("倍)", buf.getvalue())  # 動いた log から比を出さない
+
+    def test_a_failed_verdict_does_not_claim_a_stale_baseline(self):
+        """履歴が走査の前後で動いたなら、 baseline も threshold も断定しない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-x", "failed")
+        answers = [(200.0, True), (900.0, True)]  # 3 倍が floor を超える値にする
+        buf = io.StringIO()
+        with (
+            redirect_stdout(buf),
+            mock.patch(
+                __name__ + ".baseline_silence",
+                lambda *a: answers.pop(0) if answers else (900.0, True),
+            ),
+        ):
+            args = self._watch_args(root, "task-x", once=True, stall_seconds=None)
+            self.assertEqual(watch(args), EXIT_NOT_COMPLETED)
+        self.assertNotIn("600", buf.getvalue())  # 200s * 3 の古い threshold
+
+    def test_a_timeout_does_not_quote_a_discarded_record(self):
+        """破棄した record の status や root を、 timeout の evidence で断定しない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-x", "running")
+        elsewhere = tempfile.mkdtemp()  # 実在する dir にして tree が引けるようにする
+        os.utime(elsewhere, (time.time() - 900, time.time() - 900))
+        artifact = os.path.join(root, "report.md")
+        with open(artifact, "w", encoding="utf-8") as f:
+            f.write("body\nDONE\n")
+        args = self._watch_args(root, "task-x")
+        args.artifact, args.token = artifact, "DONE"
+        real, crossed = record_view, []
+
+        def other_bytes(path, job_id=None):
+            if path != record or job_id is None:
+                return real(path, job_id)
+            crossed.append(1)
+            return ("swapped",), {
+                "id": "task-x",
+                "status": "completed",
+                "workspaceRoot": elsewhere,
+                "startedAt": "2020-01-01T00:00:00Z",
+            }
+
+        monotonic = time.monotonic
+        with (
+            redirect_stdout(buf := io.StringIO()),
+            mock.patch(__name__ + ".record_view", other_bytes),
+            mock.patch(
+                "time.monotonic",
+                lambda: monotonic() + (args.timeout_seconds + 1 if crossed else 0),
+            ),
+        ):
+            self.assertEqual(watch(args), EXIT_TIMEOUT)
+        self.assertNotIn(elsewhere, buf.getvalue())
+        self.assertNotIn("status=completed", buf.getvalue())
+        self.assertNotIn("最終書き込み", buf.getvalue())  # B の root から引いた age
+        self.assertNotIn("成果物 : ready", buf.getvalue())  # B の startedAt 由来
 
     def test_a_failed_verdict_does_not_claim_a_moved_tree(self):
         """成果物と同じ理由で、 走査後に動いたツリーの age も evidence で断定しない。"""
