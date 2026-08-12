@@ -47,7 +47,7 @@
 | 41 | **観測の前後比較は、 その観測を成す全要素で行う**: ツリーは最大 mtime と entry 数、record は bytes の指紋、 log と成果物は読んだ descriptor の指紋である | C | `Observation` の reader 別 fingerprint + `test_a_tree_with_the_same_newest_mtime_but_other_entries_moved` / `test_a_log_swapped_around_the_parse_is_not_one_view` |
 | 42 | **検証していない候補を読み直して採らない**: 解決時に読めなかった候補は corrupt である。消えている場合だけ exit 10 へ委ねる | C | `test_an_unvalidated_candidate_is_not_replaced_by_a_readable_one` |
 | 43 | **掴みは新しいものを得てから手放す**: 間を空けると番号を再利用される | B | `Observation.replace_hold` + `test_a_hold_kept_through_an_unheld_round_still_sees_the_swap` |
-| 44 | **周回の間に別 inode へ替わった record は別 record**: 同じ path でも exit 14 で返す | C | `test_a_record_replaced_between_rounds_is_a_different_record` |
-| 45 | **一度見えた候補は忘れない**: 動いた候補も `seen_pairs` に残す。 忘れると完全な空走査の後に「未登録」 (exit 6) と断定できてしまう | C | `test_a_shifting_candidate_is_remembered_as_seen` |
-| 46 | **読取窓の中だけ消えた観測は「無い」 ではない**: path に entry が在るのに view を読めなかったなら、 それは不在ではなく変化である。 「log なし」 「成果物なし」 は path にも無い時の答えで、不在の指紋は他の失敗と別値を名乗る。 52 巡目の修正である | C | `test_a_log_gone_only_during_the_read_is_not_stable_absence` |
+| 44 | **周回の間に別 inode へ替わった record は別 record**: 同じ path でも exit 14 で返す | C | `test_a_record_replaced_between_rounds_is_a_different_record` + `test_toctou_enumerator_oracles` (`record-round` の別内容 / 同内容別 inode、k=17 → exit 14 の singleton assert) |
+| 45 | **一度見えた候補は忘れない**: 動いた候補も `seen_pairs` に残す。 忘れると完全な空走査の後に「未登録」 (exit 6) と断定できてしまう | C | `test_a_shifting_candidate_is_remembered_as_seen` + `test_toctou_enumerator_oracles` (`record` / `record-round` の消失、k=6 → exit 7 の singleton assert) |
+| 46 | **読取窓の中だけ消えた観測は「無い」 ではない**: path に entry が在るのに view を読めなかったなら、 それは不在ではなく変化である。 「log なし」 「成果物なし」 は path にも無い時の答えで、不在の指紋は他の失敗と別値を名乗る。 52 巡目の修正である | C | `test_a_log_gone_only_during_the_read_is_not_stable_absence` + `test_toctou_enumerator_oracles` (log open 窓の消失 k=2 → exit 14、artifact open / moved 窓 k=4 / 9 → exit 11 の singleton assert) |
 | 47 | **行の分割は LF だけで行う**: `str.splitlines()` は VT・FF・NEL・U+2028 も境界として消すので、token の後ろにそれらが付いた成果物が完成品に化ける。 「splitlines のほうが素直」 は退行 | A | `test_splitlines_has_no_call_sites` |

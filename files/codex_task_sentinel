@@ -6205,6 +6205,677 @@ class WatchTest(unittest.TestCase):
         self.assertTrue(command_may_be_running(lines))
 
 
+class WatchTest(WatchTest):
+    """Enumerate one scripted TOCTOU perturbation at every observation point."""
+
+    _TOCTOU_SHIM_ENABLED = True
+    _TOCTOU_SCENARIOS = (
+        "record",
+        "record-pin",
+        "record-round",
+        "log",
+        "log-command",
+        "artifact",
+        "peer",
+    )
+    _TOCTOU_PERTURBATIONS = (
+        "unlink",
+        "replace-different",
+        "replace-same",
+        "unreadable",
+        "appear",
+        "grow",
+        "late",
+    )
+
+    def _toctou_fixture(self, scenario, perturbation):
+        import shutil
+
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        jobs = os.path.join(root, "ws", "jobs")
+        os.makedirs(jobs)
+        record = os.path.join(jobs, "task-x.json")
+        log = os.path.join(jobs, "task-x.log")
+        artifact = os.path.join(root, "report.md")
+        wall = 2_000_000_000.0
+        kind = scenario.split("-", 1)[0]
+        status = "completed" if kind == "artifact" else "running"
+        record_body = {
+            "id": "task-x",
+            "status": status,
+            "workspaceRoot": root,
+            "startedAt": "2026-01-01T00:00:00Z",
+        }
+        with open(record, "w", encoding="utf-8") as stream:
+            json.dump(record_body, stream)
+        with open(log, "w", encoding="utf-8") as stream:
+            if scenario == "log-command":
+                stream.write(
+                    "[2026-08-09T00:00:00.000Z] Running command: cargo test\n"
+                    "[2026-08-09T00:00:01.000Z] Running command: true\n"
+                    "[2026-08-09T00:00:02.000Z] Command exited: true (exit 0)\n"
+                )
+            else:
+                stream.write("[2026-08-09T00:00:00.000Z] active\n")
+        with open(artifact, "w", encoding="utf-8") as stream:
+            stream.write("body\nREPORT_COMPLETE\n")
+        log_age = 600.0 if kind == "peer" else 900.0
+        os.utime(log, (wall - log_age, wall - log_age))
+
+        peer_log = os.path.join(jobs, "task-peer.log")
+        if kind == "peer":
+            peer_record = os.path.join(jobs, "task-peer.json")
+            with open(peer_record, "w", encoding="utf-8") as stream:
+                json.dump({"id": "task-peer", "status": "completed"}, stream)
+            with open(peer_log, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "[2026-08-09T00:00:00.000Z] first\n"
+                    "[2026-08-09T00:05:00.000Z] last\n"
+                )
+            for path in (peer_record, peer_log):
+                os.utime(path, (wall - 1_000.0, wall - 1_000.0))
+
+        targets = {
+            "record": record,
+            "log": log,
+            "artifact": artifact,
+            "peer": peer_log,
+        }
+        different = {
+            "record": json.dumps(
+                {
+                    "id": "task-x",
+                    "status": "completed",
+                    "workspaceRoot": root,
+                    "startedAt": "2026-01-01T00:00:00Z",
+                }
+            ).encode(),
+            "log": b"[2026-08-09T00:10:00.000Z] replacement\n",
+            "artifact": b"body\nREPORT_COMPLETE\n",
+            "peer": (
+                b"[2026-08-09T00:00:00.000Z] first\n"
+                b"[2026-08-09T01:00:00.000Z] last\n"
+            ),
+        }
+        target = targets[kind]
+        with open(target, "rb") as stream:
+            original = stream.read()
+        looping = scenario == "record-round" or perturbation == "appear" or (
+            kind == "record" and perturbation == "unlink"
+        )
+        args = self._watch_args(
+            root,
+            "task-x",
+            once=not looping,
+            timeout_seconds=0.05,
+            poll_seconds=0.01,
+            stall_seconds=None if kind == "peer" else 420.0,
+            trust_log=kind == "log",
+        )
+        if kind == "artifact":
+            args.artifact = artifact
+            args.token = "REPORT_COMPLETE"
+        if perturbation == "appear":
+            os.unlink(target)
+        return {
+            "args": args,
+            "different": different[kind],
+            "grow": b"[2026-08-09T00:20:00.000Z] growth\n",
+            "kind": kind,
+            "original": original,
+            "persistent_replace": scenario == "record-round",
+            "scenario": scenario,
+            "target": target,
+            "tree_age": 600.0 if kind == "peer" else 900.0,
+            "wall": wall,
+        }
+
+    def _toctou_apply(self, fixture, perturbation, state):
+        target = fixture["target"]
+        hidden = target + ".toctou-original"
+        real_lstat = state["real_lstat"]
+
+        def exists(path):
+            try:
+                real_lstat(path)
+            except (FileNotFoundError, NotADirectoryError):
+                return False
+            return True
+
+        if perturbation == "appear":
+            if exists(target):
+                return None
+            with open(target, "wb") as stream:
+                stream.write(fixture["original"])
+            fixture["args"].once = True
+            state["applied"] = True
+            return None
+        if perturbation == "late":
+            state["clock"]["monotonic"] = state["deadline"] + 0.001
+            state["applied"] = True
+            state["late_observation"] = True
+            return None
+        if not exists(target):
+            return None
+        if perturbation == "unlink":
+            os.rename(target, hidden)
+            state["hidden"] = hidden
+            state["applied"] = True
+            if fixture["kind"] == "record":
+                return None
+
+            def restore_unlink():
+                os.rename(hidden, target)
+                state["hidden"] = None
+
+            return restore_unlink
+        if perturbation == "unreadable":
+            mode = real_lstat(target).st_mode & 0o777
+            os.chmod(target, 0o000)
+            state["mode"] = mode
+            state["applied"] = True
+            return None
+        if perturbation == "grow":
+            before = os.stat(target)
+            with open(target, "ab") as stream:
+                stream.write(fixture["grow"])
+            state["applied"] = True
+
+            def restore_grow():
+                with open(target, "r+b") as stream:
+                    stream.truncate(before.st_size)
+                os.utime(
+                    target,
+                    ns=(before.st_atime_ns, before.st_mtime_ns),
+                )
+
+            return restore_grow
+
+        os.rename(target, hidden)
+        state["hidden"] = hidden
+        payload = (
+            fixture["different"]
+            if perturbation == "replace-different"
+            else fixture["original"]
+        )
+        with open(target, "wb") as stream:
+            stream.write(payload)
+        state["applied"] = True
+        if fixture["persistent_replace"]:
+            return None
+
+        def restore():
+            if exists(target):
+                os.unlink(target)
+            os.rename(hidden, target)
+            state["hidden"] = None
+
+        return restore
+
+    def _toctou_cleanup(self, fixture, state):
+        target = fixture["target"]
+        hidden = state.get("hidden")
+        real_lstat = state["real_lstat"]
+
+        def exists(path):
+            try:
+                real_lstat(path)
+            except (FileNotFoundError, NotADirectoryError):
+                return False
+            return True
+
+        mode = state.get("mode")
+        if mode is not None and exists(target):
+            os.chmod(target, mode)
+        if hidden and exists(hidden):
+            if exists(target):
+                os.unlink(target)
+            os.rename(hidden, target)
+
+    def _toctou_run(self, scenario, perturbation=None, ordinal=None):
+        import io
+        from contextlib import redirect_stdout
+        from typing import Any
+        from unittest import mock
+
+        fixture = self._toctou_fixture(scenario, perturbation)
+        target = os.path.abspath(fixture["target"])
+        real_open = os.open
+        real_fdopen = os.fdopen
+        real_fstat = os.fstat
+        real_lstat = os.lstat
+        real_stat = os.stat
+        real_carrying_records = carrying_records
+        real_find_jobs = find_jobs
+        fd_paths = {}
+        clock = {"monotonic": 100.0}
+        state: dict[str, Any] = {
+            "applied": False,
+            "calls": 0,
+            "hidden": None,
+            "late_observation": False,
+            "mode": None,
+            "open_failures": 0,
+            "operations": [],
+            "real_lstat": real_lstat,
+            "witnessed_record": False,
+        }
+        state["clock"] = clock
+        state["deadline"] = 100.0 + fixture["args"].timeout_seconds
+
+        def is_target(path):
+            try:
+                return os.path.abspath(os.fspath(path)) == target
+            except TypeError:
+                return False
+
+        def observe(operation, path, call):
+            matching = is_target(path)
+            restore = None
+            if matching:
+                state["calls"] += 1
+                state["operations"].append(operation)
+                if state["calls"] == ordinal and perturbation is not None:
+                    if self._TOCTOU_SHIM_ENABLED:
+                        restore = self._toctou_apply(fixture, perturbation, state)
+            try:
+                try:
+                    result = call()
+                except OSError:
+                    if matching and perturbation == "unreadable":
+                        state["open_failures"] += operation == "open"
+                    raise
+            finally:
+                if restore is not None:
+                    restore()
+            if matching and scenario == "record" and operation in {
+                "open",
+                "fstat",
+                "lstat",
+                "stat",
+                "read",
+                "readline",
+            }:
+                state["witnessed_record"] = True
+            if (
+                matching
+                and clock["monotonic"]
+                > state["deadline"]
+            ):
+                state["late_observation"] = True
+            return result
+
+        def opening(path, flags, *args, **kwargs):
+            def call():
+                descriptor = real_open(path, flags, *args, **kwargs)
+                fd_paths[descriptor] = path
+                return descriptor
+
+            return observe("open", path, call)
+
+        def descriptor_stat(descriptor):
+            path = fd_paths.get(descriptor)
+            return observe("fstat", path, lambda: real_fstat(descriptor))
+
+        def path_lstat(path, *args, **kwargs):
+            return observe("lstat", path, lambda: real_lstat(path, *args, **kwargs))
+
+        def path_stat(path, *args, **kwargs):
+            return observe("stat", path, lambda: real_stat(path, *args, **kwargs))
+
+        def fdopening(descriptor, *args, **kwargs):
+            raw = real_fdopen(descriptor, *args, **kwargs)
+            path = fd_paths.get(descriptor)
+            proxy = mock.MagicMock(wraps=raw)
+            proxy.fileno.side_effect = raw.fileno
+            proxy.seek.side_effect = raw.seek
+            proxy.read.side_effect = lambda *a, **k: observe(
+                "read", path, lambda: raw.read(*a, **k)
+            )
+            proxy.readline.side_effect = lambda *a, **k: observe(
+                "readline", path, lambda: raw.readline(*a, **k)
+            )
+
+            def close():
+                fd_paths.pop(descriptor, None)
+                return raw.close()
+
+            def exit_handle(*exc):
+                fd_paths.pop(descriptor, None)
+                return raw.__exit__(*exc)
+
+            proxy.close.side_effect = close
+            proxy.__enter__.return_value = proxy
+            proxy.__exit__.side_effect = exit_handle
+            return proxy
+
+        def sleep(_deadline, poll_seconds):
+            clock["monotonic"] += poll_seconds
+
+        def carrying_without_hold(found, job_id, hold=None):
+            return real_carrying_records(found, job_id)
+
+        round_state = {"registration_calls": 0}
+
+        def find_jobs_in_two_rounds(job_id, roots):
+            found, complete = real_find_jobs(job_id, roots)
+            round_state["registration_calls"] += 1
+            if round_state["registration_calls"] == 1 and found:
+                return found, False
+            if found:
+                fixture["args"].once = True
+            return found, complete
+
+        patches = (
+            mock.patch("os.open", opening),
+            mock.patch("os.fdopen", fdopening),
+            mock.patch("os.fstat", descriptor_stat),
+            mock.patch("os.lstat", path_lstat),
+            mock.patch("os.stat", path_stat),
+            mock.patch("time.monotonic", lambda: clock["monotonic"]),
+            mock.patch("time.time", lambda: fixture["wall"]),
+            mock.patch(__name__ + ".sleep_until", sleep),
+            mock.patch(
+                __name__ + ".tree_age",
+                lambda *a, **k: (fixture["tree_age"], 1, True),
+            ),
+        )
+        try:
+            with redirect_stdout(io.StringIO()), contextlib.ExitStack() as stack:
+                for patch in patches:
+                    stack.enter_context(patch)
+                if scenario == "record-pin":
+                    stack.enter_context(
+                        mock.patch(
+                            __name__ + ".carrying_records",
+                            carrying_without_hold,
+                        )
+                    )
+                if scenario == "record-round":
+                    stack.enter_context(
+                        mock.patch(__name__ + ".find_jobs", find_jobs_in_two_rounds)
+                    )
+                code = watch(fixture["args"])
+            if perturbation == "unreadable" and os.geteuid() != 0:
+                try:
+                    descriptor = real_open(target, os.O_RDONLY)
+                except OSError:
+                    state["open_failures"] += 1
+                else:
+                    os.close(descriptor)
+        finally:
+            self._toctou_cleanup(fixture, state)
+        return {
+            "applied": state["applied"],
+            "calls": state["calls"],
+            "code": code,
+            "late_observation": state["late_observation"],
+            "open_failures": state["open_failures"],
+            "operations": state["operations"],
+            "witnessed_record": state["witnessed_record"],
+        }
+
+    def _toctou_expected(self, scenario, perturbation, ordinal):
+        """Ruling-derived exit set for one selected semantic observation window."""
+        if perturbation == "late":
+            return {EXIT_TIMEOUT}
+        expected = {
+            "record": {
+                "unlink": {1: 6, 6: 7, 17: 10, 26: 10, 40: 10, 45: 10},
+                "replace-different": {
+                    3: 14,
+                    6: 14,
+                    17: 14,
+                    28: 11,
+                    40: 14,
+                    42: 14,
+                },
+                "replace-same": {
+                    3: 14,
+                    6: 14,
+                    17: 14,
+                    28: 11,
+                    40: 14,
+                    42: 14,
+                },
+                "unreadable": {3: 13, 17: 13, 28: 11, 41: 11},
+                "grow": {6: 14, 16: 13, 43: 11},
+                "appear": {1: 14, 12: 7},
+            },
+            "record-pin": {
+                "unlink": {15: 10},
+                "unreadable": {15: 13},
+            },
+            "record-round": {
+                "unlink": {6: 7},
+                "replace-different": {17: 14},
+                "replace-same": {17: 14},
+            },
+            "log": {
+                "unlink": {1: 11, 2: 14, 6: 4, 7: 11},
+                "replace-different": {2: 11, 6: 4, 7: 11},
+                "replace-same": {2: 11, 6: 4, 7: 11},
+                "unreadable": {2: 14},
+                "grow": {4: 11, 5: 4, 6: 4, 7: 11},
+                "appear": {1: 4, 2: 11, 3: 14, 5: 11},
+            },
+            "log-command": {"grow": {6: 14}},
+            "artifact": {
+                "unlink": {4: 11, 7: 0, 8: 0, 9: 11},
+                "replace-different": {4: 11, 7: 0, 8: 0, 9: 11},
+                "replace-same": {4: 11, 7: 0, 8: 0, 9: 11},
+                "unreadable": {4: 14},
+                "grow": {7: 0, 8: 5, 9: 0},
+                "appear": {1: 0, 2: 11, 3: 11, 4: 11},
+            },
+            "peer": {
+                "unlink": {2: 11, 6: 11, 8: 11, 10: 11, 16: 11},
+                "replace-different": {
+                    2: 11,
+                    6: 11,
+                    8: 11,
+                    10: 11,
+                    14: 11,
+                    16: 11,
+                },
+                "replace-same": {
+                    2: 11,
+                    6: 11,
+                    8: 11,
+                    10: 11,
+                    14: 11,
+                    16: 11,
+                },
+                "unreadable": {2: 14},
+                "grow": {4: 11, 6: 11, 8: 11, 12: 11, 14: 11, 16: 11},
+                "appear": {1: 11, 2: 11},
+            },
+        }
+        return {expected[scenario][perturbation][ordinal]}
+
+    def _toctou_reachable(self, scenario):
+        """All verdicts reachable from a fixture before selecting one window."""
+        return {
+            "record": {6, 7, 10, 11, 13, 14},
+            "record-pin": {7, 10, 11, 13, 14},
+            "record-round": {7, 11, 14},
+            "log": {4, 7, 11, 14},
+            "log-command": {7, 11, 14},
+            "artifact": {0, 5, 7, 11, 14},
+            "peer": {7, 11, 14},
+        }[scenario]
+
+    def test_toctou_shim_sanity_check(self):
+        result = self._toctou_run("record", "unlink", 1)
+        self.assertTrue(result["applied"], "the scripted perturbation did not run")
+        self.assertGreaterEqual(result["calls"], 1)
+
+    def test_toctou_unreadable_effect(self):
+        if os.geteuid() == 0:
+            self.skipTest("chmod cannot make an open fail for euid 0")
+        result = self._toctou_run("log", "unreadable", 2)
+        self.assertTrue(result["applied"])
+        self.assertGreater(result["open_failures"], 0)
+
+    def test_toctou_enumerator_oracles(self):
+        started = time.perf_counter()
+        measured = {
+            scenario: self._toctou_run(scenario)
+            for scenario in self._TOCTOU_SCENARIOS
+        }
+        absent = {
+            scenario: self._toctou_run(scenario, "appear")
+            for scenario in ("record", "log", "artifact", "peer")
+        }
+        counts = {scenario: result["calls"] for scenario, result in measured.items()}
+        appear_counts = {
+            scenario: result["calls"] for scenario, result in absent.items()
+        }
+        for scenario, result in (*measured.items(), *absent.items()):
+            self.assertGreater(result["calls"], 0, scenario)
+        selected = {
+            "record": {
+                "unlink": (1, 6, 17, 26, 40, 45),
+                "replace-different": (3, 6, 17, 28, 40, 42),
+                "replace-same": (3, 6, 17, 28, 40, 42),
+                "unreadable": (3, 17, 28, 41),
+                "grow": (6, 16, 43),
+                "late": (1, 17, 28, 45),
+            },
+            "record-pin": {
+                "unlink": (15,),
+                "unreadable": (15,),
+                "late": (15,),
+            },
+            "record-round": {
+                "unlink": (6,),
+                "replace-different": (17,),
+                "replace-same": (17,),
+                "late": (17,),
+            },
+            "log": {
+                "unlink": (1, 2, 6, 7),
+                "replace-different": (2, 6, 7),
+                "replace-same": (2, 6, 7),
+                "unreadable": (2,),
+                "grow": (4, 5, 6, 7),
+                "late": (1, 6, 7),
+            },
+            "artifact": {
+                "unlink": (4, 7, 8, 9),
+                "replace-different": (4, 7, 8, 9),
+                "replace-same": (4, 7, 8, 9),
+                "unreadable": (4,),
+                "grow": (7, 8, 9),
+                "late": (4, 8, 9),
+            },
+            "peer": {
+                "unlink": (2, 6, 8, 10, 16),
+                "replace-different": (2, 6, 8, 10, 14, 16),
+                "replace-same": (2, 6, 8, 10, 14, 16),
+                "unreadable": (2,),
+                "grow": (4, 6, 8, 12, 14, 16),
+                "late": (2, 8, 16),
+            },
+        }
+        cases = [
+            (scenario, perturbation, ordinal)
+            for scenario, perturbations in selected.items()
+            for perturbation, ordinals in perturbations.items()
+            for ordinal in ordinals
+        ]
+        appear_selected = {
+            "record": (1, 12),
+            "log": (1, 2, 3, 5),
+            "artifact": (1, 2, 3, 4),
+            "peer": (1, 2),
+        }
+        cases.extend(
+            (scenario, "appear", ordinal)
+            for scenario, ordinals in appear_selected.items()
+            for ordinal in ordinals
+        )
+        for scenario, perturbation, ordinal in cases:
+            with self.subTest(
+                scenario=scenario,
+                ordinal=ordinal,
+                perturbation=perturbation,
+            ):
+                result = self._toctou_run(scenario, perturbation, ordinal)
+                self.assertTrue(
+                    result["applied"],
+                    "the perturbation did not reach its observation",
+                )
+                if perturbation == "unreadable" and os.geteuid() != 0:
+                    self.assertGreater(
+                        result["open_failures"],
+                        0,
+                        "chmod did not cause an open failure",
+                    )
+                if perturbation == "late":
+                    self.assertTrue(result["late_observation"])
+                expected = self._toctou_expected(
+                    scenario, perturbation, ordinal
+                )
+                self.assertLess(
+                    expected,
+                    self._toctou_reachable(scenario),
+                    "the oracle must be narrower than the reachable verdicts",
+                )
+                self.assertIn(
+                    result["code"],
+                    expected,
+                    f"observed {result['code']}; expected {sorted(expected)}",
+                )
+        self.assertEqual(
+            counts,
+            {
+                "record": 45,
+                "record-pin": 47,
+                "record-round": 61,
+                "log": 7,
+                "log-command": 9,
+                "artifact": 12,
+                "peer": 16,
+            },
+        )
+        self.assertEqual(
+            appear_counts,
+            {"record": 12, "log": 5, "artifact": 4, "peer": 2},
+        )
+        deterministic = (
+            ("record", "replace-same", 40),
+            ("record-pin", "unlink", 15),
+            ("record-round", "replace-same", 17),
+            ("log", "replace-same", 6),
+            ("log-command", "grow", 6),
+            ("artifact", "grow", 8),
+            ("peer", "replace-same", 14),
+        )
+        for scenario, perturbation, ordinal in deterministic:
+            first = self._toctou_run(scenario, perturbation, ordinal)
+            second = self._toctou_run(scenario, perturbation, ordinal)
+            self.assertIn(
+                first["code"],
+                self._toctou_expected(scenario, perturbation, ordinal),
+            )
+            self.assertEqual(second["code"], first["code"])
+        self.assertEqual(measured["log-command"]["code"], EXIT_UNVERIFIABLE)
+        elapsed = time.perf_counter() - started
+        full_combinations = sum(
+            result["calls"] * (len(self._TOCTOU_PERTURBATIONS) - 1)
+            for result in measured.values()
+        ) + sum(appear_counts.values())
+        print(
+            "TOCTOU_ENUMERATION "
+            f"counts={counts} appear_counts={appear_counts} "
+            f"combinations={len(cases)} full_combinations={full_combinations} "
+            f"executions={len(cases) + len(measured) + len(absent) + 14} "
+            f"seconds={elapsed:.3f}"
+        )
+
+
 class SourceInvariantTest(unittest.TestCase):
     """Structural invariants decided by the sentinel review rulings."""
 
