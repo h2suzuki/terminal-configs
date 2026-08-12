@@ -682,7 +682,7 @@ def tree_age(root: str | None, now: float) -> float | None:
     return None if newest is None else now - newest
 
 
-def longest_silence(log_path: str) -> float | None:
+def longest_silence(log_path: str) -> tuple[float | None, tuple | None]:
     """The runner's longest quiet spell in this log; None when it holds no pair of stamps.
 
     Reads the same stamp-ordered view the command pairing uses: a quoted line
@@ -694,12 +694,13 @@ def longest_silence(log_path: str) -> float | None:
     worst = None
     previous = None
     whole = True
+    view: list = []
 
     def truncated() -> None:
         nonlocal whole  # 短い view の最大 gap は、その log の最大 gap ではない
         whole = False
 
-    for line in event_lines(log_lines(log_path, truncated)):
+    for line in event_lines(log_lines(log_path, truncated, view)):
         m = LOG_TS.match(line)
         stamp = stamp_seconds(m.group(1)) if m else None
         if stamp is None:
@@ -707,7 +708,7 @@ def longest_silence(log_path: str) -> float | None:
         if previous is not None and (worst is None or stamp - previous > worst):
             worst = stamp - previous
         previous = stamp
-    return worst if whole else None
+    return (worst if whole else None), (view[0] if view else None)
 
 
 def baseline_silence(
@@ -750,9 +751,11 @@ def baseline_silence(
             continue
         if now - max(before[2], marked[2]) / 1e9 < settle_seconds:
             continue
-        quiet = longest_silence(peer_log)
+        quiet, peer_log_stamp = longest_silence(peer_log)
+        # 対象 log と同じ理由で、 読んだ descriptor が前後の観測と同じかを確かめる。
         if (
-            file_stat(peer_log) != before
+            peer_log_stamp != before
+            or file_stat(peer_log) != before
             or file_stat(record_path) != marked
             or record_stamp(record_path) != peer_stamp
         ):
@@ -1722,7 +1725,7 @@ class WatchTest(unittest.TestCase):
                 "[2026-08-08T00:00:00.000Z] quoted line from yesterday\n"
                 "[2026-08-09T00:01:00.000Z] c\n"
             )
-        silence = longest_silence(p)
+        silence = longest_silence(p)[0]
         assert silence is not None
         self.assertLess(silence, 120.0)
 
@@ -1887,7 +1890,7 @@ class WatchTest(unittest.TestCase):
                 "2026-08-08T00:03:30",
             ),
         )
-        self.assertEqual(longest_silence(log), 180.0)
+        self.assertEqual(longest_silence(log)[0], 180.0)
 
     def test_the_baseline_scan_does_not_grow_with_the_log(self):
         """完走 log は短い event 行を何十万も持ちうる — 行数分の list を作れば同じ MemoryError に戻る。"""
@@ -1902,7 +1905,7 @@ class WatchTest(unittest.TestCase):
             )
         tracemalloc.start()
         try:
-            self.assertIsNotNone(longest_silence(log))
+            self.assertIsNotNone(longest_silence(log)[0])
             peak = tracemalloc.get_traced_memory()[1]
         finally:
             tracemalloc.stop()
@@ -1988,7 +1991,7 @@ class WatchTest(unittest.TestCase):
         with mock.patch("os.open", side_effect=PermissionError):
             list(log_lines(log, lambda: seen.append(1)))
             self.assertFalse(scan_log(log)[2])
-            self.assertIsNone(longest_silence(log))
+            self.assertIsNone(longest_silence(log)[0])
         self.assertEqual(seen, [1])
 
     def test_the_discarded_path_also_stops_at_the_deadline(self):
@@ -2488,6 +2491,28 @@ class WatchTest(unittest.TestCase):
         with mock.patch(__name__ + ".MAX_PEERS", 3):
             self.assertEqual(
                 baseline_silence(jobs, "task-live", time.time()), (None, False)
+            )
+
+    def test_a_peer_log_swapped_around_the_parse_is_not_history(self):
+        """peer log にも対象 log と同じ理由で descriptor の一致を要る。"""
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-live", "running")
+        jobs = os.path.dirname(record)
+        peer_log = os.path.join(jobs, "task-peer.log")
+        with open(os.path.join(jobs, "task-peer.json"), "w", encoding="utf-8") as f:
+            json.dump({"id": "task-peer", "status": "completed"}, f)
+        with open(peer_log, "w", encoding="utf-8") as f:
+            f.write("[2026-08-09T00:00:00.000Z] a\n[2026-08-09T00:05:00.000Z] b\n")
+        real = longest_silence
+
+        def foreign_stamp(path):
+            quiet, _view = real(path)
+            return quiet, (0, 0, 0, 0)  # 別 descriptor から読んだことにする
+
+        with mock.patch(__name__ + ".longest_silence", foreign_stamp):
+            self.assertEqual(
+                baseline_silence(jobs, "task-live", time.time() + 3600)[0], None
             )
 
     def test_a_job_id_that_is_a_path_is_refused(self):
@@ -4258,7 +4283,7 @@ class WatchTest(unittest.TestCase):
             f.write("[9999-99-99T99:99:99.000Z] fixture\n")
             f.write("[2026-08-09T00:05:00.000Z] done\n")
         self.assertIsNone(stamp_seconds("9999-99-99T99:99:99"))
-        self.assertEqual(longest_silence(log), 300.0)
+        self.assertEqual(longest_silence(log)[0], 300.0)
 
     def test_a_peer_with_an_impossible_stamp_does_not_kill_the_baseline(self):
         root, _rec, _log = self._state("ws", "task-target", "running")
