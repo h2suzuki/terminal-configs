@@ -1,4 +1,7 @@
-# codex_task_sentinel 敵対レビュー 17〜53 巡 集計
+# codex_task_sentinel 敵対レビュー 1〜53 巡 集計
+
+17 巡目より前の 16 巡は **§0** に分ける。この範囲は報告書原文が 16 本すべて現存するため、
+件数は復元でなく原文からの直接計数であり、以下 §1〜§7 の 179 件には含まれない。
 
 `files/codex_task_sentinel` に対する 37 巡 (17〜53 巡) の敵対レビューで挙がった 179 件の指摘を、
 処理ブロック・原因タイプ・由来 (self / preexisting / unknown) で集計した文書である。
@@ -9,6 +12,52 @@
 **運用**: 1 巡終えるごとに本文書を更新する。手順は (1) worktree を消す前に報告書を `drafts/` へ退避、
 (2) 6 つの表 (総数・ブロック・原因・クラス時系列・効果・未検証) にその巡を足す、(3) 次巡の発注書を書く。
 `drafts/` は版管理外なので、本文書だけは `docs/` に置いて commit する。
+
+## 0. 1〜16 巡
+
+16 巡・**新規指摘 33 件**。報告書原文 16 本が worktree 内に現存するので、以下はすべて原文からの直接計数である
+(§0 に推測は無い)。「新規指摘」は各報告書の `## 新規指摘` 節に番号付きで挙がった件数、
+「前巡の検証」は同 `検証結果` 節の見出し語をそのまま数えたもの。
+
+| 巡 | 新規指摘 | 前巡指摘の検証結果 (見出し語のまま) | 収束判定 |
+|---:|---:|---|---|
+| 1 | **13** | — (初回) | 出荷不可 (収束判定節なし) |
+| 2 | 2 | R1 の 13 件: 塞がった 8 / 塞がっていない 4 / 別欠陥に化けた 1 | not converged |
+| 3 | 3 | 10 件: 塞がった 9 / 別欠陥に化けた 1 | not converged |
+| 4 | 0 | 塞がった 1 / 塞がっていない 1 / 別欠陥に化けた 1 | not converged |
+| 5 | 0 | 塞がった 1 / 別欠陥に化けた 1 (「削除は不妥当」) | not converged |
+| 6 | 0 | 未修正 1 | 出荷不可・収束不可 |
+| 7 | 0 | 塞がった 1 / 不妥当 (material な残存) 1 | not converged |
+| 8 | 0 | 具体列は塞がったが同一 key の残存で未修正 1 | not converged |
+| 9 | 2 | 直接列は塞がった 1 | not converged |
+| 10 | 1 | 直接列は塞がったが修正が残る 2 | not converged |
+| 11 | 0 | 脱落は塞がったが R9 経路へ回帰 1 / 「log の読み方だけで閉じる手 — 無し」 | not converged |
+| 12 | 2 | 既定の cancel 導線 塞がった・`--trust-log` 等価 / evidence 不十分・skill に契約回帰 | not converged |
+| 13 | 2 | 直接欠陥は塞がった 2 (うち 1 は巨大 log で別欠陥に化けた) | not converged |
+| 14 | 4 | 6 点中 5 点が解消、同期 test だけ第 13 巡の中心契約が未達 | not converged |
+| 15 | 1 | 塞がった 1 / 塞がっていない 2 / 別欠陥に化けた 1 | not converged |
+| 16 | 3 | 塞がった 1 / 塞がっていない 1 / 直接経路は塞がった 1 | not converged |
+| **計** | **33** | | **16 巡すべて未収束** |
+
+読み取れること (原文にある事実のみ):
+
+- **初回 1 巡で 33 件中 13 件 (39%) が出ている**。2 巡目でその 13 件を検証した内訳は
+  塞がった 8 / 塞がっていない 4 / 別欠陥に化けた 1 で、**初回指摘の 5 件が 1 巡では閉じなかった**。
+- **4〜8 巡と 11 巡の 6 巡は「新規指摘は無し」と明記している**。ただしいずれも前巡指摘の
+  未修正・別欠陥化・material な残存を報告しており、指摘ゼロの巡は 16 巡中 1 巡も無い。
+  6 巡の報告書は結論を「出荷不可、収束不可」と書いている。
+- **前巡の修正が別欠陥に化けたと見出しに明記された箇所は 5 つ** (R2 #3 / R3 2-b / R4 #1 / R5 #1 / R15 #4)。
+  17 巡以降で支配的になる「修正が次巡の指摘を生む」形は、この範囲で既に現れている。
+- 4〜8 巡・11 巡が扱った論点は一貫して 1 つ — log 上で「引用された行」と「真正 event」を
+  分離できるか。11 巡の報告書は `### log の読み方だけで閉じる手 — 無し` と結論し、
+  以後この論点は上流依存 (plugin が per-command lifecycle を record に持たない) として
+  新規指摘から外す扱いになった。
+
+16 巡と 17 巡の境目: 16 巡の修正 (`b1d8ed7`) の後に worktree `wt-rev20` で 17 巡目を発注したが、
+その job (`task-msl8tq7h-w30qoa`) は報告書を書かないまま session が終わっている
+(state record は今も `status: running`、`wt-rev20/adversarial_report_r17.md` は不在、
+監視は `無音 919s / しきい値 900s` で exit 14 を返していた)。
+§1 以降が典拠とする 17 巡は別 session が改めて実施したもので、その修正 commit は `6a83eff` (08-12) である。
 
 ## 1. 総数と推移
 
@@ -32,8 +81,12 @@ r17..r53: 5 10 12 5 5 4 4 4 5 3 6 4 5 8 5 5 9 7 6 6 4 5 2 3 2 3 2 3 3 5 3 4 4 4 
 読み取れること (数値の事実のみ):
 
 - **「preexisting は 39 巡で尽きた」という 51 巡時点の読みは、52 巡で覆った**。r52 指摘 6 (`str.splitlines()` が
-  VT・FF・NEL・U+2028 も行末として消す) の該当行は commit `6de685f` に由来し、これは 17 巡目の修正 (`6a83eff`) の
-  **30 commit 前** — レビュー開始初期から在って 50 巡以上素通しされた欠陥である。40〜51 巡に preexisting が
+  VT・FF・NEL・U+2028 も行末として消す) の該当行は commit `6de685f` に由来する。
+  **この commit は 1 巡目の修正である** — 2026-08-08 21:55、sentinel を触った 3 番目の commit で、
+  subject は `Stop calling a cancelled run a success`、1 巡目の指摘 1 (failed / cancelled の成功昇格) を閉じたもの
+  (2 巡目の報告書 `### 1. failed / cancelled の成功昇格 — 塞がった` が受理を記録)。
+  `git log -S'splitlines'` の初出も同 commit である。つまり **1 巡目の修正が入れた欠陥が 52 巡目まで 51 巡ぶん残った**。
+  「レビュー開始初期」は正しいが、実際にはレビューの初回そのものである。40〜51 巡に preexisting が
   1 件も出なかったのは「掘り尽くした」からではなく、**発注書が毎巡「直前の修正が生んだ欠陥」を最優先に指定していた**
   ためと読むほうが資料と整合する。
 - **self 率は単調に上がり続け、46〜53 巡では 88%**。件数自体は 12 (r19) → 2〜6 に収束したが、
@@ -109,7 +162,7 @@ r17..r53: 5 10 12 5 5 4 4 4 5 3 6 4 5 8 5 5 9 7 6 6 4 5 2 3 2 3 2 3 3 5 3 4 4 4 
   (test-fixture / imagined 6 件の典型で、r26・r27・r28・r36・r37・r38 に 1 件ずつ出続けた)。
 - **r52**: `str.splitlines()` を「LF と CRLF で分けるもの」と思って書いていた。実際は VT・FF・NEL・U+2028 も
   境界として消すので、token の後ろにそれらが付いた成果物まで完成品になる。**この 1 件だけが 46〜52 巡で唯一の
-  preexisting** で、レビュー開始初期から 50 巡以上残っていた。
+  preexisting** で、**1 巡目の修正 (`6de685f`) が入れた行が 51 巡ぶん残っていた** (§1 の注記を参照)。
 
 ### contradictory (34 件) — 自分の裁定と code の矛盾
 
@@ -385,12 +438,18 @@ r51 の欄を 2 から 3 に訂正した。51 巡時点では r52 発注書の�
 
 ## 復元元
 
+repo の実 path は `/home/scorer/terminal-configs` である (user 名変更前の `/home/h2suzuki/...` は現存しない
+— `ls -d /home/h2suzuki` が `No such file or directory`)。以下は現行 path に直してある。
+
 | 資料 | path | 範囲 / 欠落 |
 |---|---|---|
-| 報告書原文 | `/home/h2suzuki/terminal-configs/drafts/sentinel-review-r{17..30}-report.md` | r17〜r30 のみ現存 |
-| 報告書原文 | `/home/h2suzuki/terminal-configs/drafts/sentinel-review-r{52,53}-report.md` | 52 巡目から worktree 削除前に drafts/ へ退避する手順に変更したため現存 |
+| 報告書原文 (1〜16 巡) | `wt-adv13/PREVIOUS_REVIEW_R{1..12}.md`、`wt-adv13/adversarial_report_r13.md`、`wt-rev16/adversarial_report_r14.md`、`wt-rev18/adversarial_report_r15.md`、`wt-rev19/adversarial_report_r16.md` | **16 本すべて現存**。各巡の worktree に前巡までの報告書を複写して渡していたため、worktree を消しても複写が残った。§0 はこれだけを典拠とする |
+| 報告書原文 | `drafts/sentinel-review-r{17..30}-report.md` | r17〜r30。**この checkout には不在** (`ls drafts/` は `memory-routing.PROPOSED-EDIT.md` のみ) |
+| 報告書原文 | `drafts/sentinel-review-r{52,53}-report.md` | 52 巡目から worktree 削除前に drafts/ へ退避する手順に変更。**この checkout には不在** |
 | 報告書原文 | (r31〜r51) | **欠落**。worktree 内に書かせ `git worktree remove --force` で削除していた |
-| 発注書 | `/home/h2suzuki/terminal-configs/drafts/sentinel-review-r{17..53}.md` | 全 37 本が現存。各「## 目的」に前巡の指摘要約と件数推移行があり、r31 以降はここが唯一の一次資料 |
-| commit log | `git -C /home/h2suzuki/terminal-configs log -- files/codex_task_sentinel` | 17 巡 (6a83eff) 〜 53 巡 (cbe3bf2) の 63 commit。各 message に直した指摘と変異検証の結果 |
-| 対象コード | `/home/h2suzuki/terminal-configs/files/codex_task_sentinel` | 現行版 (selftest 244 tests + 外部 11 tests) |
+| 発注書 | `drafts/sentinel-review-r{17..53}.md` | 各「## 目的」に前巡の指摘要約と件数推移行があり、r31 以降はここが唯一の一次資料。**この checkout には不在** |
+| commit log | `git -C /home/scorer/terminal-configs log -- files/codex_task_sentinel` | 1 巡 (`6de685f` ほか) 〜 53 巡 (`cbe3bf2`)。各 message に直した指摘と変異検証の結果 |
+| 対象コード | `/home/scorer/terminal-configs/files/codex_task_sentinel` | 現行版 (selftest 244 tests + 外部 11 tests) |
 | transcript | (session 内) | 自力発見・等価変異・空振り fixture・作業中の事故。commit message に未記載の項目 (r33 の fixture 2 件、r50 の空振り 1 件) を含む |
+
+`drafts/` 配下が不在なのはこの checkout での実測であり、別 checkout での存否は確認していない。
