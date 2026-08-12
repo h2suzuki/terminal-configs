@@ -244,3 +244,21 @@ round 2 は sentinel exit 0。A〜H 全適用 (SourceInvariantTest 分離 + 1 �
 - 起動: worktree `wt-p1s1` (HEAD `fbda658`)、job `task-msqas0pl-36n734`、record で
   **sol / xhigh / write** を確認 (refactor のみ xhigh へ昇格はユーザー承認済)。probe 5 秒。
   監視 sentinel (estimate 4500s / stall 900s / timeout 10800s) を background 実行
+
+### 2026-08-13 — 第 1 段 納品受領・発注側裁定・レビュー起動
+
+- sentinel exit 0 (終端自己確認が 2 round 連続で機能)。納品: 286+/137- (watch() funnel 化 +
+  meta-test 2 本 + rulings doc 18/21/27 の B→A)。**変更した既存 test は 0 本** — 250 test が
+  無改変で緑のまま、が挙動保存の主証拠。指定 5 変異すべて catch (報告書に `Ran N tests` 付き)
+- 受け入れ再検証 (発注側): gates 全緑 (selftest **252** / 外部 11 / ruff / ty / lang lint)、
+  独立変異 (到達不能な裸 `return 0` を watch() 冒頭へ) も meta-test が行番号付きで catch
+- 開示 5 件への発注側裁定: (1) gate と return の間の時刻窓で挙動が exit 7 側へ変わる境界 —
+  **funnel 契約を採用し受理** (裁定 21 の意図どおり。旧挙動が潜在バグ側)。(2) resolved_unknown
+  境界の timeout 表示に隣接 site 文面 — 受理。(3) 非終局の継続判定に probe 形
+  `finish(deadline, EXIT_ALIVE, (), ())` — 単一 site 維持のトレードオフとして受理
+  (使われ方の正誤はレビュー対象に指定)。(4) 手順逸脱 2 件 (初回検索を repo 全体へ・
+  py_compile の pyc 一時生成→削除済) — 永続影響なしで受理、記録のみ。(5) 発注書が例示した
+  `observed_late` 変数は実在せず (発注側の記述不正確)、codex は rename せず既存分岐を維持 — 適切
+- opus 5 xhigh の敵対レビューを Workflow (`wf_9730ce10-9d3`) で起動 — 12 site の意味保存 /
+  finish() の pass-through と表示順 / probe の使われ方 / 例外 flag の閉じ / 終局経路の全数 /
+  meta-test の AST 強度、の 6 観点。発注側の裁定済み 3 件は指摘対象から除外指定
