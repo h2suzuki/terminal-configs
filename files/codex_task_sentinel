@@ -745,6 +745,10 @@ def baseline_silence(
         # completed と書かれてから最終 block が append されるまでの窓で読むと、
         # その peer の本当の gap を欠いた低い baseline になる。 落ち着くまで数えない。
         # log だけ見ると、 古い log を持つ peer が今 completed になった窓を通す。
+        try:
+            peer_pin = open_regular(peer_log)  # 比較の間 inode を押さえる
+        except OSError:
+            peer_pin = None
         before = file_stat(peer_log)
         marked = file_stat(record_path)
         if before is None or marked is None:
@@ -760,6 +764,8 @@ def baseline_silence(
             or record_stamp(record_path) != peer_stamp
         ):
             continue  # 読んでいる間に伸びた peer は、この poll の手本にならない
+        if peer_pin is not None:
+            peer_pin.close()
         if quiet is not None and (worst is None or quiet > worst):
             worst = quiet
     return worst, True
@@ -871,7 +877,8 @@ def artifact_view(
     if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
         return False, stamp  # 読んでいる間に伸びた
     if named is None or (named.st_dev, named.st_ino) != (after.st_dev, after.st_ino):
-        return False, stamp  # 読取中だけ在った成果物を ready にしない
+        # 「無い」 ではなく「今その path に在るのが同じ file か言えない」。
+        return None, stamp
     if after.st_mtime < since:
         return False, stamp  # a leftover from an earlier run
     if not token:
@@ -1227,15 +1234,26 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         print(f"  job    : {printable(args.job_id)} record={printable(record_path)}")
         return EXIT_TIMEOUT
     jobs_dir = os.path.dirname(record_path)
-    # 同じ path が別 inode へ差し替わっても、 内容が同じなら record 比較では気付けない。
     # 開いたまま持つ — 番号だけ覚えると、 解放後に再利用された別 file と一致する。
     pinned = None
     try:
         pinned = open_regular(record_path)
         pinned_stat = os.fstat(pinned.fileno())
         record_inode = (pinned_stat.st_dev, pinned_stat.st_ino)
+    except FileNotFoundError:
+        record_inode = (None, None)  # 消えているなら poll が exit 10 として扱う
     except OSError:
-        record_inode = (file_stat(record_path) or (None, None))[:2]
+        pinned, record_inode = None, (None, None)
+    # 掴めたなら、 それが今もその path か — 登録解決の read との間で差し替わりうる。
+    if pinned is not None and (
+        (file_stat(record_path) or (None, None))[:2] != record_inode
+    ):
+        print(
+            f"unverifiable: {printable(args.job_id)} could not be pinned to one "
+            f"record, so nothing observed after this is about one job"
+        )
+        print(f"  job    : record={printable(record_path)}")
+        return EXIT_UNVERIFIABLE
     last_report: tuple[str, str] | None = None
     while True:
         # 期限に達していたら新しい poll を始めない — 期限後の状態から出た verdict が
@@ -1264,6 +1282,11 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         record_view_stamp, record = record_view(record_path, args.job_id)
         # 1 poll 1 走査 — verdict も evidence も同じ結果を使い、読み直さない。 走査の
         # 前後で観測対象が動いたら、 その poll は古い無音と新しい本文の混成になる。
+        # 比較の間 inode を押さえる — 解放されれば番号は再利用されうる。
+        try:
+            log_pin = open_regular(log)
+        except OSError:
+            log_pin = None
         before_log, before_artifact = file_stat(log), file_stat(args.artifact)
         unfinished, tail, whole_log, log_view_stamp = scan_log(log)
         log_incomplete = not whole_log
@@ -1306,6 +1329,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # 要求する分岐が書けない。
         # parse が読んだ descriptor と、 前後の path 観測が同じでなければ判定しない。
         log_changed = file_stat(log) != before_log or log_view_stamp != before_log
+        if log_pin is not None:
+            log_pin.close()  # 比較が済むまで押さえていた
         # 読んだ descriptor も前後の観測と同じでなければ、 A→B→A が透過する。
         artifact_changed = file_stat(args.artifact) != before_artifact or (
             artifact_stamp is not None and artifact_stamp != before_artifact
@@ -2594,6 +2619,114 @@ class WatchTest(unittest.TestCase):
             self.assertEqual(
                 baseline_silence(jobs, "task-live", time.time()), (None, False)
             )
+
+    def test_a_record_swapped_before_the_pin_is_not_watched(self):
+        """登録解決の read と保持用 open の間で差し替わったら、 掴めていない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-x", "running")
+        args = self._watch_args(root, "task-x", once=True)
+        real, moved = file_stat, []
+
+        def elsewhere(path):
+            got = real(path)
+            # 保持用 open の後、 その path が別 inode を指している状況。
+            if path == record and got and not moved:
+                moved.append(1)
+                return (got[0], got[1] + 1, got[2], got[3])
+            return got
+
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch(__name__ + ".file_stat", elsewhere):
+            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
+        self.assertIn("could not be pinned", buf.getvalue())
+        self.assertTrue(moved)
+
+    def test_an_artifact_whose_name_moved_is_not_a_missing_one(self):
+        """閉じる前の名前照合が食い違ったら、 「無い」 ではなく「言えない」。"""
+        from unittest import mock
+
+        root = tempfile.mkdtemp()
+        path = os.path.join(root, "report.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("body\nDONE\n")
+        since = os.stat(path).st_mtime - 60
+        real, swapped = open_regular, []
+
+        def unlinking(target):
+            handle = real(target)
+            if target == path and not swapped:
+                swapped.append(1)
+                os.unlink(path)
+            return handle
+
+        with mock.patch(__name__ + ".open_regular", unlinking):
+            self.assertIsNone(artifact_ready(path, "DONE", since))
+        self.assertTrue(swapped)
+
+    def test_the_log_inode_is_held_while_it_is_compared(self):
+        """比較の間 descriptor で押さえる — 解放されれば番号は再利用されうる。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, log = self._state("ws", "task-live", "running")
+        args = self._watch_args(root, "task-live", once=True)
+        real_open, handles, held = open_regular, [], []
+
+        def tracking(path):
+            handle = real_open(path)
+            if path == log:
+                handles.append(handle)
+            return handle
+
+        def during_compare(path):
+            if path == log:
+                held.append(any(not h.closed for h in handles))
+            return real_stat(path)
+
+        real_stat = file_stat
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".open_regular", tracking),
+            mock.patch(__name__ + ".file_stat", during_compare),
+        ):
+            watch(args)
+        self.assertTrue(held and all(held))
+
+    def test_a_peer_log_inode_is_held_while_it_is_compared(self):
+        """peer log も対象 log と同じ理由で、 比較の間 descriptor で押さえる。"""
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-live", "running")
+        jobs = os.path.dirname(record)
+        peer = os.path.join(jobs, "task-peer.json")
+        peer_log = os.path.join(jobs, "task-peer.log")
+        with open(peer, "w", encoding="utf-8") as f:
+            json.dump({"id": "task-peer", "status": "completed"}, f)
+        with open(peer_log, "w", encoding="utf-8") as f:
+            f.write("[2026-08-09T00:00:00.000Z] a\n[2026-08-09T00:05:00.000Z] b\n")
+        real_open, real_stat, handles, held = open_regular, file_stat, [], []
+
+        def tracking(path):
+            handle = real_open(path)
+            if path == peer_log:
+                handles.append(handle)
+            return handle
+
+        def during_compare(path):
+            if path == peer_log:
+                held.append(any(not h.closed for h in handles))
+            return real_stat(path)
+
+        with (
+            mock.patch(__name__ + ".open_regular", tracking),
+            mock.patch(__name__ + ".file_stat", during_compare),
+        ):
+            baseline_silence(jobs, "task-live", time.time() + 3600)
+        self.assertTrue(held and all(held))
 
     def test_a_recycled_inode_is_not_the_pinned_record(self):
         """番号だけ覚えると、 解放後に再利用された別 file と一致してしまう。"""
