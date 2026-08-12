@@ -1281,6 +1281,12 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             scanned_all = scanned_all and not (carried and unknown)
         # plugin は record を completed に書いてから final output を append する。
         # その窓に入った poll は、 古い running のまま静穏を読んで stall と言える。
+        scan_incomplete = not scanned_all
+        record_moved = (
+            seen != [(record_path, log)]
+            # watch 全体の同一性 — mtime と size は heartbeat で動くのが正常である。
+            or (file_stat(record_path) or (None, None))[:2] != record_inode
+        )
         # 前後一致は中間値との一致を証明しない — parse が見た bytes も同じと要求する。
         record_changed = (
             record_stamp(record_path) != record_before
@@ -1313,12 +1319,6 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         )
         # 「動いた」 と 「読めなかった」 は別の理由 — 畳むと headline がどちらも
         # 「読取中に変わった」 になり、 安定して読めない log が活動に化ける。
-        scan_incomplete = not scanned_all
-        record_moved = (
-            seen != [(record_path, log)]
-            # watch 全体の同一性 — mtime と size は heartbeat で動くのが正常である。
-            or (file_stat(record_path) or (None, None))[:2] != record_inode
-        )
         # 数え切れなかったのは job の変化ではない — 読めなかった側に分類する。
         baseline_incomplete = args.stall_seconds is None and not (
             counted_all and counted_all_after
@@ -1434,6 +1434,12 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 continue
             out = (
                 (
+                    EXIT_UNVERIFIABLE,
+                    "unverifiable: the record this watch fixed on was replaced or "
+                    "resolved elsewhere, so no observation here is about one job",
+                )
+                if record_moved
+                else (
                     EXIT_UNVERIFIABLE,
                     "unverifiable: the log or the state tree could not be read in full, "
                     "so nothing observed here settles what the job is doing",
@@ -2577,6 +2583,30 @@ class WatchTest(unittest.TestCase):
             self.assertEqual(
                 baseline_silence(jobs, "task-live", time.time()), (None, False)
             )
+
+    def test_a_replaced_record_is_not_called_unreadable(self):
+        """差し替わった record は「読めなかった」 ではない — 理由を取り違えない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, log = self._state("ws", "task-x", "running")
+        _e, peer, _p = self._state("ws", "task-x", "running")
+        args = self._watch_args(root, "task-x", once=True)
+        calls = []
+
+        def finding(job_id, roots):
+            calls.append(1)
+            # 登録は成立させ、 poll で別 path の record へ解決させる。
+            if len(calls) == 1:
+                return [(record, log)], True
+            return [(peer, peer[: -len(".json")] + ".log")], True
+
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch(__name__ + ".find_jobs", finding):
+            watch(args)
+        self.assertIn("replaced or resolved elsewhere", buf.getvalue())
+        self.assertNotIn("could not be read in full", buf.getvalue())
 
     def test_an_unreadable_peer_root_is_not_reported_as_a_change(self):
         """走査しきれていないのは変化ではない — 別の理由として表示する。"""
