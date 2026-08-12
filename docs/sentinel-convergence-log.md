@@ -60,7 +60,7 @@ test 数 / 指摘件数) を追記して commit する。発注書・報告書�
 |---|---|---|---|
 | 裁定の機械化 | 完了 | 2026-08-12 | `55c618e` で main へ取り込み (区分 B は refactor 後) |
 | 構造 refactor | 完了 | 2026-08-13 | 3 段完了: `c067c0b` / `0425a28` / `265ccfe`。256 tests |
-| TOCTOU harness | 進行中 | 2026-08-13 | codex sol xhigh へ発注・走行中 |
+| TOCTOU harness | 完了 | 2026-08-13 | `f109f59`。反証可能 oracle・259 tests |
 | 体制と収束認定 | 未着手 | — | 柱完了後に 54 巡目 |
 | 方法論 doc (`docs/adversarial-review-methodology.md`) | 完了 | 2026-08-13 | 発散機構 M1–M6 / 設計 G・L・R / モデル選定 / チェックリスト |
 | traceability 記録 (本 doc) | 進行中 | 2026-08-12 | 運用開始 |
@@ -427,3 +427,18 @@ fix round 発注 (`drafts/sentinel-p3-fixes.md`、lint rc=0・初回): 期待集
 義務化 / 到達可能集合と一致する期待集合は不合格 / grow 摂動と時間摂動の追加 / 複数周回
 fixture で裁定 44 到達 / appear の N 別実測 / 後ろ窓 k の選定。job `task-msqiarbt-qfmt20`
 (sol / xhigh / write 確認済)。監視 sentinel (estimate 6300s) を background 実行。
+
+### 2026-08-13 — 柱 3 完了・main 取り込み (全 build 柱完了)
+
+fix round は sentinel exit 0。**導出表は全 singleton の期待 exit を裁定から静的導出** (観測
+出力からの逆算でないことを明記)、レビューア実証の evasion 変異 9/9 を全 catch (4〜115
+failures)、拡張後も「発見」= 0 — 今度は反証可能な oracle 上のゼロ。受け入れ再検証:
+gates 全緑 (selftest **259** / 外部 11 / ruff / ty / lang lint)、発注側で変異 5 (log 縮退) を
+独立再現し FAILED (failures=5) が codex 報告と一致。**受け入れ作業中に発注側自身が false
+catch を 1 回作った** (splice ミスの SyntaxError による rc=1 を「Ran 259」行の誤読で捕捉と
+誤認 → 再実行で発覚。handoff の警告どおりの罠。「Ran 行の存在」は同一 command の出力である
+ことまで確認して初めて証拠になる)。commit `aae4478` → cherry-pick **`f109f59`** で main へ。
+worktree / branch 削除・報告書 2 本退避。
+
+**全 build 柱が完了**: 裁定の機械化 `55c618e` / 構造 refactor 3 段 `c067c0b`・`0425a28`・
+`265ccfe` / TOCTOU harness `f109f59`。selftest 244 → **259**。残りは収束認定巡のみ。
