@@ -893,7 +893,8 @@ def artifact_view(
                 named = None
     except FileNotFoundError:
         # 辿れない link は entry が在る — 無いのではなく読めないので 3 値の None。
-        return (None if dangling(path) else False), None
+        # 指紋は「不在」 を名乗る — 前後に在るなら読取窓の中だけ消えたことになる。
+        return (None if dangling(path) else False), ("absent",)
     except UnicodeDecodeError:
         # 置換して読むと、 binary の末尾行が token と一致して完成品に化ける。
         return False, stamp
@@ -1404,7 +1405,11 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # 読んだ inode を押さえたことにならない。
         log_pin: list = []
         unfinished, tail, whole_log, log_view_stamp = scan_log(log, hold=log_pin)
-        log_incomplete = not whole_log
+        # 読めた view が無いのに path には file が在るなら、 読取窓の中だけ消えていた。
+        # 「log なし」 は path にも無い時の答えである。
+        log_incomplete = not whole_log or (
+            log_view_stamp is None and file_stat(log) is not None
+        )
         # 無音も読んだ descriptor から — 無ければ「読んでいない」 であって、
         # path を開き直して別 file の mtime を無音に使ってよい理由にはならない。
         age = now - log_view_stamp[2] / 1e9 if log_view_stamp is not None else None
@@ -1460,7 +1465,9 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             handle.close()  # 比較が済むまで押さえていた
         # 読んだ descriptor も前後の観測と同じでなければ、 A→B→A が透過する。
         artifact_changed = file_stat(args.artifact) != before_artifact or (
-            artifact_stamp is not None and artifact_stamp != before_artifact
+            artifact_stamp is not None
+            and before_artifact is not None
+            and artifact_stamp != before_artifact
         )
         for handle in artifact_pin:
             handle.close()  # 比較が済むまで押さえていた
@@ -2850,6 +2857,94 @@ class WatchTest(unittest.TestCase):
             ),
         ):
             self.assertEqual(watch(args), EXIT_TIMEOUT)
+
+    def test_a_log_gone_only_during_the_read_is_not_stable_absence(self):
+        """path に file が在るのに view が無いなら、 読取窓の中だけ消えていた。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, log = self._state("ws", "task-x", "failed")
+        real = scan_log
+
+        def vanishing(path, *a, **k):
+            out = real(path, *a, **k)
+            return out[0], out[1], out[2], None  # 読取窓では不在だった
+
+        buf = io.StringIO()
+        with (
+            redirect_stdout(buf),
+            mock.patch(__name__ + ".scan_log", vanishing),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1, True)),
+        ):
+            watch(self._watch_args(root, "task-x", once=True))
+        self.assertNotIn("無音   : log なし", buf.getvalue())
+        self.assertIn("走査未完了", buf.getvalue())
+
+    def test_an_artifact_gone_only_during_the_read_is_a_change(self):
+        """前後に在る成果物が読取窓でだけ不在なら、 「無い」 ではなく動いている。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-done", "completed")
+        with open(record, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "id": "task-done",
+                    "status": "completed",
+                    "startedAt": "2020-01-01T00:00:00Z",
+                },
+                f,
+            )
+        artifact = os.path.join(root, "report.md")
+        with open(artifact, "w", encoding="utf-8") as f:
+            f.write("body\nDONE\n")
+        args = self._watch_args(root, "task-done", once=True)
+        args.artifact, args.token = artifact, "DONE"
+        real_open, gone = open_regular, []
+
+        def missing(path):
+            # 読取の瞬間だけ不在 — path には前後とも file が在る。
+            if path == artifact and not gone:
+                gone.append(1)
+                raise FileNotFoundError(path)
+            return real_open(path)
+
+        buf = io.StringIO()
+        with (
+            redirect_stdout(buf),
+            mock.patch(__name__ + ".open_regular", missing),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1, True)),
+        ):
+            self.assertNotEqual(watch(args), EXIT_ENDED_WITHOUT_ARTIFACT)
+        self.assertIn("成果物 : 不明 (走査中に変化)", buf.getvalue())
+        self.assertTrue(gone)
+
+    def test_an_artifact_absent_throughout_is_still_a_missing_deliverable(self):
+        """前後とも不在なら、 それは変化ではなく「無い」 である。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-done", "completed")
+        with open(record, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "id": "task-done",
+                    "status": "completed",
+                    "startedAt": "2020-01-01T00:00:00Z",
+                },
+                f,
+            )
+        args = self._watch_args(root, "task-done", once=True)
+        args.artifact = os.path.join(root, "never-written.md")
+        args.token = "DONE"
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1, True)),
+        ):
+            self.assertEqual(watch(args), EXIT_ENDED_WITHOUT_ARTIFACT)
 
     def test_only_a_newline_ends_the_final_line(self):
         """splitlines は VT・FF・NEL・U+2028 も境界にする — token の後ろに置けば完成品に化ける。"""
