@@ -1184,12 +1184,17 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             carried, unknown, shifting = carrying_records(
                 found, args.job_id, hold=fresh_hold
             )
-            # 新旧の掴みが別 inode なら、 周回の間に差し替わっている。
+            # 周回の間に別 inode へ替わったなら、 同じ path でも同じ record ではない。
             if pin_hold and fresh_hold:
                 was = os.fstat(pin_hold[0].fileno())
                 now_id = os.fstat(fresh_hold[0].fileno())
                 if (was.st_dev, was.st_ino) != (now_id.st_dev, now_id.st_ino):
-                    complete = False
+                    print(
+                        f"unverifiable: {printable(args.job_id)} resolved to a "
+                        f"different record than the one seen earlier"
+                    )
+                    print(f"  {printable(found[0][0])}")
+                    return EXIT_UNVERIFIABLE
             # 新しい掴みを得てから前の周回を手放す — 間を空けると番号を再利用される。
             for handle in pin_hold:
                 handle.close()
@@ -2777,6 +2782,33 @@ class WatchTest(unittest.TestCase):
         ):
             self.assertNotEqual(watch(args), EXIT_NEVER_REGISTERED)
         self.assertNotIn("never-registered", buf.getvalue())
+
+    def test_a_record_replaced_between_rounds_is_a_different_record(self):
+        """周回の間に別 inode へ替わったなら、 同じ path でも同じ record ではない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, log = self._state("ws", "task-x", "running")
+        args = self._watch_args(root, "task-x", timeout_seconds=0.5)
+        rounds = []
+
+        def finding(job_id, roots):
+            rounds.append(1)
+            if len(rounds) == 2:
+                with open(record + ".new", "w", encoding="utf-8") as f:
+                    json.dump({"id": "task-x", "status": "completed"}, f)
+                os.rename(record + ".new", record)  # 別 inode へ差し替え
+            return [(record, log)], len(rounds) != 1  # 1 周目は不完全
+
+        buf = io.StringIO()
+        with (
+            redirect_stdout(buf),
+            mock.patch(__name__ + ".find_jobs", finding),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1, True)),
+        ):
+            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
+        self.assertIn("different record", buf.getvalue())
 
     def test_an_unopenable_log_says_unread_not_changed(self):
         """開けない log は stamp を持たないだけ — path が動いていないなら変化ではない。"""
