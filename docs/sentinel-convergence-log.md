@@ -59,7 +59,7 @@ test 数 / 指摘件数) を追記して commit する。発注書・報告書�
 | 対策 | 状態 | 直近更新 | 要約 |
 |---|---|---|---|
 | 裁定の機械化 | 完了 | 2026-08-12 | `55c618e` で main へ取り込み (区分 B は refactor 後) |
-| 構造 refactor | 進行中 | 2026-08-13 | 第 1 段 (期限 gate funnel 化) を codex sol xhigh へ発注・走行中 |
+| 構造 refactor | 進行中 | 2026-08-13 | 第 1 段 (期限 funnel) 完了 `c067c0b`。第 2 段 (Observation 層) へ |
 | TOCTOU harness | 未着手 | — | refactor 完了後 |
 | 体制と収束認定 | 未着手 | — | 柱完了後に 54 巡目 |
 | 方法論 doc (`docs/adversarial-review-methodology.md`) | 完了 | 2026-08-13 | 発散機構 M1–M6 / 設計 G・L・R / モデル選定 / チェックリスト |
@@ -282,3 +282,14 @@ funnel 経由・raise/sys.exit なし)・meta-test の AST 判定を 10 形で i
 lint rc=0・初回)。変異 2 件 (probe 形 return / 例外 flag の複製) は発注側選定。
 job `task-msqc0nus-w6owj8` (sol / xhigh / write 確認済)。レビューアの指摘 1 と 2 は
 「実装者の開示が不完全でもレビューアが全数を数え直す」二重化が機能した実例として記録する。
+
+### 2026-08-13 — 第 1 段 完了・main 取り込み
+
+fix round は sentinel exit 0、5 件全修正 + 変異 2/2 catch (probe 形 return の検出は行番号付き)。
+発注側再検証: gates 全緑 (selftest **253** = 252 + 裁定 27 の新 meta-test / 外部 11 / ruff /
+ty / lang lint)。commit `b0ece2f` (wt-p1s1) → cherry-pick **`c067c0b`** で main へ、main 上でも
+253 OK。報告書 2 本を drafts/ へ退避後、worktree と branch を削除。
+
+第 1 段の総括: 発注 1 + レビュー 1 (material 0 / minor 5) + fix 1 の **2 round で完了**。
+期限 gate 外 return (53 巡ループ最頻クラスの 1 つ・7 件再発) は `finish()` funnel +
+meta-test 3 本で構造的に作れなくなった。裁定 18・21・27 が実体のある区分 A になった。
