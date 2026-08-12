@@ -58,7 +58,7 @@ test 数 / 指摘件数) を追記して commit する。発注書・報告書�
 
 | 対策 | 状態 | 直近更新 | 要約 |
 |---|---|---|---|
-| 裁定の機械化 | 進行中 | 2026-08-12 | codex へ発注済・走行中 |
+| 裁定の機械化 | 進行中 | 2026-08-12 | 納品受領・受け入れレビュー中 |
 | 構造 refactor | 未着手 | — | 機械化の完了後 |
 | TOCTOU harness | 未着手 | — | refactor 完了後 |
 | 体制と収束認定 | 未着手 | — | 柱完了後に 54 巡目 |
@@ -127,3 +127,25 @@ test が捕捉するかを確かめる一式) の緑を確認する。一括変�
   record の model / effort が `gpt-5.6-sol` / `medium` と発注どおりであることを起動直後に確認。
   write probe は起動 5 秒で出現。監視は `files/codex_task_sentinel` (estimate 2700s /
   stall 900s / timeout 7200s) を background 実行
+
+### 2026-08-12 — 裁定の機械化: 納品受領・受け入れ検証
+
+- 所要は発注の見積もりバンド内 (発注 22:49 → 報告書 22:57)。sentinel は **exit 5
+  (成果物なし完了)** で返った — 報告書が `REPORT_COMPLETE\n\n` と token の後に空行 1 行を
+  持ち、「最終行は token の 1 行」の契約に厳密不適合のため。not ready 判定は sentinel の
+  仕様どおり (書きかけと完成の機械判別)。課題: 発注書に「書き終えたら終端 byte を自己確認する」
+  step を入れると、この種の 1 byte 逸脱は納品側で消える
+- 納品: `files/codex_task_sentinel` へ末尾追加 186 行のみ (実装・既存 test への変更ゼロを
+  `git diff` の hunk 位置で確認)、`docs/sentinel-rulings.md` 全 47 裁定を逐語 + 区分
+  (A3 / B12 / C30 / D2) + 担保 test 名で収載
+- meta-test 5 本: splitlines 禁止 / EXIT_CONTRACT literal / time.time() allowlist
+  ({watch} のみ、deadline_reached・sleep_until の不在も assert) / open 系 allowlist
+  (os.open@open_regular のみ) / mock.patch 対象の実在。全て allowlist 方式・違反行番号付き。
+  既存 loader (line 1783) が class 名 "WatchTest" を固定しているため、既存 code に触れない
+  継承 shadowing (`class WatchTest(WatchTest)`) で 249 tests に載せた
+- 変異検証 5/5 catch (報告書に `Ran 249 tests` 行つきで転記)
+- 発注側の自己再実行で gates 全緑を確認: selftest **249 OK** (rc=0) / 外部 11 OK / ruff /
+  ty / `claude_lang_lint --repo wt-p2 --allow docs/sentinel-rulings.md` rc=0
+- codex session 棚卸し: companion status running 0 件
+- opus 5 xhigh の敵対レビューを Workflow (`wf_d5afdae3-6f2`) で起動 — 健全性 (alias 迂回・
+  _owners 帰属・非走査構文) / 分類の反証 / shadowing 検証 / scope 検証の 4 観点
