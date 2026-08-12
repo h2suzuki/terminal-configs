@@ -77,9 +77,9 @@ Exit Criteria:
   prompt の直書き禁止 (短文または prompt-file)」を追記 (`9ee961b` 同梱)
 - [x] 応答書の差し替え — terminal-config-response-codex-launcher.md を不採用裁定版に全面
   更新 (受入 3 点の読み替え + 依頼元 tools/ 削除手順、2026-08-13)
-- [ ] 残 deploy 2 件の sudo 実行と diff -q 一致 — `files/claude_managed-settings.json`
-  (permissions deny 追加分) / `files/claude_managed-skills/codex-delegation/SKILL.md`
-  (慣行追記分)。roster 系 (guard hook / extensions.json) は deploy 済 IDENTICAL
+- [x] 残 deploy の sudo 実行と diff -q 一致 — 2026-08-13 ユーザー deploy 後に検証:
+  managed-settings.json / codex-delegation SKILL.md / codex_task_sentinel = 全て IDENTICAL
+  (roster 系 guard hook / extensions.json は先行 deploy 済・exec bit 755 も確認)
 
 依頼書 = `/home/h2suzuki/daily-stock-analyzer/drafts/terminal-config-request-codex-launcher.md`。
 
