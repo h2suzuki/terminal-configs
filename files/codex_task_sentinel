@@ -910,7 +910,11 @@ def artifact_view(
     if not token:
         return seen_content, stamp
     # The order says the final line IS the token: no padding, no trailing blanks.
-    lines = body.splitlines()
+    # LF だけで分ける — splitlines は VT・FF・NEL・U+2028 も境界として消すので、
+    # token の後ろにそれらが付いた成果物まで完成品になる。
+    lines = [line.removesuffix("\r") for line in body.split("\n")]
+    if lines and lines[-1] == "":
+        lines.pop()  # 末尾の LF は行終端であって空行ではない
     return (bool(lines) and lines[-1] == token), stamp
 
 
@@ -2809,6 +2813,20 @@ class WatchTest(unittest.TestCase):
         ):
             self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
         self.assertIn("different record", buf.getvalue())
+
+    def test_only_a_newline_ends_the_final_line(self):
+        """splitlines は VT・FF・NEL・U+2028 も境界にする — token の後ろに置けば完成品に化ける。"""
+        root = tempfile.mkdtemp()
+        path = os.path.join(root, "report.md")
+        for tail in ("\x0b", "\x0c", "\x1c", "\x85", "\u2028"):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(f"body\nDONE{tail}")
+            self.assertFalse(
+                artifact_ready(path, "DONE", 0.0), tail.encode("unicode_escape")
+            )
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("body\r\nDONE\r\n")  # CRLF は従来どおり行終端
+        self.assertTrue(artifact_ready(path, "DONE", 0.0))
 
     def test_an_unopenable_log_says_unread_not_changed(self):
         """開けない log は stamp を持たないだけ — path が動いていないなら変化ではない。"""
