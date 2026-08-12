@@ -1,0 +1,363 @@
+#!/usr/bin/env python3
+"""Check a codex order document against the delegation conventions (発注書の規約適合の機械検査).
+
+用途: codex へ委譲する直前の gate。 委譲規律が必須とする節 (スコープ / 成果物 /
+作業量上限 / 実行してよい command / 適用される既存裁定 / 出力言語規約 / 所要見積もり)
+の有無と、 巡を重ねると食い違う 5 点 (報告書 path・終端 token・見積もりと調査しきい値の
+倍率・裁定の採番・kill-by-port 禁止) を検査する。
+
+Usage:
+  codex_order_lint ORDER.md [ORDER.md ...]
+  codex_order_lint --selftest
+
+Exit: 0 clean / 1 findings / 2 usage error。
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+import unittest
+
+REQUIRED_SECTIONS = (
+    "スコープ",
+    "成果物",
+    "作業量上限",
+    "実行してよい command",
+    "適用される既存裁定",
+    "出力言語規約",
+    "所要見積もり",
+)
+
+HEADING_RE = re.compile(r"^#{2,}\s+(\S.*?)\s*$")
+FENCE_RE = re.compile(r"^\s*```")
+REPORT_PATH_RE = re.compile(r"[\w./-]*-report\.md")
+TOKEN_RE = re.compile(r"\b([A-Z][A-Z0-9_]{3,})\b")
+BAND_RE = re.compile(r"見積もりバンド[^\d]*(\d+)\s*[〜~-]\s*(\d+)\s*分")
+THRESHOLD_RE = re.compile(r"調査発動しきい値[^\d]*(\d+)\s*分")
+ORDERED_RE = re.compile(r"^(\d+)\.\s")
+NO_COMMIT_RE = re.compile(r"(commit|コミット)\s*(も|は)?\s*(しない|禁止)")
+
+
+def outside_fences(lines: list[str]) -> list[int]:
+    """Indices of the lines that are not inside a ``` fence."""
+    live, fenced = [], False
+    for i, line in enumerate(lines):
+        if FENCE_RE.match(line):
+            fenced = not fenced
+            continue
+        if not fenced:
+            live.append(i)
+    return live
+
+
+def sections(lines: list[str]) -> list[tuple[str, int, int]]:
+    """[(heading, first body line, end line)] for every heading outside a fence."""
+    live = set(outside_fences(lines))
+    marks = [
+        (i, m.group(1))
+        for i, line in enumerate(lines)
+        if i in live and (m := HEADING_RE.match(line))
+    ]
+    return [
+        (name, i + 1, marks[k + 1][0] if k + 1 < len(marks) else len(lines))
+        for k, (i, name) in enumerate(marks)
+    ]
+
+
+def body(lines: list[str], found: list[tuple[str, int, int]], prefix: str) -> list[str]:
+    """Lines of the first section whose heading starts with prefix, [] if absent."""
+    return next(
+        (lines[start:end] for name, start, end in found if name.startswith(prefix)),
+        [],
+    )
+
+
+def check_sections(found: list[tuple[str, int, int]]) -> list[str]:
+    return [
+        f"必須の節がない: ## {prefix}"
+        for prefix in REQUIRED_SECTIONS
+        if not any(name.startswith(prefix) for name, _, _ in found)
+    ]
+
+
+def check_report_path(lines: list[str]) -> list[str]:
+    paths = {m.group(0) for line in lines for m in REPORT_PATH_RE.finditer(line)}
+    if not paths:
+        return ["報告書 path (*-report.md) が 1 度も書かれていない"]
+    if len(paths) > 1:
+        return [f"報告書 path が食い違う: {' / '.join(sorted(paths))}"]
+    return []
+
+
+def check_terminal_token(lines: list[str]) -> list[str]:
+    named = [
+        m.group(1)
+        for i in outside_fences(lines)
+        if "最終行" in lines[i]
+        for m in TOKEN_RE.finditer(lines[i])
+    ]
+    if not named:
+        return ["報告書の最終行に置く終端 token が指定されていない"]
+    # 書式例にも現れていなければ、 発注文だけの約束で終わっている。
+    if len(re.findall(rf"\b{re.escape(named[0])}\b", "\n".join(lines))) < 2:
+        return [f"終端 token {named[0]} が報告書の書式例に現れない"]
+    return []
+
+
+def check_estimate(lines: list[str]) -> list[str]:
+    whole = "\n".join(lines)
+    band, threshold = BAND_RE.search(whole), THRESHOLD_RE.search(whole)
+    if not band:
+        return ["見積もりバンド (N〜M 分) が無い"]
+    if not threshold:
+        return ["調査発動しきい値 (K 分) が無い"]
+    upper, fired = int(band.group(2)), int(threshold.group(1))
+    if fired != upper * 2:
+        return [f"調査発動しきい値 {fired} 分が見積もり上限 {upper} 分の 2 倍でない"]
+    return []
+
+
+def first_break(numbers: list[int]) -> str:
+    """The first item whose number is not its position, as `位置 N -> 記載 M`."""
+    return next(
+        (f"位置 {i} -> 記載 {n}" for i, n in enumerate(numbers, 1) if i != n),
+        "末尾",
+    )
+
+
+def check_rulings(section: list[str]) -> list[str]:
+    # 裁定が引用する fence 内の番号付き例を裁定に数えると、 採番検査が偽陽性になる。
+    live = [section[i] for i in outside_fences(section)]
+    numbers = [int(m.group(1)) for line in live if (m := ORDERED_RE.match(line))]
+    if not numbers:
+        return ["適用される既存裁定が 1 件も列挙されていない"]
+    if numbers != list(range(1, len(numbers) + 1)):
+        return [
+            f"裁定の採番が 1..{len(numbers)} の昇順でない "
+            f"(重複・欠番・並び違い: {first_break(numbers)})"
+        ]
+    return []
+
+
+def check_prohibitions(lines: list[str]) -> list[str]:
+    whole = "\n".join(lines)
+    stated = {
+        "kill-by-port (fuser -k / pkill) の禁止が書かれていない": "fuser -k" in whole
+        and "pkill" in whole,
+        "commit しない旨が書かれていない": bool(NO_COMMIT_RE.search(whole)),
+        "触らない path が明示されていない": "触らない" in whole,
+    }
+    return [message for message, said in stated.items() if not said]
+
+
+def check_command_fence(section: list[str]) -> list[str]:
+    if not any(FENCE_RE.match(line) for line in section):
+        return ["実行してよい command が code fence で列挙されていない"]
+    return []
+
+
+def lint(text: str) -> list[str]:
+    """Every convention breach in one order document."""
+    lines = text.splitlines()
+    found = sections(lines)
+    return [
+        *check_sections(found),
+        *check_report_path(lines),
+        *check_terminal_token(lines),
+        *check_estimate(lines),
+        *check_rulings(body(lines, found, "適用される既存裁定")),
+        *check_prohibitions(lines),
+        *check_command_fence(body(lines, found, "実行してよい command")),
+    ]
+
+
+CONFORMING = """# 発注書: 例
+
+## 目的
+
+例である。
+
+## スコープ
+
+読んでよい path は `files/x` のみ。 **触らない path** は上記以外の全て。
+
+## 成果物
+
+- 報告書 1 file のみ: `drafts/example-report.md`
+- commit もしない
+
+## 作業量上限 (worst-case bound)
+
+- 読む file は 1 本のみ
+
+## 実行してよい command
+
+```
+python3 files/x --selftest
+```
+
+- `fuser -k` / `pkill` 等の kill-by-port は禁止
+
+## 適用される既存裁定 (これに反する指摘は不成立)
+
+1. **裁定 A**: 説明
+2. **裁定 B**: 説明
+
+## レビューの観点
+
+新規 material 指摘を探す。
+
+## 出力言語規約
+
+- 報告書 (`drafts/example-report.md`) は **日本語**で書く
+
+## 報告書の書式
+
+```markdown
+# 報告書
+
+REPORT_COMPLETE
+```
+
+- **報告書の最終行は `REPORT_COMPLETE` の 1 行で終える**
+
+## 所要見積もり
+
+- 見積もりバンド: **20〜30 分**
+- 調査発動しきい値: **60 分** (見積もりの 2 倍)
+"""
+
+
+class LintTest(unittest.TestCase):
+    def test_a_conforming_order_document_has_no_findings(self):
+        self.assertEqual(lint(CONFORMING), [])
+
+    def test_a_missing_required_section_is_named(self):
+        broken = CONFORMING.replace("## 出力言語規約", "## 言語のはなし")
+        self.assertIn("必須の節がない: ## 出力言語規約", lint(broken))
+
+    def test_two_spellings_of_the_report_path_are_a_finding(self):
+        broken = CONFORMING.replace(
+            "報告書 (`drafts/example-report.md`)", "報告書 (`drafts/exampl-report.md`)"
+        )
+        self.assertTrue(any("食い違う" in f for f in lint(broken)))
+
+    def test_a_report_path_never_written_is_a_finding(self):
+        broken = CONFORMING.replace("-report.md", "-out.md")
+        self.assertIn("報告書 path (*-report.md) が 1 度も書かれていない", lint(broken))
+
+    def test_a_terminal_token_promised_but_absent_from_the_format_is_a_finding(self):
+        broken = CONFORMING.replace("\nREPORT_COMPLETE\n", "\n終わり\n")
+        self.assertIn(
+            "終端 token REPORT_COMPLETE が報告書の書式例に現れない", lint(broken)
+        )
+
+    def test_no_terminal_token_at_all_is_a_finding(self):
+        broken = CONFORMING.replace("報告書の最終行は", "報告書の締めは")
+        self.assertIn("報告書の最終行に置く終端 token が指定されていない", lint(broken))
+
+    def test_a_threshold_that_is_not_twice_the_band_is_a_finding(self):
+        broken = CONFORMING.replace(
+            "調査発動しきい値: **60 分**", "調査発動しきい値: **45 分**"
+        )
+        self.assertIn(
+            "調査発動しきい値 45 分が見積もり上限 30 分の 2 倍でない", lint(broken)
+        )
+
+    def test_a_missing_band_is_a_finding(self):
+        broken = CONFORMING.replace("見積もりバンド: **20〜30 分**", "だいたい 30 分")
+        self.assertIn("見積もりバンド (N〜M 分) が無い", lint(broken))
+
+    def test_a_ruling_out_of_sequence_is_a_finding(self):
+        broken = CONFORMING.replace("2. **裁定 B**", "9. **裁定 B**")
+        self.assertTrue(any("位置 2 -> 記載 9" in f for f in lint(broken)))
+
+    def test_an_empty_ruling_list_is_a_finding(self):
+        broken = CONFORMING.replace(
+            "1. **裁定 A**: 説明\n2. **裁定 B**: 説明", "無し。"
+        )
+        self.assertIn("適用される既存裁定が 1 件も列挙されていない", lint(broken))
+
+    def test_a_missing_kill_by_port_ban_is_a_finding(self):
+        broken = CONFORMING.replace(
+            "`fuser -k` / `pkill` 等の kill-by-port は禁止", "静かに"
+        )
+        self.assertIn(
+            "kill-by-port (fuser -k / pkill) の禁止が書かれていない", lint(broken)
+        )
+
+    def test_a_missing_no_commit_line_is_a_finding(self):
+        broken = CONFORMING.replace("- commit もしない\n", "")
+        self.assertIn("commit しない旨が書かれていない", lint(broken))
+
+    def test_a_missing_untouchable_path_line_is_a_finding(self):
+        broken = CONFORMING.replace("**触らない path** は上記以外の全て。", "以上。")
+        self.assertIn("触らない path が明示されていない", lint(broken))
+
+    def test_commands_listed_as_prose_are_a_finding(self):
+        broken = CONFORMING.replace(
+            "```\npython3 files/x --selftest\n```", "python3 files/x --selftest"
+        )
+        self.assertIn(
+            "実行してよい command が code fence で列挙されていない", lint(broken)
+        )
+
+    def test_a_numbered_example_quoted_inside_a_fence_is_not_a_ruling(self):
+        quoted = CONFORMING.replace(
+            "2. **裁定 B**: 説明",
+            "2. **裁定 B**: 説明\n\n```\n9. 引用した例\n```",
+        )
+        self.assertEqual(lint(quoted), [])
+
+    def test_headings_quoted_inside_a_fence_are_not_sections(self):
+        # 書式例の中の ## を節と数えると、 裁定 section の境界がずれる。
+        quoted = CONFORMING.replace(
+            "```markdown\n# 報告書\n", "```markdown\n# 報告書\n\n## 指摘一覧\n"
+        )
+        self.assertEqual(lint(quoted), [])
+
+    def test_a_numbered_list_in_a_later_section_is_not_counted_as_rulings(self):
+        extra = CONFORMING.replace(
+            "## レビューの観点\n\n新規 material 指摘を探す。",
+            "## レビューの観点\n\n1. 観点 A\n2. 観点 B\n3. 観点 C",
+        )
+        self.assertEqual(lint(extra), [])
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Lint a codex order document.")
+    parser.add_argument("paths", nargs="*", help="order documents to check")
+    parser.add_argument(
+        "--selftest", action="store_true", help="run the built-in tests"
+    )
+    args = parser.parse_args(argv)
+
+    if args.selftest:
+        loaded = unittest.defaultTestLoader.loadTestsFromTestCase(LintTest)
+        return 0 if unittest.TextTestRunner().run(loaded).wasSuccessful() else 1
+    if not args.paths:
+        parser.error("give at least one order document, or --selftest")
+
+    total = 0
+    for path in args.paths:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                findings = lint(handle.read())
+        except OSError as err:
+            print(f"{path}: 読めない ({err.strerror})")
+            return 2
+        except UnicodeDecodeError:
+            print(f"{path}: UTF-8 として読めない")
+            return 2
+        for finding in findings:
+            print(f"{path}: {finding}")
+        total += len(findings)
+    if total:
+        print(f"{total} 件の規約違反")
+    return 1 if total else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
