@@ -106,6 +106,7 @@ RECORD_TS = re.compile(
 MAX_LOG_LINE = 8192
 # 未完了 start の保持上限 — 実ログの最大は 3 件で、 これを超えるのは本文が作った偽 start。
 MAX_PENDING = 512
+PENDING_OVERFLOW = "command omitted after pending limit"
 # 成果物は全体を strict decode するが、 1 回の read 量と保持する末尾 buffer を
 # この値に抑える — 全量を持つと巨大な成果物ひとつで MemoryError になる。
 MAX_ARTIFACT_BYTES = 1 << 20
@@ -798,15 +799,23 @@ def scan_log(
     )
 
 
-def command_text(line: str) -> str:
-    """The command an event line refers to, with the end line's exit suffix removed."""
+def command_text(line: str, ended: bool | None = None) -> str:
+    """The command an event line refers to; exit suffixes belong only to ends."""
+    if ended is None:
+        ended = COMMAND_END.match(line) is not None
     body = re.sub(r"^\[[^\]]+\]\s+(Running command:|Command \w+:)\s*", "", line)
-    return re.sub(r"\s*\(exit -?\d+\)\s*$", "", body).strip()
+    if ended:
+        body = re.sub(r"\s*\(exit -?\d+\)\s*$", "", body)
+    return body.strip()
 
 
 def epoch_fraction(whole: int, fraction: str | None) -> Decimal:
     """An integral epoch second plus its non-negative decimal fraction."""
-    return Decimal(whole) + Decimal("0" + (fraction or ""))
+    fraction_digits = (fraction or "").lstrip(".")
+    scale = len(fraction_digits)
+    coefficient = whole * (10**scale) + int(fraction_digits or "0")
+    digits = tuple(int(digit) for digit in str(abs(coefficient)))
+    return Decimal((coefficient < 0, digits, -scale))
 
 
 def exact_stamp(stamp: str) -> Decimal | None:
@@ -869,16 +878,21 @@ def pending_commands(lines: Iterator[str] | list[str]) -> list[str]:
     enough to pass the per-line bound while the list itself grows without one.
     """
     pending: list[str] = []
+    overflow = False
     for line, _stamp in ordered_events(lines):
         if COMMAND_START.match(line):
             if len(pending) < MAX_PENDING:
-                pending.append(command_text(line))
+                pending.append(command_text(line, ended=False))
+            else:
+                overflow = True
         elif COMMAND_END.match(line):
-            text = command_text(line)
+            text = command_text(line, ended=True)
             for i in range(len(pending) - 1, -1, -1):
                 if pending[i] == text:
                     del pending[i]
                     break
+    if overflow and not pending:
+        pending.append(PENDING_OVERFLOW)
     return pending
 
 
@@ -1138,9 +1152,7 @@ def companion_path() -> str | None:
 
 def cancel_command(job_id: str, root: str | None) -> str:
     """The cancel the operator would otherwise have to assemble, cwd included."""
-    # 完成した command を後から printable() に通すと quote の中身が別 argv になる。
-    if any(not ch.isprintable() and ch != " " for ch in job_id + (root or "")):
-        return f"control characters in the id or root — cancel {printable(job_id)} from the plugin"
+    fallback = f"cancel {printable(job_id)} from the plugin"
     companion = companion_path()
     if companion is None:
         # 在りかを言えないなら、 動かない command を印字するより言えないと言う。
@@ -1149,9 +1161,21 @@ def cancel_command(job_id: str, root: str | None) -> str:
     node = f"node {shlex.quote(companion)} cancel {shlex.quote(job_id)} --json"
     # 無い dir へ cd する command を出しても実行できない — 出せる形だけを出す。
     # 存在するだけでは足りない — 検索権が無い dir への cd は Permission denied になる。
-    if not (root and os.path.isdir(root) and os.access(root, os.X_OK)):
-        return node
-    return f"(cd {shlex.quote(root)} && {node})"
+    command = (
+        f"(cd {shlex.quote(root)} && {node})"
+        if root and os.path.isdir(root) and os.access(root, os.X_OK)
+        else node
+    )
+    # 完成した command を後から変換すると quote の中身が別 argv になる。
+    if any(not ch.isprintable() and ch != " " for ch in command):
+        return f"control characters in the cancel command — {fallback}"
+    encoding = getattr(sys.stdout, "encoding", None)
+    if encoding is not None:
+        try:
+            command.encode(encoding, "strict")
+        except UnicodeEncodeError:
+            return f"cancel command is not representable on stdout — {fallback}"
+    return command
 
 
 def verdict(
@@ -2362,6 +2386,21 @@ class WatchTest(unittest.TestCase):
         ]
         self.assertEqual([ln[-1] for ln in event_lines(lines)], ["a"])
 
+    def test_event_lines_drop_a_step_below_the_decimal_context_precision(self):
+        lines = [
+            "[2026-08-09T00:00:00.123456789012345678901234567890Z] a",
+            "[2026-08-09T00:00:00.123456789012345678901234567889Z] quoted",
+        ]
+        self.assertEqual([ln[-1] for ln in event_lines(lines)], ["a"])
+
+    def test_epoch_fraction_does_not_depend_on_the_decimal_context(self):
+        from decimal import localcontext
+
+        with localcontext() as context:
+            context.prec = 3
+            value = epoch_fraction(1786233600, ".123456789012345678901234567890")
+        self.assertEqual(value, Decimal("1786233600.123456789012345678901234567890"))
+
     def test_event_lines_drop_no_fraction_after_a_fraction(self):
         lines = [
             "[2026-08-09T00:00:00.5Z] a",
@@ -2397,6 +2436,14 @@ class WatchTest(unittest.TestCase):
             command_text("[2026-08-09T00:00:00.000Z] Command failed: ls -la (exit 2)"),
             "ls -la",
         )
+
+    def test_a_start_ending_in_exit_text_pairs_with_its_end(self):
+        lines = [
+            "[2026-08-09T00:00:00.000Z] Running command: (exit 2)",
+            "[2026-08-09T00:00:01.000Z] Command failed: (exit 2) (exit 2)",
+        ]
+        self.assertEqual(command_text(lines[0]), "(exit 2)")
+        self.assertEqual(pending_commands(lines), [])
 
     def test_all_commands_finished_does_not_suppress(self):
         lines = [
@@ -4677,6 +4724,24 @@ class WatchTest(unittest.TestCase):
         self.assertIn("from the plugin", cancel_command("task\nx", None))
         self.assertNotIn("\n", cancel_command("task\nx", None))
 
+    def test_ascii_stdout_does_not_offer_a_changed_non_ascii_cancel_command(self):
+        """stream 変換で別 argv になる貼付 command は表示しない。"""
+        from unittest import mock
+
+        class AsciiStream:
+            encoding = "ascii"
+
+        root = tempfile.mkdtemp() + "-日本語"
+        os.mkdir(root)
+        self.addCleanup(os.rmdir, root)
+        with (
+            mock.patch.object(sys, "stdout", AsciiStream()),
+            mock.patch(__name__ + ".companion_path", return_value="/tmp/companion.mjs"),
+        ):
+            command = cancel_command("仕事-id", root)
+        self.assertIn("from the plugin", command)
+        self.assertNotIn("node ", command)
+
     def test_a_record_without_an_id_is_corrupt_not_unregistered(self):
         """名前が一致する record が在る以上、 「未登録」 とは言えない。"""
         import io
@@ -6087,6 +6152,21 @@ class WatchTest(unittest.TestCase):
             for i in range(MAX_PENDING + 50)
         ]
         self.assertEqual(len(pending_commands(lines)), MAX_PENDING)
+
+    def test_a_discarded_start_stays_pending_after_the_kept_starts_finish(self):
+        starts = [
+            "[2026-08-09T00:%02d:%02d.000Z] Running command: probe %d"
+            % (i // 60, i % 60, i)
+            for i in range(MAX_PENDING + 1)
+        ]
+        ends = [
+            "[2026-08-09T01:%02d:%02d.000Z] Command completed: probe %d (exit 0)"
+            % (i // 60, i % 60, i)
+            for i in range(MAX_PENDING)
+        ]
+        pending = pending_commands(starts + ends)
+        self.assertEqual(pending, [PENDING_OVERFLOW])
+        self.assertTrue(command_may_be_running(starts + ends))
 
     def test_dangling_symlink_is_not_a_write(self):
         """link 先が無いだけの entry を「今の書き込み」にすると、静穏に到達できなくなる。"""
