@@ -479,3 +479,16 @@ sentinel 1 file 63+/11- のみ (scope 遵守)。wt 内 commit `764696f` → cher
 で main へ。worktree / branch 削除・報告書退避。裁定 48 (数値比較・等値保持) と裁定 49
 (空 `--state-root` 拒否) を `docs/sentinel-rulings.md` へ正本化 (47 → **49 件**)。
 次: r55 = 認定 1 巡目のやり直しを新 HEAD から同型発注 (裁定数と test 数を更新)。
+
+### 2026-08-13 — r55 発注ミス (--write 欠落) → exit 5 → fresh 再発注
+
+r55 の初回起動 (`task-msqkp5zs-ezwah3`) を発注側が `--write` なしで実行した。レビュー本体は
+完走したが read-only sandbox が報告書の apply_patch を拒否し、sentinel が **exit 5
+(成果物なし完了)** で正しく検知 (log 末尾に「報告書は未作成」の自己申告を提示)。r54 の
+レビューは write: True で起動していたことを record で確認 — 手順の退行は発注側にある。
+resume は sandbox を引き継ぐため fresh + `--write` で再発注 (`task-msql6vwz-suqt2l`、
+record 検証: sol / xhigh / write: True / fresh)。sentinel `btgmvwv9c` (estimate 2250s)。
+countermeasure: codex-delegation skill の起動節に「報告書を成果物とする発注は read-only
+レビューでも `--write` で起動し、record 検証で write flag と発注意図の一致まで見る」を追加
+(source 更新済・deploy はユーザー sudo 待ち)。起動時の第一動作も「報告書 file に見出し
+1 行を書いて write を確認する」に変更した。

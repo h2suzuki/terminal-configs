@@ -19,6 +19,7 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
    - **所要見積もりバンドと調査発動しきい値（目安 = 見積もり 2 倍）を発注時に宣言する**: 規模 × build 状態（cold/warm）× テスト範囲から見積もる。見積もりを持たない監視は生存確認にとどまる（2026-07-23 の user 指摘）
    - **報告書の終端トークンを義務付ける**: 「報告書の最終行は `REPORT_COMPLETE` の 1 行で終える」を発注書に明記する。監視の完了判定が「report file の存在」だと書きかけと完成を機械的に区別できない（user 提案 2026-07-29）。「報告書を書いたら即座に最終出力して終了する（報告後の追加調査禁止）」も併記する
 2. **起動**: codex rescue 系 command で発注書 path を渡す。**実装発注は `task --write` 必須（既定 = read-only sandbox）**。発注 prompt の第一動作に write probe file 作成を入れ、起動 1-2 分後に実在を確認する（数十分の空走を早期検知）。既存 thread の続き（fix round 等）は resume、新規作業は fresh。wrapper が「background job 起動」とだけ返すのは正常で、完了報告ではない
+   - **報告書を成果物とする発注は read-only レビューでも `--write` で起動する**: 既定 sandbox では報告書 1 file すら書けず、レビュー本体が完走しても成果物ゼロで終わる（sol xhigh のレビューが分析完了後に apply_patch を拒否され全滅した実例 2026-08-13）。スコープの read-only 性は sandbox でなく発注書の禁止事項で担保し、起動後の record 検証では write flag が発注意図と一致することまで見る
    - background 起動の出力 redirect 先は変数展開に頼らず、既知 writable な絶対 path に固定する
    - 実装委譲では、起動後は companion `status` の workspaceRoot が隔離 worktree を指すことを確認し、以降の probe 確認・静穏 find・`git diff`・成果物確認・受け入れレビュー・commit はこの workspaceRoot を唯一の作業 root とし、全 path をその絶対 path で扱う
 3. **完了 / stall 判定**:

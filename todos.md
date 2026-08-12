@@ -69,13 +69,14 @@ Exit Criteria:
 
 - [x] codex sol medium の実装納品を受け入れ検証 — 負経路 1〜8 + dry-run + gates 全緑 +
   lang lint (`--allow` で内包日本語 prompt 受理)、2026-08-13 実測
-- [ ] opus 5 xhigh レビュー指摘の fix round 完了 (material 2: SessionStart が roster latch を
-  先取りし失敗時 roster が消える / 相対 `--git-common-dir` を cwd 基準で realpath し
-  subdir 起動が exit 1。minor 1: worktree 所属証明が main checkout の subdir を通す — 継承穴)
-- [ ] main へ commit (launcher 本体 / installer copy 行 / managed-settings / hook)
+- [x] opus 5 xhigh レビュー指摘の fix round 完了 — material 2 + minor 1 を全採用、codex 修正
+  + 変異 3/3 検出、発注側で fixture 検証 A/B/C と latch 変異を独立再現 (2026-08-13)
+- [x] main へ commit — `746ef2e` (launcher 本体 / installer copy 行 / managed-settings /
+  extensions hooks 節 / guard hook、6 files 163+)
 - [ ] ユーザーの sudo deploy 後、deploy 先と `files/` の diff -q 一致
-- [ ] 応答書を `/home/h2suzuki/daily-stock-analyzer/drafts/` へ配置 (設計根拠 + 依頼元
-  tools/ 側の削除手順 + 受入条件 3 点の確認手順。依頼元 repo への write は応答書のみ)
+- [x] 応答書を `/home/h2suzuki/daily-stock-analyzer/drafts/` へ配置 —
+  terminal-config-response-codex-launcher.md (設計変更 2 点の根拠 + 削除手順 + 受入 3 点の
+  確認手順。依頼元 repo への write は応答書のみ、2026-08-13)
 
 依頼書 = `/home/h2suzuki/daily-stock-analyzer/drafts/terminal-config-request-codex-launcher.md`。
 Work file: `drafts/launcher-order.md` / `drafts/launcher-report.md` (実装は wt-launcher に滞留中、
