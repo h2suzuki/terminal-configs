@@ -403,3 +403,27 @@ reader からの fd 系 syscall 直呼びは meta-test で構造的に禁止さ�
   oracle 違反 0・37 秒・258 tests OK**。抑制分も一度は検証済みとなった
 - opus 5 xhigh レビューを Workflow (`wf_b7050145-607`) で起動 — false-green 検査
   (期待集合の緩さ・shim の syscall 網羅・fixture 現実性・選定 logic・決定性・scope) の 6 観点
+
+### 2026-08-13 — 柱 3 レビュー結果 (material 5) と oracle 反証可能化の fix round
+
+opus 5 xhigh レビュー (21.1 分・151k tokens・in-memory instrumentation で k→呼び出し元の
+完全 map まで実測) は **material 5 / minor 5** — この柱で最も重要な捕捉:
+
+1. log / peer の 50 組合せは期待集合 = 到達可能集合で**反証不能** (fixture の tree_age 0 固定で
+   verdict が常に None、log 観測が verdict に影響できない)
+2. record の oracle は実質 exit 0 排除のみ — レビューアの実バグ変異 6 件が全部緑。裁定 44 の
+   分岐は once=True では到達不能
+3. 摂動集合に「同 inode で中身が伸びる」(最も普通の interleave) が無く、suite 全体で唯一
+   無被覆の guard (artifact の mtime/size 前後比較) が未被覆のまま
+4. 裁定 18/21 の oracle 条項は 0/115 で dead
+5. appear 摂動の k が観測点に対応しない (23 組合せが同一 lstat の反復)
+
+shim の忠実性はレビューアの二重計測で完全一致 (堅牢)。**発注側の full sweep 400/400 緑は
+反証不能 oracle 上の偽の安心だった** — 「期待値は spec から導く」教訓の harness 規模での
+再演であり、受け入れ変異を実装者 (と発注側) が選ぶ限界も 3 度目の露呈。fix round の受け入れ
+変異 9 件は**レビューアが実証した evasion をそのまま採用** (選定 bias の排除)。
+
+fix round 発注 (`drafts/sentinel-p3-fixes.md`、lint rc=0・初回): 期待集合の裁定からの導出表を
+義務化 / 到達可能集合と一致する期待集合は不合格 / grow 摂動と時間摂動の追加 / 複数周回
+fixture で裁定 44 到達 / appear の N 別実測 / 後ろ窓 k の選定。job `task-msqiarbt-qfmt20`
+(sol / xhigh / write 確認済)。監視 sentinel (estimate 6300s) を background 実行。
