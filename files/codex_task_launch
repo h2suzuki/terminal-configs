@@ -1,0 +1,127 @@
+#!/bin/bash
+# codex_task_launch - validated launcher for codex order-file implementation rounds
+
+set -euo pipefail
+
+PROG=$(basename "$0")
+
+usage()
+{
+    cat <<EOF
+Usage:
+    $PROG [--dry-run] <worktree_dir> <order_basename> {fresh|resume} <effort> [<model>]
+
+Example:
+    $PROG --dry-run wt-rsfix order-rsfix-fix1.md resume high
+    $PROG /abs/path/wt-foo order-foo.md fresh medium gpt-5.6-terra
+
+The order basename must follow the round convention order-<name>.md; the
+probe/report/gates artifact names are derived from <name> automatically.
+EOF
+}
+
+DRY_RUN=0
+ARGS=()
+for ARG in "$@"; do
+    case "$ARG" in
+        --dry-run) DRY_RUN=1;;
+        --*) echo "$PROG: unknown option: $ARG" >&2; exit 2;;
+        *) ARGS+=("$ARG");;
+    esac
+done
+
+if [ "${#ARGS[@]}" -lt 4 ] || [ "${#ARGS[@]}" -gt 5 ]; then
+    usage >&2
+    exit 2
+fi
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
+    echo "$PROG: current directory is not in a git repository" >&2
+    exit 2
+}
+REPO_ROOT=$(realpath -e "$REPO_ROOT") || {
+    echo "$PROG: cannot resolve repository root" >&2
+    exit 2
+}
+REPO_GIT=$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || {
+    echo "$PROG: cannot resolve repository git common directory" >&2
+    exit 2
+}
+REPO_GIT=$(realpath -e "$REPO_GIT") || {
+    echo "$PROG: cannot resolve repository git common directory" >&2
+    exit 2
+}
+MAIN_CHECKOUT=$(dirname "$REPO_GIT")
+
+WT_ARG="${ARGS[0]}"; ORDER="${ARGS[1]}"; MODE="${ARGS[2]}"; EFFORT="${ARGS[3]}"
+MODEL="${ARGS[4]:-gpt-5.6-sol}"
+
+case "$WT_ARG" in
+    /*) WT="$WT_ARG";;
+    *)  WT="$REPO_ROOT/$WT_ARG";;
+esac
+WT=$(realpath -e "$WT") || { echo "$PROG: worktree not found: $WT_ARG" >&2; exit 2; }
+
+if [ "$WT" = "$MAIN_CHECKOUT" ]; then
+    echo "$PROG: refusing to launch a write task in the main checkout" >&2
+    exit 2
+fi
+WT_ROOT=$(git -C "$WT" rev-parse --show-toplevel 2>/dev/null) || { echo "$PROG: not a git worktree: $WT" >&2; exit 2; }
+WT_ROOT=$(realpath -e "$WT_ROOT") || { echo "$PROG: cannot resolve worktree root: $WT" >&2; exit 2; }
+[ "$WT_ROOT" = "$WT" ] || { echo "$PROG: worktree path is not its root: $WT" >&2; exit 2; }
+COMMON_GIT=$(git -C "$WT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || { echo "$PROG: not a git worktree: $WT" >&2; exit 2; }
+COMMON_GIT=$(realpath -e "$COMMON_GIT") || { echo "$PROG: cannot resolve worktree git common directory: $WT" >&2; exit 2; }
+[ "$COMMON_GIT" = "$REPO_GIT" ] || { echo "$PROG: worktree does not belong to $REPO_ROOT" >&2; exit 2; }
+
+case "$ORDER" in
+    order-*.md) :;;
+    *) echo "$PROG: order basename must match order-<name>.md: $ORDER" >&2; exit 2;;
+esac
+if [ -f "$WT/drafts/rebuild/$ORDER" ]; then
+    ORDER_DIR="drafts/rebuild"
+elif [ -f "$WT/drafts/$ORDER" ]; then
+    ORDER_DIR="drafts"
+else
+    echo "$PROG: order file not found: $WT/drafts/rebuild/$ORDER or $WT/drafts/$ORDER" >&2
+    exit 2
+fi
+NAME=${ORDER#order-}; NAME=${NAME%.md}
+
+case "$MODE" in
+    fresh|resume) :;;
+    *) echo "$PROG: mode must be fresh or resume: $MODE" >&2; exit 2;;
+esac
+
+case "$EFFORT" in
+    none|minimal|low|medium|high|xhigh) :;;
+    *) echo "$PROG: invalid effort: $EFFORT" >&2; exit 2;;
+esac
+
+case "$MODEL" in
+    gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna|gpt-5.3-codex-spark) :;;
+    *) echo "$PROG: model not in allowlist: $MODEL" >&2; exit 2;;
+esac
+
+COMPANION=""
+for f in "$HOME"/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs; do
+    [ -f "$f" ] || continue
+    if [ -z "$COMPANION" ] || [ "$f" -nt "$COMPANION" ]; then COMPANION="$f"; fi
+done
+[ -n "$COMPANION" ] || { echo "$PROG: codex-companion.mjs not found under ~/.claude/plugins/cache" >&2; exit 2; }
+
+CONTINUATION=""
+[ "$MODE" = resume ] && CONTINUATION="直前 round と同じ thread の続き。"
+
+PROMPT="このワークスペースの作業指示書 $ORDER_DIR/$ORDER を読み、記載の全項目を実装せよ。${CONTINUATION}最初に $ORDER_DIR/probe-$NAME.txt に 1 行書いて保存する。曖昧な箇所は指示書の記述を優先し、逸脱する場合は理由を報告書に明記する。完了時は指示書記載の検証コマンド一式を実行してログを $ORDER_DIR/gates-$NAME.log に保存し、報告書 $ORDER_DIR/report-$NAME.md を書いて最終行を REPORT_COMPLETE とする。指示書の範囲外の変更は行わない。"
+
+COMMAND=(node "$COMPANION" task "$PROMPT" --cwd "$WT" --write)
+[ "$MODE" = resume ] && COMMAND+=(--resume-last)
+COMMAND+=(--model "$MODEL" --effort "$EFFORT" --background)
+
+if [ "$DRY_RUN" -eq 1 ]; then
+    printf '%q ' "${COMMAND[@]:0:${#COMMAND[@]}-1}"
+    printf '%q\n' "${COMMAND[-1]}"
+    exit 0
+fi
+
+exec "${COMMAND[@]}"

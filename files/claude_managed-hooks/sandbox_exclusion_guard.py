@@ -2,6 +2,7 @@
 """
 Sandbox excluded-command hook for Bash.
 
+SessionStart proactively injects the live excludedCommands roster once per session.
 PreToolUse denies path-prefixed and sudo forms and warns on other wrappers, all
 of which miss the match and fall back into the sandbox. PostToolUseFailure
 answers sandbox-looking failures with the live excludedCommands roster, so a
@@ -207,9 +208,14 @@ def _run(payload: object, patterns: list[str] | None = None) -> int:
     if not isinstance(payload, dict):
         return 0
     patterns = load_patterns() if patterns is None else patterns
+    event = payload.get("hook_event_name")
+    if event == "SessionStart":
+        if not claim_once(payload, "session-start-roster"):
+            return 0
+        _emit("SessionStart", roster_text(patterns))
+        return 0
     if payload.get("tool_name") != "Bash":
         return 0
-    event = payload.get("hook_event_name")
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         return 0
@@ -429,9 +435,32 @@ class GateTest(unittest.TestCase):
         self.assertNotEqual(stdout, "")
         self.assertEqual(stderr, "")
 
-    def test_session_start_is_left_alone(self):
+    def test_session_start_emits_the_roster_once(self):
         payload = {"hook_event_name": "SessionStart", "session_id": "start"}
+        result, stdout, stderr = self._emit_for(payload)
+        self.assertEqual((result, stderr), (0, ""))
+        output = json.loads(stdout)["hookSpecificOutput"]
+        self.assertEqual(output["hookEventName"], "SessionStart")
+        self.assertIn("sandbox.excludedCommands", output["additionalContext"])
+        self.assertIn("`git *`", output["additionalContext"])
         self.assertEqual(self._emit_for(payload), (0, "", ""))
+
+    def test_failure_still_gets_the_roster_after_session_start(self):
+        session_id = "start-then-failure"
+        start = {"hook_event_name": "SessionStart", "session_id": session_id}
+        failure = {
+            "hook_event_name": "PostToolUseFailure",
+            "tool_name": "Bash",
+            "tool_input": {"command": "curl https://example.com"},
+            "tool_response": {"stderr": "curl: Connection timed out"},
+            "session_id": session_id,
+        }
+        self.assertNotEqual(self._emit_for(start)[1], "")
+        result, stdout, stderr = self._emit_for(failure)
+        self.assertEqual((result, stderr), (0, ""))
+        context = json.loads(stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("sandbox のせいと", context)
+        self.assertIn("`git *`", context)
 
     def test_failure_rejects_the_credential_store_inference(self):
         secret = os.path.join(os.path.expanduser("~"), ".config", "gh", "hosts.yml")
