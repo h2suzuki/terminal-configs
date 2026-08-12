@@ -60,33 +60,28 @@ Work file: `last-session-handoff.md` の同名 section (再開手順)、
 `drafts/sentinel-review-r{17..53}.md` (発注書)、`drafts/sentinel-review-r{17..30,52,53}-report.md` (報告書)
 
 
-### daily-stock-analyzer 依頼: codex launcher の本 repo 移管
+### daily-stock-analyzer 依頼: codex 起動経路の裁定と roster 配信
 
-Goal: 隣 repo からの依頼 3 点 (launcher の移管・汎用化 / excludedCommands 登録 /
-roster の SessionStart 配信) を本 repo に land し、deploy と応答書の返送まで完了する。
+Goal: 隣 repo からの依頼 3 点を裁定どおりに決着させる — launcher 方式は不採用 (既存
+exclusion + 短文 prompt / prompt-file 慣行へ一本化)、roster の SessionStart 配信は land・
+deploy し、応答書を返送する。
 
 Exit Criteria:
 
-- [x] codex sol medium の実装納品を受け入れ検証 — 負経路 1〜8 + dry-run + gates 全緑 +
-  lang lint (`--allow` で内包日本語 prompt 受理)、2026-08-13 実測
-- [x] opus 5 xhigh レビュー指摘の fix round 完了 — material 2 + minor 1 を全採用、codex 修正
-  + 変異 3/3 検出、発注側で fixture 検証 A/B/C と latch 変異を独立再現 (2026-08-13)
-- [x] main へ commit — `746ef2e` (launcher 本体 / installer copy 行 / managed-settings /
-  extensions hooks 節 / guard hook、6 files 163+)
-- [ ] launcher の採否をユーザーと合意する — 2026-08-13 ユーザー懸念 3 点: plugin / skill と
-  の関係 (companion glob・allowlist・prompt 雛形の複製)、`node *codex-companion.mjs*`
-  exclusion との重複、`_launch` の命名不統一。採用 / 縮小 / revert の選択肢を提示済み
-- [ ] 合意の結果に応じて deploy 完了 — 2026-08-13 時点で部分 deploy 済み (sentinel /
-  extensions.json / guard hook / codex-delegation skill = diff -q IDENTICAL。
-  managed-settings.json は `codex_task_launch *` 行のみ除いた形で deploy、launcher 本体は
-  未 deploy = 合意待ち)
-- [x] 応答書を `/home/h2suzuki/daily-stock-analyzer/drafts/` へ配置 —
-  terminal-config-response-codex-launcher.md (設計変更 2 点の根拠 + 削除手順 + 受入 3 点の
-  確認手順。依頼元 repo への write は応答書のみ、2026-08-13)
+- [x] launcher の採否合意 — 2026-08-13 ユーザー裁定「不採用 + revert」。理由 3 点 (plugin
+  との版結合 / exclusion 重複 / 命名不統一) は応答書と commit message に記録
+- [x] revert 完了 — `9ee961b` (launcher 本体・installer copy 行 2・exclusion 1 行を撤去。
+  roster SessionStart 配信と guard latch 修正は残置)。移管実装の受け入れ・レビュー・fix
+  round の記録は `746ef2e` と drafts/launcher-*.md に履歴として残る
+- [x] 代替慣行の成文化 — codex-delegation skill 起動節に「companion 直接起動 + 長い日本語
+  prompt の直書き禁止 (短文または prompt-file)」を追記 (`9ee961b` 同梱)
+- [x] 応答書の差し替え — terminal-config-response-codex-launcher.md を不採用裁定版に全面
+  更新 (受入 3 点の読み替え + 依頼元 tools/ 削除手順、2026-08-13)
+- [ ] 残 deploy 2 件の sudo 実行と diff -q 一致 — `files/claude_managed-settings.json`
+  (permissions deny 追加分) / `files/claude_managed-skills/codex-delegation/SKILL.md`
+  (慣行追記分)。roster 系 (guard hook / extensions.json) は deploy 済 IDENTICAL
 
 依頼書 = `/home/h2suzuki/daily-stock-analyzer/drafts/terminal-config-request-codex-launcher.md`。
-Work file: `drafts/launcher-order.md` / `drafts/launcher-report.md` (実装は wt-launcher に滞留中、
-fix round 後に land)。
 
 ## Medium
 
