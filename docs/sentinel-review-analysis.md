@@ -777,6 +777,16 @@ codex sol xhigh で 2 巡連続」。
 - 未疑前提枠 (regular file の st_size semantics・stdout の寿命・`.git` 除外の正本化漏れ)。
   閉鎖済みクラスからの再指摘ゼロは 15 巡連続
 - fix round: `drafts/sentinel-r68-fixes.md`。認定 counter 0 のまま
+- fix 取り込み: commit `e7a9234`。(1) advertised size 消費後の 1 byte probe (log = onerror /
+  artifact = `advertised-size` の UNSTABLE・truncated view は skip)、(2) `finish()` の EPIPE
+  保護 (EPIPE のみ捕捉・他 OSError は re-raise・stdout を devnull 差し替えで shutdown flush
+  も防護・選択済み code を返却)、(3) `.git` test docstring の裁定 57 引用化 (挙動不変)。
+  受け入れ: gates 全緑 (selftest **311** / 外部 12 / ruff / ty / lang lint)。TOCTOU counts の
+  変化 (log 8・log-command 10・artifact 13・peer 18) は probe read の追加に正確に対応。
+  独立変異 2/2 検出 (probe 除去は専用 test + TOCTOU oracle の両輪)、消滅確認 3/3 (/proc が
+  whole=False・artifact None・finish rc=0)。裁定 57 (.git 設計除外) を正本化し gate pin を
+  57 へ bump (`7a9e73e`)、裁定 16 (advertised size ≠ 全量)・21 (funnel の EPIPE) を 68 巡
+  拡張で更新
 
 ## 復元元
 

@@ -961,3 +961,15 @@ sentinel `b76609kwe` (estimate 2850s)。認定 counter 0 のまま。
 なれるか見る」。従来の「2 巡連続ゼロ」を本 goal では非連続の計 2 回に緩和 — r60 が 0 件
 (1/2 済) のため、残り 1 回の指摘ゼロ巡で goal 達成。todos.md の Exit 条件 (2 巡連続) の
 扱いは goal 達成後にユーザーと確認する。
+
+### 2026-08-13 — r68 fix round 完了・main 取り込み (selftest 311)・裁定 57・r69 発注へ
+
+fix round は sentinel `b76609kwe` exit 0。受け入れ: (1) advertised size 消費後の 1 byte
+probe (log onerror / artifact `advertised-size` UNSTABLE)、(2) `finish()` の EPIPE 保護
+(EPIPE のみ捕捉・stdout devnull 差し替え・選択済み code 返却)、(3) `.git` docstring の裁定
+57 引用化。gates 全緑を発注側再実行 (selftest **311** / 外部 12 / ruff / ty / lang lint)。
+TOCTOU counts の変化 (log 8 / log-command 10 / artifact 13 / peer 18) は probe read 追加に
+正確に対応。独立変異 2/2 検出 (probe 除去は専用 test + TOCTOU oracle の両輪)、消滅確認 3/3
+(/proc whole=False・artifact None・finish rc=0)。wt 内 commit `07db445` → cherry-pick
+**`e7a9234`**。裁定 57 (.git 設計除外) を正本化し gate pin 57 (`7a9e73e`)、裁定 16 / 21 を
+68 巡拡張で更新。報告書退避・worktree / branch 削除。
