@@ -993,3 +993,11 @@ gate pin 58 (`13f6e44`)。(2) **採用** — EPIPE 復旧の `open(devnull)` が
 二次例外で契約 code を失う (repro 実測)。r65 fd class × r68 EPIPE fix の縫い目。閉鎖済み
 クラスからの再指摘ゼロは 16 巡連続。報告書退避・worktree / branch 削除。認定 counter 0 の
 まま (goal 判定は次巡へ)。
+
+### 2026-08-13 — r69 fix round 発注
+
+fix round: `drafts/sentinel-r69-fixes.md` (lint rc=0) — EPIPE 後の sink を新規 fd 不要の
+no-op stream へ (指摘 1 は裁定 58 で code 変更禁止を明記)。worktree `wt-r69fix` は台帳
+commit `d3be684` の後に分岐 (手順遵守・row 58 を分岐直後に grep 確認)。job
+`task-msr4nkhl-7b8n7i` (record 検証: sol / medium / write / fresh)。sentinel `bkf3h8sso`
+(estimate 1950s)。認定 counter 0 のまま。
