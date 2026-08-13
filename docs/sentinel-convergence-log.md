@@ -867,3 +867,12 @@ PermissionError 送出 + mock で素通りを実測)、(2) 正の小数 duration
 切り捨てで「0.5s → 0s」の誤 evidence (exit 7 headline で実測・裁定 32 違反)。2 件とも
 未疑前提枠 (handler 内 syscall の独立失敗・duration の整数前提)、閉鎖済みクラスからの
 再指摘ゼロは 13 巡連続。報告書退避・worktree / branch 削除。認定 counter 0 のまま。
+
+### 2026-08-13 — r66 fix round 発注
+
+fix round: `drafts/sentinel-r66-fixes.md` (lint rc=0) — (1) handler 内再確認を内側
+try/except で保護し complete=False へ、(2) duration 表示を helper 1 箇所に集約し「正の値を
+0 と表示しない」を要件化 (整数は従来形・契約値は同一性保持・測定値の精度は helper で一元)。
+worktree `wt-r66fix` は台帳 commit `5f26d2d` の後に分岐 (手順遵守)。job
+`task-msr0jx45-pkfhkl` (record 検証: sol / medium / write / fresh)。sentinel `btec9se4b`
+(estimate 2550s)。認定 counter 0 のまま。
