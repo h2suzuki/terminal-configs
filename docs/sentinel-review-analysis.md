@@ -760,6 +760,24 @@ codex sol xhigh で 2 巡連続」。
   再読 code は grep 0。裁定 20 (hold 再読の規律)・41 (ctime 帰属) を 67 巡拡張で更新
   (gate green)
 
+### r68 (認定 1 巡目・15 度目) — material 2 採用 + 仕様裁定 1、認定不成立
+
+- **指摘 1 (部分採用・仕様維持)**: `.git` 全除外に裁定の根拠がなく test が実装を oracle 化 —
+  正本に `.git` 言及ゼロを確認 (grep)。司令塔裁定: 挙動は意図的仕様として維持し裁定 57 へ
+  正本化。根拠 = worktree の `.git` は gitdir file で git 状態は tree 外 / full-checkout では
+  git 背景活動が completion livelock を生む / 完了の一次権威は成果物 + record (裁定 4/19)。
+  code 変更は test docstring の裁定引用化のみ
+- **指摘 2 (採用)**: S_ISREG かつ `st_size == 0` の pseudo-regular file を「空の全量 view」と
+  誤認 — advertised size を全量性の根拠にし EOF probe がない (repro: /proc/self/status
+  1503B content で whole=True・0 行・artifact 空扱いを実測)。pathological fs 前提の既採用
+  クラス
+- **指摘 3 (採用)**: `finish()` の出力 funnel が無保護 — stdout の pipe が閉じると
+  BrokenPipeError が素通し、選択済み verdict code でなく契約外の traceback 終了 (repro:
+  2 write 目 EPIPE stub で実測)。`... | head` は現実的な呼び方
+- 未疑前提枠 (regular file の st_size semantics・stdout の寿命・`.git` 除外の正本化漏れ)。
+  閉鎖済みクラスからの再指摘ゼロは 15 巡連続
+- fix round: `drafts/sentinel-r68-fixes.md`。認定 counter 0 のまま
+
 ## 復元元
 
 repo の実 path は `/home/scorer/terminal-configs` である (user 名変更前の `/home/h2suzuki/...` は現存しない

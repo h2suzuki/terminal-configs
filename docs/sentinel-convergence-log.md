@@ -932,3 +932,15 @@ anchor 一意 assert・lint rc=0)。material 33 件・selftest 309 を反映し�
 前提群の再なぞり回避を明記。worktree `wt-r68` は docs commit `4bad248` の後に分岐 (手順遵守・
 裁定拡張 2 箇所を分岐直後に grep 確認)。job `task-msr2bydd-k0bzte` (record 検証: sol /
 xhigh / write / fresh)。sentinel `b7abjv005` (estimate 2250s)。
+
+### 2026-08-13 — r68 受領: material 2 採用 + 仕様裁定 1 → fix round 発注へ
+
+r68 (`task-msr2bydd-k0bzte`・sol xhigh・write) は sentinel `b7abjv005` exit 0。指摘 3 件を
+裁定: (1) **部分採用 (仕様維持)** — `.git` 全除外の正本欠落は事実 (正本に言及ゼロを grep
+確認) だが、挙動は司令塔裁定で仕様維持し裁定 57 へ正本化する。worktree の `.git` は gitdir
+file で git 状態は tree 外・full-checkout では git 背景活動が completion livelock を生む・
+完了の一次権威は成果物 + record。code は test docstring の裁定引用化のみ。(2) **採用** —
+S_ISREG + size 0 の pseudo-regular を空の全量 view と誤認 (/proc/self/status 1503B で
+whole=True を実測)。(3) **採用** — `finish()` の出力が無保護で BrokenPipeError が契約外
+traceback に (EPIPE stub で実測)。閉鎖済みクラスからの再指摘ゼロは 15 巡連続。報告書退避・
+worktree / branch 削除。認定 counter 0 のまま。
