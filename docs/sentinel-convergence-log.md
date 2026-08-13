@@ -1286,3 +1286,11 @@ shutdown flush 防護・外部側は AST self-check)。gates 全緑を発注側�
 cross-root alias は exit 11・`--selftest | head -c 200` の左側 exit 0。wt 内 commit
 `e26791f` → cherry-pick **`f2f5fe9`**。裁定 23 / 21 を 75 巡拡張で更新 (gate green)。
 報告書退避・worktree / branch 削除。
+
+### 2026-08-13 — r76 発注 (新条件 2 巡目)
+
+r76 を発注: `drafts/sentinel-review-r76.md` (r75 から python 置換で生成・lint rc=0)。
+material 47 件・selftest 326・外部 13・charter v3 を反映。worktree `wt-r76` は docs commit
+`441bcf9` の後に分岐 (手順遵守・charter v3 を分岐直後に確認)。job `task-msretefy-hcufa0`
+(record 検証: sol / xhigh / write / fresh)。sentinel `b5b1927n0` (estimate 2250s・stall
+1500s)。U0 ゼロなら収束 2/2 達成。
