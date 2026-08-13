@@ -924,3 +924,11 @@ fix round は sentinel `bcfol5gzb` exit 0。受け入れ: (1) 通常 pin は検�
 再読の最小再導入は専用 test + TOCTOU enumerator の両 oracle が発火)、消滅確認 = 未来 mtime
 ready=False・旧再読 code grep 0。wt 内 commit `4e42ef6` → cherry-pick **`39dcf3a`**。裁定
 20 / 41 の本文・担保を 67 巡拡張で更新 (gate green)。報告書退避・worktree / branch 削除。
+
+### 2026-08-13 — r68 発注
+
+r68 (認定 1 巡目) を発注: `drafts/sentinel-review-r68.md` (r67 から python 置換で生成・
+anchor 一意 assert・lint rc=0)。material 33 件・selftest 309 を反映し、60〜67 巡が洗った
+前提群の再なぞり回避を明記。worktree `wt-r68` は docs commit `4bad248` の後に分岐 (手順遵守・
+裁定拡張 2 箇所を分岐直後に grep 確認)。job `task-msr2bydd-k0bzte` (record 検証: sol /
+xhigh / write / fresh)。sentinel `b7abjv005` (estimate 2250s)。
