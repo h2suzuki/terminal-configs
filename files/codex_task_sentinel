@@ -252,6 +252,9 @@ def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], boo
         except FileNotFoundError:
             # 未作成の root は「無い」で正しいが、 走査後に現れたなら見落としである。
             try:
+                if Observation.unreachable(root):
+                    complete = False
+                    continue
                 appeared = link_identity(root)
             except OSError:
                 complete = False
@@ -788,7 +791,7 @@ def finish(
             print(line)
         sys.stdout.flush()
     except OSError as exc:
-        if exc.errno != errno.EPIPE:
+        if exc.errno not in {errno.EPIPE, errno.EAGAIN, errno.EWOULDBLOCK}:
             raise
         Observation.discard_stdout()
     return code
@@ -1714,6 +1717,19 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 after = Observation.descriptor_stat(fallback)
             except (FileNotFoundError, NotADirectoryError):
                 Observation.release(fallback_hold)
+                if not record_gone(found[0][0]):
+                    return finish(
+                        deadline,
+                        EXIT_CORRUPT,
+                        (
+                            "corrupt: the state record is present but unreadable — the job's "
+                            "outcome cannot be read from it, so do not treat this as a stall",
+                            f"  job    : record={printable(found[0][0])}",
+                        ),
+                        (
+                            f"timeout: the record could not be held within {duration_seconds(args.timeout_seconds)}",
+                        ),
+                    )
                 return finish(
                     deadline,
                     EXIT_VANISHED,
@@ -4242,7 +4258,7 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(len(opens), 4)
 
     def test_a_record_that_could_not_be_pinned_is_not_replaced(self):
-        """pin に失敗した後で同じ名前が読めても、 それは同じ record ではない。"""
+        """pin に失敗して entry が残るなら、 消失でなく読取不能である。"""
         import io
         from contextlib import redirect_stdout
         from unittest import mock
@@ -4270,7 +4286,7 @@ class WatchTest(unittest.TestCase):
             mock.patch(__name__ + ".record_view", no_hold),
             mock.patch(__name__ + ".open_regular", flaky),
         ):
-            self.assertEqual(watch(args), EXIT_VANISHED)
+            self.assertEqual(watch(args), EXIT_CORRUPT)
         self.assertEqual(len(opens), 4)  # pin の呼び出しで落ちた
 
     def test_a_record_readable_again_after_a_failed_pin_is_not_adopted(self):
@@ -8496,6 +8512,56 @@ class WatchTest(WatchTest):
                 side_effect=OSError(errno.EMFILE, "too many open files"),
             ),
         ):
+            code = finish(float("inf"), EXIT_ALIVE, ("terminal",), ())
+        self.assertEqual(code, EXIT_ALIVE)
+
+
+class WatchTest(WatchTest):
+    """Regressions fixed in the 70th review round."""
+
+    def test_a_dangling_record_at_fallback_pin_is_corrupt(self):
+        """A stable dangling record is present but unreadable, not vanished."""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, log = self._state("ws", "task-x", "running")
+        os.unlink(record)
+        os.symlink(record + ".missing", record)
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".find_jobs", return_value=([(record, log)], True)),
+        ):
+            code = watch(self._watch_args(root, "task-x", once=True))
+        self.assertEqual(code, EXIT_CORRUPT)
+
+    def test_a_root_below_a_dangling_ancestor_is_not_an_empty_scan(self):
+        """An unreachable root cannot establish that a job is unregistered."""
+        import io
+        from contextlib import redirect_stdout
+
+        base = tempfile.mkdtemp()
+        ancestor = os.path.join(base, "state-link")
+        os.symlink(os.path.join(base, "missing"), ancestor)
+        root = os.path.join(ancestor, "state")
+        shown = io.StringIO()
+        with redirect_stdout(shown):
+            code = watch(self._watch_args(root, "task-x", once=True))
+        self.assertEqual(code, EXIT_UNVERIFIABLE)
+        self.assertNotIn("not registered", shown.getvalue())
+
+    def test_finish_keeps_the_selected_code_when_stdout_would_block(self):
+        """EAGAIN switches stdout to the sink without replacing the verdict."""
+        from unittest import mock
+
+        class BlockingStream:
+            def write(self, _text):
+                raise BlockingIOError(errno.EAGAIN, "would block")
+
+            def flush(self):
+                pass
+
+        with mock.patch.object(sys, "stdout", BlockingStream()):
             code = finish(float("inf"), EXIT_ALIVE, ("terminal",), ())
         self.assertEqual(code, EXIT_ALIVE)
 
