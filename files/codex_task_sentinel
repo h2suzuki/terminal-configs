@@ -51,7 +51,6 @@ import calendar
 import codecs
 import collections
 import contextlib
-import errno
 import glob
 import hashlib
 import itertools
@@ -1158,7 +1157,11 @@ def artifact_view(
         return False, observed.stamp
     assert observed.descriptor is not None
     floor = since if isinstance(since, Decimal) else Decimal.from_float(since)
-    if Decimal(observed.descriptor.st_mtime_ns) / Decimal(1_000_000_000) < floor:
+    nanoseconds = Decimal(1_000_000_000)
+    if (
+        Decimal(observed.descriptor.st_mtime_ns) / nanoseconds < floor
+        or Decimal(observed.descriptor.st_ctime_ns) / nanoseconds < floor
+    ):
         return False, observed.stamp  # a leftover from an earlier run
     if not token:
         return observed.seen_content, observed.stamp
@@ -1668,7 +1671,80 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                         f"  searched: {printable(', '.join(roots))}",
                     ),
                 )
-            break
+            if pin_hold:
+                break
+            # test stub 等で解決時の hold が無い時だけ開き直す。 読取前後の
+            # descriptor 全指紋が動いた view は corrupt でなく未解決へ戻す。
+            fallback_hold: list = []
+            try:
+                fallback = open_regular(found[0][0])
+                fallback_hold.append(fallback)
+                before = Observation.descriptor_stat(fallback)
+                raw = Observation.read_held(fallback, MAX_RECORD_BYTES + 1)
+                after = Observation.descriptor_stat(fallback)
+            except (FileNotFoundError, NotADirectoryError):
+                Observation.release(fallback_hold)
+                return finish(
+                    deadline,
+                    EXIT_VANISHED,
+                    (
+                        "vanished: the state record disappeared after registration — "
+                        "the plugin prunes old jobs, so this job's outcome is unknowable here",
+                        f"  job    : record={printable(found[0][0])}",
+                    ),
+                    (
+                        f"timeout: the record could not be held within {duration_seconds(args.timeout_seconds)}",
+                    ),
+                )
+            except OSError:
+                Observation.release(fallback_hold)
+                return finish(
+                    deadline,
+                    EXIT_CORRUPT,
+                    (
+                        "corrupt: the state record is present but unreadable — the job's "
+                        "outcome cannot be read from it, so do not treat this as a stall",
+                        f"  job    : record={printable(found[0][0])}",
+                    ),
+                    (
+                        f"timeout: the record could not be held within {duration_seconds(args.timeout_seconds)}",
+                    ),
+                )
+            before_fingerprint = (
+                before.st_dev,
+                before.st_ino,
+                before.st_mtime_ns,
+                before.st_ctime_ns,
+                before.st_size,
+            )
+            after_fingerprint = (
+                after.st_dev,
+                after.st_ino,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+                after.st_size,
+            )
+            if before_fingerprint != after_fingerprint:
+                Observation.release(fallback_hold)
+                complete = False
+            elif _parse_record(raw, args.job_id) is None:
+                Observation.release(fallback_hold)
+                return finish(
+                    deadline,
+                    EXIT_CORRUPT,
+                    (
+                        "corrupt: the state record is present but unreadable — the job's "
+                        "outcome cannot be read from it, so do not treat this as a stall",
+                        f"  job    : record={printable(found[0][0])}",
+                    ),
+                    (
+                        f"timeout: registered but not observed within {duration_seconds(args.timeout_seconds)}",
+                        f"  job    : {printable(args.job_id)} record={printable(found[0][0])}",
+                    ),
+                )
+            else:
+                pin_hold = [(found[0], fallback_hold)]
+                break
         # 走査しきれていない 1 件は「唯一」の証明にならないが、 どれを見たかは事実。
         # bool に畳むと、 後から別 path の同名 record へ黙ってすり替わる。
         if not remember_pairs(seen_pairs, iter(found)):
@@ -1770,8 +1846,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             (),
         )
     jobs_dir = os.path.dirname(record_path)
-    # 検証と pin は同じ descriptor で行う — 別に開き直すと、 その間の差し替えを
-    # 検出できないまま別 record を掴む。
+    # 検証と pin は同じ descriptor で行う — 登録解決で検証した hold を再読しない。
     if resolved_unknown and not record_gone(record_path):
         # 検証できなかった候補を、 後から読めた別 record で置き換えない。
         # 消えている場合は別 — それは exit 10 が答えなので下の pin へ委ねる。
@@ -1790,14 +1865,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         )
     pinned = None
     try:
-        # 登録解決で検証した descriptor をそのまま使う。 読み手を差し替えた呼び手
-        # (test の stub 等) では手元に無いので、 その時だけ開き直して自己検証する。
-        pinned = pin_hold[0][1][0] if pin_hold else open_regular(record_path)
+        pinned = pin_hold[0][1][0]
         pinned_stat = Observation.descriptor_stat(pinned)
-        if _parse_record(
-            Observation.read_held(pinned, MAX_RECORD_BYTES + 1), args.job_id
-        ) is None:
-            raise OSError(errno.EIO, "the held view does not carry this job")
         record_inode = (pinned_stat.st_dev, pinned_stat.st_ino)
     except (FileNotFoundError, NotADirectoryError):
         # 掴めなかった理由を identity に化けさせない — 同じ名前が後で読めても、
@@ -7279,25 +7348,25 @@ class WatchTest(WatchTest):
             return {EXIT_TIMEOUT}
         expected = {
             "record": {
-                "unlink": {1: 6, 6: 7, 17: 10, 26: 10, 40: 10, 45: 10},
+                "unlink": {1: 6, 6: 7, 16: 10, 25: 10, 39: 10, 44: 10},
                 "replace-different": {
                     3: 14,
                     6: 14,
-                    17: 14,
-                    28: 11,
-                    40: 14,
-                    42: 14,
+                    16: 14,
+                    27: 11,
+                    39: 14,
+                    41: 14,
                 },
                 "replace-same": {
                     3: 14,
                     6: 14,
-                    17: 14,
-                    28: 11,
-                    40: 14,
-                    42: 14,
+                    16: 14,
+                    27: 11,
+                    39: 14,
+                    41: 14,
                 },
-                "unreadable": {3: 13, 17: 13, 28: 11, 41: 11},
-                "grow": {6: 14, 16: 13, 43: 11},
+                "unreadable": {3: 13, 16: 13, 27: 11, 40: 11},
+                "grow": {6: 14, 42: 11},
                 "appear": {1: 14, 12: 7},
             },
             "record-pin": {
@@ -7393,12 +7462,12 @@ class WatchTest(WatchTest):
             self.assertGreater(result["calls"], 0, scenario)
         selected = {
             "record": {
-                "unlink": (1, 6, 17, 26, 40, 45),
-                "replace-different": (3, 6, 17, 28, 40, 42),
-                "replace-same": (3, 6, 17, 28, 40, 42),
-                "unreadable": (3, 17, 28, 41),
-                "grow": (6, 16, 43),
-                "late": (1, 17, 28, 45),
+                "unlink": (1, 6, 16, 25, 39, 44),
+                "replace-different": (3, 6, 16, 27, 39, 41),
+                "replace-same": (3, 6, 16, 27, 39, 41),
+                "unreadable": (3, 16, 27, 40),
+                "grow": (6, 42),
+                "late": (1, 16, 27, 44),
             },
             "record-pin": {
                 "unlink": (15,),
@@ -7488,9 +7557,9 @@ class WatchTest(WatchTest):
         self.assertEqual(
             counts,
             {
-                "record": 45,
-                "record-pin": 47,
-                "record-round": 61,
+                "record": 44,
+                "record-pin": 49,
+                "record-round": 60,
                 "log": 7,
                 "log-command": 9,
                 "artifact": 12,
@@ -7502,7 +7571,7 @@ class WatchTest(WatchTest):
             {"record": 12, "log": 5, "artifact": 4, "peer": 2},
         )
         deterministic = (
-            ("record", "replace-same", 40),
+            ("record", "replace-same", 39),
             ("record-pin", "unlink", 15),
             ("record-round", "replace-same", 17),
             ("log", "replace-same", 6),
@@ -8232,6 +8301,95 @@ class SourceInvariantTest(unittest.TestCase):
             if isinstance(node, ast.Call) and not patch_target_exists(node)
         ]
         self.assertFalse(bad, f"unresolved patch targets at lines {bad}")
+
+
+class WatchTest(WatchTest):
+    """Regressions fixed in the 67th review round."""
+
+    def test_a_validated_pin_is_not_reread_during_a_truncate_window(self):
+        """A transient truncate after resolution is not stable corrupt evidence."""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-x", "running")
+        with open(record, "rb") as stream:
+            original = stream.read()
+        real_read = Observation.read_held
+        rereads = []
+
+        def truncate_during_reread(handle, limit):
+            rereads.append(1)
+            with open(record, "wb"):
+                pass
+            raw = real_read(handle, limit)
+            with open(record, "wb") as stream:
+                stream.write(original)
+            return raw
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(
+                __name__ + ".Observation.read_held",
+                side_effect=truncate_during_reread,
+            ),
+        ):
+            code = watch(self._watch_args(root, "task-x", once=True))
+        self.assertNotEqual(code, EXIT_CORRUPT)
+        self.assertEqual(rereads, [], "the validated held descriptor was reread")
+
+    def test_a_stable_corrupt_fallback_record_is_still_corrupt(self):
+        """Only a stable fallback snapshot licenses the corrupt verdict."""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-x", "running")
+        real_carrying = carrying_records
+
+        def carrying_without_hold(found, job_id, hold=None):
+            return real_carrying(found, job_id)
+
+        with open(record, "wb") as stream:
+            stream.write(b"{broken")
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".carrying_records", carrying_without_hold),
+        ):
+            self.assertEqual(
+                watch(self._watch_args(root, "task-x", once=True)),
+                EXIT_CORRUPT,
+            )
+
+    def test_a_future_mtime_from_before_the_run_is_not_ready(self):
+        """A pre-run file cannot claim freshness through a forged future mtime."""
+        path = os.path.join(tempfile.mkdtemp(), "report.md")
+        with open(path, "w", encoding="utf-8") as stream:
+            stream.write("body\nREPORT_COMPLETE\n")
+        future_ns = time.time_ns() + 86_400_000_000_000
+        before = os.stat(path)
+        os.utime(path, ns=(before.st_atime_ns, future_ns))
+        planted = os.stat(path)
+        started = Decimal(planted.st_ctime_ns + 1) / Decimal(1_000_000_000)
+        self.assertGreaterEqual(
+            Decimal(planted.st_mtime_ns) / Decimal(1_000_000_000),
+            started,
+        )
+        self.assertLess(
+            Decimal(planted.st_ctime_ns) / Decimal(1_000_000_000),
+            started,
+        )
+        self.assertFalse(artifact_ready(path, "REPORT_COMPLETE", started))
+
+    def test_an_artifact_written_during_the_run_is_ready(self):
+        """A completed artifact remains acceptable at its exact write ctime."""
+        path = os.path.join(tempfile.mkdtemp(), "report.md")
+        with open(path, "w", encoding="utf-8") as stream:
+            stream.write("body\nREPORT_COMPLETE\n")
+        written = os.stat(path)
+        started = Decimal(written.st_ctime_ns) / Decimal(1_000_000_000)
+        self.assertGreaterEqual(written.st_mtime_ns, written.st_ctime_ns)
+        self.assertTrue(artifact_ready(path, "REPORT_COMPLETE", started))
 
 
 class WatchTest(WatchTest, SourceInvariantTest):
