@@ -1066,3 +1066,12 @@ r71 (`task-msr6gt53-sailmn`・sol xhigh・write) は sentinel `bgdh98nqs` exit 0
 `Observation.release()` の close が無保護で OSError 素通し + 残り handle の解放中断 (実測)。
 未疑前提枠 (root 文字列 = identity の同一視・close の成功保証)、閉鎖済みクラスからの
 再指摘ゼロは 18 巡連続。報告書退避・worktree / branch 削除。認定 counter 0 のまま。
+
+### 2026-08-13 — r71 fix round 発注
+
+fix round: `drafts/sentinel-r71-fixes.md` (lint rc=0) — (1) 走査 root の `(st_dev, st_ino)`
+重複排除 (stat 不能 root は complete=False・hardlink record は畳まない)、(2)
+`Observation.release()` の per-handle close 抑止 + 全解放継続 (再試行なし)。worktree
+`wt-r71fix` は台帳 commit `afaeb9e` の後に分岐 (手順遵守)。job `task-msr75u7i-3ofo98`
+(record 検証: sol / medium / write / fresh)。sentinel `bggi1yq4f` (estimate 2550s・stall
+1500s)。認定 counter 0 のまま。
