@@ -1162,3 +1162,13 @@ terminal output は OSError 全てを sink 切替に (errno 列挙廃止)。work
 台帳 commit `de77dfd` の後に分岐 (手順遵守)。job `task-msra5qxd-19g6rf` (record 検証: sol /
 medium / write / fresh)。sentinel `bhe87tvpz` (estimate 2550s・stall 1500s)。認定 counter 0
 のまま。
+
+### 2026-08-13 — r73 fix round 完了・main 取り込み (selftest 322)・r74 発注へ
+
+fix round は sentinel `bhe87tvpz` exit 0。受け入れ: (1) workspace の jobs directory
+identity 重複排除 (hardlink は畳まない)、(2) finish の OSError 全 sink 切替 (errno 列挙
+廃止)。gates 全緑を発注側再実行 (selftest **322** / 外部 12 / ruff / ty / lang lint)。TOCTOU
+artifact 13→15・unreadable 期待 11→14 は fix 1 由来と semantics まで確認。独立変異 2/2
+検出 (専用 test + TOCTOU oracle の両輪)、消滅確認 2/2 (alias → 11・ENOSPC → rc=0)。wt 内
+commit `a444e5b` → cherry-pick **`36de3c4`**。裁定 23 / 21 を 73 巡拡張で更新 (gate green)。
+報告書退避・worktree / branch 削除。

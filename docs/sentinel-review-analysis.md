@@ -892,6 +892,15 @@ codex sol xhigh で 2 巡連続」。
 - 2 件とも直近閉鎖 class の横展開漏れ (directory alias の層・errno 集合の網羅)。閉鎖済み
   クラスからの再指摘ゼロは 20 巡連続
 - fix round: `drafts/sentinel-r73-fixes.md`。認定 counter 0 のまま (goal 判定は次巡へ)
+- fix 取り込み: commit `36de3c4`。(1) workspace の jobs directory identity で 1 root 走査内を
+  重複排除 (観測失敗 / 不在は complete=False・hardlink record は畳まない)、(2) finish の
+  terminal output は OSError 全てを sink 切替 (errno 列挙廃止)。受け入れ: gates 全緑
+  (selftest **322** / 外部 12 / ruff / ty / lang lint)。TOCTOU の artifact 13→15 と
+  unreadable 期待 11→14 は fix 1 の workspace stat 追加に由来し semantics まで整合 (state
+  root 直下の成果物 file が pseudo-workspace として stat される +2)。独立変異 2/2 検出
+  (fix 1 は専用 test + TOCTOU oracle の両輪)、消滅確認 2/2 (alias → exit 11・ENOSPC →
+  rc=0)。裁定 23 (workspace 層への横展開)・21 (errno 非依存化) を 73 巡拡張で更新
+  (gate green)
 
 ## 復元元
 
