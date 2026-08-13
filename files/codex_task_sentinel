@@ -277,7 +277,20 @@ def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], boo
             complete = False
             continue
         observed = []
+        workspace_identities = set()
         for workspace in workspaces:
+            workspace_path = os.path.join(root, workspace)
+            try:
+                workspace_identity = Observation.directory_identity(workspace_path)
+            except OSError:
+                complete = False
+                continue
+            if workspace_identity is None:
+                complete = False
+                continue
+            if workspace_identity in workspace_identities:
+                continue
+            workspace_identities.add(workspace_identity)
             record = os.path.join(root, workspace, "jobs", job_id + ".json")
             # entry 自身を 1 度だけ見る — 壊れた symlink も「在る」 で、 不在ではない。
             try:
@@ -289,7 +302,6 @@ def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], boo
             if identity is None:
                 # 通常 file なら jobs/ を抱えられないので空で正しい。 消えた entry も
                 # 辿れない link も不在の証明ではないので、 そこでは断定しない。
-                workspace_path = os.path.join(root, workspace)
                 if dangling(workspace_path) or dangling(
                     os.path.join(workspace_path, "jobs")
                 ):
@@ -818,9 +830,7 @@ def finish(
         for line in output:
             print(line)
         sys.stdout.flush()
-    except OSError as exc:
-        if exc.errno not in {errno.EPIPE, errno.EAGAIN, errno.EWOULDBLOCK}:
-            raise
+    except OSError:
         Observation.discard_stdout()
     return code
 
@@ -7466,7 +7476,7 @@ class WatchTest(WatchTest):
                 "unlink": {4: 11, 7: 11, 8: 11, 9: 11},
                 "replace-different": {4: 11, 7: 11, 8: 11, 9: 11},
                 "replace-same": {4: 11, 7: 11, 8: 11, 9: 11},
-                "unreadable": {4: 11},
+                "unreadable": {4: 14},
                 "grow": {5: 11, 7: 11, 8: 11, 9: 11},
                 "appear": {1: 0, 2: 11, 3: 11, 4: 11},
             },
@@ -7646,7 +7656,7 @@ class WatchTest(WatchTest):
                 "record-round": 60,
                 "log": 8,
                 "log-command": 10,
-                "artifact": 13,
+                "artifact": 15,
                 "peer": 18,
             },
         )
@@ -8680,6 +8690,36 @@ class WatchTest(WatchTest):
             found, complete = find_jobs("task-x", [alias, first])
         self.assertEqual(found, [])
         self.assertFalse(complete)
+
+
+class WatchTest(WatchTest):
+    """Regressions fixed in the 73rd review round."""
+
+    def test_workspace_aliases_are_scanned_once(self):
+        """Two names for one workspace cannot manufacture ambiguity."""
+        import io
+        from contextlib import redirect_stdout
+
+        root, _record, _log = self._state("ws", "task-x", "running")
+        os.symlink(os.path.join(root, "ws"), os.path.join(root, "ws-alias"))
+        with redirect_stdout(io.StringIO()):
+            code = watch(self._watch_args(root, "task-x", once=True))
+        self.assertEqual(code, EXIT_ALIVE)
+
+    def test_finish_keeps_the_selected_code_when_stdout_is_full(self):
+        """Any stdout OSError preserves the already selected verdict."""
+        from unittest import mock
+
+        class FullStream:
+            def write(self, _text):
+                raise OSError(errno.ENOSPC, "no space left on device")
+
+            def flush(self):
+                pass
+
+        with mock.patch.object(sys, "stdout", FullStream()):
+            code = finish(float("inf"), EXIT_ALIVE, ("terminal",), ())
+        self.assertEqual(code, EXIT_ALIVE)
 
 
 class WatchTest(WatchTest, SourceInvariantTest):
