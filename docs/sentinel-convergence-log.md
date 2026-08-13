@@ -1231,3 +1231,18 @@ r75 を発注: `drafts/sentinel-review-r75.md` (全面改訂・lint rc=0)。レ�
 過剰実装の検出。worktree `wt-r75` は docs commit `149a384` の後に分岐 (charter と row 60 を
 分岐直後に確認)。job `task-msrdl4a2-5ckqoi` (record 検証: sol / xhigh / write / fresh)。
 sentinel `bml1zva66` (estimate 2250s・stall 1500s)。U0 指摘ゼロなら収束 2/2。
+
+### 2026-08-13 — ユースケース正本を v2 へ (delegation 実運用からの導出・ユーザー指摘)
+
+ユーザー指摘: v1 は sentinel の見た目の機能から書いており、codex delegation の各機能 →
+我々の実際の使い方 → 要求、という導出になっていない。抽象要件 (「codex task を delegation
+する」) は無限に広がるため、我々の使い方に根ざして絞らないと過剰実装になる。v2 で対応:
+(1) delegation 機能ごとの実績 → sentinel 要求の導出表を追加、(2) **運用規約 C-1〜C-5** を
+明文化 — C-1: write delegation は 1 worktree 同時 1 本 (worktree はチープ・並列は worktree を
+分ける)、C-2: 同一 job の並列 sentinel なし (再 arm は直列)、C-3: 再起動断の回収は
+「判定 → 成果物回収 → worktree ごと削除」まで (復旧 orchestration は役割外)、C-4:
+--state-root は test 用、C-5: 報告書は終端 token。(3) 目的外に C-1/C-2/C-3 違反の調停・
+orchestration を明記 (commit `3595e76`)。**worktree root の lock file による critical
+region 化**は delegation flow 側の将来 option として記録に留める (現運用は C-1 の規約 +
+単一 operator で充足しており、今実装すると本 charter 自身の過剰実装条項に抵触する)。
+r75 (走行中) は charter v1 で発注済みのため、受領時の U 分類検証は v2 を基準に発注側が行う。
