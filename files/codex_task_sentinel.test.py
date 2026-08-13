@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.machinery
 import importlib.util
 import json
@@ -17,11 +18,15 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 SENTINEL = os.path.join(HERE, "codex_task_sentinel")
 SKILL = os.path.join(HERE, "claude_managed-skills", "codex-delegation", "SKILL.md")
+RULINGS = os.path.join(HERE, "..", "docs", "sentinel-rulings.md")
 
 # "  4  stall             --trust-log only: log and tree quiet — ..."
 MODULE_ROW = re.compile(r"^ {2}(\d+)\s+(\S+)\s{2,}(.+)$")
 # "  | 4 | stall (`--trust-log` 時のみ) | log を読み、... |"
 SKILL_ROW = re.compile(r"^\s*\|\s*(\d+)\s*\|([^|]*)\|([^|]*)\|")
+RULING_ROW = re.compile(r"^\|\s*(\d+)\s*\|.*\|\s*[A-D]\s*\|\s*(.*?)\s*\|$")
+RULING_TEST = re.compile(r"`(test_[A-Za-z0-9_]+)`")
+LAST_RULING = 55
 
 TRUST_FLAG = "--trust-log"
 
@@ -174,6 +179,34 @@ class DocumentedDefaultTest(unittest.TestCase):
         root = self._quiet_job()
         self.assertEqual(self._run(root), sentinel.EXIT_UNVERIFIABLE)
         self.assertEqual(self._run(root, TRUST_FLAG), sentinel.EXIT_STALL)
+
+
+class RulingsSyncTest(unittest.TestCase):
+    """The canonical rulings stay ordered and name tests that exist in the source."""
+
+    def test_rulings_are_contiguous_and_reference_existing_test_methods(self):
+        rows = [
+            (int(match.group(1)), match.group(2))
+            for match in map(RULING_ROW.match, _read(RULINGS))
+            if match
+        ]
+        numbers = [number for number, _assurance in rows]
+        self.assertEqual(numbers, list(range(1, LAST_RULING + 1)))
+
+        source = "\n".join(_read(SENTINEL))
+        methods = {
+            node.name
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name.startswith("test_")
+        }
+        referenced = {
+            name
+            for _number, assurance in rows
+            for name in RULING_TEST.findall(assurance)
+        }
+        self.assertTrue(referenced)
+        self.assertEqual(referenced - methods, set())
 
 
 if __name__ == "__main__":
