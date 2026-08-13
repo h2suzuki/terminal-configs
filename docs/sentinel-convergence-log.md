@@ -1009,3 +1009,12 @@ in-memory stream) へ変更。gates 全緑を発注側再実行 (selftest **312*
 lang lint)、TOCTOU counts 不変、独立変異 1/1 検出、消滅確認 = EPIPE×EMFILE で finish rc=0。
 wt 内 commit `dae7ffa` → cherry-pick **`9a09c1e`**。裁定 21 に「復旧手段も資源を仮定しない」
 を 69 巡拡張で追記 (gate green)。報告書退避・worktree / branch 削除。
+
+### 2026-08-13 — r70 発注
+
+r70 (認定 1 巡目・goal 判定対象) を発注: `drafts/sentinel-review-r70.md` (r69 から python
+置換で生成・anchor 一意 assert・lint rc=0)。material 36 件・selftest 312・裁定 58 を反映し、
+60〜69 巡が洗った前提群の再なぞり回避を明記。worktree `wt-r70` は docs commit `2963570` の
+後に分岐 (手順遵守・69 巡拡張を分岐直後に grep 確認)。job `task-msr52xxn-md4zse` (record
+検証: sol / xhigh / write / fresh)。sentinel `bkbho0z6b` (estimate 2250s)。指摘ゼロなら
+ユーザー goal (非連続 2 回のゼロ巡) 達成。
