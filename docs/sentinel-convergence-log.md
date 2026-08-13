@@ -944,3 +944,13 @@ S_ISREG + size 0 の pseudo-regular を空の全量 view と誤認 (/proc/self/s
 whole=True を実測)。(3) **採用** — `finish()` の出力が無保護で BrokenPipeError が契約外
 traceback に (EPIPE stub で実測)。閉鎖済みクラスからの再指摘ゼロは 15 巡連続。報告書退避・
 worktree / branch 削除。認定 counter 0 のまま。
+
+### 2026-08-13 — r68 fix round 発注
+
+fix round: `drafts/sentinel-r68-fixes.md` (lint rc=0) — (1) advertised size 消費後の 1 byte
+probe (食い違いは log incomplete / artifact UNSTABLE)、(2) `finish()` の EPIPE 保護 (二次
+flush 抑止 + 選択済み code の返却)、(3) `.git` skip test の docstring を裁定 57 引用へ
+(挙動不変)。裁定 57 の row 追加 + gate pin bump は landing 時に発注側が行う (fix cherry-pick
+→ docs commit の順で gate green を維持)。worktree `wt-r68fix` は台帳 commit `7277b4e` の後に
+分岐 (手順遵守)。job `task-msr32qgs-578dzd` (record 検証: sol / medium / write / fresh)。
+sentinel `b76609kwe` (estimate 2850s)。認定 counter 0 のまま。
