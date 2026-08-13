@@ -1223,3 +1223,11 @@ worktree / branch 削除。
 3 件のみ・直近 5 巡はほぼ P1/P2 — 従来条件は reviewer に新規前提の無限発掘を課す構造だった。
 r75 発注書を「正本適合 + U 分類自己申告 (発注側が repro で検証)」型に全面改訂 (lint rc=0)。
 収束判定は「U0 指摘ゼロの巡を計 2 回 (r60 を 1 回目と数える)」。
+
+### 2026-08-13 — r75 発注 (新認定条件の 1 巡目)
+
+r75 を発注: `drafts/sentinel-review-r75.md` (全面改訂・lint rc=0)。レビュー観点 = 裁定と
+実装の矛盾 / exit contract の全経路 / 直近 fix の縫い目 / ユースケース正本自体の欠陥 /
+過剰実装の検出。worktree `wt-r75` は docs commit `149a384` の後に分岐 (charter と row 60 を
+分岐直後に確認)。job `task-msrdl4a2-5ckqoi` (record 検証: sol / xhigh / write / fresh)。
+sentinel `bml1zva66` (estimate 2250s・stall 1500s)。U0 指摘ゼロなら収束 2/2。
