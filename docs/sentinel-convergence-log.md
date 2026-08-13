@@ -1107,3 +1107,14 @@ r72 (認定 1 巡目・goal 判定対象) を発注: `drafts/sentinel-review-r72
 (手順遵守・71 巡拡張 2 箇所を分岐直後に grep 確認)。job `task-msr7wstd-6ydsb8` (record 検証:
 sol / xhigh / write / fresh)。sentinel `beq6oo0e3` (estimate 2250s・stall 1500s)。指摘ゼロ
 ならユーザー goal (非連続 2 回のゼロ巡) 達成。
+
+### 2026-08-13 — r72 受領: material 1 採用 + 実行環境裁定 1 → fix round 発注へ
+
+r72 (`task-msr7wstd-6ydsb8`・sol xhigh・write) は sentinel `beq6oo0e3` exit 0。指摘 2 件を
+裁定: (1) **採用** — r71 alias 排除の identity と走査が別観測 (swap 窓で found=1・
+complete=True の偽唯一性を実測)。最小 fix = 走査前後の root identity 照合 (不一致は
+complete=False)。fd 束縛走査は downstream の path 束縛と不整合で不採用。(2) **部分採用** —
+blocking read の deadline 越え機構は実在するが、O_NONBLOCK は regular read に効かないことを
+実測 [open(2)]。per-read process 隔離は不釣り合い — **裁定 59** (local fs 前提・無応答 fs は
+実行環境の境界外) を正本化し gate pin 59 (`32c7a8e`)。閉鎖済みクラスからの再指摘ゼロは
+19 巡連続。報告書退避・worktree / branch 削除。認定 counter 0 のまま。

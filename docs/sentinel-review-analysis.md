@@ -858,6 +858,22 @@ codex sol xhigh で 2 巡連続」。
   alias 11 / release 継続)。裁定 23 (別名 root)・21 (close 失敗) を 71 巡拡張で更新
   (gate green)
 
+### r72 (認定 1 巡目・19 度目) — material 1 採用 + 実行環境裁定 1、認定不成立
+
+- **指摘 1 (採用)**: r71 の alias 重複排除が identity と走査を別観測にしている — identity
+  取得 (A) と走査 (B) の間の symlink 付替えで A/B の真の重複が消え、found=1・complete=True
+  の偽唯一性になる (repro: swap 窓を bounded_names hook で実測)。fd 束縛走査の提案は
+  downstream の path 束縛と不整合なため採らず、**最小 fix = 走査前後の root identity 照合**
+  (不一致は complete=False で終局保留 — 報告書自身が最小形として認める形)。A→B→A の残余は
+  他の path 水準観測と同じ指紋粒度の限界として台帳に明記
+- **指摘 2 (部分採用・実行環境裁定)**: blocking read の 1 syscall が deadline を越えうる
+  機構は実在するが、提案の「O_NONBLOCK 維持」は regular file の read に効かないことを実測
+  [open(2): regular file に効果なし]。真の閉鎖は per-read process 隔離のみで、監視対象が
+  local plugin state dir である本 tool には不釣り合い。**裁定 59** (reader syscall の有限
+  応答は local fs 前提・無応答 fs は実行環境の境界外) を正本化し gate pin 59 (`32c7a8e`)
+- 閉鎖済みクラスからの再指摘ゼロは 19 巡連続
+- fix round: `drafts/sentinel-r72-fixes.md`。認定 counter 0 のまま (goal 判定は次巡へ)
+
 ## 復元元
 
 repo の実 path は `/home/scorer/terminal-configs` である (user 名変更前の `/home/h2suzuki/...` は現存しない
