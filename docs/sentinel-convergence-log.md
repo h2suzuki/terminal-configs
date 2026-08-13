@@ -1018,3 +1018,13 @@ r70 (認定 1 巡目・goal 判定対象) を発注: `drafts/sentinel-review-r70
 後に分岐 (手順遵守・69 巡拡張を分岐直後に grep 確認)。job `task-msr52xxn-md4zse` (record
 検証: sol / xhigh / write / fresh)。sentinel `bkbho0z6b` (estimate 2250s)。指摘ゼロなら
 ユーザー goal (非連続 2 回のゼロ巡) 達成。
+
+### 2026-08-13 — r70 受領: material 3 (全件確定) → fix round 発注へ
+
+r70 (`task-msr52xxn-md4zse`・sol xhigh・write) は途中 2 度の sentinel exit 14 (深読み phase
+の無音 451s > 既定 420s)。evidence から生存と判断し `--stall-seconds 1500` で再 arm
+(`b1unh8odv`) → exit 0。指摘 3 件を全て repro で確定し**採用**: (1) dangling record
+symlink が fallback pin で無条件 exit 10 (期待 13)、(2) root 祖先の dangling symlink を
+完全空走査と誤認し exit 11「not registered」、(3) `BlockingIOError` (EAGAIN) が finish を
+素通し。分類の横展開漏れ ×2 + EPIPE 系の残余 errno ×1。閉鎖済みクラスからの再指摘ゼロは
+17 巡連続。報告書退避・worktree / branch 削除。認定 counter 0 のまま。

@@ -809,6 +809,23 @@ codex sol xhigh で 2 巡連続」。
   どおり仕様外として残存)。裁定 21 に「復旧手段も資源を仮定しない」を 69 巡拡張で追記
   (gate green)
 
+### r70 (認定 1 巡目・17 度目) — material 3、認定不成立
+
+- **監視側の学び**: xhigh の深読み phase (純 reasoning = log/tree 無音) が既定しきい値 420s
+  を超え、sentinel が exit 14 を 2 度返した。evidence (running・gates 正常完了・見積もり
+  バンド内) から生存と判断し、明示 `--stall-seconds 1500` で再 arm して完走 — 裁定 1 の
+  「静穏から断定しない」設計が正しく人の判断に返した実例
+- **指摘 1 (採用)**: 安定した dangling record symlink が fallback pin の FileNotFoundError
+  で無条件 exit 10「vanished」になる (repro: exit 10 実測)。「present だが unreadable =
+  exit 13」の分類が fallback pin に届いていない — 裁定 13/42 系の横展開漏れ
+- **指摘 2 (採用)**: state root の祖先 dangling symlink を「完全な空走査」と誤認し exit 11
+  「not registered yet」(repro: unreachable=True で実測)。r66 で保護した handler が
+  `link_identity` の None 畳みで祖先を調べていない — `Observation.unreachable()` の未適用面
+- **指摘 3 (採用)**: non-blocking stdout の `BlockingIOError` (EAGAIN) が finish funnel を
+  素通し (repro: 実測)。r68/69 の EPIPE 系で「送れない stdout」の別 errno が残っていた
+- 3 件とも縫い目/横展開漏れ枠。閉鎖済みクラスからの再指摘ゼロは 17 巡連続
+- fix round: `drafts/sentinel-r70-fixes.md`。認定 counter 0 のまま (goal 判定は次巡へ)
+
 ## 復元元
 
 repo の実 path は `/home/scorer/terminal-configs` である (user 名変更前の `/home/h2suzuki/...` は現存しない
