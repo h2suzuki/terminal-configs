@@ -254,6 +254,7 @@ def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], boo
             if root_identity in root_identities:
                 continue
             root_identities.add(root_identity)
+        root_found_start = len(found)
         try:
             workspaces = bounded_names(root)
             if workspaces is None:
@@ -314,6 +315,13 @@ def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], boo
                     complete = False
             except OSError:
                 complete = False
+        try:
+            if Observation.directory_identity(root) != root_identity:
+                del found[root_found_start:]
+                complete = False
+        except OSError:
+            del found[root_found_start:]
+            complete = False
     return found, complete
 
 
@@ -8645,6 +8653,33 @@ class WatchTest(WatchTest):
 
         Observation.release([FailingHandle(), FollowingHandle()])
         self.assertEqual(calls, ["failing", "following"])
+
+
+class WatchTest(WatchTest):
+    """Regressions fixed in the 72nd review round."""
+
+    def test_a_root_alias_swapped_during_its_scan_is_incomplete(self):
+        """A root identity must describe the directory whose entries were scanned."""
+        from unittest import mock
+
+        first, _record, _log = self._state("ws-a", "task-x", "running")
+        second, _record, _log = self._state("ws-b", "task-x", "running")
+        alias = first + "-alias"
+        os.symlink(first, alias)
+        real = bounded_names
+        swapped = []
+
+        def swapping(root):
+            if root == alias and not swapped:
+                swapped.append(True)
+                os.unlink(alias)
+                os.symlink(second, alias)
+            return real(root)
+
+        with mock.patch(__name__ + ".bounded_names", swapping):
+            found, complete = find_jobs("task-x", [alias, first])
+        self.assertEqual(found, [])
+        self.assertFalse(complete)
 
 
 class WatchTest(WatchTest, SourceInvariantTest):
