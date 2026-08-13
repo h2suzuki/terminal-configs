@@ -1098,3 +1098,12 @@ fix round 2 は sentinel `bqfa03isr` exit 0。受け入れ: FNF は identity な
 wt 内 commit `46d7dbd` (round 1+2) → cherry-pick **`9160b2e`**。裁定 23 (別名 root の重複
 排除)・21 (close 失敗の個別抑止) を 71 巡拡張で更新 (gate green)。報告書退避・worktree /
 branch 削除。
+
+### 2026-08-13 — r72 発注
+
+r72 (認定 1 巡目・goal 判定対象) を発注: `drafts/sentinel-review-r72.md` (r71 から python
+置換で生成・anchor 一意 assert・lint rc=0)。material 41 件・selftest 319 を反映し、60〜71 巡
+が洗った前提群の再なぞり回避を明記。worktree `wt-r72` は docs commit `07ff69f` の後に分岐
+(手順遵守・71 巡拡張 2 箇所を分岐直後に grep 確認)。job `task-msr7wstd-6ydsb8` (record 検証:
+sol / xhigh / write / fresh)。sentinel `beq6oo0e3` (estimate 2250s・stall 1500s)。指摘ゼロ
+ならユーザー goal (非連続 2 回のゼロ巡) 達成。
