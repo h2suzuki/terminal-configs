@@ -677,6 +677,15 @@ codex sol xhigh で 2 巡連続」。
   着地点・時間方向の保持量)。閉鎖済みクラス (精度・受理域・funnel/Observation/harness)
   からの再指摘ゼロは 11 巡連続
 - fix round: `drafts/sentinel-r64-fixes.md`。認定 counter 0 のまま
+- fix 取り込み: commit `d2fcca3`。(1) 途中 OSError → `CompanionScanOverflow` (entry を 1 件
+  でも読んだ後の失敗は fallback)、(2) `version_key` = `(数値 prefix, release か)` の組
+  (裁定 56 として正本化・gate pin 55 → 56 bump `93699db`)、(3) `dropping = truncated_left`
+  (既存 cap 断片機構の再利用 — 適切な altitude)、(4) `MAX_SEEN_PAIRS` + `remember_pairs()`
+  (既知 pair の再目撃は cap を消費しない dedup-first・到達時は `finish()` 経由 exit 14)。
+  受け入れ: gates 全緑 (selftest **299** / 外部 12 / ruff / ty / lang lint)、TOCTOU counts
+  不変、独立変異 4/4 検出 (fail 構成も codex 報告と一致)、消滅確認 4/4 (churn は cap 50 の
+  51 回目で exit 14)。裁定 47 / 55 の本文・担保も 64 巡拡張で更新。残余 note: seen_pairs の
+  cap は件数のみ (byte 面は path 長 × 10k で有界と判断)
 
 ## 復元元
 

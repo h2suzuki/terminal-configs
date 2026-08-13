@@ -797,3 +797,15 @@ docstring 是正、(4) `seen_pairs` の件数上限 + 到達時は解決不能�
 worktree `wt-r64fix` は台帳 commit `653e5eb` の後に分岐 (手順遵守)。job
 `task-msqxta6e-gvu3br` (record 検証: sol / medium / write / fresh)。sentinel `b73iwkhpe`
 (estimate 3150s)。認定 counter 0 のまま。
+
+### 2026-08-13 — r64 fix round 完了・main 取り込み (selftest 299)・裁定 56・r65 発注へ
+
+fix round は sentinel `b73iwkhpe` exit 0。受け入れ: 4 修正とも発注どおり — 途中 OSError の
+fallback 化 (entry 1 件でも読んだ後の失敗は部分 best を破棄)、`version_key` semver-lite
+(`(数値 prefix, release か)` 組)、seek 後の最初の LF まで破棄 (既存 `dropping` 機構の再利用)、
+`MAX_SEEN_PAIRS` + dedup-first の `remember_pairs()` (到達時は `finish()` 経由 exit 14・裁定
+45 維持)。gates 全緑を発注側再実行 (selftest **299** / 外部 12 / ruff / ty / lang lint)、
+TOCTOU counts 不変、独立変異 4/4 検出 (fail 構成一致)、消滅確認 4/4 (churn は cap 50 到達の
+51 回目で exit 14 実測)。wt 内 commit `3c64c5b` → cherry-pick **`d2fcca3`**。裁定 56
+(semver-lite 版名順序) を正本化し gate pin を 56 へ bump (`93699db`)、裁定 47 / 55 の本文・
+担保を 64 巡拡張で更新。報告書退避・worktree / branch 削除。
