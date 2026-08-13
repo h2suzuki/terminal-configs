@@ -787,3 +787,13 @@ r64 (`task-msqwt2qf-vq0hnw`・sol xhigh・write) は sentinel `b9nkjjqqa` exit 0
 (4) 登録解決の `seen_pairs` が cadence 比例で無上限成長 (peak 9.7x 実測・裁定 55 の時間軸
 拡張漏れ)。4 件とも未疑前提枠、閉鎖済みクラスからの再指摘ゼロは 11 巡連続。報告書退避・
 worktree / branch 削除。認定 counter 0 のまま。
+
+### 2026-08-13 — r64 fix round 発注
+
+fix round: `drafts/sentinel-r64-fixes.md` (lint rc=0) — (1) 列挙途中 OSError の fallback 化、
+(2) `version_key` の semver-lite 化 (数値 prefix + release 優先 — 裁定 56 として landing 時に
+正本化・`LAST_RULING` bump は発注側)、(3) 非ゼロ offset 読みの最初の LF まで破棄 +
+docstring 是正、(4) `seen_pairs` の件数上限 + 到達時は解決不能の契約 exit (裁定 45 は維持)。
+worktree `wt-r64fix` は台帳 commit `653e5eb` の後に分岐 (手順遵守)。job
+`task-msqxta6e-gvu3br` (record 検証: sol / medium / write / fresh)。sentinel `b73iwkhpe`
+(estimate 3150s)。認定 counter 0 のまま。
