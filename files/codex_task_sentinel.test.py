@@ -169,6 +169,11 @@ class DocumentedDefaultTest(unittest.TestCase):
                 "1",
                 "--hang-seconds",
                 "1",
+                # 成果物は不存在のまま指定する — quiet-job の oracle を保つ
+                "--artifact",
+                os.path.join(root, "report.md"),
+                "--token",
+                "REPORT_COMPLETE",
                 *extra,
             ],
             capture_output=True,

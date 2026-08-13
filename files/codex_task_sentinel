@@ -414,7 +414,6 @@ class Observation:
         error: BaseException | None = None,
         reason: str | None = None,
         text: str = "",
-        seen_content: bool = False,
         descriptor=None,
     ) -> None:
         self.state = state
@@ -423,7 +422,6 @@ class Observation:
         self.error = error
         self.reason = reason
         self.text = text
-        self.seen_content = seen_content
         self.descriptor = descriptor
 
     @staticmethod
@@ -580,7 +578,6 @@ class Observation:
         stamp = None
         decoder = codecs.getincrementaldecoder("utf-8")()
         body = ""
-        seen_content = False
         try:
             with contextlib.ExitStack() as opened:
                 handle = open_regular(path)
@@ -604,7 +601,6 @@ class Observation:
                 ):
                     remaining -= len(chunk)
                     body += decoder.decode(chunk)
-                    seen_content = seen_content or bool(body.strip())
                     body = body[-chunk_limit:]
                 if remaining == 0 and handle.read(1):
                     return cls(
@@ -613,7 +609,6 @@ class Observation:
                         reason="advertised-size",
                     )
                 body += decoder.decode(b"", True)
-                seen_content = seen_content or bool(body.strip())
                 body = body[-chunk_limit:]
                 after = cls.descriptor_stat(handle)
                 try:
@@ -649,7 +644,6 @@ class Observation:
             cls.PRESENT,
             stamp=stamp,
             text=body,
-            seen_content=seen_content,
             descriptor=after,
         )
 
@@ -1226,15 +1220,15 @@ def stamp_epoch(stamp: object) -> Decimal | None:
 
 
 def artifact_ready(
-    path: str | None, token: str | None, since: Decimal | float | None = None
+    path: str, token: str, since: Decimal | float | None = None
 ) -> bool | None:
     """Whether the deliverable is this run's finished output; None when unreadable."""
     return artifact_view(path, token, since)[0]
 
 
 def artifact_view(
-    path: str | None,
-    token: str | None,
+    path: str,
+    token: str,
     since: Decimal | float | None = None,
     hold: list | None = None,
 ) -> tuple[bool | None, tuple | None]:
@@ -1265,8 +1259,6 @@ def artifact_view(
         or Decimal(observed.descriptor.st_ctime_ns) / nanoseconds < floor
     ):
         return False, observed.stamp  # a leftover from an earlier run
-    if not token:
-        return observed.seen_content, observed.stamp
     # The order says the final line IS the token: no padding, no trailing blanks.
     # LF だけで分ける — splitlines は VT・FF・NEL・U+2028 も境界として消すので、
     # token の後ろにそれらが付いた成果物まで完成品になる。
@@ -1399,7 +1391,6 @@ def verdict(
     ready: bool | None,
     stall_seconds: float,
     hang_seconds: float,
-    expects_artifact: bool = True,
     command_may_run: bool = False,
     trust_log: bool = False,
 ) -> tuple[int, str] | None:
@@ -1418,7 +1409,7 @@ def verdict(
             )
     # cancel / 失敗は成果物を読めるかに関わらず結果ではないので、 その先で見る。
     # 生存中も completed も、 読めない成果物からは done も stall も言えない。
-    if expects_artifact and ready is None:
+    if ready is None:
         return EXIT_UNVERIFIABLE, (
             "unverifiable: the deliverable is there but could not be read, so it can "
             "be shown neither finished nor missing — check the path below"
@@ -1435,14 +1426,12 @@ def verdict(
             )
         if tree < hang_seconds:
             return None  # still settling; re-check rather than hand over mid-write
-        if not (ready or not expects_artifact):
+        if not ready:
             return EXIT_ENDED_WITHOUT_ARTIFACT, (
                 "ended-without-deliverable: job completed with no complete deliverable — "
                 "the log's tail below is what it reported instead"
             )
         return EXIT_DONE, "done: job completed and its tree settled"
-    if not expects_artifact:
-        ready = False  # nothing to be ready; only the tree and the log speak here
     settled = hang_seconds if ready else stall_seconds
     if age is not None and age < settled:
         return None
@@ -2236,7 +2225,6 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 shown_ready,
                 threshold,
                 args.hang_seconds,
-                expects_artifact=args.artifact is not None,
                 command_may_run=bool(unfinished),
                 trust_log=args.trust_log,
             )
@@ -2259,7 +2247,6 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 ready,
                 threshold,
                 args.hang_seconds,
-                expects_artifact=args.artifact is not None,
                 command_may_run=bool(unfinished),
                 trust_log=args.trust_log,
             )
@@ -2451,10 +2438,11 @@ def check_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace) -
             parser.error(
                 f"--{name.replace('_', '-')} needs a value, not an empty string"
             )
-    if args.token and not args.artifact:
-        # 成果物が無ければ token を照合する相手がいない。 黙って無視すると、
-        # 完了 token を指定した呼び手が「検査された」 と読んだまま exit 0 を受け取る。
-        parser.error("--token needs --artifact: there is nothing to check it against")
+    if args.job_id and not args.selftest:
+        if not args.artifact:
+            parser.error("--artifact is required when watching a job")
+        if not args.token:
+            parser.error("--token is required when watching a job")
     for name in (
         "stall_seconds",
         "hang_seconds",
@@ -2595,12 +2583,6 @@ class WatchTest(unittest.TestCase):
         out = verdict("completed", 1.0, None, False, 420, 300)
         assert out is not None
         self.assertEqual(out[0], EXIT_UNVERIFIABLE)
-
-    def test_completion_without_an_expected_deliverable_is_done(self):
-        """成果物を指定しない発注では、completed とツリー静穏で成功を表現できる。"""
-        out = verdict("completed", 1.0, 600.0, False, 420, 300, expects_artifact=False)
-        assert out is not None
-        self.assertEqual(out[0], EXIT_DONE)
 
     def test_a_job_not_yet_started_owns_no_deliverable(self):
         """worker が拾う前の job は何も書けない — createdAt を下限にすると他人の file を通す。"""
@@ -2894,8 +2876,9 @@ class WatchTest(unittest.TestCase):
 
     def test_absent_artifact_is_not_ready(self):
         floor = time.time() - 60
-        self.assertFalse(artifact_ready("/nonexistent/report.md", None, floor))
-        self.assertFalse(artifact_ready(None, None, floor))
+        self.assertFalse(
+            artifact_ready("/nonexistent/report.md", "REPORT_COMPLETE", floor)
+        )
 
     def test_leftover_artifact_from_an_earlier_run_is_not_this_run_s(self):
         """前 run が残した完成済み report を、今回の成果物として受理しない。"""
@@ -4193,7 +4176,6 @@ class WatchTest(unittest.TestCase):
                 {"id": "task-done", "status": "completed", "workspaceRoot": root}, f
             )
         args = self._watch_args(root, "task-done", once=True)
-        args.artifact = None
         answers = [
             (900.0, 12, True),
             (900.0, 13, True),
@@ -4372,7 +4354,6 @@ class WatchTest(unittest.TestCase):
 
         root, record, _log = self._state("ws", "task-done", "completed")
         args = self._watch_args(root, "task-done", once=True)
-        args.artifact = None
         real, opens = open_regular, []
 
         def flaky(path):
@@ -4731,7 +4712,6 @@ class WatchTest(unittest.TestCase):
 
         root, record, _log = self._state("ws", "task-done", "completed")
         args = self._watch_args(root, "task-done", once=True)
-        args.artifact = None
         real, reads = record_view, []
 
         def shifting(path, job_id=None, hold=None):
@@ -4758,7 +4738,6 @@ class WatchTest(unittest.TestCase):
 
         root, record, _log = self._state("ws", "task-done", "completed")
         args = self._watch_args(root, "task-done", once=True)
-        args.artifact = None
         real, seen, in_poll = record_view, [], []
 
         def shifting(path, job_id=None, hold=None):
@@ -4960,7 +4939,6 @@ class WatchTest(unittest.TestCase):
 
         root, record, _log = self._state("ws", "task-x", "running")
         args = self._watch_args(root, "task-x", once=True)
-        args.artifact = None
         real = record_view
 
         def other_bytes(path, job_id=None, hold=None):
@@ -5267,9 +5245,19 @@ class WatchTest(unittest.TestCase):
         from contextlib import redirect_stdout
         from unittest import mock
 
-        root, _rec, log = self._state("ws", "task-done", "completed")
+        root, record, log = self._state("ws", "task-done", "completed")
+        with open(record, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "id": "task-done",
+                    "status": "completed",
+                    "startedAt": "2020-01-01T00:00:00Z",
+                },
+                f,
+            )
+        with open(os.path.join(root, "report.md"), "w", encoding="utf-8") as f:
+            f.write("body\nREPORT_COMPLETE\n")
         args = self._watch_args(root, "task-done", once=True)
-        args.artifact = None
         real = scan_log
 
         def appending(path, *a, **k):
@@ -5292,7 +5280,6 @@ class WatchTest(unittest.TestCase):
 
         root, _rec, _log = self._state("ws", "task-done", "completed")
         args = self._watch_args(root, "task-done", once=True)
-        args.artifact = None
         ages = [(900.0, 1, True), (5.0, 1, True)]
         with (
             redirect_stdout(io.StringIO()),
@@ -5364,7 +5351,6 @@ class WatchTest(unittest.TestCase):
 
         root, record, log = self._state("ws", "task-done", "completed")
         args = self._watch_args(root, "task-done", once=True)
-        args.artifact = None
         other = os.path.join(root, "ws2", "jobs")
         os.makedirs(other)
         broken = os.path.join(other, "task-done.json")
@@ -5478,7 +5464,6 @@ class WatchTest(unittest.TestCase):
         root, _rec, _log = self._state("ws", "task-x", "completed")
         # --once は estimate 分岐の手前で返るので、 ここでは使わない。
         args = self._watch_args(root, "task-x", stall_seconds=None)
-        args.artifact = None
         args.estimate_seconds = 0.001
         real, crossed = time.monotonic, []
         real_baseline = baseline_silence
@@ -5531,7 +5516,6 @@ class WatchTest(unittest.TestCase):
 
         root, _rec, _log = self._state("ws", "task-x", "running")
         args = self._watch_args(root, "task-x", once=True)
-        args.artifact = None
         real = record_view
 
         def other_bytes(path, job_id=None, hold=None):
@@ -5562,7 +5546,6 @@ class WatchTest(unittest.TestCase):
         root, record, log = self._state("ws", "task-x", "running")
         elsewhere, peer, _p = self._state("ws", "task-x", "running")
         args = self._watch_args(root, "task-x")
-        args.artifact = None
         real, crossed = time.monotonic, []
         gaining = [
             [(record, log)],
@@ -5672,7 +5655,6 @@ class WatchTest(unittest.TestCase):
 
         root, _rec, _log = self._state("ws", "task-x", "completed")
         args = self._watch_args(root, "task-x", stall_seconds=None)
-        args.artifact = None
         real, crossed = time.monotonic, []
         real_baseline = baseline_silence
 
@@ -6024,13 +6006,6 @@ class WatchTest(unittest.TestCase):
         self.assertIsNone(stamp_epoch("2026-08-08T11:43:06Z\n\n"))
         self.assertIsNotNone(stamp_epoch("2026-08-08T11:43:06Z"))
 
-    def test_content_before_a_whitespace_tail_still_counts(self):
-        """末尾だけ保持するので、先頭側の中身は読みながら覚えておくしかない。"""
-        p = os.path.join(tempfile.mkdtemp(), "report.md")
-        with open(p, "w", encoding="utf-8") as f:
-            f.write("body\n" + " " * (MAX_ARTIFACT_BYTES + 16))
-        self.assertTrue(artifact_ready(p, None, time.time() - 60))
-
     def test_a_discarded_poll_never_becomes_an_over_estimate(self):
         """破棄した snapshot を exit 12 の evidence にしない — comment はそう書いてある。"""
         import io
@@ -6135,7 +6110,20 @@ class WatchTest(unittest.TestCase):
         from contextlib import redirect_stdout
         from unittest import mock
 
-        root, _rec, _log = self._state("ws", "task-done", "completed", log_age=900.0)
+        root, record, _log = self._state(
+            "ws", "task-done", "completed", log_age=900.0
+        )
+        with open(record, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "id": "task-done",
+                    "status": "completed",
+                    "startedAt": "2020-01-01T00:00:00Z",
+                },
+                f,
+            )
+        with open(os.path.join(root, "report.md"), "w", encoding="utf-8") as f:
+            f.write("body\nREPORT_COMPLETE\n")
         with (
             redirect_stdout(io.StringIO()),
             mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1, True)),
@@ -6227,11 +6215,20 @@ class WatchTest(unittest.TestCase):
         with mock.patch(__name__ + ".longest_silence", growing):
             self.assertIsNone(baseline_silence(jobs, "task-live", time.time(), 0.0)[0])
 
-    def test_token_without_a_deliverable_is_refused(self):
-        """照合相手が無いまま受理すると、token を指定した呼び手が検査済みと読む。"""
+    def test_job_mode_requires_artifact_and_token(self):
+        """Every watched job names both the deliverable and its completion token."""
         parser = build_parser()
-        with self.assertRaises(SystemExit):
-            check_arguments(parser, parser.parse_args(["task-x", "--token", "DONE"]))
+        for argv in (
+            ["task-x"],
+            ["task-x", "--artifact", "report.md"],
+            ["task-x", "--token", "DONE"],
+        ):
+            with self.subTest(argv=argv), self.assertRaises(SystemExit):
+                check_arguments(parser, parser.parse_args(argv))
+
+    def test_selftest_does_not_require_job_artifact_arguments(self):
+        parser = build_parser()
+        check_arguments(parser, parser.parse_args(["--selftest"]))
 
     def test_huge_deliverable_is_read_bounded(self):
         """全量展開すると、成果物ひとつで監視自身が MemoryError で終わる。"""
@@ -6311,8 +6308,8 @@ class WatchTest(unittest.TestCase):
     def _watch_args(self, root, job_id, **over):
         opts = {
             "job_id": job_id,
-            "artifact": None,
-            "token": None,
+            "artifact": os.path.join(root, "report.md"),
+            "token": "REPORT_COMPLETE",
             "stall_seconds": 420.0,
             "hang_seconds": 300.0,
             "poll_seconds": 0.01,
@@ -7164,6 +7161,8 @@ class WatchTest(WatchTest):
         if kind == "artifact":
             args.artifact = artifact
             args.token = "REPORT_COMPLETE"
+        else:
+            args.artifact = os.path.join(root, "expected-report.md")
         if perturbation == "appear":
             os.unlink(target)
         return {
@@ -7826,6 +7825,10 @@ class WatchTest(WatchTest):
                 "--once",
                 "--stall-seconds",
                 "999",
+                "--artifact",
+                os.path.join(root, "report.md"),
+                "--token",
+                "REPORT_COMPLETE",
             ],
             check=False,
             capture_output=True,
@@ -7970,7 +7973,18 @@ class WatchTest(WatchTest):
             os.set_inheritable(filler, True)
 
         result = subprocess.run(
-            [sys.executable, __file__, "task-dup", "--state-root", root, "--once"],
+            [
+                sys.executable,
+                __file__,
+                "task-dup",
+                "--state-root",
+                root,
+                "--once",
+                "--artifact",
+                os.path.join(root, "report.md"),
+                "--token",
+                "REPORT_COMPLETE",
+            ],
             check=False,
             capture_output=True,
             text=True,
