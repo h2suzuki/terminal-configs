@@ -873,6 +873,12 @@ codex sol xhigh で 2 巡連続」。
   応答は local fs 前提・無応答 fs は実行環境の境界外) を正本化し gate pin 59 (`32c7a8e`)
 - 閉鎖済みクラスからの再指摘ゼロは 19 巡連続
 - fix round: `drafts/sentinel-r72-fixes.md`。認定 counter 0 のまま (goal 判定は次巡へ)
+- fix 取り込み: commit `7de6c24`。走査後に root identity を再観測し、不一致 / 再観測不能は
+  当該 root の found を破棄して complete=False (missing root は `directory_identity` の
+  FNF→None と None==None で従来どおり complete 維持 — r71 fix 2 と整合)。受け入れ: gates
+  全緑 (selftest **320** / 外部 12 / ruff / ty / lang lint)、TOCTOU counts 不変 (root stat は
+  enumerator の分類対象外)、独立変異 1/1 検出、消滅確認 = swap 窓が found=0・complete=False
+  の終局保留へ。裁定 23 に前後照合を 72 巡拡張で追記 (gate green)
 
 ## 復元元
 

@@ -1127,3 +1127,12 @@ fix round: `drafts/sentinel-r72-fixes.md` (lint rc=0) — 走査前後の root i
 commit `10489c3` の後に分岐 (手順遵守・row 59 を分岐直後に grep 確認)。job
 `task-msr905or-kxw9h6` (record 検証: sol / medium / write / fresh)。sentinel `bog56883c`
 (estimate 2100s・stall 1500s)。認定 counter 0 のまま。
+
+### 2026-08-13 — r72 fix round 完了・main 取り込み (selftest 320)・r73 発注へ
+
+fix round は sentinel `bog56883c` exit 0。受け入れ: 走査後の root identity 再観測で不一致 /
+再観測不能は当該 root の found 破棄 + complete=False (missing root は FNF→None の一致で
+従来維持 — r71 fix 2 と整合することを diff 精査で確認)。gates 全緑を発注側再実行 (selftest
+**320** / 外部 12 / ruff / ty / lang lint)、TOCTOU counts 不変、独立変異 1/1 検出、消滅確認 =
+swap 窓が found=0・complete=False へ。wt 内 commit `8d1cc9e` → cherry-pick **`7de6c24`**。
+裁定 23 に前後照合を 72 巡拡張で追記 (gate green)。報告書退避・worktree / branch 削除。
