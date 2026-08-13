@@ -1048,3 +1048,12 @@ fix round は sentinel `btduq4q4n` exit 0。受け入れ: (1) fallback pin の�
 ruff / ty / lang lint)、TOCTOU counts 不変、独立変異 3/3 検出、消滅確認 3/3。wt 内 commit
 `3866c3c` → cherry-pick **`c5d1288`**。裁定 21 / 33 / 42 を 70 巡拡張で更新 (gate green)。
 報告書退避・worktree / branch 削除。
+
+### 2026-08-13 — r71 発注
+
+r71 (認定 1 巡目・goal 判定対象) を発注: `drafts/sentinel-review-r71.md` (r70 から python
+置換で生成・anchor 一意 assert・lint rc=0)。material 39 件・selftest 315 を反映し、60〜70 巡
+が洗った前提群の再なぞり回避を明記。worktree `wt-r71` は docs commit `0b5c6cd` の後に分岐
+(手順遵守・70 巡拡張 3 箇所を分岐直後に grep 確認)。job `task-msr6gt53-sailmn` (record 検証:
+sol / xhigh / write / fresh)。sentinel `bgdh98nqs` (estimate 2250s・stall 1500s)。指摘ゼロ
+ならユーザー goal (非連続 2 回のゼロ巡) 達成。
