@@ -609,6 +609,25 @@ codex sol xhigh で 2 巡連続」。
   変異では TOCTOU oracle 4 件が余分に fail する差も確認 = enumerator が観測回数増を検出)。
   lang lint OK。selftest 287 → **288**
 
+### r62 (認定 1 巡目・9 度目) — material 2、認定不成立
+
+- **指摘 1 (採用)**: `tree_age()` の件数 cap は保持 byte を囲わない — `measured` /
+  `pending` が完全 path 文字列を最大 200,000 件保持し、budget は件数のみ。repro: peak
+  実測で保持が件数 × path 長に線形 (1000 entry × 名前 +190B → +190,332B)、MemoryError は
+  `except OSError` を素通りして watch まで漏れる (mock 実測)。cap 上限 × 4KB path ≈ 800MB
+  の例外終了経路
+- **指摘 2 (採用)**: `companion_path()` の `glob.glob` だけ候補数無上限 — 2000 候補の全件
+  list 化を spy で実測。`cancel_command()` は全 terminal 報告が通るため、補助情報の探索が
+  verdict funnel を落としうる
+- 両件とも裁定 16 (作業量上限) の未適用 site = 旧来 code の未疑前提 (「件数 cap は byte も
+  囲う」「plugin cache の版数は常に少ない」)。61 巡 fix の縫い目 (named_now) は r62 が確認して
+  無事。閉鎖済みクラスからの再指摘ゼロは 9 巡連続
+- repro 側の教訓: tracemalloc の snapshot 差分では関数 return で解放される transient 保持が
+  見えず、peak 測定 (`reset_peak` + `get_traced_memory`) に修正して確定 — repro 自体の検証で
+  oracle を 1 度誤った
+- fix round: `drafts/sentinel-r62-fixes.md` (保持 byte 上限 + companion 候補上限。二 pass
+  構造は維持し TOCTOU oracle への観測列波及を避ける)。認定 counter 0 のまま
+
 ## 復元元
 
 repo の実 path は `/home/scorer/terminal-configs` である (user 名変更前の `/home/h2suzuki/...` は現存しない

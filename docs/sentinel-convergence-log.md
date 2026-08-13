@@ -693,3 +693,20 @@ r62 (認定 1 巡目・やり直し) を発注: `drafts/sentinel-review-r62.md` 
 生成・anchor 一意 assert・lint rc=0)。60/61 巡が洗った前提 3 種の再なぞり回避を明記。
 worktree `wt-r62` @ `b62b9b2`。job `task-msqu1dqo-e5byo8` (record 検証: sol / xhigh /
 write / fresh)。sentinel `b3cqj8kxz` (estimate 2250s)。
+
+### 2026-08-13 — r62 受領: material 2 (全件確定) → fix round 発注
+
+r62 (`task-msqu1dqo-e5byo8`・sol xhigh・write) は sentinel `b3cqj8kxz` exit 0。指摘 2 件を
+裁定し**両件採用**: (1) `tree_age()` の件数 cap は保持 byte を囲わず、件数上限内でも
+MemoryError の例外終了経路 (repro: peak 実測で保持が件数 × path 長に線形 +190,332B ≒
+1000 × 190B、MemoryError の素通りを mock 実測)、(2) `companion_path()` の `glob.glob` だけ
+候補数無上限 (repro: 2000 候補の全件 list 化を spy 実測)。両件とも裁定 16 の未適用 site =
+旧来 code の未疑前提。61 巡 fix の縫い目は確認済みで無事、閉鎖済みクラスからの再指摘ゼロは
+9 巡連続。repro の tracemalloc oracle を snapshot 差分 → peak 測定に 1 度修正して確定。
+報告書退避・worktree / branch 削除。
+
+fix round: `drafts/sentinel-r62-fixes.md` (lint rc=0) — 保持 path byte の上限 + companion
+候補上限 (超過は fallback)。二 pass 構造維持で TOCTOU oracle への波及を避け、counts 変化時は
+由来説明を完了条件に指定。worktree `wt-r62fix` @ `3005ac5`。job `task-msqutb22-qhneqb`
+(record 検証: sol / medium / write / fresh)。sentinel `bgzc6n8i0` (estimate 2550s)。
+認定 counter 0 のまま。
