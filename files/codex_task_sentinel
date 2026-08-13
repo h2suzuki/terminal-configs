@@ -243,7 +243,17 @@ def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], boo
     """
     found = []
     complete = True
+    root_identities = set()
     for root in roots:
+        try:
+            root_identity = Observation.directory_identity(root)
+        except OSError:
+            complete = False
+            continue
+        if root_identity is not None:
+            if root_identity in root_identities:
+                continue
+            root_identities.add(root_identity)
         try:
             workspaces = bounded_names(root)
             if workspaces is None:
@@ -384,6 +394,15 @@ class Observation:
         return os.fstat(handle.fileno())
 
     @staticmethod
+    def directory_identity(path: str) -> tuple[int, int] | None:
+        """Identity of a followed state directory name from one observation."""
+        try:
+            observed = os.stat(path)
+        except FileNotFoundError:
+            return None
+        return observed.st_dev, observed.st_ino
+
+    @staticmethod
     def read_held(handle, limit: int) -> bytes:
         """Re-read a held descriptor from its start, within the caller's cap."""
         handle.seek(0)
@@ -393,7 +412,8 @@ class Observation:
     def release(handles: list) -> None:
         """Release held descriptors in their existing order."""
         for handle in handles:
-            handle.close()
+            with contextlib.suppress(OSError):
+                handle.close()
 
     @staticmethod
     def discard_stdout() -> None:
@@ -8564,6 +8584,67 @@ class WatchTest(WatchTest):
         with mock.patch.object(sys, "stdout", BlockingStream()):
             code = finish(float("inf"), EXIT_ALIVE, ("terminal",), ())
         self.assertEqual(code, EXIT_ALIVE)
+
+
+class WatchTest(WatchTest):
+    """Regressions fixed in the 71st review round."""
+
+    def test_an_uncreated_state_root_is_a_complete_absence(self):
+        """A state directory that was never created is absent, not unreadable."""
+        import io
+        from contextlib import redirect_stdout
+
+        root = os.path.join(tempfile.mkdtemp(), "state")
+        shown = io.StringIO()
+        with redirect_stdout(shown):
+            code = watch(self._watch_args(root, "task-x", once=True))
+        self.assertEqual(code, EXIT_ALIVE)
+        self.assertIn("not registered yet", shown.getvalue())
+
+    def test_state_root_aliases_are_scanned_once(self):
+        """Two names for one state directory cannot manufacture ambiguity."""
+        import io
+        from contextlib import redirect_stdout
+
+        root, _record, _log = self._state("ws", "task-x", "running")
+        alias = root + "-alias"
+        os.symlink(root, alias)
+        with redirect_stdout(io.StringIO()):
+            code = watch(
+                self._watch_args(root, "task-x", once=True),
+                roots=[root, alias],
+            )
+        self.assertEqual(code, EXIT_ALIVE)
+
+    def test_distinct_state_roots_still_report_ambiguity(self):
+        """Records in different state directories remain separate candidates."""
+        import io
+        from contextlib import redirect_stdout
+
+        first, _record, _log = self._state("ws-a", "task-x", "running")
+        second, _record, _log = self._state("ws-b", "task-x", "running")
+        with redirect_stdout(io.StringIO()):
+            code = watch(
+                self._watch_args(first, "task-x", once=True),
+                roots=[first, second],
+            )
+        self.assertEqual(code, EXIT_AMBIGUOUS)
+
+    def test_release_continues_after_a_close_oserror(self):
+        """Each held handle gets one close attempt even when an earlier one fails."""
+        calls = []
+
+        class FailingHandle:
+            def close(self):
+                calls.append("failing")
+                raise OSError("release failed")
+
+        class FollowingHandle:
+            def close(self):
+                calls.append("following")
+
+        Observation.release([FailingHandle(), FollowingHandle()])
+        self.assertEqual(calls, ["failing", "following"])
 
 
 class WatchTest(WatchTest, SourceInvariantTest):
