@@ -1001,3 +1001,11 @@ no-op stream へ (指摘 1 は裁定 58 で code 変更禁止を明記)。worktr
 commit `d3be684` の後に分岐 (手順遵守・row 58 を分岐直後に grep 確認)。job
 `task-msr4nkhl-7b8n7i` (record 検証: sol / medium / write / fresh)。sentinel `bkf3h8sso`
 (estimate 1950s)。認定 counter 0 のまま。
+
+### 2026-08-13 — r69 fix round 完了・main 取り込み (selftest 312)・r70 発注へ
+
+fix round は sentinel `bkf3h8sso` exit 0。受け入れ: sink を `DiscardStream` (新規 fd 不要の
+in-memory stream) へ変更。gates 全緑を発注側再実行 (selftest **312** / 外部 12 / ruff / ty /
+lang lint)、TOCTOU counts 不変、独立変異 1/1 検出、消滅確認 = EPIPE×EMFILE で finish rc=0。
+wt 内 commit `dae7ffa` → cherry-pick **`9a09c1e`**。裁定 21 に「復旧手段も資源を仮定しない」
+を 69 巡拡張で追記 (gate green)。報告書退避・worktree / branch 削除。

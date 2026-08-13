@@ -802,6 +802,12 @@ codex sol xhigh で 2 巡連続」。
   r65 の fd class と r68 EPIPE fix の縫い目。fix = fd 不要の no-op sink へ
 - 閉鎖済みクラスからの再指摘ゼロは 16 巡連続
 - fix round: `drafts/sentinel-r69-fixes.md`。認定 counter 0 のまま (goal 判定は次巡へ)
+- fix 取り込み: commit `9a09c1e`。`DiscardStream` (write は文字数返却・flush no-op・新規 fd
+  不要) へ sink を変更。受け入れ: gates 全緑 (selftest **312** / 外部 12 / ruff / ty / lang
+  lint)、TOCTOU counts 不変 (production 観測列に変更なし)、独立変異 1/1 検出 (devnull open
+  へ revert → EMFILE ERROR)、消滅確認 = EPIPE×EMFILE で finish rc=0 (指摘 1 は裁定 58
+  どおり仕様外として残存)。裁定 21 に「復旧手段も資源を仮定しない」を 69 巡拡張で追記
+  (gate green)
 
 ## 復元元
 
