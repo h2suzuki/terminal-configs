@@ -26,7 +26,7 @@ MODULE_ROW = re.compile(r"^ {2}(\d+)\s+(\S+)\s{2,}(.+)$")
 SKILL_ROW = re.compile(r"^\s*\|\s*(\d+)\s*\|([^|]*)\|([^|]*)\|")
 RULING_ROW = re.compile(r"^\|\s*(\d+)\s*\|.*\|\s*[A-D]\s*\|\s*(.*?)\s*\|$")
 RULING_TEST = re.compile(r"`(test_[A-Za-z0-9_]+)`")
-LAST_RULING = 58
+LAST_RULING = 59
 
 TRUST_FLAG = "--trust-log"
 
