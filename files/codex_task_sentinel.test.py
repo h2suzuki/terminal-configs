@@ -209,5 +209,36 @@ class RulingsSyncTest(unittest.TestCase):
         self.assertEqual(referenced - methods, set())
 
 
+class RunnerConfigurationTest(unittest.TestCase):
+    """The external suite must keep its own terminal output behind the sink."""
+
+    def test_the_runner_uses_the_oserror_stream(self):
+        tree = ast.parse("\n".join(_read(__file__)))
+        main_calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "unittest"
+            and node.func.attr == "main"
+        ]
+        self.assertEqual(len(main_calls), 1)
+        runners = [
+            keyword.value
+            for keyword in main_calls[0].keywords
+            if keyword.arg == "testRunner"
+        ]
+        self.assertEqual(len(runners), 1)
+        runner = ast.dump(runners[0])
+        self.assertIn("TextTestRunner", runner)
+        self.assertIn("OSErrorStream", runner)
+
+
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(
+        testRunner=unittest.TextTestRunner(
+            verbosity=2,
+            stream=sentinel.Observation.OSErrorStream(sys.stderr),
+        )
+    )

@@ -244,6 +244,7 @@ def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], boo
     found = []
     complete = True
     root_identities = set()
+    jobs_identities = set()
     for root in roots:
         try:
             root_identity = Observation.directory_identity(root)
@@ -277,7 +278,6 @@ def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], boo
             complete = False
             continue
         observed = []
-        jobs_identities = set()
         for workspace in workspaces:
             workspace_path = os.path.join(root, workspace)
             jobs_path = os.path.join(workspace_path, "jobs")
@@ -374,6 +374,36 @@ class Observation:
 
         def flush(self) -> None:
             """Allow interpreter shutdown to flush the sink safely."""
+
+    class OSErrorStream:
+        """Keep a text producer running after its output stream fails."""
+
+        def __init__(self, stream):
+            self.stream = stream
+
+        def discard(self) -> None:
+            """Replace the failed target, including its interpreter-shutdown alias."""
+            failed = self.stream
+            self.stream = Observation.DiscardStream()
+            if sys.stdout is failed:
+                sys.stdout = self.stream
+            if sys.stderr is failed:
+                sys.stderr = self.stream
+
+        def write(self, text: str) -> int:
+            """Switch permanently to the in-memory sink after any output OSError."""
+            try:
+                return self.stream.write(text)
+            except OSError:
+                self.discard()
+                return self.stream.write(text)
+
+        def flush(self) -> None:
+            """Treat a failed flush like a failed write."""
+            try:
+                self.stream.flush()
+            except OSError:
+                self.discard()
 
     def __init__(
         self,
@@ -2448,7 +2478,13 @@ def main(argv: list[str]) -> int:
     if args.selftest:
         loaded = unittest.defaultTestLoader.loadTestsFromName(__name__ + ".WatchTest")
         return (
-            0 if unittest.TextTestRunner(verbosity=2).run(loaded).wasSuccessful() else 1
+            0
+            if unittest.TextTestRunner(
+                verbosity=2, stream=Observation.OSErrorStream(sys.stderr)
+            )
+            .run(loaded)
+            .wasSuccessful()
+            else 1
         )
     if not args.job_id:
         parser.print_usage(sys.stderr)
@@ -8746,6 +8782,115 @@ class WatchTest(WatchTest):
         with mock.patch.object(sys, "stdout", FullStream()):
             code = finish(float("inf"), EXIT_ALIVE, ("terminal",), ())
         self.assertEqual(code, EXIT_ALIVE)
+
+
+class WatchTest(WatchTest):
+    """Regressions fixed in the 75th review round."""
+
+    def test_roots_sharing_a_jobs_directory_are_scanned_once(self):
+        """One jobs directory shared across roots remains one candidate."""
+        import io
+        from contextlib import redirect_stdout
+
+        shared_jobs = tempfile.mkdtemp()
+        roots = [tempfile.mkdtemp(), tempfile.mkdtemp()]
+        for index, root in enumerate(roots):
+            workspace = os.path.join(root, f"ws-{index}")
+            os.makedirs(workspace)
+            os.symlink(shared_jobs, os.path.join(workspace, "jobs"))
+        record = os.path.join(shared_jobs, "task-x.json")
+        with open(record, "w", encoding="utf-8") as stream:
+            json.dump({"id": "task-x", "status": "running"}, stream)
+        log = os.path.join(shared_jobs, "task-x.log")
+        with open(log, "w", encoding="utf-8") as stream:
+            stream.write("x\n")
+
+        found, complete = find_jobs("task-x", roots)
+        self.assertTrue(complete)
+        self.assertEqual(len(found), 1)
+        with redirect_stdout(io.StringIO()):
+            code = watch(self._watch_args(roots[0], "task-x", once=True), roots=roots)
+        self.assertEqual(code, EXIT_ALIVE)
+
+    def test_runner_stream_oserrors_preserve_the_suite_result(self):
+        """Broken pipes and full output devices cannot replace pass/fail status."""
+
+        class FailingStream:
+            def __init__(self, error):
+                self.error = error
+
+            def write(self, _text):
+                raise self.error
+
+            def flush(self):
+                raise self.error
+
+        def outcome_test(ran, successful):
+            class OutcomeTest(unittest.TestCase):
+                def runTest(self):
+                    ran.append(True)
+                    if not successful:
+                        self.fail("expected failure")
+
+            return OutcomeTest()
+
+        for error in (
+            BrokenPipeError(errno.EPIPE, "closed pipe"),
+            OSError(errno.ENOSPC, "no space left on device"),
+        ):
+            for successful in (True, False):
+                ran = []
+                suite = unittest.TestSuite([outcome_test(ran, successful)])
+                result = unittest.TextTestRunner(
+                    verbosity=2,
+                    stream=Observation.OSErrorStream(FailingStream(error)),
+                ).run(suite)
+                self.assertEqual(ran, [True])
+                self.assertIs(result.wasSuccessful(), successful)
+
+    def test_selftest_runner_oserrors_preserve_the_exit_code(self):
+        """The CLI selftest runner uses the guarded stream, not unittest's default."""
+        from unittest import mock
+
+        class FailingStream:
+            def __init__(self, error):
+                self.error = error
+
+            def write(self, _text):
+                raise self.error
+
+            def flush(self):
+                raise self.error
+
+        def outcome_test(ran, successful):
+            class OutcomeTest(unittest.TestCase):
+                def runTest(self):
+                    ran.append(True)
+                    if not successful:
+                        self.fail("expected failure")
+
+            return OutcomeTest()
+
+        for error in (
+            BrokenPipeError(errno.EPIPE, "closed pipe"),
+            OSError(errno.ENOSPC, "no space left on device"),
+        ):
+            for successful, expected in ((True, 0), (False, 1)):
+                ran = []
+                suite = unittest.TestSuite([outcome_test(ran, successful)])
+                failing = FailingStream(error)
+                with (
+                    mock.patch.object(sys, "stderr", failing),
+                    mock.patch.object(
+                        unittest.defaultTestLoader,
+                        "loadTestsFromName",
+                        return_value=suite,
+                    ),
+                ):
+                    code = main(["--selftest"])
+                    self.assertIsInstance(sys.stderr, Observation.DiscardStream)
+                self.assertEqual(ran, [True])
+                self.assertEqual(code, expected)
 
 
 class WatchTest(WatchTest, SourceInvariantTest):
