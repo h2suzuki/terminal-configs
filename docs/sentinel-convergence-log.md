@@ -1075,3 +1075,15 @@ fix round: `drafts/sentinel-r71-fixes.md` (lint rc=0) — (1) 走査 root の `(
 `wt-r71fix` は台帳 commit `afaeb9e` の後に分岐 (手順遵守)。job `task-msr75u7i-3ofo98`
 (record 検証: sol / medium / write / fresh)。sentinel `bggi1yq4f` (estimate 2550s・stall
 1500s)。認定 counter 0 のまま。
+
+### 2026-08-13 — r71 fix round 1 受け入れ不合格 → fix round 2 発注
+
+fix round 1 (`task-msr75u7i-3ofo98`) は gates 全緑 (selftest 318) だったが、発注側の独立
+検証で **regression を確定し不合格**: `directory_identity()` の os.stat が未作成 root の
+FileNotFoundError も complete=False に落とし、単に存在しない state root の `--once` が
+exit 11「not registered yet」→ exit 14 へ退行 (main = 11 / fix 版 = 14 を実測)。selftest が
+緑なのは missing-root → complete の pin が無いため — 実装者の gates が通っても受け入れが
+落とす lifecycle の実例。fix round 2: `drafts/sentinel-r71-fixes-2.md` (FileNotFoundError は
+identity なしで既存 flow へ委譲・EACCES 等のみ complete=False・regression pin test 追加)。
+同 thread resume `task-msr7j0x1-ddoaor` (write 継承確認済)。sentinel `bqfa03isr`
+(estimate 1500s・stall 1500s)。
