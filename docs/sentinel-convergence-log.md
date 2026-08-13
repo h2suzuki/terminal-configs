@@ -663,3 +663,19 @@ r61 (認定 2 巡目・最終巡) を発注: `drafts/sentinel-review-r61.md` (r6
 生成・anchor 一意 assert・lint rc=0)。60 巡が洗った前提の再なぞりを避ける指示を追加。
 worktree `wt-r61` @ `b93762c`。job `task-msqso0q4-ja2vt3` (record 検証: sol / xhigh /
 write / fresh)。sentinel `b1ue1moba` (estimate 2250s)。**指摘ゼロなら認定成立 (2/2)**。
+
+### 2026-08-13 — r61 受領: material 1 (確定) → 認定不成立・fix round 発注
+
+r61 (`task-msqso0q4-ja2vt3`・sol xhigh・write) は sentinel `b1ue1moba` exit 0。指摘 1 件を
+裁定し**採用**: poll 内の record 同一性判定が stat 失敗 (EACCES / EIO / 不在) を inode
+不一致に畳み、祖先 directory の検索権喪失だけで「was replaced or resolved elsewhere」の
+headline に入る (repro: chmod 000 fixture で `record_moved=True`・`record_gone()=False` を
+実測)。verdict 自体は exit 14 で安全側だが、evidence が未観測の差し替えを断定する — 裁定
+33/36 の分離違反。site は `aa5aa49` (認定巡開始前) 由来の旧来 code 未疑前提で、閉鎖済み
+クラスからの再指摘ゼロは 8 巡連続。報告書退避・worktree / branch 削除。
+
+fix round: `drafts/sentinel-r61-fixes.md` (lint rc=0) — pin 直後と同じ `named_now is not
+None` 形へ揃え、stat 失敗は既存の gone / corrupt / unreadable 経路へ委ねる。worktree
+`wt-r61fix` @ `f9203df`。job `task-msqtip55-76zsqe` (record 検証: sol / medium / write /
+fresh)。sentinel `bj0d1ue71` (estimate 1950s)。**認定 counter は 0 へ reset — r62 から
+2 巡連続ゼロをやり直す**。

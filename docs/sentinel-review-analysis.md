@@ -586,6 +586,23 @@ codex sol xhigh で 2 巡連続」。
 - r61 (認定 2 巡目・最終巡) を同型発注。60 巡が洗った前提の再なぞりを避け、別の未疑前提を
   優先する指示を発注書に追加
 
+### r61 (認定 2 巡目・8 度目) — material 1、認定不成立 (counter reset)
+
+- **指摘 1 (採用)**: poll 内の record 同一性判定が stat 失敗を inode 不一致に畳む —
+  `file_stat()` は全 OSError を None にし、`(file_stat(record_path) or (None, None))[:2]
+  != record_inode` が不在・EACCES・EIO の全てを「差し替え」にする。祖先 directory の
+  検索権喪失だけで headline「was replaced or resolved elsewhere」— inode 不一致は未観測
+  (repro: chmod 000 で EACCES 実測、`record_moved=True`・`record_gone()=False`)。
+  裁定 33/36「動いた vs 読めなかった」分離の実装違反 = 誤った evidence。pin 直後の判定は
+  `named_now is not None` 条件付きで正しく、poll 側だけが畳む非対称
+- 指摘 site は `aa5aa49` (認定巡開始前の構造 commit) 由来 — 直近 fix の縫い目ではなく
+  旧来 code の未疑前提 (errno 分類の保存)。peer baseline 側の同型 stat 失敗は skip
+  (安全側) で無事故と確認。閉鎖済みクラス (精度・受理域・funnel/Observation/harness) からの
+  再指摘ゼロは 8 巡連続
+- fix round: `drafts/sentinel-r61-fixes.md` (stat 失敗を moved にしない + 権限 fixture red +
+  差し替え/不在の回帰維持)。**認定 counter は 0 へ reset** — 認定は r62 から 2 巡連続ゼロを
+  やり直し
+
 ## 復元元
 
 repo の実 path は `/home/scorer/terminal-configs` である (user 名変更前の `/home/h2suzuki/...` は現存しない
