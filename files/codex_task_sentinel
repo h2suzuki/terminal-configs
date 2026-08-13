@@ -516,8 +516,15 @@ class Observation:
                 after = cls.descriptor_stat(handle)
                 try:
                     named = os.stat(path)
-                except OSError:
+                except (FileNotFoundError, NotADirectoryError):
                     named = None
+                except OSError as exc:
+                    return cls(
+                        cls.UNSTABLE,
+                        stamp=stamp,
+                        error=exc,
+                        reason="unreadable",
+                    )
         except FileNotFoundError:
             state = cls.UNSTABLE if cls.unreachable(path) else cls.ABSENT
             return cls(state, stamp=("absent",), reason="missing")
@@ -631,10 +638,17 @@ def _parse_record(raw: bytes, job_id: str | None = None) -> dict | None:
             loaded[name] = value
         return loaded
 
+    def reject_constant(name):
+        raise ValueError(f"non-standard JSON constant: {name}")
+
     try:
         if len(raw) > MAX_RECORD_BYTES:
             return None
-        loaded = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object)
+        loaded = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=unique_object,
+            parse_constant=reject_constant,
+        )
     except (ValueError, RecursionError, UnicodeDecodeError):
         # 深くネストした JSON は ValueError ではなく RecursionError で来る。
         return None
@@ -1461,12 +1475,14 @@ def carrying_records(
     one that moved is not a stable corrupt — each licenses a different verdict.
     """
     carried = []
+    carried_stamps = []
     unknown = []
     shifting = []
     for pair in found:
         before = record_stamp(pair[0])
         view: list = []
-        stamp, loaded = record_view(pair[0], hold=view if hold is not None else None)
+        keep_read = hold is not None and len(found) == 1
+        stamp, loaded = record_view(pair[0], hold=view if keep_read else None)
         # 判断に使った bytes そのものが、 前後どちらとも同じであることを要求する。
         if stamp != before or record_stamp(pair[0]) != before:
             shifting.append(pair)
@@ -1478,10 +1494,21 @@ def carrying_records(
             continue
         if loaded.get("id") == job_id:
             carried.append(pair)
-            if hold is not None and view:
+            carried_stamps.append(stamp)
+            if keep_read and view:
                 hold.append((pair, view))
                 view = []
-        Observation.release(view)  # 採らなかった候補の descriptor は持たない
+        Observation.release(view)
+    if hold is not None and len(found) > 1 and len(carried) == 1:
+        singleton = carried[0]
+        view = []
+        pinned = Observation.record(singleton[0], MAX_RECORD_BYTES + 1, view)
+        if pinned.state == Observation.PRESENT and pinned.stamp == carried_stamps[0]:
+            hold.append((singleton, view))
+        else:
+            Observation.release(view)
+            carried.clear()
+            shifting.append(singleton)
     return carried, unknown, shifting
 
 
@@ -1511,6 +1538,10 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             carried, unknown, shifting = carrying_records(
                 found, args.job_id, hold=fresh_hold
             )
+            if len(carried) > 1 and pin_hold:
+                for _pair, descriptors in pin_hold:
+                    Observation.release(descriptors)
+                pin_hold = []
             # 周回間 inode 比較は同じ path の単独候補だけに限る。重複は下の
             # cardinality 判定へ送り、走査順の違う候補同士を比較しない。
             if (
@@ -7693,6 +7724,79 @@ class WatchTest(WatchTest):
         self.assertEqual(code, EXIT_UNVERIFIABLE)
         self.assertEqual(len(calls), 4)
         self.assertLessEqual(max(retained), 3)
+
+
+class WatchTest(WatchTest):
+    """Regressions fixed in the 65th review round."""
+
+    def test_duplicate_records_do_not_exhaust_the_descriptor_budget(self):
+        import resource
+        import subprocess
+
+        root, _record, _log = self._state("ws-a", "task-dup", "running")
+        jobs = os.path.join(root, "ws-b", "jobs")
+        os.makedirs(jobs)
+        with open(os.path.join(jobs, "task-dup.json"), "w", encoding="utf-8") as f:
+            json.dump({"id": "task-dup", "status": "running"}, f)
+        with open(os.path.join(jobs, "task-dup.log"), "w", encoding="utf-8") as f:
+            f.write("x\n")
+
+        def one_candidate_slot():
+            resource.setrlimit(resource.RLIMIT_NOFILE, (5, 5))
+            filler = os.open(os.devnull, os.O_RDONLY)
+            os.set_inheritable(filler, True)
+
+        result = subprocess.run(
+            [sys.executable, __file__, "task-dup", "--state-root", root, "--once"],
+            check=False,
+            capture_output=True,
+            text=True,
+            preexec_fn=one_candidate_slot,
+        )
+        self.assertEqual(result.returncode, EXIT_AMBIGUOUS, result.stdout + result.stderr)
+        self.assertIn("ambiguous: 2 records carry the id", result.stdout)
+
+    def test_non_standard_json_constants_are_corrupt(self):
+        for constant in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(constant=constant, position="top-level"):
+                raw = (
+                    '{"id":"task-x","status":"running","ignored":'
+                    + constant
+                    + "}"
+                ).encode()
+                self.assertIsNone(_parse_record(raw))
+            with self.subTest(constant=constant, position="nested"):
+                raw = (
+                    '{"id":"task-x","status":"running","ignored":{"value":'
+                    + constant
+                    + "}}"
+                ).encode()
+                self.assertIsNone(_parse_record(raw))
+        self.assertIsNotNone(
+            _parse_record(b'{"id":"task-x","status":"running","ignored":1.5}')
+        )
+
+    def test_an_artifact_post_stat_permission_error_is_unreadable(self):
+        from unittest import mock
+
+        path = os.path.join(tempfile.mkdtemp(), "report.md")
+        with open(path, "wb") as stream:
+            stream.write(b"body\nDONE")
+        real_stat = os.stat
+
+        def denied_after_read(target, *args, **kwargs):
+            if target == path:
+                raise PermissionError(target)
+            return real_stat(target, *args, **kwargs)
+
+        with mock.patch("os.stat", side_effect=denied_after_read):
+            observed = Observation.artifact(
+                path, MAX_SCAN_BYTES, MAX_ARTIFACT_BYTES
+            )
+        self.assertEqual(observed.state, Observation.UNSTABLE)
+        self.assertEqual(observed.reason, "unreadable")
+        self.assertIsInstance(observed.error, PermissionError)
+        self.assertNotEqual(observed.stamp, ("moved",))
 
 
 class SourceInvariantTest(unittest.TestCase):
