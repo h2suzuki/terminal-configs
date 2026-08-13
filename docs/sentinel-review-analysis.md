@@ -553,6 +553,22 @@ codex sol xhigh で 2 巡連続」。
   **修正が 1 層深い未疑前提を開ける連鎖** (Decimal→context、ASCII→出力 encode) が続く。
   受理域を仕様で絞る (例: stamp の小数を 9 桁までに制限 — runner は 3 桁しか書かない) ことで
   クラスごと閉じられる指摘が複数あり、材料は司令塔判断へ
+- fix 取り込み: commit `9575741` (tuple 構築の exact 化・end 限定 suffix・overflow sentinel・
+  strict encode 判定)。裁定 54 (stamp 小数 9 桁上限) を司令塔裁定で確定し `a3c7d07` で取り込み
+  (selftest 283)
+
+### r59 (認定 1 巡目・6 度目) — material 3、認定不成立
+
+- **指摘 1 (採用)**: 相対 `workspaceRoot` (`"."` 等) が受理され、監視 cwd 基準で解決 —
+  別ツリーを根拠に exit 0/3/4 を返しうる (repro: `_parse_record` が `"."` を受理)
+- **指摘 2 (採用)**: 8192 byte 超の物理行の先頭断片が `dropping` 設定前に yield され、
+  正確に cap byte で `(exit 0)` が終わる偽 end が pending を消す (repro: 発注側 fixture は
+  2 度 off-by-one を踏んでから正確な断片で確定 — 境界 repro 自体の検証も裁定の一部)
+- **指摘 3 (採用)**: tail の `strip()` が event 判別に使える左端空白を消し、本文を真正 event
+  と同じ表示に改変 (source 確認)。裁定 32/33 の表示忠実性クラス
+- 3 件とも旧来 code の未疑前提 (path 束縛・reader framing・表示忠実性)。**裁定 54 で閉じた
+  精度クラスと、直近修正の連鎖窓からの指摘は 0** — 供給源の分布が変わった
+- fix round: `drafts/sentinel-r59-fixes.md`。認定 counter は 0 のまま
 
 ## 復元元
 

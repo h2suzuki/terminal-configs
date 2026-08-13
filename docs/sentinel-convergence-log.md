@@ -628,3 +628,15 @@ ruff / ty)、境界 repro 5 点 (9 桁受理両側・10 桁棄却両側・10 桁
 独立変異 (LOG_TS 無制限戻し) 再現。r58 で追加した `epoch_fraction()` の context 非依存 unit
 test は保持され、置き換えは regex 受理側の 30 桁 test のみ (裁定 54 との矛盾解消) — 妥当。
 wt 内 commit `1f13523` → cherry-pick **`a3c7d07`**。裁定 54 を正本化 (53 → **54 件**)。
+
+### 2026-08-13 — r59 受領: material 3 (全件確定) → fix round 発注
+
+r59 (`task-msqqp1kh-t8hhd1`・sol xhigh・write) は sentinel exit 0。指摘 3 件を裁定: 相対
+workspaceRoot の受理 (repro)、cap 到達断片の event 化 (repro — 発注側 fixture が 2 度
+off-by-one を踏んだ後、正確な 8192 byte 断片で pending 消失を確定)、tail `strip()` の表示
+改変 (source 確認)。**裁定 54 で閉じた精度クラスと直近修正の連鎖窓からの指摘はゼロ** —
+供給源は旧来 code の未疑前提 (path 束縛・reader framing・表示忠実性) に移った。
+
+fix round: `drafts/sentinel-r59-fixes.md` (isabs 要求 / cap 断片の非採用 / tail 左端保持)。
+worktree `wt-r59fix` @ `00a0abf`。job `task-msqri7yn-z5zxh6` (record 検証: sol / medium /
+write / fresh)。sentinel `bhl39rye6` (estimate 2250s)。認定 counter 0 のまま。
