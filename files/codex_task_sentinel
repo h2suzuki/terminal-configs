@@ -122,6 +122,8 @@ MAX_WORKSPACES = 10_000
 MAX_PEERS = 5_000
 # cache の版 directory も逐次列挙し、補助探索だけが無制限にならないようにする。
 MAX_COMPANION_CANDIDATES = 10_000
+# cadence を跨いで保持する候補 path も上限内に抑える。
+MAX_SEEN_PAIRS = 10_000
 
 EXIT_DONE = 0
 EXIT_DONE_HUNG = 3
@@ -437,11 +439,13 @@ class Observation:
                     )
                 size = cls.descriptor_stat(handle).st_size
                 budget = min(size, MAX_SCAN_BYTES)
-                if budget < size:
+                truncated_left = budget < size
+                if truncated_left:
                     handle.seek(size - budget)
                     if onerror is not None:
                         onerror()
-                dropping = False
+                # 非ゼロ offset は物理行境界の証明を持たないので最初の LF まで捨てる。
+                dropping = truncated_left
                 while budget > 0:
                     # cap の次の 1 byte も同じ read で見て、物理行の途中かを決める。
                     chunk = handle.readline(min(MAX_LOG_LINE + 1, budget))
@@ -767,7 +771,7 @@ def log_lines(
     stamp: list | None = None,
     hold: list | None = None,
 ) -> Iterator[str]:
-    """Non-empty log lines, newest last, left edge intact so events can be anchored.
+    """Non-empty log lines, newest last, with an unproved left fragment omitted.
 
     Streamed, and physical lines beyond MAX_LOG_LINE are omitted: the plugin
     appends message bodies with no size limit, so one agent turn can be a single
@@ -1150,10 +1154,17 @@ def artifact_view(
     return (bool(lines) and lines[-1] == token), observed.stamp
 
 
-def version_key(path: str) -> tuple[int, ...]:
-    """The version directory of a cached plugin path, ordered numerically not lexically."""
+def version_key(path: str) -> tuple[tuple[int, bool], ...]:
+    """The cached plugin version ordered by numeric prefixes, release after suffix."""
     part = path.split(os.sep)[-3] if path.count(os.sep) >= 3 else ""
-    return tuple(int(x) if x.isascii() and x.isdigit() else 0 for x in part.split("."))
+
+    def component_key(component: str) -> tuple[int, bool]:
+        matched = re.match(r"[0-9]*", component, re.ASCII)
+        assert matched is not None
+        prefix = matched.group()
+        return (int(prefix) if prefix else 0, matched.end() == len(component))
+
+    return tuple(component_key(component) for component in part.split("."))
 
 
 def ascii_float(value: str) -> float:
@@ -1175,9 +1186,9 @@ def companion_candidates(pattern: str) -> Iterator[str]:
     parent = os.path.dirname(prefix)
     name_prefix = prefix[len(parent) + 1 :]
     name_suffix, separator, tail = suffix.partition(os.sep)
+    count = 0
     try:
         with os.scandir(parent) as entries:
-            count = 0
             for entry in entries:
                 count += 1
                 if count > MAX_COMPANION_CANDIDATES:
@@ -1190,8 +1201,23 @@ def companion_candidates(pattern: str) -> Iterator[str]:
                 ):
                     continue
                 yield os.path.join(parent, name, tail) if separator else entry.path
-    except OSError:
+    except OSError as exc:
+        if count:
+            raise CompanionScanOverflow from exc
         return
+
+
+def remember_pairs(
+    seen_pairs: set[tuple[str, str]], pairs: Iterator[tuple[str, str]]
+) -> bool:
+    """Remember candidates through cadences, or stop before exceeding the cap."""
+    for pair in pairs:
+        if pair in seen_pairs:
+            continue
+        if len(seen_pairs) >= MAX_SEEN_PAIRS:
+            return False
+        seen_pairs.add(pair)
+    return True
 
 
 def companion_path() -> str | None:
@@ -1515,7 +1541,21 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 pin_hold = replace_candidate_holds(pin_hold, fresh_hold)
             complete = complete and not shifting  # 動いた候補は掴めていない
             # 動いた候補も「一度は見えた」 — 忘れると後で未登録と断定できてしまう。
-            seen_pairs.update(shifting)
+            if not remember_pairs(seen_pairs, iter(shifting)):
+                return finish(
+                    deadline,
+                    EXIT_UNVERIFIABLE,
+                    (
+                        f"unverifiable: {printable(args.job_id)} could not be "
+                        "resolved to one record before the candidate history limit",
+                        f"  searched: {printable(', '.join(roots))}",
+                    ),
+                    (
+                        f"timeout: {printable(args.job_id)} could not be resolved "
+                        f"within {int(args.timeout_seconds)}s",
+                        f"  searched: {printable(', '.join(roots))}",
+                    ),
+                )
             if carried:
                 found, complete = carried, complete and not unknown
             else:
@@ -1578,7 +1618,21 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             break
         # 走査しきれていない 1 件は「唯一」の証明にならないが、 どれを見たかは事実。
         # bool に畳むと、 後から別 path の同名 record へ黙ってすり替わる。
-        seen_pairs.update(found)
+        if not remember_pairs(seen_pairs, iter(found)):
+            return finish(
+                deadline,
+                EXIT_UNVERIFIABLE,
+                (
+                    f"unverifiable: {printable(args.job_id)} could not be resolved "
+                    "to one record before the candidate history limit",
+                    f"  searched: {printable(', '.join(roots))}",
+                ),
+                (
+                    f"timeout: {printable(args.job_id)} could not be resolved within "
+                    f"{int(args.timeout_seconds)}s",
+                    f"  searched: {printable(', '.join(roots))}",
+                ),
+            )
         found = []
         if args.once:
             # --once は 1 cadence で返す約束。 ただし走査が不完全、 または一度でも
@@ -7529,6 +7583,116 @@ class WatchTest(WatchTest):
         self.assertIn(r"\u7121\u97f3", result.stdout)
         self.assertIn(r"\u6210\u679c\u7269", result.stdout)
         self.assertIn("  cancel :", result.stdout)
+
+
+class WatchTest(WatchTest):
+    """Regressions fixed in the 64th review round."""
+
+    def test_companion_iteration_failure_discards_the_partial_best(self):
+        from types import SimpleNamespace
+        from unittest import mock
+
+        cached = "/cache/1.0.10/scripts/x.mjs"
+        fallback = "/marketplace/scripts/x.mjs"
+
+        class FailingEntries:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+            def __iter__(self):
+                yield SimpleNamespace(name="1.0.10", path=cached)
+                raise OSError("iterator failed")
+
+        with (
+            mock.patch(__name__ + ".COMPANION_GLOB", "/cache/*/scripts/x.mjs"),
+            mock.patch(__name__ + ".COMPANION_FALLBACK", fallback),
+            mock.patch("os.scandir", return_value=FailingEntries()),
+            mock.patch("os.path.isfile", return_value=True),
+            mock.patch("os.access", return_value=True),
+        ):
+            self.assertEqual(companion_path(), fallback)
+
+    def test_suffix_versions_follow_semver_lite_order(self):
+        prerelease = "/cache/1.0.10-beta/scripts/x.mjs"
+        release = "/cache/1.0.10/scripts/x.mjs"
+        older = "/cache/1.0.9/scripts/x.mjs"
+        self.assertGreater(version_key(prerelease), version_key(older))
+        self.assertLess(version_key(prerelease), version_key(release))
+
+    def test_a_scan_window_fragment_cannot_become_an_event(self):
+        from unittest import mock
+
+        log = os.path.join(tempfile.mkdtemp(), "job.log")
+        prefix = b"same physical line: "
+        fake = b"[2026-08-09T00:00:00.000Z] Running command: sleep 999"
+        rest = b"\n[2026-08-09T00:00:01.000Z] note\n"
+        with open(log, "wb") as stream:
+            stream.write(prefix + fake + rest)
+        with mock.patch(__name__ + ".MAX_SCAN_BYTES", len(fake + rest)):
+            pending, tail, whole, _stamp = scan_log(log)
+        self.assertEqual(pending, [])
+        self.assertFalse(any("sleep 999" in line for line in tail))
+        self.assertFalse(whole)
+
+    def test_a_scan_window_at_a_line_start_still_drops_its_first_line(self):
+        from unittest import mock
+
+        log = os.path.join(tempfile.mkdtemp(), "job.log")
+        kept_window = b"first\nfinal without LF"
+        with open(log, "wb") as stream:
+            stream.write(b"outside\n" + kept_window)
+        with mock.patch(__name__ + ".MAX_SCAN_BYTES", len(kept_window)):
+            lines = list(log_lines(log))
+            _pending, _tail, whole, _stamp = scan_log(log)
+        self.assertEqual(lines, ["final without LF"])
+        self.assertFalse(whole)
+
+    def test_an_untruncated_eof_line_is_still_read(self):
+        log = os.path.join(tempfile.mkdtemp(), "job.log")
+        with open(log, "wb") as stream:
+            stream.write(b"final without LF")
+        self.assertEqual(list(log_lines(log)), ["final without LF"])
+
+    def test_shifting_candidates_stop_at_the_history_cap(self):
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root = tempfile.mkdtemp()
+        calls = []
+        retained = []
+        real_remember = remember_pairs
+
+        def changing_jobs(_job_id, _roots):
+            calls.append(1)
+            if len(calls) > 4:
+                raise AssertionError("candidate history did not stop at its cap")
+            pair = (f"/record/{len(calls)}", f"/log/{len(calls)}")
+            return [pair], False
+
+        def carried(found, _job_id, hold=None):
+            return found, [], []
+
+        def bounded_remember(seen, pairs):
+            result = real_remember(seen, pairs)
+            retained.append(len(seen))
+            return result
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".MAX_SEEN_PAIRS", 3),
+            mock.patch(__name__ + ".find_jobs", side_effect=changing_jobs),
+            mock.patch(__name__ + ".carrying_records", side_effect=carried),
+            mock.patch(__name__ + ".remember_pairs", side_effect=bounded_remember),
+            mock.patch(__name__ + ".sleep_until"),
+        ):
+            code = watch(self._watch_args(root, "task-x"))
+        self.assertEqual(code, EXIT_UNVERIFIABLE)
+        self.assertEqual(len(calls), 4)
+        self.assertLessEqual(max(retained), 3)
 
 
 class SourceInvariantTest(unittest.TestCase):
