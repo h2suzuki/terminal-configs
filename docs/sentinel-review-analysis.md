@@ -687,6 +687,24 @@ codex sol xhigh で 2 巡連続」。
   51 回目で exit 14)。裁定 47 / 55 の本文・担保も 64 巡拡張で更新。残余 note: seen_pairs の
   cap は件数のみ (byte 面は path 長 × 10k で有界と判断)
 
+### r65 (認定 1 巡目・12 度目) — material 3、認定不成立
+
+- **指摘 1 (採用)**: carried 候補ごとの descriptor 保持が fd 上限を自己消費し、実在する重複を
+  exit 9 にできない — EMFILE が `("unopenable", errno)` に正規化され「読めない候補」に化ける
+  (repro: 重複 2 record の state root を subprocess の RLIMIT_NOFILE で走らせ、fd 6→5 で
+  exit 9→14 の flip を実測)。裁定 23 の担保が「件数 cap = fd 消費も有界」という OS 資源前提に
+  依存していた。周回間 inode 比較に hold が要るのは singleton だけ — 2 件目確定で解放できる
+- **指摘 2 (採用)**: record JSON が `NaN` / `Infinity` を受理 — Python json.loads の既定は
+  非標準定数を float 化するため、破損 record が corrupt (exit 13) でなく終局判定に使われうる
+  (repro: NaN 入り raw が dict 受理)。裁定 52 (標準外 JSON は corrupt) の未適用面
+- **指摘 3 (採用)**: `Observation.artifact` の後置 `os.stat` が全 OSError を `named=None` に
+  畳み、inode 不一致と同じ `("moved",)` に分類 (repro: PermissionError で
+  reason=moved を実測)。r61 で record 側に入れた「stat 失敗 ≠ 移動の観測」の分類規律が
+  artifact primitive に届いていなかった — 同欠陥定義の横展開漏れ
+- 3 件とも未疑前提枠 (fd 上限・JSON decoder の標準外受理集合・errno 分類の primitive 間
+  一貫性)。閉鎖済みクラスからの再指摘ゼロは 12 巡連続
+- fix round: `drafts/sentinel-r65-fixes.md`。認定 counter 0 のまま
+
 ## 復元元
 
 repo の実 path は `/home/scorer/terminal-configs` である (user 名変更前の `/home/h2suzuki/...` は現存しない

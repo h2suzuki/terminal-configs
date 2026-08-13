@@ -817,3 +817,14 @@ anchor 一意 assert・lint rc=0)。material 26 件・selftest 299・裁定 56 �
 洗った前提群の再なぞり回避を明記。worktree `wt-r65` は docs commit `c14f9c4` の後に分岐
 (手順遵守・row 56 を分岐直後に grep 確認)。job `task-msqyfg2i-gpl4r7` (record 検証: sol /
 xhigh / write / fresh)。sentinel `bv237nzjm` (estimate 2250s)。
+
+### 2026-08-13 — r65 受領: material 3 (全件確定) → fix round 発注へ
+
+r65 (`task-msqyfg2i-gpl4r7`・sol xhigh・write) は sentinel `bv237nzjm` exit 0。指摘 3 件を
+全て repro で確定し**採用**: (1) carried 候補の descriptor 保持が fd を自己消費し重複を
+exit 9 にできない (RLIMIT_NOFILE subprocess で fd 6→5 の exit 9→14 flip を実測 — 裁定 23 の
+担保が OS 資源前提に依存)、(2) record JSON の `NaN` / `Infinity` 受理 (裁定 52 の未適用面)、
+(3) artifact 後置 stat の全 OSError が `("moved",)` に畳まれる (r61 の分類規律の primitive 間
+横展開漏れ)。3 件とも未疑前提枠 (fd 上限・JSON decoder 受理集合・errno 分類の一貫性)、
+閉鎖済みクラスからの再指摘ゼロは 12 巡連続。報告書退避・worktree / branch 削除。認定
+counter 0 のまま。
