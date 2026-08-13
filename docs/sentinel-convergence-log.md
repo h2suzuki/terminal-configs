@@ -1028,3 +1028,13 @@ symlink が fallback pin で無条件 exit 10 (期待 13)、(2) root 祖先の d
 完全空走査と誤認し exit 11「not registered」、(3) `BlockingIOError` (EAGAIN) が finish を
 素通し。分類の横展開漏れ ×2 + EPIPE 系の残余 errno ×1。閉鎖済みクラスからの再指摘ゼロは
 17 巡連続。報告書退避・worktree / branch 削除。認定 counter 0 のまま。
+
+### 2026-08-13 — r70 fix round 発注
+
+fix round: `drafts/sentinel-r70-fixes.md` (lint rc=0) — (1) fallback pin の名前消失例外で
+`record_gone()` 再分類 (dangling link は exit 13)、(2) root handler で
+`Observation.unreachable()` 確認 (走査不能 root は complete=False)、(3) EAGAIN /
+EWOULDBLOCK も sink 切替 (EPIPE / EAGAIN 以外の再送出は維持)。worktree `wt-r70fix` は台帳
+commit `68900fe` の後に分岐 (手順遵守)。job `task-msr5yu65-iffcbz` (record 検証: sol /
+medium / write / fresh)。sentinel `btduq4q4n` (estimate 2550s・stall-seconds 1500 — 以後の
+監視は xhigh 深読み対策で明示しきい値を使う)。認定 counter 0 のまま。
