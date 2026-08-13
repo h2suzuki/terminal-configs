@@ -973,3 +973,12 @@ TOCTOU counts の変化 (log 8 / log-command 10 / artifact 13 / peer 18) は pro
 (/proc whole=False・artifact None・finish rc=0)。wt 内 commit `07db445` → cherry-pick
 **`e7a9234`**。裁定 57 (.git 設計除外) を正本化し gate pin 57 (`7a9e73e`)、裁定 16 / 21 を
 68 巡拡張で更新。報告書退避・worktree / branch 削除。
+
+### 2026-08-13 — r69 発注
+
+r69 (認定 1 巡目・goal 判定対象) を発注: `drafts/sentinel-review-r69.md` (r68 から python
+置換で生成・anchor 一意 assert・lint rc=0)。material 35 件・selftest 311・裁定 57 を反映し、
+60〜68 巡が洗った前提群の再なぞり回避を明記。worktree `wt-r69` は docs commit `e5311d5` の
+後に分岐 (手順遵守・row 57 を分岐直後に grep 確認)。job `task-msr3olom-a7gony` (record 検証:
+sol / xhigh / write / fresh)。sentinel `bcbvxhzlh` (estimate 2250s)。指摘ゼロならユーザー
+goal (非連続 2 回のゼロ巡) 達成。
