@@ -1172,3 +1172,12 @@ artifact 13→15・unreadable 期待 11→14 は fix 1 由来と semantics ま�
 検出 (専用 test + TOCTOU oracle の両輪)、消滅確認 2/2 (alias → 11・ENOSPC → rc=0)。wt 内
 commit `a444e5b` → cherry-pick **`36de3c4`**。裁定 23 / 21 を 73 巡拡張で更新 (gate green)。
 報告書退避・worktree / branch 削除。
+
+### 2026-08-13 — r74 発注
+
+r74 (認定 1 巡目・goal 判定対象) を発注: `drafts/sentinel-review-r74.md` (r73 から python
+置換で生成・anchor 一意 assert・lint rc=0)。material 44 件・selftest 322 を反映し、60〜73 巡
+が洗った前提群の再なぞり回避を明記。worktree `wt-r74` は docs commit `ab90e94` の後に分岐
+(手順遵守)。job `task-msranb01-rzqqi6` (record 検証: sol / xhigh / write / fresh)。sentinel
+`bzn9nffym` (estimate 2250s・stall 1500s)。指摘ゼロならユーザー goal (非連続 2 回のゼロ巡)
+達成。
