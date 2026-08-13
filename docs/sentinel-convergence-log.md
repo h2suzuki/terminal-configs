@@ -776,3 +776,14 @@ anchor 一意 assert・lint rc=0)。material 22 件・selftest 293・外部 12�
 commit `66ea88d` の後に分岐 (手順遵守・row 55 の 63 巡拡張を分岐直後に grep 確認)。job
 `task-msqwt2qf-vq0hnw` (record 検証: sol / xhigh / write / fresh)。sentinel `b9nkjjqqa`
 (estimate 2250s)。
+
+### 2026-08-13 — r64 受領: material 4 (全件確定) → fix round 発注へ
+
+r64 (`task-msqwt2qf-vq0hnw`・sol xhigh・write) は sentinel `b9nkjjqqa` exit 0。指摘 4 件を
+全て repro で確定し**採用**: (1) companion 列挙の途中 OSError が正常 EOF に化け部分 best を
+採用 (r61 同族)、(2) `version_key` の suffix 付き component 丸ごと 0 化で `1.0.10-beta` が
+`1.0.9` に負ける (版名文法の仕様空白 → 裁定 56 を司令塔裁定で確定予定)、(3) scan window
+左端を物理行頭と仮定し断片が event 化 (`pending=['sleep 999']` 実測・docstring 矛盾)、
+(4) 登録解決の `seen_pairs` が cadence 比例で無上限成長 (peak 9.7x 実測・裁定 55 の時間軸
+拡張漏れ)。4 件とも未疑前提枠、閉鎖済みクラスからの再指摘ゼロは 11 巡連続。報告書退避・
+worktree / branch 削除。認定 counter 0 のまま。

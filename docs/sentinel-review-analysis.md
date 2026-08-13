@@ -657,6 +657,27 @@ codex sol xhigh で 2 巡連続」。
   消滅確認 = 同一 repro (103 entry × cap 5) が fallback へ。裁定 55 本文を 63 巡拡張で更新
   (raw scandir entry 消費 + 担保 5 tests)
 
+### r64 (認定 1 巡目・11 度目) — material 4、認定不成立
+
+- **指摘 1 (採用)**: companion 列挙の途中 OSError が `except OSError: return` で正常 EOF に
+  化け、部分集合から best を採用 (repro: 1 件 yield 後に OSError → fallback でなく当該候補を
+  選択)。r61 (stat 失敗の畳み込み) と同族の companion 列挙版 — 裁定 33/36/55 違反
+- **指摘 2 (採用)**: `version_key` が suffix 付き component を丸ごと 0 化 — `1.0.10-beta` は
+  `(1,0,0)` になり `1.0.9` に負ける (repro: key 直接比較)。cache 版名の文法が未定義という
+  仕様空白 → 裁定 56 として numeric-prefix + release 優先 (semver-lite) を司令塔裁定で確定
+- **指摘 3 (採用)**: `MAX_SCAN_BYTES` 超過時の seek 着地点を物理行の先頭と仮定 — window
+  左端が長い本文行の途中でも次の LF までを独立行として採用し、断片が event 化する (repro:
+  1 物理行の途中に窓を合わせ `pending=['sleep 999']` を実測)。`log_lines()` docstring の
+  「left edge intact」とも矛盾。reader framing class (裁定 16/47 家系) の残余
+- **指摘 4 (採用)**: 登録解決 loop の `seen_pairs` が cadence を跨いで無上限 —
+  `set.update()` に件数・byte 上限がなく、churn する state tree で cadence 比例に成長
+  (repro: tracemalloc peak が 200→2000 巡で 9.7x)。裁定 55 の時間軸への拡張漏れ。裁定 45
+  (忘れない) は維持し、上限到達 = 解決不能の契約 exit とする方針
+- 4 件とも旧来 code / 直近 fix の縫い目の未疑前提 (iterator の途中失敗・版名文法・seek
+  着地点・時間方向の保持量)。閉鎖済みクラス (精度・受理域・funnel/Observation/harness)
+  からの再指摘ゼロは 11 巡連続
+- fix round: `drafts/sentinel-r64-fixes.md`。認定 counter 0 のまま
+
 ## 復元元
 
 repo の実 path は `/home/scorer/terminal-configs` である (user 名変更前の `/home/h2suzuki/...` は現存しない
