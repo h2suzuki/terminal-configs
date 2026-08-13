@@ -788,6 +788,21 @@ codex sol xhigh で 2 巡連続」。
   57 へ bump (`7a9e73e`)、裁定 16 (advertised size ≠ 全量)・21 (funnel の EPIPE) を 68 巡
   拡張で更新
 
+### r69 (認定 1 巡目・16 度目) — material 1 採用 + 脅威 model 裁定 1、認定不成立
+
+- **指摘 1 (部分採用・脅威 model 裁定)**: run 前の未来 mtime + run 後の chmod (metadata-only)
+  で両時刻 gate を通過し、前 run の成果物が ready=True になる (repro: chmod 後 ready=True を
+  実測)。機構は実在するが、提案の content fingerprint 基準化は (a) fs を制御する敵対者には
+  結局勝てず、(b) 完了後に監視を張り直す再 arm 運用を「帰属不能 = exit 14」で壊す actual
+  cost。**裁定 58** を司令塔裁定で正本化: POSIX metadata は帰属の必要条件であって content
+  provenance の十分条件ではなく、metadata を偽装する敵対的 local actor は脅威 model 外
+  (裁定 2 の観測可能性と同系)。gate pin 58 (`13f6e44`)
+- **指摘 2 (採用)**: EPIPE 復旧の `discard_stdout()` が `open(devnull)` で新規 fd を要求 —
+  fd 枯渇時は EMFILE の二次例外が素通しし契約 code を失う (repro: EMFILE mock で実測)。
+  r65 の fd class と r68 EPIPE fix の縫い目。fix = fd 不要の no-op sink へ
+- 閉鎖済みクラスからの再指摘ゼロは 16 巡連続
+- fix round: `drafts/sentinel-r69-fixes.md`。認定 counter 0 のまま (goal 判定は次巡へ)
+
 ## 復元元
 
 repo の実 path は `/home/scorer/terminal-configs` である (user 名変更前の `/home/h2suzuki/...` は現存しない

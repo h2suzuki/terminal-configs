@@ -982,3 +982,14 @@ r69 (認定 1 巡目・goal 判定対象) を発注: `drafts/sentinel-review-r69
 後に分岐 (手順遵守・row 57 を分岐直後に grep 確認)。job `task-msr3olom-a7gony` (record 検証:
 sol / xhigh / write / fresh)。sentinel `bcbvxhzlh` (estimate 2250s)。指摘ゼロならユーザー
 goal (非連続 2 回のゼロ巡) 達成。
+
+### 2026-08-13 — r69 受領: material 1 採用 + 脅威 model 裁定 1 → fix round 発注へ
+
+r69 (`task-msr3olom-a7gony`・sol xhigh・write) は sentinel `bcbvxhzlh` exit 0。指摘 2 件を
+裁定: (1) **部分採用** — chmod の metadata-only ctime 前進で時刻 gate を迂回できる (repro
+実測)。content fingerprint 化は fs 制御者に勝てず再 arm 運用を壊す actual cost があり不採用。
+**裁定 58** (POSIX metadata は帰属の必要条件・敵対的 local actor は脅威 model 外) を正本化し
+gate pin 58 (`13f6e44`)。(2) **採用** — EPIPE 復旧の `open(devnull)` が fd 枯渇時に EMFILE の
+二次例外で契約 code を失う (repro 実測)。r65 fd class × r68 EPIPE fix の縫い目。閉鎖済み
+クラスからの再指摘ゼロは 16 巡連続。報告書退避・worktree / branch 削除。認定 counter 0 の
+まま (goal 判定は次巡へ)。
