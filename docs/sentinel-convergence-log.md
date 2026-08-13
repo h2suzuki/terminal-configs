@@ -954,3 +954,10 @@ flush 抑止 + 選択済み code の返却)、(3) `.git` skip test の docstring
 → docs commit の順で gate green を維持)。worktree `wt-r68fix` は台帳 commit `7277b4e` の後に
 分岐 (手順遵守)。job `task-msr32qgs-578dzd` (record 検証: sol / medium / write / fresh)。
 sentinel `b76609kwe` (estimate 2850s)。認定 counter 0 のまま。
+
+### 2026-08-13 — ユーザー goal: 認定 counter の定義を緩和
+
+ユーザー指示 (/goal): 「認定カウンターが 2 になるまで。連続でなくても、2 回は指摘 0 に
+なれるか見る」。従来の「2 巡連続ゼロ」を本 goal では非連続の計 2 回に緩和 — r60 が 0 件
+(1/2 済) のため、残り 1 回の指摘ゼロ巡で goal 達成。todos.md の Exit 条件 (2 巡連続) の
+扱いは goal 達成後にユーザーと確認する。
