@@ -727,6 +727,13 @@ codex sol xhigh で 2 巡連続」。
   「duration は整数」という表示側の未疑前提
 - 2 件とも未疑前提枠。閉鎖済みクラスからの再指摘ゼロは 13 巡連続
 - fix round: `drafts/sentinel-r66-fixes.md`。認定 counter 0 のまま
+- fix 取り込み: commit `d4bc8eb`。(1) handler 内再確認を内側 try/except で保護し
+  complete=False へ、(2) `duration_seconds()` helper に全 duration 表示を集約 — 契約値は
+  round-trip 表記・測定値は 3 桁 + 非ゼロ guard・整数は従来形。受け入れ: gates 全緑
+  (selftest **305** / 外部 12 / ruff / ty / lang lint)、TOCTOU counts 不変、独立変異 2/2
+  検出 (分離も codex 報告と一致)、消滅確認 2/2 (「within 0.5s」・find_jobs 例外漏れなし)。
+  裁定 32 (duration 忠実性)・33 (handler 内 syscall 失敗の分類) を 66 巡拡張で更新
+  (gate green 確認)
 
 ## 復元元
 

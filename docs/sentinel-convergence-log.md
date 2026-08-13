@@ -876,3 +876,13 @@ try/except で保護し complete=False へ、(2) duration 表示を helper 1 箇
 worktree `wt-r66fix` は台帳 commit `5f26d2d` の後に分岐 (手順遵守)。job
 `task-msr0jx45-pkfhkl` (record 検証: sol / medium / write / fresh)。sentinel `btec9se4b`
 (estimate 2550s)。認定 counter 0 のまま。
+
+### 2026-08-13 — r66 fix round 完了・main 取り込み (selftest 305)・r67 発注へ
+
+fix round は sentinel `btec9se4b` exit 0。受け入れ: (1) handler 内再確認の内側 try/except
+保護 (complete=False へ)、(2) `duration_seconds()` helper への全 site 集約 (契約値
+round-trip・測定値 3 桁 + 非ゼロ guard・整数従来形)。gates 全緑を発注側再実行 (selftest
+**305** / 外部 12 / ruff / ty / lang lint)、TOCTOU counts 不変、独立変異 2/2 検出 (分離
+一致)、消滅確認 2/2 —「within 0.5s」表示と find_jobs の例外漏れなしを実測。wt 内 commit
+`d09aad2` → cherry-pick **`d4bc8eb`**。裁定 32 / 33 の本文・担保を 66 巡拡張で更新
+(gate green)。報告書退避・worktree / branch 削除。
