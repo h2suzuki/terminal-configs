@@ -880,6 +880,19 @@ codex sol xhigh で 2 巡連続」。
   enumerator の分類対象外)、独立変異 1/1 検出、消滅確認 = swap 窓が found=0・complete=False
   の終局保留へ。裁定 23 に前後照合を 72 巡拡張で追記 (gate green)
 
+### r73 (認定 1 巡目・20 度目) — material 2、認定不成立
+
+- **指摘 1 (採用)**: workspace 層の symlink alias (ws-alias → ws) で同一 record が別 path で
+  2 回 found に入り exit 9 (repro: 実測)。r71 で root 層に入れた identity 重複排除の直下に
+  残った縫い目 — 裁定 23 の理由は workspace 層にもそのまま成立する。fix は jobs directory
+  identity での重複排除 (別 directory の hardlink record は従来どおり畳まない保守側)
+- **指摘 2 (採用)**: stdout の ENOSPC / EDQUOT / EIO が finish の errno 列挙 (EPIPE /
+  EAGAIN / EWOULDBLOCK) から漏れ、契約外の例外終了 (repro: ENOSPC 実測)。verdict は例外前に
+  確定済みで、errno で code を捨てる意味上の根拠はない — 全 OSError を sink 切替に変更
+- 2 件とも直近閉鎖 class の横展開漏れ (directory alias の層・errno 集合の網羅)。閉鎖済み
+  クラスからの再指摘ゼロは 20 巡連続
+- fix round: `drafts/sentinel-r73-fixes.md`。認定 counter 0 のまま (goal 判定は次巡へ)
+
 ## 復元元
 
 repo の実 path は `/home/scorer/terminal-configs` である (user 名変更前の `/home/h2suzuki/...` は現存しない

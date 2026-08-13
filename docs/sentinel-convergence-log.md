@@ -1145,3 +1145,11 @@ r73 (認定 1 巡目・goal 判定対象) を発注: `drafts/sentinel-review-r73
 後に分岐 (手順遵守・72 巡拡張を分岐直後に grep 確認)。job `task-msr9fbcb-so2wqp` (record
 検証: sol / xhigh / write / fresh)。sentinel `b843rgazp` (estimate 2250s・stall 1500s)。
 指摘ゼロならユーザー goal (非連続 2 回のゼロ巡) 達成。
+
+### 2026-08-13 — r73 受領: material 2 (全件確定) → fix round 発注へ
+
+r73 (`task-msr9fbcb-so2wqp`・sol xhigh・write) は sentinel `b843rgazp` exit 0。指摘 2 件を
+全て repro で確定し**採用**: (1) workspace 層の symlink alias で 1 record が exit 9 (r71 の
+root 層 fix の直下に残った縫い目)、(2) stdout の ENOSPC 等が finish の errno 列挙から漏れ
+契約外終了。横展開漏れ枠 ×2、閉鎖済みクラスからの再指摘ゼロは 20 巡連続。報告書退避・
+worktree / branch 削除。認定 counter 0 のまま。
