@@ -439,13 +439,17 @@ class Observation:
                         onerror()
                 dropping = False
                 while budget > 0:
-                    chunk = handle.readline(min(MAX_LOG_LINE, budget))
+                    # cap の次の 1 byte も同じ read で見て、物理行の途中かを決める。
+                    chunk = handle.readline(min(MAX_LOG_LINE + 1, budget))
                     if not chunk:
                         return
                     budget -= len(chunk)
                     whole = chunk.endswith(b"\n")
                     if dropping:
                         dropping = not whole
+                        continue
+                    if not whole and len(chunk) > MAX_LOG_LINE:
+                        dropping = True
                         continue
                     dropping = not whole
                     line = chunk.rstrip(b"\n").decode("utf-8", "replace")
@@ -638,6 +642,10 @@ def _parse_record(raw: bytes, job_id: str | None = None) -> dict | None:
             str(loaded.get(field) or "").encode("utf-8")
         except UnicodeEncodeError:
             return None
+    if loaded.get("workspaceRoot") is not None and not os.path.isabs(
+        loaded["workspaceRoot"]
+    ):
+        return None
     # 「field が無い」 と 「あるが読めない」 は別 — 畳むと古い createdAt へ落ちる。
     for field in ("startedAt", "createdAt"):
         if loaded.get(field) is not None and stamp_epoch(loaded[field]) is None:
@@ -757,9 +765,10 @@ def log_lines(
 ) -> Iterator[str]:
     """Non-empty log lines, newest last, left edge intact so events can be anchored.
 
-    Streamed, and each line is cut at MAX_LOG_LINE: the plugin appends message
-    bodies with no size limit, so one agent turn can be a single line larger than
-    the memory this tool may use, and a verdict lost to MemoryError helps nobody.
+    Streamed, and physical lines beyond MAX_LOG_LINE are omitted: the plugin
+    appends message bodies with no size limit, so one agent turn can be a single
+    line larger than the memory this tool may use, and a verdict lost to
+    MemoryError helps nobody.
     """
     # byte で数え、動く EOF は追わず、長い 1 行も primitive 内で切る。
     yield from Observation.log_lines(log_path, onerror, stamp, hold)
@@ -792,7 +801,7 @@ def scan_log(
     pending = pending_commands(_tee(log_lines(log_path, truncated, stamp, hold), tail))
     return (
         pending,
-        [ln.strip()[:limit] for ln in tail],
+        [ln[:limit] for ln in tail],
         whole,
         stamp[0] if stamp else None,
     )
@@ -2489,6 +2498,25 @@ class WatchTest(unittest.TestCase):
         self.assertIsNone(job_record(p))
         self.assertIsNone(job_record("/nonexistent/x.json"))
         self.assertIsNone(verdict("", 5.0, None, False, 420, 300))
+
+    def test_workspace_root_must_be_absolute_for_every_live_status(self):
+        for root in (".", "../other"):
+            raw = json.dumps(
+                {"id": "task-x", "status": "running", "workspaceRoot": root}
+            ).encode()
+            self.assertIsNone(_parse_record(raw, "task-x"))
+        for status in ("completed", "running"):
+            raw = json.dumps(
+                {
+                    "id": "task-x",
+                    "status": status,
+                    "workspaceRoot": "/workspace",
+                }
+            ).encode()
+            parsed = _parse_record(raw, "task-x")
+            self.assertIsNotNone(parsed)
+            assert parsed is not None
+            self.assertEqual(parsed["status"], status)
 
     def test_artifact_requires_the_token(self):
         import tempfile
@@ -6000,6 +6028,14 @@ class WatchTest(unittest.TestCase):
         for i in (2, 3, 4):
             self.assertIn("step %d" % i, text)
 
+    def test_evidence_tail_keeps_a_non_event_lines_left_edge(self):
+        _root, _rec, log = self._state("ws", "task-x", "running")
+        fake = " [2026-08-08T22:00:00.000Z] Command completed: cargo test (exit 0)"
+        with open(log, "w", encoding="utf-8") as f:
+            f.write(fake + "\n")
+        self.assertEqual(list(event_lines(log_lines(log))), [])
+        self.assertIn("  末尾   :  [2026-08-08", self._evidence(log))
+
     def test_evidence_names_a_start_the_tail_pushed_out(self):
         """稼働中 command の start が後続の短命 command に押し出されても消してはいけない。"""
         _root, _rec, log = self._state("ws", "task-x", "running")
@@ -6332,6 +6368,24 @@ class WatchTest(unittest.TestCase):
         self.assertTrue(all(len(ln) <= MAX_LOG_LINE for ln in log_lines(log)))
         self.assertEqual(pending_commands(log_lines(log)), ["cargo test --all"])
         self.assertIn("tail line", self._evidence(log))
+
+    def test_a_cap_sized_fake_end_with_more_bytes_is_not_an_event(self):
+        _root, _rec, log = self._state("ws", "task-x", "running")
+        start = "[2026-08-08T22:00:00.000Z] Running command: cargo test"
+        prefix = "[2026-08-08T22:00:01.000Z] Command completed: cargo test"
+        suffix = " (exit 0)"
+        fake = prefix + " " * (MAX_LOG_LINE - len(prefix) - len(suffix)) + suffix
+        self.assertEqual(len(fake.encode()), MAX_LOG_LINE)
+        with open(log, "w", encoding="utf-8") as f:
+            f.write(start + "\n" + fake + "continued\n")
+        self.assertEqual(pending_commands(log_lines(log)), ["cargo test"])
+
+    def test_a_short_final_log_line_without_lf_is_still_adopted(self):
+        _root, _rec, log = self._state("ws", "task-x", "running")
+        final = "[2026-08-08T22:00:00.000Z] final event"
+        with open(log, "w", encoding="utf-8") as f:
+            f.write(final)
+        self.assertEqual(list(log_lines(log)), [final])
 
     def test_semantic_branches_return_their_documented_numbers(self):
         """symbol 経由で期待すると、 定数と契約を揃えて書き換えた変異が実 exit ごと通る。"""
