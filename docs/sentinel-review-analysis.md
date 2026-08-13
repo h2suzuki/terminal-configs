@@ -902,6 +902,16 @@ codex sol xhigh で 2 巡連続」。
   rc=0)。裁定 23 (workspace 層への横展開)・21 (errno 非依存化) を 73 巡拡張で更新
   (gate green)
 
+### r74 (認定 1 巡目・21 度目) — material 1、認定不成立
+
+- **指摘 1 (採用)**: r73 fix の重複排除キーが正本より一層上 — 裁定 23 (73 巡拡張) は
+  「jobs directory identity」と定めるのに実装は workspace identity をキーにしており、別
+  inode の w1/w2 が同一 jobs (symlink 共有) を指すと 1 record が exit 9 になる (repro:
+  実測)。正本と実装の粒度齟齬 — RulingsSyncTest は test 名の実在しか見ず fixture の粒度は
+  検査できない、という gate の既知の限界も同時に露呈
+- 縫い目枠 (r73 fix の直下)。閉鎖済みクラスからの再指摘ゼロは 21 巡連続
+- fix round: `drafts/sentinel-r74-fixes.md`。認定 counter 0 のまま (goal 判定は次巡へ)
+
 ## 復元元
 
 repo の実 path は `/home/scorer/terminal-configs` である (user 名変更前の `/home/h2suzuki/...` は現存しない

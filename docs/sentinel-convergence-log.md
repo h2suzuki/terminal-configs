@@ -1181,3 +1181,11 @@ r74 (認定 1 巡目・goal 判定対象) を発注: `drafts/sentinel-review-r74
 (手順遵守)。job `task-msranb01-rzqqi6` (record 検証: sol / xhigh / write / fresh)。sentinel
 `bzn9nffym` (estimate 2250s・stall 1500s)。指摘ゼロならユーザー goal (非連続 2 回のゼロ巡)
 達成。
+
+### 2026-08-13 — r74 受領: material 1 (確定) → fix round 発注へ
+
+r74 (`task-msranb01-rzqqi6`・sol xhigh・write) は sentinel `bzn9nffym` exit 0。指摘 1 件を
+repro で確定し**採用**: r73 fix の重複排除キーが workspace identity で、裁定 23 の文言
+(jobs directory identity) と粒度が齟齬 — 別 inode の w1/w2 が jobs symlink を共有すると
+1 record が exit 9 (実測)。正本と実装の齟齬 class。閉鎖済みクラスからの再指摘ゼロは 21 巡
+連続。報告書退避・worktree / branch 削除。認定 counter 0 のまま。
