@@ -679,3 +679,17 @@ None` 形へ揃え、stat 失敗は既存の gone / corrupt / unreadable 経路�
 `wt-r61fix` @ `f9203df`。job `task-msqtip55-76zsqe` (record 検証: sol / medium / write /
 fresh)。sentinel `bj0d1ue71` (estimate 1950s)。**認定 counter は 0 へ reset — r62 から
 2 巡連続ゼロをやり直す**。
+
+### 2026-08-13 — r61 fix round 完了・main 取り込み (selftest 288)・r62 発注
+
+fix round は sentinel `bj0d1ue71` exit 0。受け入れ: diff は判定式 1 site + test 2 件の最小
+(新規行は 1 判断 1 観測 — 1 poll で file_stat 1 回)、gates 全緑を発注側再実行 (selftest
+**288** / 外部 11 / ruff / ty)、完全 revert 変異で failures=1 (追加 test のみ) = codex 報告と
+一致。非等価変異 (named_now 代入残し) では TOCTOU oracle 4 件が余分に fail する差も確認 —
+enumerator が観測回数増を検出した。lang lint OK。wt 内 commit `ffd019a` → cherry-pick
+**`b62b9b2`**。報告書退避・worktree / branch 削除。
+
+r62 (認定 1 巡目・やり直し) を発注: `drafts/sentinel-review-r62.md` (r61 から python 置換で
+生成・anchor 一意 assert・lint rc=0)。60/61 巡が洗った前提 3 種の再なぞり回避を明記。
+worktree `wt-r62` @ `b62b9b2`。job `task-msqu1dqo-e5byo8` (record 検証: sol / xhigh /
+write / fresh)。sentinel `b3cqj8kxz` (estimate 2250s)。

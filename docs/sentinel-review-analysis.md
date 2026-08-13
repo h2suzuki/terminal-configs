@@ -602,6 +602,12 @@ codex sol xhigh で 2 巡連続」。
 - fix round: `drafts/sentinel-r61-fixes.md` (stat 失敗を moved にしない + 権限 fixture red +
   差し替え/不在の回帰維持)。**認定 counter は 0 へ reset** — 認定は r62 から 2 巡連続ゼロを
   やり直し
+- fix 取り込み: commit `b62b9b2`。pin 直後と同じ `named_now is not None` 形へ統一
+  (1 判断 1 観測: 1 poll で file_stat は 1 回)。追加 test = 検索権剥奪 fixture (euid 0 skip・
+  exit 14・replaced 非表示・unreadable 表示) + 差し替え test の exit 明示化。red / 変異は
+  完全 revert 形で発注側再実行 — failures=1 (追加 test のみ) が codex 報告と一致 (非等価
+  変異では TOCTOU oracle 4 件が余分に fail する差も確認 = enumerator が観測回数増を検出)。
+  lang lint OK。selftest 287 → **288**
 
 ## 復元元
 
