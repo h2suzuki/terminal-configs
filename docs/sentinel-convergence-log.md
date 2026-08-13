@@ -828,3 +828,12 @@ exit 9 にできない (RLIMIT_NOFILE subprocess で fd 6→5 の exit 9→14 fl
 横展開漏れ)。3 件とも未疑前提枠 (fd 上限・JSON decoder 受理集合・errno 分類の一貫性)、
 閉鎖済みクラスからの再指摘ゼロは 12 巡連続。報告書退避・worktree / branch 削除。認定
 counter 0 のまま。
+
+### 2026-08-13 — r65 fix round 発注
+
+fix round: `drafts/sentinel-r65-fixes.md` (lint rc=0) — (1) 重複確定後は descriptor を保持
+せず数える (singleton の周回間比較用 hold のみ維持・RLIMIT_NOFILE subprocess test を指定)、
+(2) `parse_constant` で非有限定数を corrupt へ、(3) artifact 後置 stat は名前消失系のみ
+moved・他は unreadable。worktree `wt-r65fix` は台帳 commit `6cea6bb` の後に分岐 (手順遵守)。
+job `task-msqz7od4-ol9lez` (record 検証: sol / medium / write / fresh)。sentinel `bndtiv7e5`
+(estimate 2850s)。認定 counter 0 のまま。
