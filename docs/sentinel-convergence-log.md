@@ -857,3 +857,13 @@ anchor 一意 assert・lint rc=0)。material 29 件・selftest 302 を反映し�
 前提群の再なぞり回避を明記。worktree `wt-r66` は docs commit `06c9624` の後に分岐 (手順遵守・
 裁定拡張 2 箇所を分岐直後に grep 確認)。job `task-msqzsnnh-cc0gh5` (record 検証: sol /
 xhigh / write / fresh)。sentinel `btqt2iaei` (estimate 2250s)。
+
+### 2026-08-13 — r66 受領: material 2 (全件確定) → fix round 発注へ
+
+r66 (`task-msqzsnnh-cc0gh5`・sol xhigh・write) は sentinel `btqt2iaei` exit 0。指摘 2 件を
+全て repro で確定し**採用**: (1) `find_jobs()` の FileNotFoundError handler 内の再確認
+`link_identity(root)` が無保護で、handler 内の OSError が契約外 traceback へ素通り (実 fs で
+PermissionError 送出 + mock で素通りを実測)、(2) 正の小数 duration の全表示 site が `int()`
+切り捨てで「0.5s → 0s」の誤 evidence (exit 7 headline で実測・裁定 32 違反)。2 件とも
+未疑前提枠 (handler 内 syscall の独立失敗・duration の整数前提)、閉鎖済みクラスからの
+再指摘ゼロは 13 巡連続。報告書退避・worktree / branch 削除。認定 counter 0 のまま。

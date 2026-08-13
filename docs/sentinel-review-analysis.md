@@ -714,6 +714,20 @@ codex sol xhigh で 2 巡連続」。
   note: log 側 `file_stat(log) != before_log` は stat flap を「changed」(discard 系) に畳む
   余地 — moved 主張ではないため裁定は保留し、認定 loop の検出に委ねる
 
+### r66 (認定 1 巡目・13 度目) — material 2、認定不成立
+
+- **指摘 1 (採用)**: `find_jobs()` の `except FileNotFoundError:` handler 内の再確認
+  `link_identity(root)` が無保護 — handler 内で新たに送出された OSError は同 try の
+  `except OSError` に捕捉されず (Python semantics)、契約外の traceback で監視が終了する
+  (repro: 実 fs で PermissionError 送出を確認 + mock で find_jobs 素通りを実測)。
+  「handler 内の再確認 syscall も独立に失敗する」という未疑前提
+- **指摘 2 (採用)**: CLI は正の有限小数 duration を受理する一方、全表示 site が `int()` で
+  0 方向へ切り捨て — `--timeout-seconds 0.5` の evidence が「within 0s」になる (repro:
+  exit 7 の headline で実測)。正の契約値がゼロへ化ける裁定 32 (判定と表示は同じ値) 違反。
+  「duration は整数」という表示側の未疑前提
+- 2 件とも未疑前提枠。閉鎖済みクラスからの再指摘ゼロは 13 巡連続
+- fix round: `drafts/sentinel-r66-fixes.md`。認定 counter 0 のまま
+
 ## 復元元
 
 repo の実 path は `/home/scorer/terminal-configs` である (user 名変更前の `/home/h2suzuki/...` は現存しない
