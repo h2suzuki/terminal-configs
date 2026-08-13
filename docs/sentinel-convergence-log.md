@@ -1087,3 +1087,14 @@ exit 11「not registered yet」→ exit 14 へ退行 (main = 11 / fix 版 = 14 �
 identity なしで既存 flow へ委譲・EACCES 等のみ complete=False・regression pin test 追加)。
 同 thread resume `task-msr7j0x1-ddoaor` (write 継承確認済)。sentinel `bqfa03isr`
 (estimate 1500s・stall 1500s)。
+
+### 2026-08-13 — r71 fix round 2 完了・main 取り込み (selftest 319)・r72 発注へ
+
+fix round 2 は sentinel `bqfa03isr` exit 0。受け入れ: FNF は identity なし (None) として
+既存の不在分類へ委譲・EACCES 等のみ complete=False・regression pin
+(`test_an_uncreated_state_root_is_a_complete_absence`) 追加。gates 全緑を発注側再実行
+(selftest **319** / 外部 12 / ruff / ty / lang lint)、TOCTOU counts 不変、独立変異検出
+(FNF 特例除去 → pin fail)、消滅確認 3/3 — missing root 11 / real+alias 11 / release 継続。
+wt 内 commit `46d7dbd` (round 1+2) → cherry-pick **`9160b2e`**。裁定 23 (別名 root の重複
+排除)・21 (close 失敗の個別抑止) を 71 巡拡張で更新 (gate green)。報告書退避・worktree /
+branch 削除。

@@ -846,6 +846,17 @@ codex sol xhigh で 2 巡連続」。
 - 2 件とも未疑前提枠 (root 文字列 = directory identity の同一視・close の成功保証)。
   閉鎖済みクラスからの再指摘ゼロは 18 巡連続
 - fix round: `drafts/sentinel-r71-fixes.md`。認定 counter 0 のまま (goal 判定は次巡へ)
+- **fix round 1 は受け入れ不合格**: `directory_identity()` の os.stat が未作成 root の
+  FileNotFoundError も complete=False に落とし、missing root の `--once` が exit 11 → 14 に
+  退行 (発注側実測 main 11 / fix 14)。selftest 318 緑でも受け入れが落とした実例 —
+  missing-root pin の不在が盲点。fix round 2 (`drafts/sentinel-r71-fixes-2.md`・同 thread
+  resume) で FNF は identity なし → 既存不在分類へ委譲 + regression pin 追加
+- fix 取り込み: commit `9160b2e` (round 1+2)。root の `(st_dev, st_ino)` 重複排除 (FNF は
+  None・EACCES 等のみ complete=False) + `release()` の per-handle `contextlib.suppress`。
+  受け入れ: gates 全緑 (selftest **319** / 外部 12 / ruff / ty / lang lint)、TOCTOU counts
+  不変、独立変異 3/3 検出 (round 1 の 2 + FNF 特例除去)、消滅確認 3/3 (missing root 11 /
+  alias 11 / release 継続)。裁定 23 (別名 root)・21 (close 失敗) を 71 巡拡張で更新
+  (gate green)
 
 ## 復元元
 
