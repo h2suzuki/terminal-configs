@@ -1153,3 +1153,12 @@ r73 (`task-msr9fbcb-so2wqp`・sol xhigh・write) は sentinel `b843rgazp` exit 0
 root 層 fix の直下に残った縫い目)、(2) stdout の ENOSPC 等が finish の errno 列挙から漏れ
 契約外終了。横展開漏れ枠 ×2、閉鎖済みクラスからの再指摘ゼロは 20 巡連続。報告書退避・
 worktree / branch 削除。認定 counter 0 のまま。
+
+### 2026-08-13 — r73 fix round 発注
+
+fix round: `drafts/sentinel-r73-fixes.md` (lint rc=0) — (1) workspace の jobs directory
+identity で重複排除 (別 directory の hardlink record は畳まない保守側)、(2) finish の
+terminal output は OSError 全てを sink 切替に (errno 列挙廃止)。worktree `wt-r73fix` は
+台帳 commit `de77dfd` の後に分岐 (手順遵守)。job `task-msra5qxd-19g6rf` (record 検証: sol /
+medium / write / fresh)。sentinel `bhe87tvpz` (estimate 2550s・stall 1500s)。認定 counter 0
+のまま。
