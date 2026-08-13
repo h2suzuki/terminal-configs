@@ -1136,3 +1136,12 @@ fix round は sentinel `bog56883c` exit 0。受け入れ: 走査後の root iden
 **320** / 外部 12 / ruff / ty / lang lint)、TOCTOU counts 不変、独立変異 1/1 検出、消滅確認 =
 swap 窓が found=0・complete=False へ。wt 内 commit `8d1cc9e` → cherry-pick **`7de6c24`**。
 裁定 23 に前後照合を 72 巡拡張で追記 (gate green)。報告書退避・worktree / branch 削除。
+
+### 2026-08-13 — r73 発注
+
+r73 (認定 1 巡目・goal 判定対象) を発注: `drafts/sentinel-review-r73.md` (r72 から python
+置換で生成・anchor 一意 assert・lint rc=0)。material 42 件・selftest 320・裁定 59 を反映し、
+60〜72 巡が洗った前提群の再なぞり回避を明記。worktree `wt-r73` は docs commit `d6814c1` の
+後に分岐 (手順遵守・72 巡拡張を分岐直後に grep 確認)。job `task-msr9fbcb-so2wqp` (record
+検証: sol / xhigh / write / fresh)。sentinel `b843rgazp` (estimate 2250s・stall 1500s)。
+指摘ゼロならユーザー goal (非連続 2 回のゼロ巡) 達成。
