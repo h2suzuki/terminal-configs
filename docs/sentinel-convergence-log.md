@@ -904,3 +904,12 @@ corrupt (exit 13) になる (実測)、(2) artifact 帰属が mtime 単独で、
 token 済み file が ready=True (実測)。2 件とも未疑前提枠 (hold 再読の不変前提・mtime の帰属
 前提)、閉鎖済みクラスからの再指摘ゼロは 14 巡連続。報告書退避・worktree / branch 削除。
 認定 counter 0 のまま。
+
+### 2026-08-13 — r67 fix round 発注
+
+fix round: `drafts/sentinel-r67-fixes.md` (lint rc=0) — (1) pin 再読を照合付きに (検証済み
+結果の信頼 or 前後指紋比較・安定 snapshot の parse 不能だけが corrupt)、(2) ready の必要
+条件に `st_ctime_ns` ≥ startedAt を追加 (Decimal exact・裁定 41 の false-change は安全側)。
+worktree `wt-r67fix` は台帳 commit `e92d4a2` の後に分岐 (手順遵守)。job
+`task-msr1r29n-l8mj1h` (record 検証: sol / medium / write / fresh)。sentinel `bcfol5gzb`
+(estimate 2850s)。認定 counter 0 のまま。
