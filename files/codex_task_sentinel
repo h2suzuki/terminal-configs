@@ -331,6 +331,16 @@ class Observation:
     ABSENT = "absent"
     UNSTABLE = "unstable"
 
+    class DiscardStream:
+        """A text sink that cannot fail for lack of file descriptors."""
+
+        def write(self, text: str) -> int:
+            """Discard text while preserving the stream write contract."""
+            return len(text)
+
+        def flush(self) -> None:
+            """Allow interpreter shutdown to flush the sink safely."""
+
     def __init__(
         self,
         state: str,
@@ -385,7 +395,7 @@ class Observation:
     @staticmethod
     def discard_stdout() -> None:
         """Prevent later writes and shutdown flushing after a closed pipe."""
-        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+        sys.stdout = Observation.DiscardStream()
 
     @classmethod
     def replace_hold(cls, previous: list, fresh: list) -> list:
@@ -8467,6 +8477,27 @@ class WatchTest(WatchTest):
             )
         self.assertEqual(code, EXIT_ALIVE)
         self.assertEqual(stream.writes, 2)
+
+    def test_finish_needs_no_descriptor_to_recover_from_epipe(self):
+        """EPIPE recovery preserves the verdict when no descriptor is available."""
+        from unittest import mock
+
+        class ClosingStream:
+            def write(self, _text):
+                raise BrokenPipeError(errno.EPIPE, "closed pipe")
+
+            def flush(self):
+                pass
+
+        with (
+            mock.patch.object(sys, "stdout", ClosingStream()),
+            mock.patch(
+                "builtins.open",
+                side_effect=OSError(errno.EMFILE, "too many open files"),
+            ),
+        ):
+            code = finish(float("inf"), EXIT_ALIVE, ("terminal",), ())
+        self.assertEqual(code, EXIT_ALIVE)
 
 
 class WatchTest(WatchTest, SourceInvariantTest):
