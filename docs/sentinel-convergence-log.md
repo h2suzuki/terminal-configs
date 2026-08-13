@@ -646,3 +646,20 @@ write / fresh)。sentinel `bhl39rye6` (estimate 2250s)。認定 counter 0 のま
 fix round は sentinel `bhl39rye6` exit 0。受け入れ: gates 全緑 (selftest **287** / 外部 11 /
 ruff / ty)、repro 消滅 5 点を直接確認、独立変異 (isabs 恒真化) を splice 再現し当該 test のみ
 fail。wt 内 commit `aeafc67` → cherry-pick **`59e75f9`**。worktree / branch 削除・報告書退避。
+
+### 2026-08-13 — r60 受領: material 0 (認定 1/2 達成) → r61 = 最終巡を発注
+
+r60 (認定 1 巡目・7 度目) を発注: `drafts/sentinel-review-r60.md` (lint rc=0)、worktree
+`wt-r60` @ `b93762c`。job `task-msqrxc26-61m342` (record 検証: sol / xhigh / write / fresh)。
+sentinel `b9f0w59pl` (estimate 2250s) は exit 0。
+
+**指摘なし** — 54 巡以降で初の指摘ゼロ巡。報告書は未疑前提 2 件 (path API と JSON 文字列の
+境界 / reader の「断片 = 物理行」仮定) を新たに洗い、既に閉じていると結論。受け入れ:
+worktree 実装変更なし (`git status` clean)、発注側 gates 再実行で報告書と緑一致
+(selftest **287** / 外部 11 / ruff / ty)。閉鎖済みクラスからの再指摘ゼロは 7 巡連続。
+報告書退避・worktree / branch 削除。
+
+r61 (認定 2 巡目・最終巡) を発注: `drafts/sentinel-review-r61.md` (r60 から python 置換で
+生成・anchor 一意 assert・lint rc=0)。60 巡が洗った前提の再なぞりを避ける指示を追加。
+worktree `wt-r61` @ `b93762c`。job `task-msqso0q4-ja2vt3` (record 検証: sol / xhigh /
+write / fresh)。sentinel `b1ue1moba` (estimate 2250s)。**指摘ゼロなら認定成立 (2/2)**。

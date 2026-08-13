@@ -574,6 +574,18 @@ codex sol xhigh で 2 巡連続」。
   repro 消滅 5 点 (相対 corrupt / 絶対受理 / cap 偽 end 無効 / EOF 行維持 / strip 不在)。
   selftest 283 → **287**
 
+### r60 (認定 1 巡目・7 度目) — material 0、認定 1/2 達成
+
+- **指摘なし**。sol xhigh (job `task-msqrxc26-61m342`・wt-r60・write) が発注書の 4 観点で確認。
+  未疑前提 2 件 (path API と JSON 文字列の境界 / reader の「断片 = 物理行」仮定) を新たに洗い、
+  どちらも corrupt 経路・cap 断片非採用で既に閉じていると結論
+- gates: selftest 287 / 外部 11 / ruff / ty — 報告書と発注側再実行の双方で緑一致。worktree に
+  実装変更なし (`git status` clean)
+- 54 巡以降で初の指摘ゼロ巡。閉鎖済みクラス (精度・受理域・funnel/Observation/harness) からの
+  再指摘ゼロは 7 巡連続
+- r61 (認定 2 巡目・最終巡) を同型発注。60 巡が洗った前提の再なぞりを避け、別の未疑前提を
+  優先する指示を発注書に追加
+
 ## 復元元
 
 repo の実 path は `/home/scorer/terminal-configs` である (user 名変更前の `/home/h2suzuki/...` は現存しない
