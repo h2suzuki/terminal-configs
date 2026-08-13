@@ -913,3 +913,14 @@ fix round: `drafts/sentinel-r67-fixes.md` (lint rc=0) — (1) pin 再読を照�
 worktree `wt-r67fix` は台帳 commit `e92d4a2` の後に分岐 (手順遵守)。job
 `task-msr1r29n-l8mj1h` (record 検証: sol / medium / write / fresh)。sentinel `bcfol5gzb`
 (estimate 2850s)。認定 counter 0 のまま。
+
+### 2026-08-13 — r67 fix round 完了・main 取り込み (selftest 309)・r68 発注へ
+
+fix round は sentinel `bcfol5gzb` exit 0。受け入れ: (1) 通常 pin は検証済み hold を信頼して
+再読廃止・fallback 再読は前後 5 要素指紋照合付き (安定 + parse 不能のみ corrupt)、(2) ready
+条件に `st_ctime_ns` ≥ startedAt (Decimal exact)。gates 全緑を発注側再実行 (selftest **309**
+/ 外部 12 / ruff / ty / lang lint)。TOCTOU counts の変化 (44/49/60) は修正 1 の観測増減に
+正確に対応 —「grow の偽 corrupt」期待の消滅は fix の目的そのもの。独立変異 2/2 検出 (無照合
+再読の最小再導入は専用 test + TOCTOU enumerator の両 oracle が発火)、消滅確認 = 未来 mtime
+ready=False・旧再読 code grep 0。wt 内 commit `4e42ef6` → cherry-pick **`39dcf3a`**。裁定
+20 / 41 の本文・担保を 67 巡拡張で更新 (gate green)。報告書退避・worktree / branch 削除。

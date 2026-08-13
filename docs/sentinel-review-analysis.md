@@ -749,6 +749,16 @@ codex sol xhigh で 2 巡連続」。
 - 2 件とも未疑前提枠 (hold 再読の不変前提・mtime の帰属前提)。閉鎖済みクラスからの
   再指摘ゼロは 14 巡連続
 - fix round: `drafts/sentinel-r67-fixes.md`。認定 counter 0 のまま
+- fix 取り込み: commit `39dcf3a`。(1) 通常 pin は検証済み hold を信頼して再読廃止、fallback
+  再読は前後 5 要素指紋の照合付き (不一致 = 未解決へ・安定 + parse 不能のみ corrupt)、
+  (2) ready 条件に `st_ctime_ns` ≥ startedAt を追加 (Decimal exact)。受け入れ: gates 全緑
+  (selftest **309** / 外部 12 / ruff / ty / lang lint)。**TOCTOU counts は変化** (record
+  45→44・record-pin 47→49・record-round 61→60) — 無照合再読 1 個の除去と fallback の前後
+  stat 追加という修正 1 の意図に正確に対応し、「grow 16:13 (偽 corrupt)」期待の消滅は fix の
+  目的そのもの。独立変異 2/2 検出 (ctime 除去 = failures 1 / 無照合再読の最小再導入 = 専用
+  test + TOCTOU enumerator の両 oracle が発火)、消滅確認 = 未来 mtime が ready=False・旧
+  再読 code は grep 0。裁定 20 (hold 再読の規律)・41 (ctime 帰属) を 67 巡拡張で更新
+  (gate green)
 
 ## 復元元
 
