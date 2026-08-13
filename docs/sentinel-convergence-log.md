@@ -1314,3 +1314,16 @@ semantics は不変。指摘 2 (U1) はユーザー裁定待ちのため本 roun
 `wt-r76fix` は台帳 commit `8441ef6` の後に分岐 (手順遵守)。job `task-msrfl24o-rfu0qu`
 (record 検証: sol / medium / write / fresh)。sentinel `bz8o696ai` (estimate 3150s・stall
 1500s)。
+
+### 2026-08-13 — r76 fix round land: 省略 mode の削除 (初の「削る fix」取り込み)
+
+job `task-msrfl24o-rfu0qu` は sentinel `bz8o696ai` exit 0 で完了。外部 gate 1 件 fail は
+発注書どおり発注側で解消 (`DocumentedDefaultTest._run()` へ `--artifact` / `--token` を追記。
+成果物は不存在のまま指定し quiet-job oracle の exit 14/4 を維持)。受け入れ: gates 全緑
+(selftest 325 = 326-3+2 / 外部 13 / ruff / ty / lang lint)・TOCTOU counts 不変 (main と全数
+一致)・独立変異 1/1 kill (必須化 revert → 新 test のみ fail)・消滅確認 4/4 (書きかけ + token
+は ready=False・`seen_content` 不存在・省略 CLI は exit 2・成果物なし完了は exit 5 維持)。
+wt 内 commit `34ca0d5` → cherry-pick `7176368`。worktree / branch / exclude 回収・companion
+running 0。**ここで停止 — 再開条件 = 指摘 2 (U1) の裁定: (a) 別 inode 差し替え防御の撤去 +
+裁定 38/39/44/45 改廃 / (b) charter に根拠追記して維持 (発注側は b 推奨)**。r77 の発注は
+裁定確定後 (U0 ゼロなら収束 2/2 目)。

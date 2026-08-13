@@ -954,6 +954,15 @@ codex sol xhigh で 2 巡連続」。
   維持。発注側の分析は (b) 推奨 — 撤去は 8 裁定級の改廃 + 大規模削除で risk 大、維持 cost は
   selftest ~1s と保守面積。ユーザーへ提示中
 - fix round (指摘 1 のみ): `drafts/sentinel-r76-fixes.md`。U0 ゼロ判定は次巡へ
+- fix 取り込み: commit `7176368`。両 option の watch mode 必須化 + 省略分岐の削除
+  (`seen_content` / `expects_artifact` 撤去・sentinel 単体 -58/+72 行)。test は 326 → **325**
+  (正本外 mode 担保 test 3 件削除・usage error test 2 件追加)。外部 gate は発注側で
+  `DocumentedDefaultTest._run()` へ両 option を追記 (test.py は codex read-only 指定・報告書の
+  提案どおり。成果物は不存在のまま指定し quiet-job oracle の exit 14/4 を維持)。受け入れ:
+  gates 全緑 (selftest **325** / 外部 **13** / ruff / ty / lang lint)、TOCTOU counts 不変
+  (main と全数一致 — 削除は verdict 層の分岐で観測窓は不変)、独立変異 1/1 kill (必須化
+  revert → 新 test のみ 3 subTest fail・他 324 緑)、消滅確認 4/4 (書きかけ + token は
+  ready=False・`seen_content` 属性不存在・省略 CLI は exit 2・成果物なし完了は exit 5 維持)
 
 ## 復元元
 
