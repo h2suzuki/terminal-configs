@@ -809,3 +809,11 @@ TOCTOU counts 不変、独立変異 4/4 検出 (fail 構成一致)、消滅確�
 51 回目で exit 14 実測)。wt 内 commit `3c64c5b` → cherry-pick **`d2fcca3`**。裁定 56
 (semver-lite 版名順序) を正本化し gate pin を 56 へ bump (`93699db`)、裁定 47 / 55 の本文・
 担保を 64 巡拡張で更新。報告書退避・worktree / branch 削除。
+
+### 2026-08-13 — r65 発注
+
+r65 (認定 1 巡目) を発注: `drafts/sentinel-review-r65.md` (r64 から python 置換で生成・
+anchor 一意 assert・lint rc=0)。material 26 件・selftest 299・裁定 56 を反映し、60〜64 巡が
+洗った前提群の再なぞり回避を明記。worktree `wt-r65` は docs commit `c14f9c4` の後に分岐
+(手順遵守・row 56 を分岐直後に grep 確認)。job `task-msqyfg2i-gpl4r7` (record 検証: sol /
+xhigh / write / fresh)。sentinel `bv237nzjm` (estimate 2250s)。
