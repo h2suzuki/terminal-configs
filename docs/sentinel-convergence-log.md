@@ -746,3 +746,12 @@ codex の副提案 (裁定番号連続性 + 担保 test 実在の機械照合) �
 class を gate で塞ぐ。
 
 報告書退避・worktree / branch 削除。認定 counter 0 のまま。
+
+### 2026-08-13 — r63 fix round 発注
+
+fix round: `drafts/sentinel-r63-fixes.md` (lint rc=0) — (1) `companion_candidates()` の cap を
+filter 前の raw scandir entry で消費し、超過は部分集合を選ばず fallback、(2) 外部 meta-test
+に rulings 同期 gate (番号連続性 + 担保 test 実在の照合)、(3) 非一致 entry 多数 fixture の
+red + 上限内回帰。worktree `wt-r63fix` は台帳 commit `7d22a0c` の後に分岐 (手順対策の初適用・
+row 55 の存在を分岐直後に grep 確認)。job `task-msqw8rk3-38a7nf` (record 検証: sol / medium /
+write / fresh)。sentinel `bngsewjk2` (estimate 2550s)。
