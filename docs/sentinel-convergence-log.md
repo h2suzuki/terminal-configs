@@ -1118,3 +1118,12 @@ blocking read の deadline 越え機構は実在するが、O_NONBLOCK は regul
 実測 [open(2)]。per-read process 隔離は不釣り合い — **裁定 59** (local fs 前提・無応答 fs は
 実行環境の境界外) を正本化し gate pin 59 (`32c7a8e`)。閉鎖済みクラスからの再指摘ゼロは
 19 巡連続。報告書退避・worktree / branch 削除。認定 counter 0 のまま。
+
+### 2026-08-13 — r72 fix round 発注
+
+fix round: `drafts/sentinel-r72-fixes.md` (lint rc=0) — 走査前後の root identity 照合
+(不一致 = complete=False・fd 束縛走査は発注側裁定で不採用・A→B→A の残余は既知の指紋粒度
+限界として記録済)。指摘 2 は裁定 59 で code 変更禁止を明記。worktree `wt-r72fix` は台帳
+commit `10489c3` の後に分岐 (手順遵守・row 59 を分岐直後に grep 確認)。job
+`task-msr905or-kxw9h6` (record 検証: sol / medium / write / fresh)。sentinel `bog56883c`
+(estimate 2100s・stall 1500s)。認定 counter 0 のまま。
