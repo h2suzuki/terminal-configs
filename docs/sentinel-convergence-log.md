@@ -1294,3 +1294,14 @@ material 47 件・selftest 326・外部 13・charter v3 を反映。worktree `wt
 `441bcf9` の後に分岐 (手順遵守・charter v3 を分岐直後に確認)。job `task-msretefy-hcufa0`
 (record 検証: sol / xhigh / write / fresh)。sentinel `b5b1927n0` (estimate 2250s・stall
 1500s)。U0 ゼロなら収束 2/2 達成。
+
+### 2026-08-13 — r76 受領: U0 1 件 (採用) + U1 1 件 (人間裁定へ) → fix round 発注へ
+
+r76 (`task-msretefy-hcufa0`・sol xhigh・write) は sentinel `b5b1927n0` exit 0。**新体制が
+過剰実装検出と人間 escalation の両方を初めて実行**: (1) U0 採用 — `--artifact` / `--token`
+省略 mode は正本外 (token 省略で書きかけ ready=True・artifact 省略で成果物なし exit 0 を
+repro 実測)。初の「削る fix」として両 option の watch mode 必須化 + 省略分岐と正本外 test の
+削除を発注。(2) U1 — 別 inode 差し替え防御 (TOCTOU enumerator 含む) が S-9 を越える過剰
+実装か。裁定 38/39/44/45 と衝突するため charter の規定どおり人間裁定へ (選択肢 a: 撤去 +
+裁定改廃 / b: charter に根拠追記して維持。発注側は b 推奨)。報告書退避・worktree / branch
+削除。U0 ゼロ判定は次巡へ。

@@ -940,6 +940,21 @@ codex sol xhigh で 2 巡連続」。
   `--selftest | head -c 200` の左側 exit **0** (契約が端到端で成立)。裁定 23 (排除集合の
   全 roots 共有)・21 (runner stream への適用) を 75 巡拡張で更新 (gate green)
 
+### r76 (新条件 2 巡目・23 度目) — U0 1 件 + U1 1 件 (人間裁定へ)、U0 ゼロならず
+
+- **指摘 1 (U0 採用)**: `--artifact` / `--token` の省略 mode が正本外 — token 省略で書きかけ
+  内容が ready=True、artifact 省略で成果物なし exit 0 (両 mode を repro 実測)。U-1 / U-3 /
+  C-5 は常に両指定で、省略 mode は誰も使わない過剰実装 + 誤 verdict 経路。**初の「削る
+  fix」** — 両 option を watch mode 必須化し、省略分岐と正本外 mode を担保していた test を
+  削除する
+- **指摘 2 (U1・人間裁定へ)**: 別 inode 差し替え防御 (descriptor hold・候補履歴・TOCTOU
+  enumerator 140 実行) が S-9 (同 inode truncate) と目的外規定を越える過剰実装ではないか —
+  ただし裁定 38/39/44/45 が担保を要求しており削減は裁定と衝突。reviewer は設計どおり
+  U1 として人間の裁定を要請。選択肢: (a) 防御撤去 + 裁定改廃 / (b) charter に根拠追記して
+  維持。発注側の分析は (b) 推奨 — 撤去は 8 裁定級の改廃 + 大規模削除で risk 大、維持 cost は
+  selftest ~1s と保守面積。ユーザーへ提示中
+- fix round (指摘 1 のみ): `drafts/sentinel-r76-fixes.md`。U0 ゼロ判定は次巡へ
+
 ## 復元元
 
 repo の実 path は `/home/scorer/terminal-configs` である (user 名変更前の `/home/h2suzuki/...` は現存しない
