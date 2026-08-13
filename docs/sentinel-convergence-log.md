@@ -728,3 +728,21 @@ anchor 一意 assert・lint rc=0)。material 21 件・selftest 292・裁定 55 �
 洗った前提 5 種の再なぞり回避を明記。worktree `wt-r63` @ `8d230f8`。job
 `task-msqvg8de-ox9smq` (record 検証: sol / xhigh / write / fresh)。sentinel `badfi4es5`
 (estimate 2250s)。
+
+### 2026-08-13 — r63 受領: material 1 採用 + 発注側手順ミス 1 → fix round へ
+
+r63 (`task-msqvg8de-ox9smq`・sol xhigh・write) は sentinel `badfi4es5` exit 0。指摘 2 件:
+
+**指摘 1 (採用)**: `companion_candidates()` の cap は filter 前の scandir entry を数えず、
+hidden / 非一致 entry が `MAX_COMPANION_CANDIDATES` を消費しない (repro: hidden 102 entry ×
+cap 5 で count 不発・version 選択を実測)。62 巡 fix が「保持候補」を囲い「走査仕事量」を
+囲い残した縫い目で、敵対 filesystem では全 terminal 報告の同期経路 (`cancel_command()`) が
+verdict 出力前に永久停止しうる。
+
+**指摘 2 (発注側手順ミス)**: 「正本に裁定 55 が無い」— wt-r63 を docs commit `dc9891e` の
+前の `8d230f8` から分岐した私の順序ミスで、worktree 内の正本だけが裁定 54 で終わっていた
+(main には row 55 が存在)。**対策 = 発注 worktree は台帳 commit 後に切る (本巡から適用)**。
+codex の副提案 (裁定番号連続性 + 担保 test 実在の機械照合) は fix round に採用し、この
+class を gate で塞ぐ。
+
+報告書退避・worktree / branch 削除。認定 counter 0 のまま。

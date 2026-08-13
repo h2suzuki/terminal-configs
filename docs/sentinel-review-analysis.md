@@ -634,6 +634,21 @@ codex sol xhigh で 2 巡連続」。
   一致、消滅確認 = byte 超過 16KB cap で peak 21KB・(None, 70, False) / companion 2000 候補で
   glob 不使用 + fallback。裁定 55 として正本化 (54 → **55 件**)
 
+### r63 (認定 1 巡目・10 度目) — material 1 + 発注側手順ミス 1、認定不成立
+
+- **指摘 1 (採用)**: `companion_candidates()` の cap は filter 前の scandir entry を数えない —
+  hidden / 非一致 entry は `MAX_COMPANION_CANDIDATES` を消費せず、走査 I/O が無上限のまま
+  (repro: hidden 102 entry × cap 5 で count 不発・version 選択を実測)。`cancel_command()` は
+  全 terminal 報告の同期経路なので、敵対 filesystem では verdict 出力前の永久停止経路。
+  62 巡 fix (裁定 55) が「保持候補」だけを囲い「走査仕事量」を囲い残した縫い目
+- **指摘 2 (発注側手順ミス・code 欠陥ではない)**: 「正本に裁定 55 が無い」— wt-r63 を docs
+  commit (`dc9891e`) 前の `8d230f8` から分岐したため、worktree 内の正本が裁定 54 で終わって
+  いた。main には row 55 が存在 (grep 確認)。**対策 = 発注 worktree は台帳 commit 後に切る**
+  (本巡から適用)。codex の副提案 (裁定番号の連続性と担保 test 実在の機械照合) は fix round に
+  採用 — この class を discipline でなく gate で塞ぐ
+- fix round: `drafts/sentinel-r63-fixes.md` (raw entry 消費の cap + 外部 meta-test に
+  rulings 同期 gate)。認定 counter 0 のまま
+
 ## 復元元
 
 repo の実 path は `/home/scorer/terminal-configs` である (user 名変更前の `/home/h2suzuki/...` は現存しない
