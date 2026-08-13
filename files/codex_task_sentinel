@@ -251,7 +251,12 @@ def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], boo
                 continue
         except FileNotFoundError:
             # 未作成の root は「無い」で正しいが、 走査後に現れたなら見落としである。
-            if link_identity(root) is not None:
+            try:
+                appeared = link_identity(root)
+            except OSError:
+                complete = False
+                continue
+            if appeared is not None:
                 complete = False
             continue
         except OSError:
@@ -1384,6 +1389,18 @@ def printable(text: object) -> str:
     )
 
 
+def duration_seconds(seconds: float, *, measured: bool = False) -> str:
+    """Seconds for evidence, preserving contracts and useful measured precision."""
+    if seconds.is_integer():
+        return f"{int(seconds)}s"
+    if not measured:
+        return f"{seconds!r}s"
+    shown = f"{seconds:.3f}".rstrip("0").rstrip(".")
+    if seconds != 0.0 and float(shown) == 0.0:
+        shown = repr(seconds)
+    return f"{shown}s"
+
+
 def evidence(
     job_id: str,
     record: dict,
@@ -1417,14 +1434,19 @@ def evidence(
     record_note = why("record")
     root = None if record_note else record.get("workspaceRoot")
     # 「無い」 と 「走査中に動いた」 は別 — 畳むと読者が log なしと誤読する。
-    quiet = log_unstable or ("log なし" if age is None else f"{int(age)}s")
+    quiet = log_unstable or (
+        "log なし" if age is None else duration_seconds(age, measured=True)
+    )
     versus = (
-        f" (この workspace の完走 job の最長無音 {int(baseline)}s の "
+        f" (この workspace の完走 job の最長無音 "
+        f"{duration_seconds(baseline, measured=True)} の "
         f"{age / baseline:.1f} 倍)"
         if baseline and age and not (log_unstable or why("baseline"))
         else ""
     )
-    bar = why("baseline") or f"{int(threshold)}s"
+    bar = why("baseline") or duration_seconds(
+        threshold, measured=baseline is not None
+    )
     shown = [log_unstable] if log_unstable else (tail or ["(なし)"])
     # exit 14 は ready を verdict へ畳むので、畳んだ値をここで戻さないと成果物あり / なしが読めない。
     state = why("artifact") or (
@@ -1444,7 +1466,7 @@ def evidence(
             else ("" if whole_log else " (log を最後まで読めず)")
         ),
         # None は 「静穏」 ではなく 「読めなかった」 — headline と強さを揃える。
-        f"  ツリー : {why('tree') or ('不明 (workspaceRoot を読めないか対象 file なし)' if tree is None else f'最終書き込み {int(tree)}s 前')}",
+        f"  ツリー : {why('tree') or ('不明 (workspaceRoot を読めないか対象 file なし)' if tree is None else f'最終書き込み {duration_seconds(tree, measured=True)} 前')}",
         f"  成果物 : {made}",
         f"  末尾   : {printable(shown[0])}",
         *(f"           {printable(ln)}" for ln in shown[1:]),
@@ -1563,7 +1585,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                         ),
                         (
                             f"timeout: {printable(args.job_id)} could not be resolved "
-                            f"within {int(args.timeout_seconds)}s",
+                            f"within {duration_seconds(args.timeout_seconds)}",
                         ),
                     )
             # 新しい掴みを得られた時だけ入れ替える — 読めない周回で手放すと、
@@ -1583,7 +1605,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     ),
                     (
                         f"timeout: {printable(args.job_id)} could not be resolved "
-                        f"within {int(args.timeout_seconds)}s",
+                        f"within {duration_seconds(args.timeout_seconds)}",
                         f"  searched: {printable(', '.join(roots))}",
                     ),
                 )
@@ -1604,7 +1626,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 EXIT_TIMEOUT,
                 (
                     f"timeout: {printable(args.job_id)} was not resolved to a single "
-                    f"record within {int(args.timeout_seconds)}s",
+                    f"record within {duration_seconds(args.timeout_seconds)}",
                     f"  searched: {printable(', '.join(roots))}",
                 ),
                 (),
@@ -1621,7 +1643,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     ),
                     (
                         f"timeout: {printable(args.job_id)} was not resolved to a single "
-                        f"record within {int(args.timeout_seconds)}s",
+                        f"record within {duration_seconds(args.timeout_seconds)}",
                         f"  searched: {printable(', '.join(roots))}",
                     ),
                 )
@@ -1642,7 +1664,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     ),
                     (
                         f"timeout: {printable(args.job_id)} could not be resolved "
-                        f"within {int(args.timeout_seconds)}s",
+                        f"within {duration_seconds(args.timeout_seconds)}",
                         f"  searched: {printable(', '.join(roots))}",
                     ),
                 )
@@ -1660,7 +1682,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 ),
                 (
                     f"timeout: {printable(args.job_id)} could not be resolved within "
-                    f"{int(args.timeout_seconds)}s",
+                    f"{duration_seconds(args.timeout_seconds)}",
                     f"  searched: {printable(', '.join(roots))}",
                 ),
             )
@@ -1678,7 +1700,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     ),
                     (
                         f"timeout: {printable(args.job_id)} was not resolved within "
-                        f"{int(args.timeout_seconds)}s",
+                        f"{duration_seconds(args.timeout_seconds)}",
                         f"  searched: {printable(', '.join(roots))}",
                     ),
                 )
@@ -1692,7 +1714,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 ),
                 (
                     f"timeout: {printable(args.job_id)} was not resolved within "
-                    f"{int(args.timeout_seconds)}s",
+                    f"{duration_seconds(args.timeout_seconds)}",
                     f"  searched: {printable(', '.join(roots))}",
                 ),
             )
@@ -1708,7 +1730,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                         EXIT_TIMEOUT,
                         (
                             f"timeout: {printable(args.job_id)} was seen and then lost "
-                            f"within {int(args.timeout_seconds)}s",
+                            f"within {duration_seconds(args.timeout_seconds)}",
                             f"  searched: {printable(', '.join(roots))}",
                         ),
                         (),
@@ -1719,7 +1741,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     EXIT_TIMEOUT,
                     (
                         f"timeout: {printable(args.job_id)} could not be resolved within "
-                        f"{int(args.timeout_seconds)}s",
+                        f"{duration_seconds(args.timeout_seconds)}",
                         f"  searched: {printable(', '.join(roots))}",
                     ),
                     (),
@@ -1742,7 +1764,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             deadline,
             EXIT_TIMEOUT,
             (
-                f"timeout: registered but not observed within {int(args.timeout_seconds)}s",
+                f"timeout: registered but not observed within {duration_seconds(args.timeout_seconds)}",
                 f"  job    : {printable(args.job_id)} record={printable(record_path)}",
             ),
             (),
@@ -1762,7 +1784,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 f"  job    : record={printable(record_path)}",
             ),
             (
-                f"timeout: registered but not observed within {int(args.timeout_seconds)}s",
+                f"timeout: registered but not observed within {duration_seconds(args.timeout_seconds)}",
                 f"  job    : {printable(args.job_id)} record={printable(record_path)}",
             ),
         )
@@ -1789,7 +1811,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 f"  job    : record={printable(record_path)}",
             ),
             (
-                f"timeout: the record could not be held within {int(args.timeout_seconds)}s",
+                f"timeout: the record could not be held within {duration_seconds(args.timeout_seconds)}",
             ),
         )
     except OSError:
@@ -1802,7 +1824,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 f"  job    : record={printable(record_path)}",
             ),
             (
-                f"timeout: the record could not be held within {int(args.timeout_seconds)}s",
+                f"timeout: the record could not be held within {duration_seconds(args.timeout_seconds)}",
             ),
         )
     # 掴めたなら、 それが今もその path か — 登録解決の read との間で差し替わりうる。
@@ -1818,7 +1840,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     f"  job    : record={printable(record_path)}",
                 ),
                 (
-                    f"timeout: the record could not be held within {int(args.timeout_seconds)}s",
+                    f"timeout: the record could not be held within {duration_seconds(args.timeout_seconds)}",
                 ),
             )
     last_report: tuple[str, str] | None = None
@@ -1834,7 +1856,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 deadline,
                 EXIT_TIMEOUT,
                 (
-                    f"timeout: no terminal verdict within {int(args.timeout_seconds)}s "
+                    f"timeout: no terminal verdict within {duration_seconds(args.timeout_seconds)} "
                     f"(record says {last_report[0]})",
                     last_report[1],
                 ),
@@ -2067,7 +2089,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     *(f"  {printable(duplicate)}" for duplicate, _log in duplicates),
                 ),
                 (
-                    f"timeout: no terminal verdict within {int(args.timeout_seconds)}s "
+                    f"timeout: no terminal verdict within {duration_seconds(args.timeout_seconds)} "
                     f"(record says {recorded})",
                     evidence(
                         args.job_id,
@@ -2123,20 +2145,21 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         ):
             out = (
                 EXIT_OVER_ESTIMATE,
-                f"over-estimate: {int(elapsed)}s elapsed against a {int(args.estimate_seconds)}s "
+                f"over-estimate: {duration_seconds(elapsed, measured=True)} elapsed against a "
+                f"{duration_seconds(args.estimate_seconds)} "
                 "estimate — read the log against the order before waiting further",
             )
         if out is None and args.once:
             out = (
                 EXIT_ALIVE,
-                f"alive: no terminal verdict yet after {int(elapsed)}s "
+                f"alive: no terminal verdict yet after {duration_seconds(elapsed, measured=True)} "
                 f"(record says {recorded})",
             )
         # out の有無で短絡させない: 直前の分岐が期限後に作った終局も funnel で潰す。
         if finish(deadline, EXIT_ALIVE, (), ()) == EXIT_TIMEOUT:
             out = (
                 EXIT_TIMEOUT,
-                f"timeout: no terminal verdict within {int(args.timeout_seconds)}s "
+                f"timeout: no terminal verdict within {duration_seconds(args.timeout_seconds)} "
                 f"(record says {recorded})",
             )
         if out is not None:
@@ -2164,7 +2187,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 (
                     printable(
                         f"timeout: no terminal verdict within "
-                        f"{int(args.timeout_seconds)}s (record says {recorded})"
+                        f"{duration_seconds(args.timeout_seconds)} (record says {recorded})"
                     ),
                     report,
                 ),
@@ -7797,6 +7820,50 @@ class WatchTest(WatchTest):
         self.assertEqual(observed.reason, "unreadable")
         self.assertIsInstance(observed.error, PermissionError)
         self.assertNotEqual(observed.stamp, ("moved",))
+
+
+class WatchTest(WatchTest):
+    """Regressions fixed in the 66th review round."""
+
+    def test_root_recheck_permission_error_marks_the_scan_incomplete(self):
+        from unittest import mock
+
+        with (
+            mock.patch(__name__ + ".bounded_names", side_effect=FileNotFoundError),
+            mock.patch(__name__ + ".link_identity", side_effect=PermissionError),
+        ):
+            self.assertEqual(find_jobs("task-x", ["/state"]), ([], False))
+
+    def test_fractional_timeout_is_preserved_in_timeout_evidence(self):
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        args = self._watch_args("/state", "task-x", timeout_seconds=0.5)
+        shown = io.StringIO()
+        with (
+            redirect_stdout(shown),
+            mock.patch(__name__ + ".find_jobs", return_value=([], False)),
+            mock.patch("time.monotonic", side_effect=(0.0, 0.0, 1.0)),
+        ):
+            self.assertEqual(watch(args), EXIT_TIMEOUT)
+        self.assertIn("within 0.5s", shown.getvalue())
+        self.assertNotIn("within 0s", shown.getvalue())
+
+    def test_fractional_threshold_and_integer_durations_keep_their_values(self):
+        shown = evidence(
+            "task-x",
+            {"status": "running"},
+            "/state/task-x.log",
+            0.0001,
+            0.5,
+            0.5,
+            None,
+        )
+        self.assertIn("しきい値 0.5s", shown)
+        self.assertNotIn("しきい値 0s", shown)
+        self.assertIn("無音   : 0.0001s", shown)
+        self.assertEqual(duration_seconds(420.0), "420s")
 
 
 class SourceInvariantTest(unittest.TestCase):
