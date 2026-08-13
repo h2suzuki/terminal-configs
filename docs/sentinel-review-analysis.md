@@ -911,6 +911,13 @@ codex sol xhigh で 2 巡連続」。
   検査できない、という gate の既知の限界も同時に露呈
 - 縫い目枠 (r73 fix の直下)。閉鎖済みクラスからの再指摘ゼロは 21 巡連続
 - fix round: `drafts/sentinel-r74-fixes.md`。認定 counter 0 のまま (goal 判定は次巡へ)
+- fix 取り込み: commit `4a6fbab`。重複排除キーを followed jobs directory identity へ
+  (workspace identity の観測は除去・jobs 未作成 / 通常 file workspace は確定不在の通常
+  flow・他 OSError は complete=False)。受け入れ: gates 全緑 (selftest **323** / 外部 12 /
+  ruff / ty / lang lint)、TOCTOU artifact 15→13 は stat 対象の workspace→jobs 下位移動に
+  由来し整合、独立変異 1/1 検出 (専用 test + TOCTOU oracle の両輪)、消滅確認 = jobs 共有
+  fixture が exit 11 の単一候補へ。裁定 23 の担保に r74 test を追記 (gate green)。
+  **r75 の発注は認定条件の再定義 (ユーザー判断待ち) のため保留**
 
 ## 復元元
 

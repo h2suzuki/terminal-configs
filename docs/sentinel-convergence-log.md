@@ -1196,3 +1196,18 @@ fix round: `drafts/sentinel-r74-fixes.md` (lint rc=0) — 重複排除キーを 
 directory identity へ (正本の文言と一致させる)。worktree `wt-r74fix` は台帳 commit
 `9c13b98` の後に分岐 (手順遵守)。job `task-msrb8ij5-x4fpph` (record 検証: sol / medium /
 write / fresh)。sentinel `bxeji9guc` (estimate 1950s・stall 1500s)。認定 counter 0 のまま。
+
+### 2026-08-13 — r74 fix round 完了・main 取り込み (selftest 323)・r75 は方針判断待ち
+
+fix round は sentinel `bxeji9guc` exit 0。受け入れ: 重複排除キーを followed jobs directory
+identity へ (正本の文言と一致)。gates 全緑を発注側再実行 (selftest **323** / 外部 12 / ruff /
+ty / lang lint)、TOCTOU artifact 15→13 は stat 対象移動に由来、独立変異 1/1 検出 (専用
+test + TOCTOU oracle)、消滅確認 = jobs 共有 fixture が exit 11 へ。wt 内 commit `94a6e13` →
+cherry-pick **`4a6fbab`**。裁定 23 の担保に r74 test を追記 (gate green)。報告書退避・
+worktree / branch 削除。
+
+**r75 の発注は保留** — 発注側が認定条件の再定義を提案中: (A) 監視中の path 階層再構成を
+環境境界外とする包括裁定 (60 予定)、(B) 認定を「未知前提の発掘」から「正本 (裁定 + docstring
++ exit contract) への適合検証」へ変更。r60 以降 15 巡で unique なゼロ巡 1 回・material 28 件
+(全採用) という実測から、現行条件は reviewer に新規性を報酬にした無限生成を課す構造と分析。
+ユーザーの裁可待ち。
