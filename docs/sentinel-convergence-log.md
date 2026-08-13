@@ -886,3 +886,11 @@ round-trip・測定値 3 桁 + 非ゼロ guard・整数従来形)。gates 全緑
 一致)、消滅確認 2/2 —「within 0.5s」表示と find_jobs の例外漏れなしを実測。wt 内 commit
 `d09aad2` → cherry-pick **`d4bc8eb`**。裁定 32 / 33 の本文・担保を 66 巡拡張で更新
 (gate green)。報告書退避・worktree / branch 削除。
+
+### 2026-08-13 — r67 発注
+
+r67 (認定 1 巡目) を発注: `drafts/sentinel-review-r67.md` (r66 から python 置換で生成・
+anchor 一意 assert・lint rc=0)。material 31 件・selftest 305 を反映し、60〜66 巡が洗った
+前提群の再なぞり回避を明記。worktree `wt-r67` は docs commit `2943af0` の後に分岐 (手順遵守・
+裁定拡張 2 箇所を分岐直後に grep 確認)。job `task-msr11yla-rgst64` (record 検証: sol /
+xhigh / write / fresh)。sentinel `bo6h4mdlq` (estimate 2250s)。
