@@ -640,3 +640,9 @@ off-by-one を踏んだ後、正確な 8192 byte 断片で pending 消失を確�
 fix round: `drafts/sentinel-r59-fixes.md` (isabs 要求 / cap 断片の非採用 / tail 左端保持)。
 worktree `wt-r59fix` @ `00a0abf`。job `task-msqri7yn-z5zxh6` (record 検証: sol / medium /
 write / fresh)。sentinel `bhl39rye6` (estimate 2250s)。認定 counter 0 のまま。
+
+### 2026-08-13 — r59 fix round 完了・main 取り込み (selftest 287)・r60 発注へ
+
+fix round は sentinel `bhl39rye6` exit 0。受け入れ: gates 全緑 (selftest **287** / 外部 11 /
+ruff / ty)、repro 消滅 5 点を直接確認、独立変異 (isabs 恒真化) を splice 再現し当該 test のみ
+fail。wt 内 commit `aeafc67` → cherry-pick **`59e75f9`**。worktree / branch 削除・報告書退避。

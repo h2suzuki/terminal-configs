@@ -569,6 +569,10 @@ codex sol xhigh で 2 巡連続」。
 - 3 件とも旧来 code の未疑前提 (path 束縛・reader framing・表示忠実性)。**裁定 54 で閉じた
   精度クラスと、直近修正の連鎖窓からの指摘は 0** — 供給源の分布が変わった
 - fix round: `drafts/sentinel-r59-fixes.md`。認定 counter は 0 のまま
+- fix 取り込み: commit `59e75f9`。isabs 要求 (相対 root は corrupt)・cap 到達断片の非採用
+  (EOF 最終行の採用は維持)・tail 左端保持。red 3/3 + 変異 3/3 + 発注側の独立変異 1 件再現 +
+  repro 消滅 5 点 (相対 corrupt / 絶対受理 / cap 偽 end 無効 / EOF 行維持 / strip 不在)。
+  selftest 283 → **287**
 
 ## 復元元
 
