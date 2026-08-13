@@ -825,6 +825,13 @@ codex sol xhigh で 2 巡連続」。
   素通し (repro: 実測)。r68/69 の EPIPE 系で「送れない stdout」の別 errno が残っていた
 - 3 件とも縫い目/横展開漏れ枠。閉鎖済みクラスからの再指摘ゼロは 17 巡連続
 - fix round: `drafts/sentinel-r70-fixes.md`。認定 counter 0 のまま (goal 判定は次巡へ)
+- fix 取り込み: commit `c5d1288`。(1) fallback pin の名前消失例外を `record_gone()` で
+  再分類 (dangling は exit 13・安定消失のみ 10)、(2) root handler に `unreachable()` 前置
+  (走査不能 root は complete=False)、(3) funnel の errno set 化 (EPIPE / EAGAIN /
+  EWOULDBLOCK・他は再送出維持)。既存 test 1 件の期待値 10→13 は裁定 13/42 由来の spec 更新。
+  受け入れ: gates 全緑 (selftest **315** / 外部 12 / ruff / ty / lang lint)、TOCTOU counts
+  不変、独立変異 3/3 検出 (fail 構成一致)、消滅確認 3/3 (exit 13 / exit 14 / rc=0)。裁定
+  21・33・42 の本文・担保を 70 巡拡張で更新 (gate green)
 
 ## 復元元
 

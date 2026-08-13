@@ -1038,3 +1038,13 @@ EWOULDBLOCK も sink 切替 (EPIPE / EAGAIN 以外の再送出は維持)。workt
 commit `68900fe` の後に分岐 (手順遵守)。job `task-msr5yu65-iffcbz` (record 検証: sol /
 medium / write / fresh)。sentinel `btduq4q4n` (estimate 2550s・stall-seconds 1500 — 以後の
 監視は xhigh 深読み対策で明示しきい値を使う)。認定 counter 0 のまま。
+
+### 2026-08-13 — r70 fix round 完了・main 取り込み (selftest 315)・r71 発注へ
+
+fix round は sentinel `btduq4q4n` exit 0。受け入れ: (1) fallback pin の名前消失を
+`record_gone()` で再分類 (dangling = exit 13)、(2) root handler の `unreachable()` 前置、
+(3) funnel errno の set 化 (EPIPE / EAGAIN / EWOULDBLOCK)。既存 test 1 件の期待値 10→13 は
+裁定 13/42 由来の spec 更新と確認。gates 全緑を発注側再実行 (selftest **315** / 外部 12 /
+ruff / ty / lang lint)、TOCTOU counts 不変、独立変異 3/3 検出、消滅確認 3/3。wt 内 commit
+`3866c3c` → cherry-pick **`c5d1288`**。裁定 21 / 33 / 42 を 70 巡拡張で更新 (gate green)。
+報告書退避・worktree / branch 削除。
