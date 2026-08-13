@@ -1189,3 +1189,10 @@ repro で確定し**採用**: r73 fix の重複排除キーが workspace identit
 (jobs directory identity) と粒度が齟齬 — 別 inode の w1/w2 が jobs symlink を共有すると
 1 record が exit 9 (実測)。正本と実装の齟齬 class。閉鎖済みクラスからの再指摘ゼロは 21 巡
 連続。報告書退避・worktree / branch 削除。認定 counter 0 のまま。
+
+### 2026-08-13 — r74 fix round 発注
+
+fix round: `drafts/sentinel-r74-fixes.md` (lint rc=0) — 重複排除キーを followed jobs
+directory identity へ (正本の文言と一致させる)。worktree `wt-r74fix` は台帳 commit
+`9c13b98` の後に分岐 (手順遵守)。job `task-msrb8ij5-x4fpph` (record 検証: sol / medium /
+write / fresh)。sentinel `bxeji9guc` (estimate 1950s・stall 1500s)。認定 counter 0 のまま。
