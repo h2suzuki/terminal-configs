@@ -1276,3 +1276,13 @@ roots で共有 (root loop の外へ)、(2) selftest / 外部 meta-test の runn
 条項に従い新汎用層は作らない。worktree `wt-r75fix` は台帳 commit `83f913a` の後に分岐
 (手順遵守)。job `task-msre6owd-l1riyx` (record 検証: sol / medium / write / fresh)。sentinel
 `b1dibya90` (estimate 2550s・stall 1500s)。
+
+### 2026-08-13 — r75 fix round 完了・main 取り込み (selftest 326)・r76 発注へ
+
+fix round は sentinel `b1dibya90` exit 0。受け入れ: (1) `jobs_identities` の全 roots 共有、
+(2) `OSErrorStream` を selftest / 外部 meta-test の runner へ (DiscardStream 再利用・
+shutdown flush 防護・外部側は AST self-check)。gates 全緑を発注側再実行 (selftest **326** /
+外部 **13** / ruff / ty / lang lint)、TOCTOU counts 不変、独立変異 2/2 検出、消滅確認 2/2 —
+cross-root alias は exit 11・`--selftest | head -c 200` の左側 exit 0。wt 内 commit
+`e26791f` → cherry-pick **`f2f5fe9`**。裁定 23 / 21 を 75 巡拡張で更新 (gate green)。
+報告書退避・worktree / branch 削除。

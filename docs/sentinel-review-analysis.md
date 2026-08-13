@@ -932,6 +932,13 @@ codex sol xhigh で 2 巡連続」。
   U-6 (selftest gate) × U-8 (pipe 部分読み) — 本 session 自身が selftest を pipe しており
   実運用内。裁定 21 (73 巡拡張) の担保が finish() に限られていた漏れ
 - fix round: `drafts/sentinel-r75-fixes.md`。U0 ゼロ計 2 回の収束判定は次巡へ持ち越し
+- fix 取り込み: commit `f2f5fe9`。(1) `jobs_identities` を全 searched roots で共有 (hoist
+  のみ)、(2) `OSErrorStream` (既存 `DiscardStream` 再利用・shutdown flush の stdout/stderr
+  差し替え込み) を selftest / 外部 meta-test の runner へ + 外部側は AST self-check test。
+  受け入れ: gates 全緑 (selftest **326** / 外部 **13** / ruff / ty / lang lint)、TOCTOU
+  counts 不変、独立変異 2/2 検出、消滅確認 2/2 — cross-root alias は exit 11・
+  `--selftest | head -c 200` の左側 exit **0** (契約が端到端で成立)。裁定 23 (排除集合の
+  全 roots 共有)・21 (runner stream への適用) を 75 巡拡張で更新 (gate green)
 
 ## 復元元
 
