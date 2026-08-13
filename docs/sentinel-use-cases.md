@@ -1,4 +1,4 @@
-# codex_task_sentinel ユースケース正本 (v2 — codex delegation の実運用から導出)
+# codex_task_sentinel ユースケース正本 (v3 — 利用特性の列挙から導出)
 
 本書は `files/codex_task_sentinel` の**用途の正本**である。指摘・要求の妥当性は本書からの
 逸脱度で判定する (裁定 60)。「codex task を delegation する」という抽象要件は無限に広がる —
@@ -9,6 +9,36 @@
 
 発注側 (Claude Code session) が起動した codex background job 1 件を、plugin の state 配置を
 観測して終局判定まで決定的に監視し、evidence 付き exit code で返す。
+
+## Step 0: 利用特性の列挙 (ここから全てを導出する)
+
+特性・特徴を挙げるほど用途は限定され、ユースケースは具体化し、実装コストは下がり、適合率が
+上がる。以下は全て運用実績 (docs/sentinel-convergence-log.md) から確認できる**我々の**特性で
+ある。厳しい特性 (無人自律・宇宙空間級) は 1 つも無い — ナイーブな実装を override する要求は
+存在しない。
+
+| # | 特性 | 殺される要求クラス |
+|---|---|---|
+| S-1 | 呼び手は単一の Claude Code session (発注側)。人間は事後 review | マルチクライアント調停・API 化 |
+| S-2 | 単一 operator・単一マシン (WSL2 Ubuntu / ext4 local) | マルチテナント・分散・network fs (裁定 59) |
+| S-3 | 同時に走る codex job は少数 (実績 1〜2 本) | 大規模並列・スケジューラ |
+| S-4 | job 寿命は分〜時間 (実績 8〜75 分) | 秒級リアルタイム・日単位の長期監視 |
+| S-5 | 監視は poll (秒〜十秒 cadence) で十分 | inotify・イベント駆動・低レイテンシ |
+| S-6 | sentinel は background の単発 process。常駐 daemon ではない | daemon lifecycle・再起動管理・IPC |
+| S-7 | 1 job 1 sentinel 直列 (C-2)・1 worktree 1 write job 直列 (C-1) | 並列監視・並列 write の調停 (lock 機構) |
+| S-8 | worktree は使い捨て (毎巡作成・削除の実績 20+ 回) | worktree 内状態の長期整合・migration |
+| S-9 | state は plugin が書く: record = writeFileSync (同 inode truncate)・log = append | 任意 producer の書込 pattern 対応 |
+| S-10 | state 規模は小: workspace 数十・log は KB〜数十 MB | big-data 走査・index・並列読み |
+| S-11 | 報告書は KB 級 markdown + 終端 token (C-5) | 任意形式 deliverable の検証 |
+| S-12 | path・job id は通常の ASCII/UTF-8 名 | exotic encoding の常時対応 (防御は既存分) |
+| S-13 | 時計は NTP 同期の通常運用 | 時計飛び・うるう秒の特別処理 (裁定 9 の範囲で足りる) |
+| S-14 | 出力の機械消費は exit code のみ。本文は人間可読 evidence | 構造化出力 (JSON)・API 互換性 |
+| S-15 | 復旧判断は人間 + 発注側 (裁定 1)。自動復旧しない | 自動 retry・自動 cancel・self-healing |
+| S-16 | 資源は通常の user session (fd 1024+・memory GB)。disk full は起きうる | 極端資源下の動作保証 (自己誘発の浪費対策は既存分で足りる) |
+| S-17 | セキュリティ境界は同一 user のみ。敵対 actor なし (裁定 58) | 暗号学的帰属・改竄検知 |
+| S-18 | 再起動・断は稀。回収は C-3 の範囲 | checkpoint・resume 機構 |
+| S-19 | 監視対象は自分が起動した job のみ | job 探索・一覧・他 session の job 管理 |
+| S-20 | 対話なし: 起動時引数のみ。Linux のみ | 対話 UI・signal 制御・他 OS 移植 |
 
 ## 導出: codex delegation の機能 → 我々の使い方 → sentinel への要求
 
