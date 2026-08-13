@@ -648,6 +648,14 @@ codex sol xhigh で 2 巡連続」。
   採用 — この class を discipline でなく gate で塞ぐ
 - fix round: `drafts/sentinel-r63-fixes.md` (raw entry 消費の cap + 外部 meta-test に
   rulings 同期 gate)。認定 counter 0 のまま
+- fix 取り込み: commit `2b6c47b`。`CompanionScanOverflow` (raw entry で cap 消費・filter 前・
+  `except OSError` と別系統・部分 best 破棄) + 外部 meta-test の `RulingsSyncTest` (番号
+  1..55 連続 + 担保 test 名の AST 実在照合。`LAST_RULING = 55` の pin は発注書の一般形より
+  強いが裁定 3 の literal doctrine に一致する強化として受け入れ — 裁定追加時は発注側が
+  bump する)。受け入れ: gates 全緑 (selftest **293** / 外部 **12** / ruff / ty / lang lint)、
+  TOCTOU counts 不変、独立変異 3/3 検出 (revert / row 55 削除 / test 名改竄 → 復元 green)、
+  消滅確認 = 同一 repro (103 entry × cap 5) が fallback へ。裁定 55 本文を 63 巡拡張で更新
+  (raw scandir entry 消費 + 担保 5 tests)
 
 ## 復元元
 

@@ -755,3 +755,15 @@ filter 前の raw scandir entry で消費し、超過は部分集合を選ばず
 red + 上限内回帰。worktree `wt-r63fix` は台帳 commit `7d22a0c` の後に分岐 (手順対策の初適用・
 row 55 の存在を分岐直後に grep 確認)。job `task-msqw8rk3-38a7nf` (record 検証: sol / medium /
 write / fresh)。sentinel `bngsewjk2` (estimate 2550s)。
+
+### 2026-08-13 — r63 fix round 完了・main 取り込み (selftest 293・外部 12)・r64 発注へ
+
+fix round は sentinel `bngsewjk2` exit 0。受け入れ: `CompanionScanOverflow` で raw scandir
+entry が filter 前に cap を消費 (`except OSError` と別系統・超過は部分 best を破棄して
+fallback)、外部 meta-test に `RulingsSyncTest` (番号 1..55 連続 + 担保 test 名の AST 実在
+照合)。`LAST_RULING = 55` の pin は発注書の一般形 (1..N) より強いが、裁定 3 の literal
+doctrine に一致する強化として受け入れ — 裁定追加時は発注側が bump する。gates 全緑を発注側
+再実行 (selftest **293** / 外部 **12** / ruff / ty / lang lint)、TOCTOU counts 不変、独立変異
+3/3 検出 (revert / row 55 削除 / 担保名改竄 → 復元 green)、消滅確認 = 同一 repro (103 entry
+× cap 5) が fallback へ。wt 内 commit `b35582e` → cherry-pick **`2b6c47b`**。裁定 55 本文を
+63 巡拡張 (raw entry 消費) で更新し、gate green を確認。報告書退避・worktree / branch 削除。
