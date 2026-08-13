@@ -277,21 +277,22 @@ def find_jobs(job_id: str, roots: list[str]) -> tuple[list[tuple[str, str]], boo
             complete = False
             continue
         observed = []
-        workspace_identities = set()
+        jobs_identities = set()
         for workspace in workspaces:
             workspace_path = os.path.join(root, workspace)
+            jobs_path = os.path.join(workspace_path, "jobs")
             try:
-                workspace_identity = Observation.directory_identity(workspace_path)
+                jobs_identity = Observation.directory_identity(jobs_path)
+            except NotADirectoryError:
+                jobs_identity = None
             except OSError:
                 complete = False
                 continue
-            if workspace_identity is None:
-                complete = False
-                continue
-            if workspace_identity in workspace_identities:
-                continue
-            workspace_identities.add(workspace_identity)
-            record = os.path.join(root, workspace, "jobs", job_id + ".json")
+            if jobs_identity is not None:
+                if jobs_identity in jobs_identities:
+                    continue
+                jobs_identities.add(jobs_identity)
+            record = os.path.join(jobs_path, job_id + ".json")
             # entry 自身を 1 度だけ見る — 壊れた symlink も「在る」 で、 不在ではない。
             try:
                 identity = link_identity(record)
@@ -7476,7 +7477,7 @@ class WatchTest(WatchTest):
                 "unlink": {4: 11, 7: 11, 8: 11, 9: 11},
                 "replace-different": {4: 11, 7: 11, 8: 11, 9: 11},
                 "replace-same": {4: 11, 7: 11, 8: 11, 9: 11},
-                "unreadable": {4: 14},
+                "unreadable": {4: 11},
                 "grow": {5: 11, 7: 11, 8: 11, 9: 11},
                 "appear": {1: 0, 2: 11, 3: 11, 4: 11},
             },
@@ -7656,7 +7657,7 @@ class WatchTest(WatchTest):
                 "record-round": 60,
                 "log": 8,
                 "log-command": 10,
-                "artifact": 15,
+                "artifact": 13,
                 "peer": 18,
             },
         )
@@ -8702,6 +8703,31 @@ class WatchTest(WatchTest):
 
         root, _record, _log = self._state("ws", "task-x", "running")
         os.symlink(os.path.join(root, "ws"), os.path.join(root, "ws-alias"))
+        with redirect_stdout(io.StringIO()):
+            code = watch(self._watch_args(root, "task-x", once=True))
+        self.assertEqual(code, EXIT_ALIVE)
+
+    def test_workspaces_sharing_a_jobs_directory_are_scanned_once(self):
+        """Distinct workspaces sharing one jobs directory form one candidate."""
+        import io
+        from contextlib import redirect_stdout
+
+        root = tempfile.mkdtemp()
+        shared_jobs = tempfile.mkdtemp()
+        for workspace in ("ws-a", "ws-b"):
+            workspace_path = os.path.join(root, workspace)
+            os.makedirs(workspace_path)
+            os.symlink(shared_jobs, os.path.join(workspace_path, "jobs"))
+        record = os.path.join(shared_jobs, "task-x.json")
+        log = os.path.join(shared_jobs, "task-x.log")
+        with open(record, "w", encoding="utf-8") as stream:
+            json.dump({"id": "task-x", "status": "running"}, stream)
+        with open(log, "w", encoding="utf-8") as stream:
+            stream.write("x\n")
+
+        found, complete = find_jobs("task-x", [root])
+        self.assertTrue(complete)
+        self.assertEqual(len(found), 1)
         with redirect_stdout(io.StringIO()):
             code = watch(self._watch_args(root, "task-x", once=True))
         self.assertEqual(code, EXIT_ALIVE)
