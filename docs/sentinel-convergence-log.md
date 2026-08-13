@@ -1246,3 +1246,15 @@ orchestration を明記 (commit `3595e76`)。**worktree root の lock file に�
 region 化**は delegation flow 側の将来 option として記録に留める (現運用は C-1 の規約 +
 単一 operator で充足しており、今実装すると本 charter 自身の過剰実装条項に抵触する)。
 r75 (走行中) は charter v1 で発注済みのため、受領時の U 分類検証は v2 を基準に発注側が行う。
+
+### 2026-08-13 — charter v3: 利用特性の列挙を Step 0 に (ユーザー指摘)
+
+ユーザー指摘: 機械的手順は「利用特性をなるべく多く列挙する」が最初 — 特性を挙げるほど用途は
+限定され、ユースケースは具体化し、実装コストは下がり、適合率が上がる (厳しい特性が
+ナイーブさを override する場合を除く)。v3 で S-1〜S-20 の特性表を charter 冒頭に追加し、
+各特性が殺す要求クラスを明記 (単一 session / 単一マシン local fs / 少数並列 / 分〜時間の
+job 寿命 / poll で十分 / 非常駐 / 直列運用 C-1・C-2 / 使い捨て worktree / plugin 固有の
+書込 pattern / 小規模 state / token 終端 / 通常 path 名 / NTP 時計 / exit code が機械契約 /
+人間判断の復旧 / 通常資源 / 同一 user 境界 / 稀な再起動 / 自分の job のみ / 非対話・Linux
+のみ)。厳しい特性は 1 つも無い = ナイーブ実装を override する要求は存在しないことも明記
+(commit `d14df6f`)。
