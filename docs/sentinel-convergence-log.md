@@ -1258,3 +1258,12 @@ job 寿命 / poll で十分 / 非常駐 / 直列運用 C-1・C-2 / 使い捨て 
 人間判断の復旧 / 通常資源 / 同一 user 境界 / 稀な再起動 / 自分の job のみ / 非対話・Linux
 のみ)。厳しい特性は 1 つも無い = ナイーブ実装を override する要求は存在しないことも明記
 (commit `d14df6f`)。
+
+### 2026-08-13 — r75 受領 (新体制初巡): U0 2 件 (全件確定) → fix round 発注へ
+
+r75 (`task-msrdl4a2-5ckqoi`・sol xhigh・write) は sentinel `bml1zva66` exit 0。**新体制は
+設計どおり機能** — reviewer は U 分類を自己申告 (U0×2・U2 なし)・ユースケース引用付き。
+発注側の U 検証 + repro で両件採用: (1) root 跨ぎ静的 jobs alias で exit 9 (`jobs_identities`
+が root 毎初期化 — alias family 最終層・実測)、(2) `--selftest | head -c 200` の左側 exit
+120 (合否契約外・実測 — U-6×U-8、本 session 自身が selftest を pipe する実運用内。裁定 21 の
+担保が finish() 限定だった漏れ)。報告書退避・worktree / branch 削除。U0 ゼロ判定は次巡へ。

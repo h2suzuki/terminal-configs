@@ -919,6 +919,20 @@ codex sol xhigh で 2 巡連続」。
   fixture が exit 11 の単一候補へ。裁定 23 の担保に r74 test を追記 (gate green)。
   **r75 の発注は認定条件の再定義 (ユーザー判断待ち) のため保留**
 
+### r75 (新認定条件の 1 巡目・22 度目) — U0 2 件、U0 ゼロならず
+
+- **新体制の初巡**: reviewer は U 分類を自己申告 (U0×2・U2 = なし) し、ユースケース引用付きで
+  報告 — 枠組みは設計どおり機能。発注は charter v1 だったが裁定は v3 基準で実施
+- **指摘 1 (U0 採用)**: root を跨ぐ静的 jobs alias で同一 record が exit 9 —
+  `jobs_identities` が root loop 内で毎回初期化されるため root 間で忘れられる (repro:
+  exit 9 実測)。U0 検証: charter の環境前提「静的 alias は正当」+ U-1 に合致。r71〜r74 の
+  alias family の最終層
+- **指摘 2 (U0 採用)**: `--selftest` / 外部 meta-test の出力が OSError sink を通らない —
+  `--selftest | head -c 200` で左側 exit **120** (合否 0/1 の契約外) を実測。U0 検証:
+  U-6 (selftest gate) × U-8 (pipe 部分読み) — 本 session 自身が selftest を pipe しており
+  実運用内。裁定 21 (73 巡拡張) の担保が finish() に限られていた漏れ
+- fix round: `drafts/sentinel-r75-fixes.md`。U0 ゼロ計 2 回の収束判定は次巡へ持ち越し
+
 ## 復元元
 
 repo の実 path は `/home/scorer/terminal-configs` である (user 名変更前の `/home/h2suzuki/...` は現存しない
