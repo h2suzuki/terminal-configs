@@ -894,3 +894,13 @@ anchor 一意 assert・lint rc=0)。material 31 件・selftest 305 を反映し�
 前提群の再なぞり回避を明記。worktree `wt-r67` は docs commit `2943af0` の後に分岐 (手順遵守・
 裁定拡張 2 箇所を分岐直後に grep 確認)。job `task-msr11yla-rgst64` (record 検証: sol /
 xhigh / write / fresh)。sentinel `bo6h4mdlq` (estimate 2250s)。
+
+### 2026-08-13 — r67 受領: material 2 (全件確定) → fix round 発注へ
+
+r67 (`task-msr11yla-rgst64`・sol xhigh・write) は sentinel `bo6h4mdlq` exit 0 (duration 表示
+は r66 fix の小数形で稼働)。指摘 2 件を全て repro で確定し**採用**: (1) pin 経路の hold 済み
+descriptor 再読が無保護で、同 inode truncate 窓 (Node writeFileSync 相当) の 0B 再読が偽
+corrupt (exit 13) になる (実測)、(2) artifact 帰属が mtime 単独で、run 前の未来 mtime +
+token 済み file が ready=True (実測)。2 件とも未疑前提枠 (hold 再読の不変前提・mtime の帰属
+前提)、閉鎖済みクラスからの再指摘ゼロは 14 巡連続。報告書退避・worktree / branch 削除。
+認定 counter 0 のまま。

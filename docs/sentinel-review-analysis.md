@@ -735,6 +735,21 @@ codex sol xhigh で 2 巡連続」。
   裁定 32 (duration 忠実性)・33 (handler 内 syscall 失敗の分類) を 66 巡拡張で更新
   (gate green 確認)
 
+### r67 (認定 1 巡目・14 度目) — material 2、認定不成立
+
+- **指摘 1 (採用)**: pin 経路の hold 済み descriptor 再読が無保護 — 同 inode の通常更新
+  (Node `writeFileSync` = O_TRUNC 同 inode) と重なると空/部分 JSON を読み、
+  `_parse_record` None が即 OSError → exit 13 の偽 corrupt (repro: truncate 窓で 0B 再読・
+  parse None を実測)。通常 poll の三者照合 (before/view/after) の規律が pin 再読に
+  届いていない — 「安定を主張する再検査は同じ粒度で」の未適用面
+- **指摘 2 (採用)**: artifact の帰属判定が mtime 単独 — run 前に未来 mtime を仕込んだ
+  token 済み file が `ready=True` (repro: utime + ctime < startedAt で実測)。「mtime ≥
+  startedAt = run 中の書込み」は utime で破れる。指紋 5 要素に ctime はあるのに帰属には
+  未使用 — fix = `st_ctime_ns` ≥ startedAt を ready の必要条件に追加
+- 2 件とも未疑前提枠 (hold 再読の不変前提・mtime の帰属前提)。閉鎖済みクラスからの
+  再指摘ゼロは 14 巡連続
+- fix round: `drafts/sentinel-r67-fixes.md`。認定 counter 0 のまま
+
 ## 復元元
 
 repo の実 path は `/home/scorer/terminal-configs` である (user 名変更前の `/home/h2suzuki/...` は現存しない
