@@ -115,9 +115,13 @@ MAX_RECORD_BYTES = 1 << 20
 MAX_SCAN_BYTES = 64 << 20
 # 同じ理由で entry 数も抑える — 実機の worktree は 4 桁で、超えるのは別ツリーである。
 MAX_TREE_ENTRIES = 200_000
+# measured と pending が保持する path の合計 — 深い tree では件数だけでは囲えない。
+MAX_TREE_PATH_BYTES = 64 << 20
 # workspace と peer record も同じ理由で数える — 列挙自体が list 化で膨らむ。
 MAX_WORKSPACES = 10_000
 MAX_PEERS = 5_000
+# cache の版 directory も逐次列挙し、補助探索だけが無制限にならないようにする。
+MAX_COMPANION_CANDIDATES = 10_000
 
 EXIT_DONE = 0
 EXIT_DONE_HUNG = 3
@@ -920,19 +924,33 @@ def tree_age(root: str | None, now: float) -> tuple[float | None, int, bool]:
     # dirs も測る — 辿らない directory symlink は base として現れないので、
     # files だけ見ていると entry 自体が走査から漏れる。
     pending, measured = [root], [root]
+    root_bytes = len(os.fsencode(root))
+    held_path_bytes = root_bytes * 2
+    if held_path_bytes > MAX_TREE_PATH_BYTES:
+        return None, len(measured), False
     while pending:
         try:
             # os.walk は 1 dir を list 化してから渡すので、 巨大な dir では上限が効かない。
-            with os.scandir(pending.pop()) as entries:
+            base = pending.pop()
+            held_path_bytes -= len(os.fsencode(base))
+            with os.scandir(base) as entries:
                 for entry in entries:
                     budget -= 1
                     if budget < 0:
                         return None, budget, False  # 走査しきれない広さ
                     if entry.name == ".git":
                         continue
-                    measured.append(entry.path)
+                    path = entry.path
+                    path_bytes = len(os.fsencode(path))
+                    if held_path_bytes + path_bytes > MAX_TREE_PATH_BYTES:
+                        return None, len(measured), False
+                    measured.append(path)
+                    held_path_bytes += path_bytes
                     if entry.is_dir(follow_symlinks=False):
-                        pending.append(entry.path)
+                        if held_path_bytes + path_bytes > MAX_TREE_PATH_BYTES:
+                            return None, len(measured), False
+                        pending.append(path)
+                        held_path_bytes += path_bytes
         except FileNotFoundError:
             # 走査中に消えた dir は file と同じく 「たった今の書き込み」。
             newest = now if newest is None else max(newest, now)
@@ -1145,6 +1163,29 @@ def ascii_float(value: str) -> float:
     return float(value)
 
 
+def companion_candidates(pattern: str) -> Iterator[str]:
+    """Yield cached companion paths without materialising the wildcard matches."""
+    prefix, wildcard, suffix = pattern.partition("*")
+    if not wildcard or any(marker in suffix for marker in "*?["):
+        return
+    parent = os.path.dirname(prefix)
+    name_prefix = prefix[len(parent) + 1 :]
+    name_suffix, separator, tail = suffix.partition(os.sep)
+    try:
+        with os.scandir(parent) as entries:
+            for entry in entries:
+                name = entry.name
+                if (
+                    name.startswith(".")
+                    or not name.startswith(name_prefix)
+                    or not name.endswith(name_suffix)
+                ):
+                    continue
+                yield os.path.join(parent, name, tail) if separator else entry.path
+    except OSError:
+        return
+
+
 def companion_path() -> str | None:
     """The companion this machine actually has; None when neither copy is present."""
 
@@ -1152,10 +1193,18 @@ def companion_path() -> str | None:
         # node に渡す script — 在るだけでは足りず、 読める通常 file である必要がある。
         return os.path.isfile(path) and os.access(path, os.R_OK)
 
-    found = [path for path in glob.glob(COMPANION_GLOB) if usable(path)]
-    if found:
-        return max(found, key=version_key)
-    return COMPANION_FALLBACK if usable(COMPANION_FALLBACK) else None
+    def fallback() -> str | None:
+        return COMPANION_FALLBACK if usable(COMPANION_FALLBACK) else None
+
+    best = None
+    count = 0
+    for path in companion_candidates(COMPANION_GLOB):
+        count += 1
+        if count > MAX_COMPANION_CANDIDATES:
+            return fallback()
+        if usable(path) and (best is None or version_key(path) > version_key(best)):
+            best = path
+    return best if best is not None else fallback()
 
 
 def cancel_command(job_id: str, root: str | None) -> str:
@@ -2750,6 +2799,38 @@ class WatchTest(unittest.TestCase):
         assert age is not None
         self.assertAlmostEqual(age, 90, delta=5)
         self.assertIsNone(tree_age("/nonexistent", time.time())[0])
+
+    def test_tree_path_bytes_are_bounded_before_the_entry_cap(self):
+        from unittest import mock
+
+        root = tempfile.mkdtemp()
+        with open(os.path.join(root, "a-long-enough-name"), "w", encoding="utf-8") as f:
+            f.write("x")
+        root_holds = len(os.fsencode(root)) * 2
+        with mock.patch(__name__ + ".MAX_TREE_PATH_BYTES", root_holds):
+            age, count, complete = tree_age(root, time.time())
+        self.assertIsNone(age)
+        self.assertEqual(count, 1)
+        self.assertFalse(complete)
+
+    def test_tree_path_bytes_within_the_cap_keep_the_walk_result(self):
+        from unittest import mock
+
+        root = tempfile.mkdtemp()
+        written = os.path.join(root, "kept")
+        with open(written, "w", encoding="utf-8") as f:
+            f.write("x")
+        observed = time.time()
+        for path in (written, root):
+            os.utime(path, (observed - 90, observed - 90))
+        held = len(os.fsencode(root)) + len(os.fsencode(written))
+        with mock.patch(__name__ + ".MAX_TREE_PATH_BYTES", held):
+            age, count, complete = tree_age(root, observed)
+        self.assertIsNotNone(age)
+        assert age is not None
+        self.assertAlmostEqual(age, 90.0)
+        self.assertEqual(count, 2)
+        self.assertTrue(complete)
 
     def test_a_broken_log_read_is_reported_to_every_reader(self):
         """短い view は未完了 start を落とし、その log の最大 gap でもない。"""
@@ -6285,14 +6366,14 @@ class WatchTest(unittest.TestCase):
             for v in ("1.0.9", "1.0.10")
         ]
         with (
-            mock.patch("glob.glob", return_value=cached),
+            mock.patch(__name__ + ".companion_candidates", return_value=iter(cached)),
             mock.patch("os.path.isfile", return_value=True),
             mock.patch("os.access", return_value=True),
         ):
             self.assertEqual(companion_path(), cached[1])
         # 在っても読めない / 通常 file でないなら、実行できる command にならない。
         with (
-            mock.patch("glob.glob", return_value=cached),
+            mock.patch(__name__ + ".companion_candidates", return_value=iter(cached)),
             mock.patch("os.path.isfile", return_value=True),
             mock.patch("os.access", return_value=False),
         ):
@@ -6309,9 +6390,49 @@ class WatchTest(unittest.TestCase):
             for v in ("²", "1.0.10")
         ]
         with (
-            mock.patch("glob.glob", return_value=cached),
+            mock.patch(__name__ + ".companion_candidates", return_value=iter(cached)),
             mock.patch("os.path.isfile", return_value=True),
             mock.patch("os.access", return_value=True),
+        ):
+            self.assertEqual(companion_path(), cached[1])
+
+    def test_too_many_companion_candidates_use_the_fallback(self):
+        from unittest import mock
+
+        root = tempfile.mkdtemp()
+        cached = []
+        for version in ("1.0.9", "1.0.10"):
+            path = os.path.join(root, version, "scripts", "x.mjs")
+            os.makedirs(os.path.dirname(path))
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("x")
+            cached.append(path)
+        fallback = os.path.join(root, "fallback.mjs")
+        with open(fallback, "w", encoding="utf-8") as f:
+            f.write("x")
+        with (
+            mock.patch(__name__ + ".COMPANION_GLOB", os.path.join(root, "*", "scripts", "x.mjs")),
+            mock.patch(__name__ + ".COMPANION_FALLBACK", fallback),
+            mock.patch(__name__ + ".MAX_COMPANION_CANDIDATES", 1),
+        ):
+            self.assertEqual(companion_path(), fallback)
+        self.assertNotEqual(fallback, max(cached, key=version_key))
+
+    def test_companion_candidates_within_the_cap_keep_numeric_order(self):
+        from unittest import mock
+
+        root = tempfile.mkdtemp()
+        cached = []
+        for version in ("1.0.9", "1.0.10"):
+            path = os.path.join(root, version, "scripts", "x.mjs")
+            os.makedirs(os.path.dirname(path))
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("x")
+            cached.append(path)
+        with (
+            mock.patch(__name__ + ".COMPANION_GLOB", os.path.join(root, "*", "scripts", "x.mjs")),
+            mock.patch(__name__ + ".COMPANION_FALLBACK", os.path.join(root, "absent")),
+            mock.patch(__name__ + ".MAX_COMPANION_CANDIDATES", 2),
         ):
             self.assertEqual(companion_path(), cached[1])
 
