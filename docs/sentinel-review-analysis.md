@@ -704,6 +704,15 @@ codex sol xhigh で 2 巡連続」。
 - 3 件とも未疑前提枠 (fd 上限・JSON decoder の標準外受理集合・errno 分類の primitive 間
   一貫性)。閉鎖済みクラスからの再指摘ゼロは 12 巡連続
 - fix round: `drafts/sentinel-r65-fixes.md`。認定 counter 0 のまま
+- fix 取り込み: commit `bfcf9ee`。(1) 複数候補走査は descriptor 非保持で逐次検証、singleton
+  のみ判定 read と 5 要素指紋一致を確認した再 pin で hold (不一致は shifting へ降格)、重複
+  確定時は旧 pin も解放、(2) `parse_constant` で非有限定数を corrupt へ、(3) artifact 後置
+  stat は名前消失系のみ moved・他は読取指紋保持の unreadable。受け入れ: gates 全緑 (selftest
+  **302** / 外部 12 / ruff / ty / lang lint)、TOCTOU counts 不変、独立変異 3/3 検出 (fail
+  構成一致)、消滅確認 3/3 — fd 4〜7 の全域で exit 9 (自己誘発枯渇の解消)。裁定 23 / 52 / 33
+  の本文・担保を 65 巡拡張で更新 (新番号なし・gate pin 56 のまま green)。横展開掃引の残余
+  note: log 側 `file_stat(log) != before_log` は stat flap を「changed」(discard 系) に畳む
+  余地 — moved 主張ではないため裁定は保留し、認定 loop の検出に委ねる
 
 ## 復元元
 

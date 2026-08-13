@@ -837,3 +837,15 @@ fix round: `drafts/sentinel-r65-fixes.md` (lint rc=0) — (1) 重複確定後は
 moved・他は unreadable。worktree `wt-r65fix` は台帳 commit `6cea6bb` の後に分岐 (手順遵守)。
 job `task-msqz7od4-ol9lez` (record 検証: sol / medium / write / fresh)。sentinel `bndtiv7e5`
 (estimate 2850s)。認定 counter 0 のまま。
+
+### 2026-08-13 — r65 fix round 完了・main 取り込み (selftest 302)・r66 発注へ
+
+fix round は sentinel `bndtiv7e5` exit 0。受け入れ: (1) 複数候補走査は descriptor 非保持・
+singleton のみ 5 要素指紋一致の再 pin で hold (不一致は shifting へ降格・重複確定時は旧 pin
+解放)、(2) `parse_constant` で非有限定数を corrupt へ、(3) artifact 後置 stat は名前消失系
+のみ moved・他は読取指紋保持の unreadable。gates 全緑を発注側再実行 (selftest **302** /
+外部 12 / ruff / ty / lang lint)、TOCTOU counts 不変、独立変異 3/3 検出 (fail 構成一致)、
+消滅確認 3/3 — fd 4〜7 の全域で exit 9。wt 内 commit `f88ec30` → cherry-pick **`bfcf9ee`**。
+裁定 23 / 52 / 33 の本文・担保を 65 巡拡張で更新 (新番号なし・gate green 確認)。横展開掃引の
+残余 note: log 側 stat flap の「changed」畳みは moved 主張ではないため裁定保留・認定 loop に
+委ねる。報告書退避・worktree / branch 削除。
