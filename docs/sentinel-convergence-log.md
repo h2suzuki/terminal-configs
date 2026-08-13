@@ -1305,3 +1305,12 @@ repro 実測)。初の「削る fix」として両 option の watch mode 必須�
 実装か。裁定 38/39/44/45 と衝突するため charter の規定どおり人間裁定へ (選択肢 a: 撤去 +
 裁定改廃 / b: charter に根拠追記して維持。発注側は b 推奨)。報告書退避・worktree / branch
 削除。U0 ゼロ判定は次巡へ。
+
+### 2026-08-13 — r76 fix round 発注 (指摘 1 のみ・削る fix)
+
+fix round: `drafts/sentinel-r76-fixes.md` (lint rc=0) — `--artifact` / `--token` の watch
+mode 必須化・省略分岐の削除・正本外 mode を担保していた test の削除 + fixture 更新。exit 5
+semantics は不変。指摘 2 (U1) はユーザー裁定待ちのため本 round に含めない。worktree
+`wt-r76fix` は台帳 commit `8441ef6` の後に分岐 (手順遵守)。job `task-msrfl24o-rfu0qu`
+(record 検証: sol / medium / write / fresh)。sentinel `bz8o696ai` (estimate 3150s・stall
+1500s)。
