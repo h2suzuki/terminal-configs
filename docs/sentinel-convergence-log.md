@@ -1267,3 +1267,12 @@ r75 (`task-msrdl4a2-5ckqoi`・sol xhigh・write) は sentinel `bml1zva66` exit 0
 が root 毎初期化 — alias family 最終層・実測)、(2) `--selftest | head -c 200` の左側 exit
 120 (合否契約外・実測 — U-6×U-8、本 session 自身が selftest を pipe する実運用内。裁定 21 の
 担保が finish() 限定だった漏れ)。報告書退避・worktree / branch 削除。U0 ゼロ判定は次巡へ。
+
+### 2026-08-13 — r75 fix round 発注
+
+fix round: `drafts/sentinel-r75-fixes.md` (lint rc=0) — (1) `jobs_identities` を全 searched
+roots で共有 (root loop の外へ)、(2) selftest / 外部 meta-test の runner stream を OSError
+耐性 wrapper (既存 `DiscardStream` 再利用・suite は完走して合否 0/1) に。charter の過剰実装
+条項に従い新汎用層は作らない。worktree `wt-r75fix` は台帳 commit `83f913a` の後に分岐
+(手順遵守)。job `task-msre6owd-l1riyx` (record 検証: sol / medium / write / fresh)。sentinel
+`b1dibya90` (estimate 2550s・stall 1500s)。
