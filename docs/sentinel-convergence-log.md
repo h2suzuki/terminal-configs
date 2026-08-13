@@ -767,3 +767,12 @@ doctrine に一致する強化として受け入れ — 裁定追加時は発注
 3/3 検出 (revert / row 55 削除 / 担保名改竄 → 復元 green)、消滅確認 = 同一 repro (103 entry
 × cap 5) が fallback へ。wt 内 commit `b35582e` → cherry-pick **`2b6c47b`**。裁定 55 本文を
 63 巡拡張 (raw entry 消費) で更新し、gate green を確認。報告書退避・worktree / branch 削除。
+
+### 2026-08-13 — r64 発注
+
+r64 (認定 1 巡目) を発注: `drafts/sentinel-review-r64.md` (r63 から python 置換で生成・
+anchor 一意 assert・lint rc=0)。material 22 件・selftest 293・外部 12・`RulingsSyncTest` の
+存在を反映し、60〜63 巡が洗った前提 6 種の再なぞり回避を明記。worktree `wt-r64` は docs
+commit `66ea88d` の後に分岐 (手順遵守・row 55 の 63 巡拡張を分岐直後に grep 確認)。job
+`task-msqwt2qf-vq0hnw` (record 検証: sol / xhigh / write / fresh)。sentinel `b9nkjjqqa`
+(estimate 2250s)。
