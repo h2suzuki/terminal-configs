@@ -51,6 +51,7 @@ import calendar
 import codecs
 import collections
 import contextlib
+import errno
 import glob
 import hashlib
 import itertools
@@ -381,6 +382,11 @@ class Observation:
         for handle in handles:
             handle.close()
 
+    @staticmethod
+    def discard_stdout() -> None:
+        """Prevent later writes and shutdown flushing after a closed pipe."""
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+
     @classmethod
     def replace_hold(cls, previous: list, fresh: list) -> list:
         """Install a newly acquired hold before releasing the previous one."""
@@ -467,6 +473,8 @@ class Observation:
                     line = chunk.rstrip(b"\n").decode("utf-8", "replace")
                     if line.strip():
                         yield line
+                if not truncated_left and handle.read(1) and onerror is not None:
+                    onerror()
         except FileNotFoundError:
             if cls.unreachable(path) and onerror is not None:
                 onerror()
@@ -514,6 +522,12 @@ class Observation:
                     body += decoder.decode(chunk)
                     seen_content = seen_content or bool(body.strip())
                     body = body[-chunk_limit:]
+                if remaining == 0 and handle.read(1):
+                    return cls(
+                        cls.UNSTABLE,
+                        stamp=stamp,
+                        reason="advertised-size",
+                    )
                 body += decoder.decode(b"", True)
                 seen_content = seen_content or bool(body.strip())
                 body = body[-chunk_limit:]
@@ -759,8 +773,14 @@ def finish(
     ):
         code = EXIT_TIMEOUT
         output = timeout_output
-    for line in output:
-        print(line)
+    try:
+        for line in output:
+            print(line)
+        sys.stdout.flush()
+    except OSError as exc:
+        if exc.errno != errno.EPIPE:
+            raise
+        Observation.discard_stdout()
     return code
 
 
@@ -2969,6 +2989,7 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(stall_threshold(120.0, 300.0), 120.0)
 
     def test_tree_age_skips_git_and_reports_newest(self):
+        """Ruling 57: .git is excluded by design; checkout-local housekeeping must not deny settling."""
         import tempfile
 
         root = tempfile.mkdtemp()
@@ -3191,7 +3212,7 @@ class WatchTest(unittest.TestCase):
             artifact_ready("/any/report.md", "TOKEN", 0.0)
         self.assertGreater(len(handle.asked), 1)  # 空振りせず、複数 chunk に割れたこと
         self.assertTrue(all(0 < n <= MAX_ARTIFACT_BYTES for n in handle.asked))
-        self.assertEqual(sum(handle.asked), size)  # size を超えて追いかけていない
+        self.assertEqual(sum(handle.asked), size + 1)  # 宣言 size と 1 byte probe だけ
 
     def test_a_record_seen_once_is_never_called_unregistered(self):
         """一度見えた record を忘れると、prune 後に「起動していない」と誤断定する。"""
@@ -7383,16 +7404,16 @@ class WatchTest(WatchTest):
                 "replace-different": {2: 11, 6: 11, 7: 11},
                 "replace-same": {2: 11, 6: 11, 7: 11},
                 "unreadable": {2: 14},
-                "grow": {4: 11, 5: 11, 6: 11, 7: 11},
+                "grow": {4: 11, 5: 11, 6: 14, 7: 14, 8: 11},
                 "appear": {1: 4, 2: 11, 3: 14, 5: 11},
             },
-            "log-command": {"grow": {6: 11}},
+            "log-command": {"grow": {6: 14}},
             "artifact": {
                 "unlink": {4: 11, 7: 11, 8: 11, 9: 11},
                 "replace-different": {4: 11, 7: 11, 8: 11, 9: 11},
                 "replace-same": {4: 11, 7: 11, 8: 11, 9: 11},
                 "unreadable": {4: 11},
-                "grow": {7: 11, 8: 11, 9: 11},
+                "grow": {5: 11, 7: 11, 8: 11, 9: 11},
                 "appear": {1: 0, 2: 11, 3: 11, 4: 11},
             },
             "peer": {
@@ -7414,7 +7435,16 @@ class WatchTest(WatchTest):
                     16: 11,
                 },
                 "unreadable": {2: 14},
-                "grow": {4: 11, 6: 11, 8: 11, 12: 11, 14: 11, 16: 11},
+                "grow": {
+                    4: 11,
+                    6: 11,
+                    7: 11,
+                    8: 11,
+                    12: 11,
+                    14: 11,
+                    15: 11,
+                    16: 11,
+                },
                 "appear": {1: 11, 2: 11},
             },
         }
@@ -7485,7 +7515,7 @@ class WatchTest(WatchTest):
                 "replace-different": (2, 6, 7),
                 "replace-same": (2, 6, 7),
                 "unreadable": (2,),
-                "grow": (4, 5, 6, 7),
+                "grow": (4, 5, 6, 7, 8),
                 "late": (1, 6, 7),
             },
             "artifact": {
@@ -7493,7 +7523,7 @@ class WatchTest(WatchTest):
                 "replace-different": (4, 7, 8, 9),
                 "replace-same": (4, 7, 8, 9),
                 "unreadable": (4,),
-                "grow": (7, 8, 9),
+                "grow": (5, 7, 8, 9),
                 "late": (4, 8, 9),
             },
             "peer": {
@@ -7501,7 +7531,7 @@ class WatchTest(WatchTest):
                 "replace-different": (2, 6, 8, 10, 14, 16),
                 "replace-same": (2, 6, 8, 10, 14, 16),
                 "unreadable": (2,),
-                "grow": (4, 6, 8, 12, 14, 16),
+                "grow": (4, 6, 7, 8, 12, 14, 15, 16),
                 "late": (2, 8, 16),
             },
         }
@@ -7560,10 +7590,10 @@ class WatchTest(WatchTest):
                 "record": 44,
                 "record-pin": 49,
                 "record-round": 60,
-                "log": 7,
-                "log-command": 9,
-                "artifact": 12,
-                "peer": 16,
+                "log": 8,
+                "log-command": 10,
+                "artifact": 13,
+                "peer": 18,
             },
         )
         self.assertEqual(
@@ -8390,6 +8420,53 @@ class WatchTest(WatchTest):
         started = Decimal(written.st_ctime_ns) / Decimal(1_000_000_000)
         self.assertGreaterEqual(written.st_mtime_ns, written.st_ctime_ns)
         self.assertTrue(artifact_ready(path, "REPORT_COMPLETE", started))
+
+
+class WatchTest(WatchTest):
+    """Regressions fixed in the 68th review round."""
+
+    def test_size_zero_regular_views_are_not_whole(self):
+        """A zero advertised size does not prove EOF for a regular pseudo-file."""
+        path = "/proc/self/status"
+        try:
+            descriptor = os.stat(path)
+        except OSError:
+            self.skipTest("no readable regular size-zero pseudo-file")
+        if not stat.S_ISREG(descriptor.st_mode) or descriptor.st_size != 0:
+            self.skipTest("no readable regular size-zero pseudo-file")
+
+        cut = []
+        self.assertEqual(list(log_lines(path, lambda: cut.append(1))), [])
+        self.assertEqual(cut, [1])
+        self.assertIsNone(artifact_ready(path, "REPORT_COMPLETE", Decimal(0)))
+
+    def test_finish_keeps_the_selected_code_when_stdout_closes(self):
+        """A downstream EPIPE does not replace the selected terminal verdict."""
+        from unittest import mock
+
+        class ClosingStream:
+            def __init__(self):
+                self.writes = 0
+
+            def write(self, _text):
+                self.writes += 1
+                if self.writes == 2:
+                    raise BrokenPipeError(errno.EPIPE, "closed pipe")
+                return 1
+
+            def flush(self):
+                pass
+
+        stream = ClosingStream()
+        with mock.patch.object(sys, "stdout", stream):
+            code = finish(
+                float("inf"),
+                EXIT_ALIVE,
+                ("first", "second"),
+                (),
+            )
+        self.assertEqual(code, EXIT_ALIVE)
+        self.assertEqual(stream.writes, 2)
 
 
 class WatchTest(WatchTest, SourceInvariantTest):
