@@ -710,3 +710,21 @@ fix round: `drafts/sentinel-r62-fixes.md` (lint rc=0) — 保持 path byte の�
 由来説明を完了条件に指定。worktree `wt-r62fix` @ `3005ac5`。job `task-msqutb22-qhneqb`
 (record 検証: sol / medium / write / fresh)。sentinel `bgzc6n8i0` (estimate 2550s)。
 認定 counter 0 のまま。
+
+### 2026-08-13 — r62 fix round 完了・main 取り込み (selftest 292)・裁定 55・r63 発注
+
+fix round は sentinel `bgzc6n8i0` exit 0。受け入れ: diff は定数 2 + byte 追跡 + 逐次列挙
+helper + test 4 件 (byte 追跡は pending pop で減算・append 前検査で cap 超過を作らない。
+companion helper は dot-file skip / 単一 `*` 限定 guard で glob 等価)。gates 全緑を発注側
+再実行 (selftest **292** / 外部 11 / ruff / ty / lang lint)、TOCTOU counts は修正前と完全一致
+(観測列不変の発注条件を充足)。独立変異 2 件 (byte 上限 revert / glob 全件 list 化 revert)
+とも追加 test が検出し、fail 構成まで codex 報告と一致。消滅確認: 16KB cap で peak 21KB・
+`(None, 70, False)` / 2000 候補で glob 不使用 + fallback。wt 内 commit `8deeca1` →
+cherry-pick **`8d230f8`**。裁定 55 (列挙上限は件数と保持 byte の両輪) を正本化 (54 →
+**55 件**)。報告書退避・worktree / branch 削除。
+
+r63 (認定 1 巡目) を発注: `drafts/sentinel-review-r63.md` (r62 から python 置換で生成・
+anchor 一意 assert・lint rc=0)。material 21 件・selftest 292・裁定 55 を反映し、60〜62 巡が
+洗った前提 5 種の再なぞり回避を明記。worktree `wt-r63` @ `8d230f8`。job
+`task-msqvg8de-ox9smq` (record 検証: sol / xhigh / write / fresh)。sentinel `badfi4es5`
+(estimate 2250s)。

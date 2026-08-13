@@ -627,6 +627,12 @@ codex sol xhigh で 2 巡連続」。
   oracle を 1 度誤った
 - fix round: `drafts/sentinel-r62-fixes.md` (保持 byte 上限 + companion 候補上限。二 pass
   構造は維持し TOCTOU oracle への観測列波及を避ける)。認定 counter 0 のまま
+- fix 取り込み: commit `8d230f8`。`MAX_TREE_PATH_BYTES` (64MB・pop で減算・append 前検査) と
+  `MAX_COMPANION_CANDIDATES` (10,000・逐次列挙 `companion_candidates()`・超過は fallback)。
+  受け入れ: gates 全緑 (selftest **292** / 外部 11 / ruff / ty / lang lint)、TOCTOU counts
+  完全一致 (観測列不変)、独立変異 2 件 (完全 revert 形) とも検出で fail 構成まで codex 報告と
+  一致、消滅確認 = byte 超過 16KB cap で peak 21KB・(None, 70, False) / companion 2000 候補で
+  glob 不使用 + fallback。裁定 55 として正本化 (54 → **55 件**)
 
 ## 復元元
 
