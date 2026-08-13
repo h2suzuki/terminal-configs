@@ -833,6 +833,20 @@ codex sol xhigh で 2 巡連続」。
   不変、独立変異 3/3 検出 (fail 構成一致)、消滅確認 3/3 (exit 13 / exit 14 / rc=0)。裁定
   21・33・42 の本文・担保を 70 巡拡張で更新 (gate green)
 
+### r71 (認定 1 巡目・18 度目) — material 2、認定不成立
+
+- **指摘 1 (採用)**: state root の symlink 別名で同一 record が root ごとに別 path 文字列で
+  found に入り、1 record が exit 9「ambiguous: 2 records」に化ける (repro: real + alias で
+  exit 9 実測)。`state_roots()` の重複排除が文字列一致のみで directory identity を見ない。
+  data dir の symlink 配置だけで起きる非敵対 config
+- **指摘 2 (採用)**: `Observation.release()` の `close()` が無保護 — FUSE / NFS の release
+  error 等の OSError が素通しし契約外終了、最初の失敗で残り handle の解放も中断 (repro:
+  fake handle で素通し + 後続未解放を実測)。open/read/fstat は Observation に分類済みなのに
+  close だけ構造化から漏れていた
+- 2 件とも未疑前提枠 (root 文字列 = directory identity の同一視・close の成功保証)。
+  閉鎖済みクラスからの再指摘ゼロは 18 巡連続
+- fix round: `drafts/sentinel-r71-fixes.md`。認定 counter 0 のまま (goal 判定は次巡へ)
+
 ## 復元元
 
 repo の実 path は `/home/scorer/terminal-configs` である (user 名変更前の `/home/h2suzuki/...` は現存しない

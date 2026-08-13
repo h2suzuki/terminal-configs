@@ -1057,3 +1057,12 @@ r71 (認定 1 巡目・goal 判定対象) を発注: `drafts/sentinel-review-r71
 (手順遵守・70 巡拡張 3 箇所を分岐直後に grep 確認)。job `task-msr6gt53-sailmn` (record 検証:
 sol / xhigh / write / fresh)。sentinel `bgdh98nqs` (estimate 2250s・stall 1500s)。指摘ゼロ
 ならユーザー goal (非連続 2 回のゼロ巡) 達成。
+
+### 2026-08-13 — r71 受領: material 2 (全件確定) → fix round 発注へ
+
+r71 (`task-msr6gt53-sailmn`・sol xhigh・write) は sentinel `bgdh98nqs` exit 0。指摘 2 件を
+全て repro で確定し**採用**: (1) state root の symlink 別名で 1 record が exit 9 に化ける
+(real + alias で実測 — 文字列一致の重複排除が directory identity を見ない)、(2)
+`Observation.release()` の close が無保護で OSError 素通し + 残り handle の解放中断 (実測)。
+未疑前提枠 (root 文字列 = identity の同一視・close の成功保証)、閉鎖済みクラスからの
+再指摘ゼロは 18 巡連続。報告書退避・worktree / branch 削除。認定 counter 0 のまま。
