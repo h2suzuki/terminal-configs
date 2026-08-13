@@ -1756,6 +1756,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # plugin は record を completed に書いてから final output を append する。
         # その窓に入った poll は、 古い running のまま静穏を読んで stall と言える。
         scan_incomplete = not scanned_all
+        named_now = file_stat(record_path)
         record_moved = (
             # 列挙し切れていない走査の空集合は、 消えた証拠でも別 record の証拠でもない。
             (scanned_all and seen != [(record_path, log)])
@@ -1763,7 +1764,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             # 掴めていない時は比較相手が無い — 無理に不一致を作らない。
             or (
                 record_inode is not None
-                and (file_stat(record_path) or (None, None))[:2] != record_inode
+                and named_now is not None
+                and named_now[:2] != record_inode
             )
         )
         # 前後一致は中間値との一致を証明しない — parse が見た bytes も同じと要求する。
@@ -4413,9 +4415,41 @@ class WatchTest(unittest.TestCase):
 
         buf = io.StringIO()
         with redirect_stdout(buf), mock.patch(__name__ + ".record_view", replacing):
-            watch(args)
+            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
         self.assertIn("replaced or resolved elsewhere", buf.getvalue())
         self.assertNotIn("could not be read in full", buf.getvalue())
+
+    def test_an_unsearchable_record_ancestor_is_not_a_replacement(self):
+        """名前を stat できないことは、別 inode を観測したことではない。"""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        if os.geteuid() == 0:
+            self.skipTest("chmod cannot remove directory search permission for euid 0")
+        root, record, log = self._state("ws", "task-x", "running")
+        jobs = os.path.dirname(record)
+        args = self._watch_args(root, "task-x", once=True)
+        real_scan, blocked = scan_log, []
+        self.addCleanup(os.chmod, jobs, 0o755)
+
+        def block_after_pin(path, hold=None):
+            view = real_scan(path, hold=hold)
+            if path == log and not blocked:
+                os.chmod(jobs, 0o000)
+                blocked.append(1)
+            return view
+
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch(
+            __name__ + ".scan_log", block_after_pin
+        ):
+            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
+        self.assertEqual(blocked, [1])
+        self.assertIsNone(file_stat(record))
+        self.assertFalse(record_gone(record))
+        self.assertNotIn("replaced or resolved elsewhere", buf.getvalue())
+        self.assertIn("could not be read in full", buf.getvalue())
 
     def test_an_unreadable_peer_root_is_not_reported_as_a_change(self):
         """走査しきれていないのは変化ではない — 別の理由として表示する。"""
