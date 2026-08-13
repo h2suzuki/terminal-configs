@@ -849,3 +849,11 @@ singleton のみ 5 要素指紋一致の再 pin で hold (不一致は shifting 
 裁定 23 / 52 / 33 の本文・担保を 65 巡拡張で更新 (新番号なし・gate green 確認)。横展開掃引の
 残余 note: log 側 stat flap の「changed」畳みは moved 主張ではないため裁定保留・認定 loop に
 委ねる。報告書退避・worktree / branch 削除。
+
+### 2026-08-13 — r66 発注
+
+r66 (認定 1 巡目) を発注: `drafts/sentinel-review-r66.md` (r65 から python 置換で生成・
+anchor 一意 assert・lint rc=0)。material 29 件・selftest 302 を反映し、60〜65 巡が洗った
+前提群の再なぞり回避を明記。worktree `wt-r66` は docs commit `06c9624` の後に分岐 (手順遵守・
+裁定拡張 2 箇所を分岐直後に grep 確認)。job `task-msqzsnnh-cc0gh5` (record 検証: sol /
+xhigh / write / fresh)。sentinel `btqt2iaei` (estimate 2250s)。
