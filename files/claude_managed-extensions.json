@@ -42,7 +42,10 @@
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/codegraph_first_gate.py" } ]
       },
       {
-        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/codex_delegation_surface.py" } ]
+        "hooks": [
+          { "type": "command", "command": "/etc/claude-code/hooks/codex_delegation_surface.py" },
+          { "type": "command", "command": "/etc/claude-code/hooks/codex_delegation_gate.py" }
+        ]
       }
     ],
     "PostToolUse": [
