@@ -440,6 +440,15 @@ systemd = true
 hostname = ubuntu2404-wsl
 EOF
 
+# Without this, WSL logs in as root whenever the Windows-side DefaultUid is unset
+if [ -n "$LOGIN_USER" ]; then
+    cat >> /etc/wsl.conf <<EOF
+
+[user]
+default = ${LOGIN_USER}
+EOF
+fi
+
 echo ''
 echo '*** Please execute "wsl -t <this-machine>" on Windows to reflect /etc/wsl.conf ***'
 echo ''
