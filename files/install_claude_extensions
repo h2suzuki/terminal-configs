@@ -98,16 +98,32 @@ run install --mode 0755 --directory ~/.claude/hooks/state
 # Clone the canonical memory repo (soft-fail: without working gh auth the
 # memory feature stays closed until this script is re-run)
 MEMORY_REPO=/var/lib/claude-rag-memory/claude-lessons-learned
+MEMORY_ROOT="$(dirname "$MEMORY_REPO")"
 command -v flock >/dev/null 2>&1 || { echo "flock not found"; exit 1; }
+# The base installer (claude_memory_rag_builder) owns this dir; the lock fd below needs it
+if [ ! -d "$MEMORY_ROOT" ] || [ ! -r "$MEMORY_ROOT" ]; then
+    echo -e "${COLOR_RED}$MEMORY_ROOT missing or unreadable — run the base installer first${COLOR_CLEAR}" >&2
+    exit 1
+fi
 # flock the parent dir fd (no lock file, works for root and user phases alike):
 # concurrent re-runs must not treat each other's half-made clone as broken
 (
-    flock 9
+    # -E 100 tells "someone holds it" apart from a real flock failure (EBADF / ENOLCK)
+    flock -n -E 100 9 || {
+        [ $? -eq 100 ] || exit 1
+        echo -e "${COLOR_YELLOW}memory dir locked by another install — waiting up to 330s${COLOR_CLEAR}"
+        # 330s > the clone's own 300s cap: a longer wait means the holder is stuck, not busy
+        flock -w 330 -E 100 9 || {
+            echo -e "${COLOR_RED}memory dir lock timeout — another install_claude_extensions is running; aborting${COLOR_CLEAR}" >&2
+            exit 1
+        }
+    }
     if ! git -C "$MEMORY_REPO" rev-parse --git-dir >/dev/null 2>&1; then
         # Salvage a missing-.git leftover instead of deleting it
         [ -e "$MEMORY_REPO" ] && run mv "$MEMORY_REPO" "$MEMORY_REPO.broken.$(date +%s)"
-        if git clone -c core.sharedRepository=all \
-            https://github.com/h2suzuki/claude-lessons-learned.git "$MEMORY_REPO"; then
+        # 9<&-: a long-lived child (credential daemon etc) must not inherit the lock fd
+        if GIT_TERMINAL_PROMPT=0 timeout 300 git clone -c core.sharedRepository=all \
+            https://github.com/h2suzuki/claude-lessons-learned.git "$MEMORY_REPO" 9<&-; then
             # An empty repo clones with an unborn HEAD; pin the branch name
             git -C "$MEMORY_REPO" rev-parse -q --verify HEAD >/dev/null \
                 || run git -C "$MEMORY_REPO" symbolic-ref HEAD refs/heads/main
@@ -119,11 +135,11 @@ command -v flock >/dev/null 2>&1 || { echo "flock not found"; exit 1; }
             echo -e "${COLOR_RED}memory repo clone failed — run 'gh auth login' then re-run this script${COLOR_CLEAR}\n"
         fi
     fi
-) 9< "$(dirname "$MEMORY_REPO")" || exit 1
+) 9< "$MEMORY_ROOT" || exit 1
 
 # Sweep control files this tooling no longer uses (left behind by older deploys)
 rm -f "$MEMORY_REPO".{lock,push.lock,install.lock,last-pull,push-failed,index-retry,pull-attempt,missing-warned,sync.log.1} \
-      "$(dirname "$MEMORY_REPO")/memory_index.sqlite3.lock"
+      "$MEMORY_ROOT/memory_index.sqlite3.lock"
 
 # Index every scope present in the clone
 if [ -d "$MEMORY_REPO/.git" ]; then
