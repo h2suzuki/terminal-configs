@@ -186,7 +186,9 @@ def _write_lock():
     # Lock path derives from DB_PATH so DB_PATH-patching tests never take the live lock.
     lock = DB_PATH + ".lock"
     os.makedirs(os.path.dirname(lock), exist_ok=True)
-    fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o664)
+    fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o666)
+    with contextlib.suppress(OSError):  # umask strips o+w at creation
+        os.fchmod(fd, 0o666)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield
@@ -202,12 +204,12 @@ def _connect() -> sqlite3.Connection | None:
         con = sqlite3.connect(DB_PATH, timeout=2.0)
     except sqlite3.Error:
         return None
-    # SQLite hardcodes 0644 (umask can't add bits); force group-write BEFORE WAL so
-    # -wal/-shm inherit it. O_NOFOLLOW: never chmod a symlink another user swapped in.
+    # SQLite hardcodes 0644 (umask can't add bits); open to all trusted users BEFORE
+    # WAL so -wal/-shm inherit it. O_NOFOLLOW: never chmod a swapped-in symlink.
     with contextlib.suppress(OSError):
         fd = os.open(DB_PATH, os.O_RDONLY | os.O_NOFOLLOW)
         try:
-            os.fchmod(fd, 0o664)
+            os.fchmod(fd, 0o666)
         finally:
             os.close(fd)
     try:
@@ -1239,7 +1241,7 @@ def _main_rebuild(argv: list[str]) -> int:
 
 
 def main() -> int:
-    os.umask(0o002)  # shared DB + WAL sidecars + lock must stay group-writable
+    os.umask(0o002)  # explicit 0666 fchmods do the sharing; umask just avoids 077 homes
     argv = sys.argv[1:]
     if not argv:
         return _main_query()
