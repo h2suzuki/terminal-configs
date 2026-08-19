@@ -18,6 +18,7 @@ todos.md は **Critical**, **High**, **Medium** の 3 つの優先度 section �
 
 各親タスクは見出し直後に以下を置く:
 
+- **起票**: `起票: <model 短形式 | user> <YYYY-MM-DD>` の 1 行 (例: `起票: fable-5 2026-08-20`、 ユーザー本人の起票は `user`)。 誰がいつ積んだかを残し、 既定却下 (Adding tasks 参照) の適用を機械的に可能にする。 既存 block への遡及は不要 (新規から適用)
 - **Goal**: 達成する outcome を 1 文で
 - **Exit Criteria**: Goal の各句を客観的・観測可能な acceptance 条件へ分解した checkbox 群
 
@@ -40,9 +41,12 @@ Goal に紐づく関連作業の進捗は Exit Criteria と別の checkbox と�
 
 ### Adding tasks
 
+ユーザーが明示的に依頼していない task の自発起票は**既定却下** — まず chat で提案し、 採用された場合のみ登録する。 ユーザー依頼の作業から派生する deferred 項目の登録は従来通り可。
+
 1. 追記前に Critical・High・Medium 以外の section (旧 「修正済」 等) の残存を確認。 あれば先に掃除 commit を入れる
 2. 新しい残課題は適切な優先度 section に追記する
 3. 関連 work file があれば task entry 内で path を言及する
+4. 起票行 (`起票: <model 短形式 | user> <YYYY-MM-DD>`) を block に必ず入れる
 
 誤記・記載不足・参照誤りなど判断容易なものは直接修正して commit。 判断要素が残るものは `(要相談)` 付きで積み、 議論を経て反映する。
 
