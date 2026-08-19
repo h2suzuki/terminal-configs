@@ -21,9 +21,9 @@ handoff-doc-without-marker block) が実運用で駆動する状態にする。
 
 Exit Criteria:
 
-- [ ] ユーザーの sudo cp 実行後、canonical 6 file と deploy 先の `diff -q` 一致を確認
-- [ ] 実 session で handoff doc への書込 (Edit または Bash) に対し handoff skill 要求 deny が発火することを確認
-- [ ] 実 session で wind-down 宣言後の doc 更新 turn に marker 未出力 block が発火し、marker 出力で通過することを確認
+- [x] ユーザーの sudo cp 実行後、canonical 6 file と deploy 先の `diff -q` 一致を確認 — 2026-08-20 02:54 実測、6/6 identical・exec bit 0755 維持
+- [x] 実 session で handoff doc への書込 (Edit または Bash) に対し handoff skill 要求 deny が発火することを確認 — 2026-08-20 02:55、skill 未 invoke の last-session-handoff.md への Edit を deploy 済み gate が deny (probe 編集は非着地)
+- [ ] 実 session で wind-down 宣言後の doc 更新 turn に marker 未出力 block が発火し、marker 出力で通過することを確認 (次回の実 handoff で自然観測する)
 
 deploy コマンド (Claude Code 外の terminal で実行):
 
