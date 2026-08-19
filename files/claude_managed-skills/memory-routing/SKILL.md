@@ -14,7 +14,7 @@ memory entry の保存先 (org / user / project-local) と保存タイミング�
 
 **Default rule**: 新 rule は **CLAUDE.md に追加しない**。 まず skill / hook / memory のいずれかで実装する。
 
-CLAUDE.md は session 毎 token を食う auto-load file。 肥大化すると個別 rule の attention 分散・compliance 連鎖低下 (cascade regression)。 追加すべき理由 (例: hook / skill 発動前の参照が必須、 trigger phrase 化できない普遍前提) が明確な case のみ、 **ユーザー承諾を得てから** CLAUDE.md に追加する。
+CLAUDE.md は session 毎 token を食う auto-load file。 肥大化すると個別 rule の attention 分散・compliance 連鎖低下。 追加すべき理由 (例: hook / skill 発動前の参照が必須、 trigger phrase 化できない普遍前提) が明確な case のみ、 **ユーザー承諾を得てから** CLAUDE.md に追加する。
 
 #### Placement priority (CLAUDE.md は最終手段)
 
@@ -33,11 +33,11 @@ CLAUDE.md は session 毎 token を食う auto-load file。 肥大化すると�
 
 ### Routing decision (priority 1 → 4)
 
-entry の置き場は共有 clone `/var/lib/claude-rag-memory/claude-lessons-learned` 配下 (canonical は同名の private GitHub repo)。 index file (roster) は無い — **dir に file が存在する = 現役** (退役 = file 削除、 git 履歴が archive)。
+entry の置き場は共有 clone `/var/lib/claude-rag-memory/claude-lessons-learned` 配下 (canonical は同名の private GitHub repo)。 index file は無い — **dir に file が存在する = 現役** (退役 = file 削除、 git 履歴が archive)。
 
 #### 1. Org (`<clone>/org/`) — user-independent scope
 
-ユーザー個人に依らない教訓は **org (全ユーザーに surface)** に保存 (2026-08-19 ユーザー裁定で採用):
+ユーザー個人に依らない教訓は **org (全ユーザーに surface)** に保存する:
 
 - **LLM 一般の認知バイアス対策**: cut-off / hedging / confabulation 等、 モデルに普遍的な regression
 - **tool / 環境の一般教訓**: 使い方・落とし穴のうち、 特定ユーザーの好みに依らないもの
@@ -80,7 +80,7 @@ user CLAUDE.md (`~/.claude/CLAUDE.md`) / project CLAUDE.md (`<repo>/.claude/CLAU
 claude_memory_sync --retire <entry の絶対パス>
 ```
 
-1 コマンドが git rm → commit → detached push → index --delete を正しい順序で実行する。 provenance は git 履歴が永続保存するので footer 追記や roster 移動は不要 — 退役 entry を読み返す時は clone で `git log --diff-filter=D --summary` / `git show <rev>:<path>` を使う。
+1 コマンドが git rm → commit → detached push → index --delete を正しい順序で実行する。 provenance は git 履歴が永続保存するので footer 追記は不要 — 退役 entry を読み返す時は clone で `git log --diff-filter=D --summary` / `git show <rev>:<path>` を使う。
 
 ### Partial coverage
 
@@ -94,7 +94,7 @@ claude_memory_sync --retire <entry の絶対パス>
 
 ### reminder + keywords + models lines in feedback body
 
-各 feedback entry の本文先頭 (frontmatter 直後) に **3 行** を置く。 UserPromptSubmit の SQLite hook が、 prompt に **keywords** が match した entry の **reminder** 文を inject する。 reminder (表示) と keywords (match) を分離するのは、 表示文を keyword 詰めにして「要約」化させない (= 過去の drift) ため。 **models** はその教訓を観測したモデルの tag で、 surface を model-scope 化する。
+各 feedback entry の本文先頭 (frontmatter 直後) に **3 行** を置く。 UserPromptSubmit の SQLite hook が、 prompt に **keywords** が match した entry の **reminder** 文を inject する。 reminder (表示) と keywords (match) を分離するのは、 表示文を keyword 詰めにして「要約」化させないため。 **models** はその教訓を観測したモデルの tag で、 surface を model-scope 化する。
 
 ```markdown
 ---
@@ -118,7 +118,7 @@ models: <観測モデルの短形式 tag (例 fable-5)。 複数は space 区切
 - **要約でなく「是正指示」** — incident の叙述や description 再述でなく、 「X する前に Y せよ」 「Z するな (理由)」 等、 読んだ瞬間に再発を止める rule を先頭に置く
 - **keyword を盛らない** — match は keywords 行が担うので reminder は自然文で読みやすく
 - **事案名・jargon を入れない** — behavioral nudge は具体事案名や jargon を入れても効きにくい。 一般的な是正指示にする (個別事案・事例は entry 本文に書く)
-- **1 文・150 字以内** — hook output は 1 行、 長文は verbose で無視される。 `memory_routing_gate` が 150 字超を deny する (hard 化)
+- **1 文・150 字以内** — hook output は 1 行、 長文は verbose で無視される。 `memory_routing_gate` が 150 字超を deny する
 
 良い例 / 悪い例:
 
@@ -135,7 +135,7 @@ keywords は **ranking ノブ** — entry は keywords 無しでも body だけ�
 - **bilingual** — 英 ・日両方 (例 「Edit ・編集」)
 - **固有名詞 ・error code ・絶対日付を含める** — 「`bg_collect_verdict`」 「`stuck (max attempts)`」 等
 
-reminder: 行が無い entry は本文先頭非空行が fallback (劣化、 必ず reminder: を置く)。 旧 `oneline_summary:` は廃止 (read されない)。
+reminder: 行が無い entry は本文先頭非空行が fallback (劣化、 必ず reminder: を置く)。 `oneline_summary:` 行は書かない (read されず、 gate が deny する)。
 
 **models (model-scope tag。 reminder / keywords とは別行)**:
 
