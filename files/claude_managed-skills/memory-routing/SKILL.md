@@ -1,12 +1,12 @@
 ---
 name: memory-routing
-description: Decide memory entry save location (user vs project-local), generation (MEMORY.md vs OLD-MEMORY.md), save timing, absolute date format, and per-model tags (models: line, cross-model search, tag propagation); retire entries to OLD-MEMORY.md when fully covered by a Managed skill / hook / CLAUDE.md rule.
+description: Decide memory entry save location (user vs project-local scope in the shared git clone), save timing, absolute date format, and per-model tags (models: line, cross-model search, tag propagation); retire entries via claude_memory_sync --retire when fully covered by a Managed skill / hook / CLAUDE.md rule.
 when_to_use: TRIGGER when user gives a correction / feedback, about to say "memory に書く / 保存" etc, uncertain about user vs project-local routing, a feedback entry becomes covered by a new skill / hook / CLAUDE.md rule, or about to conclude "できない" / "実行不能" / "環境の制約" or hitting a second failure on the same work (pull side, not write).
 ---
 
 # Memory Routing
 
-memory entry の保存先 (user vs project-local) と保存タイミングの rule、 および 2 世代化 (MEMORY.md 現役 + OLD-MEMORY.md 退役) の退役 protocol。 同じ指摘を二度受けないように、 また保存先 / 世代を一貫させるための discipline。
+memory entry の保存先 (user vs project-local) と保存タイミングの rule、 および退役 protocol (file 削除 = git 履歴が archive)。 同じ指摘を二度受けないように、 また保存先を一貫させるための discipline。
 
 ## Process
 
@@ -33,7 +33,9 @@ CLAUDE.md は session 毎 token を食う auto-load file。 肥大化すると�
 
 ### Routing decision (priority 1 → 3)
 
-#### 1. User (`~/.claude/memory/`) — cross-project scope
+entry の置き場は共有 clone `/var/lib/claude-rag-memory/memory-repo` 配下 (canonical は private GitHub repo)。 index file (roster) は無い — **dir に file が存在する = 現役** (退役 = file 削除、 git 履歴が archive)。
+
+#### 1. User (`<clone>/user/<login>/`) — cross-project scope
 
 以下に該当する memory は **user (cross-project)** に保存:
 
@@ -41,30 +43,21 @@ CLAUDE.md は session 毎 token を食う auto-load file。 肥大化すると�
 - **ユーザーの普遍的 preference**: 複数プロジェクトに渡る言語 / 文体 / commit 慣習 / コミュニケーション流儀
 - **複数プロジェクトで再現したパターン**: 1 プロジェクトで観測した issue が他でも起きると判明
 
-user の index file 名は **`MEMORY.md`**。
+#### 2. Project-local (`<clone>/project/<encoded-cwd>/`) — project-specific scope
 
-#### 2. Project-local (`<project>/memory/`) — project-specific scope
-
-以下は **project-local** に保存:
+以下は **project-local** に保存 (`<encoded-cwd>` = project cwd の `/` を `-` にした形):
 
 - 特定 file / 特定 module / 特定 deploy 手順に絡む rule
 - そのプロジェクト固有の convention / 設計選択
 - 特定 codebase の bug / regression / workaround
 
-project-local の index file 名は **`MEMORY.md`**。
-
 #### 3. 迷ったら project-local
 
 **カテゴリ判断に迷う場合は project-local を優先**。 後で user (cross-project) に昇格させやすい (逆は難しい)。
 
-### Two-generation retirement
+`<clone>/org/` は将来の org 共有 scope 用の予約 (現在未使用、 全ユーザーに surface される)。
 
-各 memory dir は 2 世代構成:
-
-- **`MEMORY.md`** — 現役 entry の index
-- **`OLD-MEMORY.md`** — Managed skill / hook / CLAUDE.md で完全 cover された退役 entry の index
-
-#### Retirement trigger
+### Retirement (git history is the archive)
 
 feedback entry が以下のいずれかで完全 cover された時点で退役:
 
@@ -75,21 +68,15 @@ user CLAUDE.md (`~/.claude/CLAUDE.md`) / project CLAUDE.md (`<repo>/.claude/CLAU
 
 #### Retirement protocol
 
-1. **MEMORY.md から該当行を削除**
-2. **OLD-MEMORY.md に行を移動** (アグレッシブに短縮、 移動日付と cover 元を併記):
-   ```
-   - [短縮 title](feedback_<name>.md) YYYY-MM-DD OLD移動 (<type>: <cover 元>)
-   ```
-   `<type>` は `skill` / `hook` / `CLAUDE.md` のいずれか (Managed 限定)
-3. **feedback_*.md 本文末尾に cover 元への言及 1 行を追加** (entry 本体への追記も Edit 不可 → grant を mint してから full content を Write し直す。 step 1・2 の index file 編集は gate 対象外で Edit 可)。 gate は `models:` 行を要求するので、 無タグ entry を Write し直す時は元の意味を保つ `models: opus-4.8` を付ける (自モデルで観測した訳ではないのに自 tag を足さない):
-   ```
-   **Covered by:** <cover 元> — YYYY-MM-DD OLD-MEMORY.md 移動
-   ```
-4. **feedback_*.md 本体 (概要 + 事例 + provenance) は保持**: 退役後も provenance 参照価値あり
+```bash
+claude_memory_sync --retire <entry の絶対パス>
+```
+
+1 コマンドが git rm → commit → detached push → index --delete を正しい順序で実行する。 provenance は git 履歴が永続保存するので footer 追記や roster 移動は不要 — 退役 entry を読み返す時は clone で `git log --diff-filter=D --summary` / `git show <rev>:<path>` を使う。
 
 ### Partial coverage
 
-部分 cover (Managed skill / hook が一部 cover、 entry の core angle / provenance / 事例が固有) の場合は **MEMORY.md 残置**、 feedback_*.md 本文末尾に 1 行言及 (同じく Edit 不可 → grant + full content Write):
+部分 cover (Managed skill / hook が一部 cover、 entry の core angle / provenance / 事例が固有) の場合は **現役のまま残し** (file は削除しない)、 feedback_*.md 本文末尾に 1 行言及 (Edit 不可 → grant + full content Write):
 
 ```
 **Partially covered by:** <cover 元> (本 entry は <固有 angle> が固有)
@@ -169,52 +156,33 @@ surface hook (UserPromptSubmit / Stop) は **実行中モデルの tag を持つ
 
 ### Write gate: entry を書く前に grant を mint
 
-memory entry (`~/.claude/memory/*.md` ・ `~/.claude/projects/<enc>/memory/*.md`) への書込は managed hook (`memory_routing_gate.py`) が gate する。 **この skill を経由せず直接 Write した entry は deny される** (Edit/MultiEdit も deny → 必ず full content で Write し直す)。 index file (MEMORY.md / OLD-MEMORY.md) は gate 対象外。
+memory entry (`<clone>/org/*.md` ・ `<clone>/user/<login>/*.md` ・ `<clone>/project/<enc>/*.md`) への書込は managed hook (`memory_routing_gate.py`) が gate する。 **この skill を経由せず直接 Write した entry は deny される** (Edit/MultiEdit も deny → 必ず full content で Write し直す)。 README.md 等の非 entry file は gate 対象外。 旧 location (`~/.claude/memory` / `~/.claude/projects/<enc>/memory`) への書込は clone への redirect deny、 clone 不在/破損時は閉塞 deny (install_claude_extensions 再実行で復旧)。
 
 hook を通すには、 entry を Write する **直前に** grant ファイルを Write tool で作る:
 
-1. grant path: `~/.claude/hooks/state/memory-routing/grants/<basename(entry)>`、 中身は entry の絶対パス。 例: entry `~/.claude/memory/feedback_foo.md` → grant `~/.claude/hooks/state/memory-routing/grants/feedback_foo.md`。
+1. grant path: `~/.claude/hooks/state/memory-routing/grants/<basename(entry)>`、 中身は entry の絶対パス。 例: entry `<clone>/user/<login>/feedback_foo.md` → grant `~/.claude/hooks/state/memory-routing/grants/feedback_foo.md`。
 2. 直後に entry 本体を Write する (grant は hook が消費 = 1 回限り)。
 3. 複数 entry を書くなら各 entry の直前にそれぞれ grant を作る。
 
 内容も hook が検査し、 不備なら deny する (warn は無い → **一発で受理される内容を Write**): 非空の `reminder:` / `keywords:` / `models:` 行が必須、 `oneline_summary:` 禁止、 keywords は FTS で match する固有語を含む (一般語のみ ・空は不可)、 models は小文字短形式 tag (フル ID も可)。 書式は上記「reminder + keywords + models」に従う。
 
-### Hook DB sync after entry write or retire
+### Hook sync after entry write
 
-entry を **Write** すると PostToolUse の sync hook (`memory_routing_gate.py sync`) が自動で `memory_surface.py --upsert` を実行し FTS DB に反映する (project-local は path から project_id を導出)。 **保存・更新後の手動 `--upsert` は不要** (gate を通った Write は必ず sync される)。 `--upsert` / `--rebuild` は embed model DB がある環境では dense embedding (hybrid 検索用) も同時に維持する。
+entry を **Write** すると PostToolUse の sync hook (`memory_routing_gate.py sync`) が自動で `claude_memory_sync --commit` を実行し、 FTS DB 反映 (scope は path から導出) + git commit + detached push まで行う。 **保存・更新後の手動 upsert / commit / push は不要** (gate を通った Write は必ず sync される)。 index 更新は embed model DB がある環境では dense embedding (hybrid 検索用) も同時に維持する。
 
-#### After retiring to OLD-MEMORY.md
-
-退役は DB から **手動で `--delete`** する (auto-sync は upsert のみで delete しない):
-
-```bash
-~/.claude/hooks/memory_surface.py --delete <abs_path> [encoded-cwd]
-```
-
-順序注意: 退役 protocol の `Covered by:` footer 追記は (Edit 不可ゆえ) Write になり、 その Write で auto-upsert が走って DB に再登録される。 **`--delete` は footer Write の後に実行** する (逆順だと再登録が残り query が retired entry を surface する)。 退役は `OLD-MEMORY.md` 移動 + footer Write + `--delete` までで 1 単位。
+退役の DB 削除は `claude_memory_sync --retire` に内蔵 (Retirement protocol 参照) なので手動 `--delete` は不要。
 
 #### Bulk re-index for disaster recovery
 
 ```bash
-# user memory
-~/.claude/hooks/memory_surface.py --rebuild
-
-# project memory
-~/.claude/hooks/memory_surface.py --rebuild ~/.claude/projects/<encoded>/memory <encoded>
+claude_memory_sync --full
 ```
 
-`--rebuild` は MEMORY.md を読み、 listed な全 `*.md` を upsert する (OLD-MEMORY.md 由来の退役 entry は対象外)。
+clone に存在する全 scope (org / user / project) を wipe + 再 upsert する。 pull / push / sync 状態の確認は `/memory-sync` (`claude_memory_sync --status`)。
 
 ### Initial bootstrap
 
-skill が新規導入された環境では、 既存 memory file 全件を一度 `--rebuild` で index に取り込む:
-
-```bash
-~/.claude/hooks/memory_surface.py --rebuild
-# project memory がある場合は project_id を指定して個別 rebuild
-```
-
-hybrid 検索の embed model DB は installer (claude_extensions.sh) が deploy する単独 CLI `claude_memory_rag_builder` (stdlib-only) で構築する。 未構築でも hook は BM25 単独に fail-open する。
+新環境では installer (install_claude_extensions) が clone 作成と `claude_memory_sync --full` まで実行する。 hybrid 検索の embed model DB は base installer が deploy する単独 CLI `claude_memory_rag_builder` (stdlib-only) で構築する。 未構築でも hook は BM25 単独に fail-open する。
 
 ## Rules
 
@@ -232,5 +200,6 @@ hybrid 検索の embed model DB は installer (claude_extensions.sh) が deploy 
 
 ## Related
 
+- `memory-sync` — clone の sync 状態確認 / 手動 pull / 退役 / 全再 index (git transport 側)
 - `writing-code` — Rules「No dangling-prone references in persistent files」 (memory dir 外 file への path 引用禁止)
 - `writing-skills` — skill SKILL.md の format / writing convention
