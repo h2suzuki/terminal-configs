@@ -62,6 +62,18 @@ Work file: `last-session-handoff.md` の同名 section (再開手順)、
 
 ## Medium
 
+### sandbox mask stub の実体化残骸と未コミット nag の偽発火
+
+Goal: repo top に実体化した sandbox write-deny mask の残骸 (0-byte read-only regular file、
+.bashrc / .claude/hooks 等 20 件、2026-08-17 生成) を除去または .gitignore し、
+check_uncommitted_at_handoff の `_is_mask_stub` (非 regular node 前提) が実態と合う状態にする。
+
+Exit Criteria:
+
+- [ ] 残骸の生成主体 (sandbox の version / 挙動変化か) を特定し、削除後に再発するかを確認
+- [ ] `git status --porcelain` がこの repo で空になり、wind-down 時の未コミット nag が偽発火しない
+- [ ] `_is_mask_stub` の判定 (regular / non-regular) を確認結果と整合させる (修正 or 現状維持を根拠付きで判断)
+
 ### 方法論の実証: 小規模ツール新規作成で敵対レビューの収束を実測する
 
 Goal: sentinel 級に小さな要件 (またはそこまでブレイクダウンした要件) の新規ツール作成を
