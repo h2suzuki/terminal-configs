@@ -24,8 +24,10 @@ Subcommands (each fails open: network/auth loss degrades to the buffer):
 
 The clone is created by the installer (install_claude_extensions); while it
 is missing or broken the write paths report and bail, and recovery is to
-re-run that installer step. The world-writable clone assumes mutually
-trusted local users — git config/hooks inside it are open by design.
+re-run that installer step. The clone contents are world-writable for
+mutually trusted local users (git config/hooks inside are open by design);
+only the clone top stays 0755, so new top-level dirs arrive via an
+owner-run pull.
 
 Test seams: CLAUDE_MEMORY_REPO / CLAUDE_MEMORY_SURFACE override the clone
 path and the index CLI so smoke tests can run against a file:// fixture.
@@ -199,7 +201,7 @@ def full_index() -> int:
 
 
 def fix_perms() -> None:
-    """Re-open the clone to everyone — checkout/Write create files with the writer's umask."""
+    """Re-open the clone contents — checkout/Write create files with the writer's umask."""
     for root, dirs, files in os.walk(REPO_DIR):
         for name in dirs:
             with contextlib.suppress(OSError):
@@ -208,8 +210,9 @@ def fix_perms() -> None:
             p = os.path.join(root, name)
             with contextlib.suppress(OSError):
                 os.chmod(p, 0o777 if os.access(p, os.X_OK) else 0o666)
+    # Top stays 0755: new top-level dirs (a future org/) land via an owner-run pull.
     with contextlib.suppress(OSError):
-        os.chmod(REPO_DIR, 0o777)
+        os.chmod(REPO_DIR, 0o755)
 
 
 def spawn_push() -> None:

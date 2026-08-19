@@ -106,6 +106,8 @@ if ! git -C "$MEMORY_REPO" rev-parse --git-dir >/dev/null 2>&1; then
         git -C "$MEMORY_REPO" rev-parse -q --verify HEAD >/dev/null \
             || run git -C "$MEMORY_REPO" symbolic-ref HEAD refs/heads/main
         run chmod -R a+rwX "$MEMORY_REPO"
+        # Top stays 0755: new top-level dirs land via an owner-run pull
+        run chmod 0755 "$MEMORY_REPO"
     else
         rm -rf "$MEMORY_REPO"
         echo -e "${COLOR_RED}memory repo clone failed — run 'gh auth login' then re-run this script${COLOR_CLEAR}\n"

@@ -42,6 +42,7 @@ branch=$(git -C "$S/clone" branch --show-current)
 check "commit: bg push reached remote branch" '[[ -n "$(git -C "$S/remote.git" rev-parse --quiet --verify "refs/heads/$branch")" ]]'
 check "commit: fix_perms opened entry file (666)" '[[ "$(stat -c %a "$S/clone/user/alice/feedback_t.md")" == 666 ]]'
 check "commit: fix_perms opened scope dir (777)" '[[ "$(stat -c %a "$S/clone/user/alice")" == 777 ]]'
+check "commit: fix_perms keeps clone top at 755" '[[ "$(stat -c %a "$S/clone")" == 755 ]]'
 
 # 3. pull applies A/M/D from a second clone
 git clone --quiet "$S/remote.git" "$S/b" 2>/dev/null
