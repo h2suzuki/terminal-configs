@@ -31,8 +31,9 @@ Exit Criteria:
   entry を提示する — 16:30 手動起動で clone path 付き surface + upsert/wipe 往復 rc=0
 - [x] perms: clone top 0755 / scope dir 0777 / entry 0666 / index DB 0666 — 16:29 stat 実測
   755/777/666/666
-- [ ] 検証 OK をユーザーへ報告し、承認を得て旧 backup 5 dir (`~/.claude/memory.pre-git` と
-  `~/.claude/projects/*/memory.pre-git` ×4) を削除する
+- [x] 検証 OK をユーザーへ報告し、承認を得て旧 backup 5 dir (`~/.claude/memory.pre-git` と
+  `~/.claude/projects/*/memory.pre-git` ×4) を削除する — 2026-08-19 16:41 ユーザー承認、
+  16:42 削除実行・5 dir とも不在を ls で確認
 
 Work file: `last-session-handoff.md` の同名 section (レジューム後の検証手順と contingency)
 
