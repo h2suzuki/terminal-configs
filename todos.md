@@ -13,6 +13,28 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 
 ## High
 
+### RAG memory GitHub 化: fresh-install 最終検証と旧 backup 削除
+
+Goal: clone 削除 → ubuntu2404-wsl.sh → セッション再起動の fresh-install 後に、GitHub-backed
+memory が全経路 (installer / SessionStart pull / surface / perms / index) で機能することを検証し、
+旧 auto-memory backup を削除して移行を完了する。
+
+Exit Criteria:
+
+- [ ] インストーラが 2 フェーズ (root / login user) ともエラーなし完走する — 前回出た
+  install.lock / .mcp.json の 2 リグレッションと `claude mcp list` diagnostics が再発しない
+  (toolbox の ADC 起因の接続失敗は対象外・ユーザー裁定 2026-08-19)
+- [ ] レジューム後: SessionStart の clone 不在警告なし + `claude_memory_sync --status` が
+  state: ok・push/pull 0・entry 計 73 (user 37 / project 9+20+6+1)・index 一致
+  (baseline 2026-08-19 15:58 実測)
+- [ ] memory surface が clone path (`/var/lib/claude-rag-memory/claude-lessons-learned/...`) の
+  entry を提示する
+- [ ] perms: clone top 0755 / scope dir 0777 / entry 0666 / index DB 0666
+- [ ] 検証 OK をユーザーへ報告し、承認を得て旧 backup 5 dir (`~/.claude/memory.pre-git` と
+  `~/.claude/projects/*/memory.pre-git` ×4) を削除する
+
+Work file: `last-session-handoff.md` の同名 section (レジューム後の検証手順と contingency)
+
 ### codex_task_sentinel: 敵対レビューの収束と上流依存 1 件
 
 Goal: 監視判定が plugin の実挙動と skill の 4 分岐に一致する状態にする。
