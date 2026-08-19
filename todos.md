@@ -21,12 +21,15 @@ ubuntu2404-wsl.sh を再実行してセッション再開し、memory 全経路�
 
 Exit Criteria:
 
-- [ ] installer 再実行が両フェーズ (root / login user) エラーなし完走する (ユーザー申告 +
-  レジューム後の間接証拠で判定)
-- [ ] レジューム後: `claude_memory_sync --status` が state ok・push/pull 0・entries 計 74
-  (user 37 / project 9+20+7+1)・index 一致 (baseline 2026-08-19 16:52 実測)
-- [ ] `/var/lib/claude-rag-memory/` の sidecar が `claude-lessons-learned.sync.log` のみの
-  まま (installer 再実行が .lock / stamp 類を再生成しない)
+- [x] installer 再実行が両フェーズ (root / login user) エラーなし完走する — 2026-08-19 17:10
+  ユーザー報告 (dir ごと削除→再実行、エラー報告なし)。想定より強い全 wipe テストで、embed
+  model 17:05・clone 17:07・index 17:07 の再構築を実測。SessionStart の閉塞警告なし
+- [x] レジューム後: `claude_memory_sync --status` が state ok・push/pull 0・entries 計 74
+  (user 37 / project 9+20+7+1)・index 一致 — 17:10 実測で全一致。last fetch 1m ago =
+  FETCH_HEAD throttle の SessionStart pull も発火確認
+- [x] `/var/lib/claude-rag-memory/` の sidecar が `claude-lessons-learned.sync.log` のみの
+  まま — 17:10 ls 実測 (残りは clone + index DB±wal/shm + embed DB のみ)。clone top 755 /
+  scope dir 777 / entry 666 / index DB 666 も stat 実測。surface 手動起動で clone path 応答
 
 Work file: `last-session-handoff.md` の同名 section (レジューム後の確認手順と contingency)
 
