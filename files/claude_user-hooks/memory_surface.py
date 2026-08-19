@@ -19,12 +19,16 @@ Modes:
   /memory-routing after writing a feedback file. Exit 1 on error so the
   skill can surface the failure.
 
-- `--delete <abs_path> [project_id]` — remove one entry. Called when
-  /memory-routing retires an entry to OLD-MEMORY.md.
+- `--delete <abs_path> [project_id]` — remove one entry. Called when an
+  entry is retired (file deleted from the clone; git history is the archive).
 
-- `--rebuild [memory_dir [project_id]]` — bulk re-index files referenced by
-  `<memory_dir>/MEMORY.md` (initial population / disaster recovery). Defaults
-  to user memory.
+- `--rebuild [memory_dir [project_id]]` — bulk re-index every entry *.md
+  under memory_dir (initial population / disaster recovery). Defaults to own
+  user memory in the shared clone.
+
+- `--wipe-scope [project_id]` — drop every entry in one scope (no arg = the
+  NULL/org scope). Used by the git-sync CLI before a full rebuild so scopes
+  that vanished from the clone (or legacy pre-clone rows) do not linger.
 
 - `--search <text> [project_id]` — cross-model ranked lookup for
   /memory-routing (no model filter, no throttle, no inject_log rows).
@@ -47,6 +51,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import getpass
 import json
 import math
 import os
@@ -60,7 +65,21 @@ import unittest
 
 
 HOME = os.path.expanduser("~")
-USER_MEMORY_DIR = os.path.join(HOME, ".claude", "memory")
+
+
+def _login() -> str:
+    try:
+        return getpass.getuser()
+    except Exception:  # uid without passwd entry — keep the hook fail-open
+        return str(os.getuid())
+
+
+# Canonical entry store = shared git clone; the GitHub repo is the source of truth.
+MEMORY_REPO_DIR = "/var/lib/claude-rag-memory/memory-repo"
+USER_MEMORY_DIR = os.path.join(MEMORY_REPO_DIR, "user", _login())
+# project_id scopes: NULL = org (shared) / user-<login> = own user / <encoded-cwd> = project
+USER_SCOPE = "user-" + _login()
+SCOPE_PRED = "(project_id IS NULL OR project_id = ? OR project_id = ?)"
 # Shared root+login-user store (installer makes it root:login-group 2775 setgid);
 # per-user fallback keeps standalone / non-deployed runs working.
 SHARED_STATE_DIR = "/var/lib/claude-rag-memory"
@@ -149,7 +168,7 @@ _CORRECTION_RES = [
 _PIXEL_REMINDER = (
     "<pixel-diff-detected>1px/見た目ずれの可能性。 個別修正でなく mock/実装両方の "
     "computed style を機械 dump して diff、再 dump 0 件で収束証明。 詳細: "
-    "~/.claude/memory/feedback_pixel_perfect_computed_style_diff.md</pixel-diff-detected>"
+    f"{USER_MEMORY_DIR}/feedback_pixel_perfect_computed_style_diff.md</pixel-diff-detected>"
 )
 _PIXEL_RES = [
     re.compile(p, re.IGNORECASE)
@@ -303,9 +322,8 @@ def _model_pred(con: sqlite3.Connection, project_id: str, model: str):
     """Predicate: does this entry's tag set (default MODELS_DEFAULT) include model?"""
     try:
         rows = con.execute(
-            "SELECT file_path, models FROM entry_models "
-            "WHERE project_id IS NULL OR project_id = ?",
-            (project_id,),
+            "SELECT file_path, models FROM entry_models WHERE " + SCOPE_PRED,
+            (project_id, USER_SCOPE),
         ).fetchall()
     except sqlite3.Error:
         rows = []
@@ -323,9 +341,8 @@ def _entry_tags(con: sqlite3.Connection, project_id: str) -> dict[str, str]:
     """file_path -> space-joined tags for display (--search); missing = default."""
     try:
         rows = con.execute(
-            "SELECT file_path, models FROM entry_models "
-            "WHERE project_id IS NULL OR project_id = ?",
-            (project_id,),
+            "SELECT file_path, models FROM entry_models WHERE " + SCOPE_PRED,
+            (project_id, USER_SCOPE),
         ).fetchall()
     except sqlite3.Error:
         rows = []
@@ -440,7 +457,7 @@ def _delete_entry(
     file_path: str,
     project_id: str | None,
 ) -> int:
-    """Remove one entry from entries_fts (e.g., retired to OLD-MEMORY.md)."""
+    """Remove one entry from entries_fts (e.g., retired = entry file deleted)."""
     try:
         con.execute(
             "DELETE FROM entries_fts WHERE file_path = ? "
@@ -463,48 +480,20 @@ def _delete_entry(
     return 0
 
 
+# Non-entry .md files an entry dir may carry (legacy rosters + repo docs).
+NON_ENTRY_MD = {"MEMORY.md", "OLD-MEMORY.md", "README.md"}
+
+
 def _list_active_entries(memory_dir: str) -> list[str]:
-    """Used by --rebuild only: read MEMORY.md, extract feedback*.md paths."""
-    index_path = os.path.join(memory_dir, "MEMORY.md")
-    if not os.path.exists(index_path):
-        return []
+    """--rebuild enumeration: every *.md on disk = active (retired files are deleted)."""
     try:
-        with open(index_path, encoding="utf-8") as f:
-            text = f.read()
+        names = os.listdir(memory_dir)
     except OSError:
         return []
-    # title can contain `]` (e.g. backtick-wrapped `[skip-semantic]`);
-    # greedy `.+` extends to the last `](` on the line, capturing the link target.
-    slugs = re.findall(r"^- \[.+\]\(([^)]+\.md)\)", text, flags=re.MULTILINE)
-    paths: list[str] = []
-    for slug in slugs:
-        abs_path = os.path.normpath(os.path.join(memory_dir, slug))
-        if not abs_path.startswith(memory_dir + os.sep):
-            continue
-        if os.path.exists(abs_path):
-            paths.append(abs_path)
-    return paths
-
-
-def _roster_slugs(memory_dir: str, roster: str) -> set[str]:
-    try:
-        with open(os.path.join(memory_dir, roster), encoding="utf-8") as f:
-            text = f.read()
-    except OSError:
-        return set()
-    return set(re.findall(r"^- \[.+\]\(([^)]+\.md)\)", text, flags=re.MULTILINE))
-
-
-def _unlisted_entries(memory_dir: str) -> list[str]:
-    """rebuild が黙って落とす entry — disk にあるがどちらの名簿にも無いもの。"""
-    known = _roster_slugs(memory_dir, "MEMORY.md") | _roster_slugs(
-        memory_dir, "OLD-MEMORY.md"
-    )
-    known = {os.path.basename(slug) for slug in known}
     return sorted(
         os.path.join(memory_dir, name)
-        for name in os.listdir(memory_dir)
-        if name.startswith("feedback") and name.endswith(".md") and name not in known
+        for name in names
+        if name.endswith(".md") and name not in NON_ENTRY_MD
     )
 
 
@@ -792,10 +781,10 @@ def _bm_candidates(con: sqlite3.Connection, query: str, project_id: str) -> list
     return con.execute(
         f"SELECT file_path, reminder, bm25(entries_fts, 0, 0, 0, 1.0, {BM25_BODY_WEIGHT}, 0) "
         "FROM entries_fts WHERE entries_fts MATCH ? "
-        "AND (project_id IS NULL OR project_id = ?) "
+        f"AND {SCOPE_PRED} "
         f"ORDER BY bm25(entries_fts, 0, 0, 0, 1.0, {BM25_BODY_WEIGHT}, 0) "
         f"LIMIT {BM25_CANDIDATES}",
-        (query, project_id),
+        (query, project_id, USER_SCOPE),
     ).fetchall()
 
 
@@ -947,9 +936,8 @@ def _hybrid_scored(
     bm_by_path = {fp: s for fp, _r, s in bm_rows if s is not None}
     try:
         vrows = con.execute(
-            "SELECT file_path, vec FROM entries_vec "
-            "WHERE project_id IS NULL OR project_id = ?",
-            (project_id,),
+            "SELECT file_path, vec FROM entries_vec WHERE " + SCOPE_PRED,
+            (project_id, USER_SCOPE),
         ).fetchall()
     except sqlite3.Error:
         vrows = []
@@ -980,8 +968,8 @@ def _lookup_reminder(
     try:
         row = con.execute(
             "SELECT reminder FROM entries_fts WHERE file_path = ? "
-            "AND (project_id IS NULL OR project_id = ?) LIMIT 1",
-            (fp, project_id),
+            f"AND {SCOPE_PRED} LIMIT 1",
+            (fp, project_id, USER_SCOPE),
         ).fetchone()
     except sqlite3.Error:
         row = None
@@ -1194,9 +1182,35 @@ def _main_delete(argv: list[str]) -> int:
             con.close()
 
 
+def _wipe_scope(con: sqlite3.Connection, project_id: str | None) -> int:
+    try:
+        for table in ("entries_fts", "entries_vec", "entry_models"):
+            con.execute(
+                f"DELETE FROM {table} WHERE coalesce(project_id, '') = coalesce(?, '')",
+                (project_id,),
+            )
+        con.commit()
+    except sqlite3.Error:
+        return 1
+    return 0
+
+
+def _main_wipe_scope(argv: list[str]) -> int:
+    project_id = argv[0] if argv else None
+    with _write_lock():
+        con = _connect()
+        if con is None:
+            return 1
+        try:
+            return _wipe_scope(con, project_id)
+        finally:
+            con.close()
+
+
 def _main_rebuild(argv: list[str]) -> int:
     memory_dir = os.path.abspath(argv[0]) if argv else USER_MEMORY_DIR
-    project_id = argv[1] if len(argv) > 1 else None
+    # no args = own user scope; an explicit dir must bring its own scope id
+    project_id = argv[1] if len(argv) > 1 else (None if argv else USER_SCOPE)
     with _write_lock():
         con = _connect()
         if con is None:
@@ -1210,23 +1224,7 @@ def _main_rebuild(argv: list[str]) -> int:
                 )
                 return 0
             # Wipe existing entries for this project_id scope first.
-            try:
-                con.execute(
-                    "DELETE FROM entries_fts WHERE coalesce(project_id, '') = "
-                    "coalesce(?, '')",
-                    (project_id,),
-                )
-                con.execute(
-                    "DELETE FROM entries_vec WHERE coalesce(project_id, '') = "
-                    "coalesce(?, '')",
-                    (project_id,),
-                )
-                con.execute(
-                    "DELETE FROM entry_models WHERE coalesce(project_id, '') = "
-                    "coalesce(?, '')",
-                    (project_id,),
-                )
-            except sqlite3.Error:
+            if _wipe_scope(con, project_id) != 0:
                 return 1
             errs = 0
             for fp in paths:
@@ -1235,14 +1233,6 @@ def _main_rebuild(argv: list[str]) -> int:
             sys.stderr.write(
                 f"rebuilt {len(paths) - errs}/{len(paths)} entries from {memory_dir}\n"
             )
-            # 名簿落ちは wipe で消えたまま戻らないので、消した側から名指しする。
-            dropped = _unlisted_entries(memory_dir)
-            if dropped:
-                sys.stderr.write(
-                    f"dropped {len(dropped)} entry/entries present on disk but listed in "
-                    f"neither MEMORY.md nor OLD-MEMORY.md; add to a roster or --delete:\n"
-                    + "".join(f"  {p}\n" for p in dropped)
-                )
             return 1 if errs else 0
         finally:
             con.close()
@@ -1260,6 +1250,8 @@ def main() -> int:
         return _main_delete(argv[1:])
     if cmd == "--rebuild":
         return _main_rebuild(argv[1:])
+    if cmd == "--wipe-scope":
+        return _main_wipe_scope(argv[1:])
     if cmd == "--search":
         return _main_search(argv[1:])
     sys.stderr.write(f"unknown command: {cmd}\n")
@@ -1873,66 +1865,60 @@ class PixelL4InjectTest(unittest.TestCase):
             self.assertNotIn("pixel-diff-detected", out2)
 
 
-class RebuildDropReportTest(unittest.TestCase):
-    """--rebuild が落とす entry の報告。 Run: python3 -m unittest memory_surface"""
+class RebuildEnumerationTest(unittest.TestCase):
+    """--rebuild は disk の entry *.md 全件を active とみなす (roster 廃止、退役 = file 削除)。 Run: python3 -m unittest memory_surface"""
 
     @staticmethod
-    def _memory_dir(listed=(), retired=(), on_disk=()):
+    def _memory_dir(on_disk=()):
         import tempfile
 
         d = tempfile.mkdtemp(prefix="mem-rebuild-")
         for name in on_disk:
             with open(os.path.join(d, name), "w", encoding="utf-8") as f:
                 f.write("reminder: r\nkeywords: k\n\nbody\n")
-        for roster, names in (("MEMORY.md", listed), ("OLD-MEMORY.md", retired)):
-            with open(os.path.join(d, roster), "w", encoding="utf-8") as f:
-                f.write("".join(f"- [title]({n})\n" for n in names))
         return d
 
     def _names(self, d):
-        return sorted(os.path.basename(p) for p in _unlisted_entries(d))
+        return sorted(os.path.basename(p) for p in _list_active_entries(d))
 
-    def test_entry_in_neither_roster_is_reported(self):
-        """rebuild は listed 以外を全消しするので、名簿落ちは黙って消える = 報告対象。"""
+    def test_every_disk_entry_is_active(self):
+        """feedback_ 以外の prefix (reference_ / project_ 等) も entry として拾う。"""
+        d = self._memory_dir(on_disk=["feedback_a.md", "reference_b.md"])
+        self.assertEqual(["feedback_a.md", "reference_b.md"], self._names(d))
+
+    def test_index_and_non_md_files_are_ignored(self):
         d = self._memory_dir(
-            listed=["feedback_a.md"],
-            retired=["feedback_b.md"],
-            on_disk=["feedback_a.md", "feedback_b.md", "feedback_c.md"],
+            on_disk=["feedback_a.md", "MEMORY.md", "OLD-MEMORY.md", "README.md"]
         )
-        self.assertEqual(["feedback_c.md"], self._names(d))
+        with open(os.path.join(d, "notes.txt"), "w", encoding="utf-8") as f:
+            f.write("x\n")
+        self.assertEqual(["feedback_a.md"], self._names(d))
 
-    def test_retired_entry_is_not_reported(self):
-        """OLD-MEMORY.md 収載は index から外れるのが正しく、報告するとノイズになる。"""
-        d = self._memory_dir(
-            listed=["feedback_a.md"],
-            retired=["feedback_b.md"],
-            on_disk=["feedback_a.md", "feedback_b.md"],
-        )
-        self.assertEqual([], self._names(d))
+    def test_missing_dir_returns_empty(self):
+        self.assertEqual([], _list_active_entries("/nonexistent/memdir"))
 
-    def test_missing_old_roster_does_not_hide_the_gap(self):
-        d = self._memory_dir(
-            listed=["feedback_a.md"], on_disk=["feedback_a.md", "feedback_c.md"]
-        )
-        os.remove(os.path.join(d, "OLD-MEMORY.md"))
-        self.assertEqual(["feedback_c.md"], self._names(d))
-
-    def test_rebuild_names_the_dropped_entry_on_stderr(self):
+    def test_rebuild_indexes_every_disk_entry_under_given_scope(self):
         import io
         import tempfile
         from contextlib import redirect_stderr
         from unittest import mock
 
-        d = self._memory_dir(
-            listed=["feedback_a.md"], on_disk=["feedback_a.md", "feedback_c.md"]
-        )
+        d = self._memory_dir(on_disk=["feedback_a.md", "reference_c.md"])
         db = os.path.join(tempfile.mkdtemp(), "idx.sqlite3")
-        err = io.StringIO()
-        with mock.patch(f"{__name__}.DB_PATH", db), redirect_stderr(err):
-            _main_rebuild([d])
-
-        self.assertIn("feedback_c.md", err.getvalue())
-        self.assertNotIn("feedback_a.md", err.getvalue())
+        with mock.patch(f"{__name__}.DB_PATH", db), redirect_stderr(io.StringIO()):
+            self.assertEqual(_main_rebuild([d, "scope-x"]), 0)
+            con = _connect()
+            assert con is not None
+            try:
+                rows = con.execute(
+                    "SELECT file_path FROM entries_fts WHERE project_id = 'scope-x'"
+                ).fetchall()
+            finally:
+                con.close()
+        self.assertEqual(
+            ["feedback_a.md", "reference_c.md"],
+            sorted(os.path.basename(fp) for (fp,) in rows),
+        )
 
 
 if __name__ == "__main__":
