@@ -60,6 +60,35 @@ Work file: `last-session-handoff.md` の同名 section (再開手順)、
 `drafts/sentinel-review-r{17..53}.md` (発注書)、`drafts/sentinel-review-r{17..30,52,53}-report.md` (報告書)
 
 
+### memory entry の frontmatter 正書式への一括 migration
+
+起票: fable-5 2026-08-20
+
+Goal: 共有 memory clone の全 entry を frontmatter 正書式 (reminder/keywords/models が
+frontmatter 内) へ一括変換し、全マシンで新書式の surface が機能する状態にする。
+
+背景: 2026-08-20 に書式再設計を実装済 (d8acb40: parser dual-read / gate 新検査 /
+memory-routing SKILL.md 改訂)。旧 parser のマシンは frontmatter 形式の reminder を
+読めず surface が劣化するため、migration 実行は全マシンの hook 再 deploy 完了後。
+
+Exit Criteria:
+
+- [ ] 本マシンの managed 側 deploy (sudo cp: memory_routing_gate.py /
+  check_skill_writing.py / memory-routing・declare-and-proceed の SKILL.md) が
+  canonical と `diff -q` 一致
+- [ ] 他の全マシンで terminal-configs を pull + base setup 再実行済み
+  (確認: `grep -c dual-read ~/.claude/hooks/memory_surface.py` が 1 以上)
+- [ ] `drafts/memory-entry-format-migration.py --apply` を実行し全 entry 変換
+  (2026-08-20 dry-run 時点: moved=91 renamed=2 skipped=1)
+- [ ] clone を git commit + push し、`claude_memory_sync --full` 後の `--status` で
+  entries と index の件数一致
+- [ ] user_profile.md を /memory-routing 経由で user scope へ移設 (reminder/keywords
+  を起草、prefix は reference_) し、旧 file を retire
+- [ ] 実 prompt で新形式 entry の reminder が `<memory-surface>` に inject されることを確認
+
+Work file: `drafts/memory-entry-format-migration.py` (migration 本体、dry-run 検証済。
+apply 後の git/claude_memory_sync 手順は script docstring に記載)
+
 ## Medium
 
 ### 方法論の実証: 小規模ツール新規作成で敵対レビューの収束を実測する
