@@ -13,6 +13,23 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 
 ## High
 
+### memory sidecar 削減: installer 再実行後の動作確認
+
+Goal: sidecar 削減 (10→1、dir-fd flock / FETCH_HEAD / installer sweep 化) 後に
+ubuntu2404-wsl.sh を再実行してセッション再開し、memory 全経路が新機構のまま問題なく
+動くことを確認して本タスクを完了とする。
+
+Exit Criteria:
+
+- [ ] installer 再実行が両フェーズ (root / login user) エラーなし完走する (ユーザー申告 +
+  レジューム後の間接証拠で判定)
+- [ ] レジューム後: `claude_memory_sync --status` が state ok・push/pull 0・entries 計 74
+  (user 37 / project 9+20+7+1)・index 一致 (baseline 2026-08-19 16:52 実測)
+- [ ] `/var/lib/claude-rag-memory/` の sidecar が `claude-lessons-learned.sync.log` のみの
+  まま (installer 再実行が .lock / stamp 類を再生成しない)
+
+Work file: `last-session-handoff.md` の同名 section (レジューム後の確認手順と contingency)
+
 ### codex_task_sentinel: 敵対レビューの収束と上流依存 1 件
 
 Goal: 監視判定が plugin の実挙動と skill の 4 分岐に一致する状態にする。
