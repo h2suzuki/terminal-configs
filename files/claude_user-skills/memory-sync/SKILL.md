@@ -40,6 +40,12 @@ installer (clone + 初回 full index) 実行済みのマシンに旧ローカル
 以下を **1 entry ずつ** 実施する。一括 move / 一括 import / 一括 re-scope は禁止
 (2026-08-19 に bulk 再配置で scope 混乱を起こした実例がある)。
 
+0. **環境の最新化**: terminal-configs repo を `git pull` し、base setup
+   (ubuntu2404-wsl.sh / debian12.sh) を再実行してから始める — 本 skill・hook・CLI が
+   旧版のまま吸い上げると手順の即興と旧形式 project id の混入が起きる。鮮度の機械確認:
+   `~/.claude/hooks/memory_surface.py --project-id` が id を 1 行出力すること
+   (旧版に無い subcommand なので、error なら未更新)。吸い上げは 1 マシンずつ行い、
+   他マシンの memory 書込作業と並行させない
 1. **対象の列挙**: 旧 dir の `feedback_*.md` を list する。`MEMORY.md` / `OLD-MEMORY.md`
    は roster (旧方式の名簿) であって entry ではない。**OLD-MEMORY.md 収載 = 退役済み**
    なので取り込まない
