@@ -21,6 +21,7 @@ commit + detached push) なので、本 skill は状態確認と手動介入の�
 
    clone の有無 / branch / 最終 fetch 時刻 / fetch 可否 / push・pull 残数 /
    未 commit 数 / scope 別 entry 数と index 行数が出る。
+   引数無し実行も同じ出力 (`--help` subcommand は無い)。
 
 2. 必要な操作を選ぶ:
 
@@ -40,13 +41,23 @@ installer (clone + 初回 full index) 実行済みのマシンに旧ローカル
 以下を **1 entry ずつ** 実施する。一括 move / 一括 import / 一括 re-scope は禁止
 (2026-08-19 に bulk 再配置で scope 混乱を起こした実例がある)。
 
+適用判定: 下記が何も出力しなければこのマシンは対象外 (完了済み or 元々未使用) で、
+以降の手順は不要。`*.pre-git` だけが出る場合は手順 7 の承認後削除だけが残っている。
+
+```bash
+ls -d ~/.claude/memory ~/.claude/memory.pre-git \
+      ~/.claude/projects/*/memory ~/.claude/projects/*/memory.pre-git 2>/dev/null
+```
+
 0. **環境の最新化**: terminal-configs repo を `git pull` し、base setup
    (ubuntu2404-wsl.sh / debian12.sh) を再実行してから始める — 本 skill・hook・CLI が
    旧版のまま吸い上げると手順の即興と旧形式 project id の混入が起きる。鮮度の機械確認:
    `~/.claude/hooks/memory_surface.py --project-id` が id を 1 行出力すること
    (旧版に無い subcommand なので、error なら未更新)。吸い上げは 1 マシンずつ行い、
    他マシンの memory 書込作業と並行させない
-1. **対象の列挙**: 旧 dir の `feedback_*.md` を list する。`MEMORY.md` / `OLD-MEMORY.md`
+1. **対象の列挙**: 旧 dir の `feedback_*.md` を list する
+   (`find ~/.claude/memory ~/.claude/projects/*/memory -name 'feedback_*.md' 2>/dev/null`)。
+   `MEMORY.md` / `OLD-MEMORY.md`
    は roster (旧方式の名簿) であって entry ではない。**OLD-MEMORY.md 収載 = 退役済み**
    なので取り込まない
 2. **突合**: entry ごとに `~/.claude/hooks/memory_surface.py --search "<要旨>"` で clone の
