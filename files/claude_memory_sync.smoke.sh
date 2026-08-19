@@ -2,7 +2,7 @@
 # Smoke test for claude_memory_sync against a local file:// fixture.
 # shellcheck disable=SC2016,SC2034,SC2317  # check() eval-expands single-quoted asserts; vars/fn used inside them
 set -u
-S="$(cd "$(dirname "$0")" && pwd)/synctest"
+S="${TMPDIR:-/tmp}/claude_memory_sync-smoke"
 CLI="$(dirname "$(readlink -f "$0")")/claude_memory_sync"
 rm -rf "$S" && mkdir -p "$S"
 
