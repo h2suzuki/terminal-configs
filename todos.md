@@ -22,15 +22,19 @@ org / user / project の 3 名前空間で新規 entry の作成・参照 (recal
 
 Exit Criteria:
 
-- [ ] 再構築の復元: `claude_memory_sync --status` が baseline (org 41 / project 9+20+7+1 =
-  計 78・index 一致・push/pull 0・HEAD 3b386c6 以降) と整合する
-- [ ] 3 scope それぞれで作成 → 他 scope へ混入していない (clone の git log --stat で path
-  確認 + --status で当該 scope のみ +1)。user は dir 不在からの新規作成経路を通す
-- [ ] 3 scope それぞれで recall: hook 手動起動で当該 reminder が surface される — project
-  entry は当該 project cwd のみ / 他 project cwd では出ない / org はどの cwd でも出る
-- [ ] 3 scope それぞれで `--retire`: file 消滅 + index 件数が baseline へ復元 + push 0
-- [ ] 検証中に memory-routing / memory-sync skill の文言を一文ずつ実挙動と突合し、乖離ゼロ
-  (乖離があれば files/ 側を修正して deploy + commit)
+- [x] 再構築の復元: `claude_memory_sync --status` が baseline (org 41 / project 9+20+7+1 =
+  計 78・index 一致・push/pull 0・HEAD 3b386c6 以降) と整合する — 21:35 実測で HEAD
+  ちょうど 3b386c6・全数一致。sync.log は `full index: 78 entries, 0 error(s)` の 1 行のみ
+- [x] 3 scope それぞれで作成 → 他 scope へ混入していない — 21:38 auto-commit 3 件の
+  --stat path が全て意図 scope・scope 別 +1 のみ・push 残 0。user は dir 不在から新設
+  (dir 777 / entry 666 を stat 実測)
+- [x] 3 scope それぞれで recall — 21:39 probe 4/4: project は自 cwd で hit・他 project
+  cwd で 0 / org・user は他 cwd でも hit
+- [x] 3 scope それぞれで `--retire` — 21:40 file 3 件消滅・org 41 / tc 7 / user scope
+  消滅で baseline 復元・index 一致・push 0
+- [x] 検証中に memory-routing / memory-sync skill の文言を一文ずつ実挙動と突合し、乖離ゼロ
+  — --project-id / grant→直後 Write / gate 一発受理 / auto-sync (commit+push+index) /
+  retire 順序内蔵 / --status 表示項目、操作文 11 件すべて一致。skill 修正は不要だった
 
 Work file: `last-session-handoff.md` の同名 section (検証手順・baseline・contingency)
 
