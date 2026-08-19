@@ -1436,23 +1436,25 @@ def _check(
     # final 文の identity は turn 内の全出現を落とし、中間文だけを従来どおり検査する。
     intent_text = _without_final_sentence_identities(text, final_text)
     m = INTENT_DECLARE_RE.search(intent_text)
-    if m and not (tool_names & TASK_TOOLS):
+    # mytask 記録は gate 検出と無関係に常に有効 — gate リスト未収載の新モデルが
+    # native Task tool を持たない session で FP block になる (fable-5 実測 2026-08-19)。
+    mytask_recorded = bool(tool_names & MYTASK_MCP_TOOLS) or any(
+        _is_mytask_path(p) for p in edited_paths
+    )
+    if m and not (tool_names & TASK_TOOLS) and not mytask_recorded:
         if _tasks_gated_off(model):
-            mytask_recorded = bool(tool_names & MYTASK_MCP_TOOLS) or any(
-                _is_mytask_path(p) for p in edited_paths
+            blocking.append(
+                f"intent-without-task: 作業遂行宣言「{m.group(0)}」を検出。現行モデルは "
+                f"tengu_vellum_ash gate で Task ツールが無効化されています。mytask skill に従い "
+                f"MCP で作業を記録してから再出力してください。"
             )
-            if not mytask_recorded:
-                blocking.append(
-                    f"intent-without-task: 作業遂行宣言「{m.group(0)}」を検出。現行モデルは "
-                    f"tengu_vellum_ash gate で Task ツールが無効化されています。mytask skill に従い "
-                    f"MCP で作業を記録してから再出力してください。"
-                )
         else:
             blocking.append(
                 f"intent-without-task: 作業遂行宣言「{m.group(0)}」を検出しましたが、このターンに"
-                f" TaskCreate/TaskUpdate/TodoWrite が記録されていません。"
+                f" TaskCreate/TaskUpdate/TodoWrite (または mytask MCP) が記録されていません。"
                 f" System §計画と遂行: 全作業項目を大小に関わらず Task で計画・追跡。"
-                f" TaskCreate で作業を登録 (または既存タスクを TaskUpdate) してから再出力してください。"
+                f" TaskCreate (native Task tool が無い session では mytask MCP) で作業を"
+                f"登録してから再出力してください。"
             )
 
     # work-without-task (block substantive edits while the session store is empty)
@@ -2611,7 +2613,26 @@ class EnforcementFamilyTest(unittest.TestCase):
             blk = self._blk(
                 "修正します\n完了", final_text="完了", model="claude-opus-4-8"
             )
-        self.assertTrue(any("TaskCreate で作業を登録" in b for b in blk))
+        self.assertTrue(any("TaskCreate" in b and "登録してから" in b for b in blk))
+
+    def test_intent_ungated_with_mcp_tool_passes(self):
+        """gate リスト未収載モデルでも mytask MCP 記録で満たす (fable-5 FP の regression)。"""
+        with self._gate_config({"tengu_vellum_ash": ["sonnet-5"]}):
+            blk = self._blk(
+                "修正します",
+                tools=["mcp__mytask__TaskUpdate"],
+                model="claude-fable-5",
+            )
+        self.assertFalse(any("intent-without-task" in b for b in blk))
+
+    def test_intent_ungated_with_mytask_edit_passes(self):
+        with self._gate_config({"tengu_vellum_ash": ["sonnet-5"]}):
+            blk = self._blk(
+                "修正します",
+                paths=["/project/drafts/tasks/session.json"],
+                model="claude-fable-5",
+            )
+        self.assertFalse(any("intent-without-task" in b for b in blk))
 
     def test_intent_declare_alone_blocks(self):
         code, _w, blk = self._c("修正します\n完了", final_text="完了")
