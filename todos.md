@@ -13,6 +13,27 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 
 ## High
 
+### memory 3 名前空間 CRUD 検証 (全 wipe 再インストール後)
+
+Goal: /var/lib/claude-rag-memory 全削除 → ubuntu2404-wsl.sh → セッションレジューム後に、
+org / user / project の 3 名前空間で新規 entry の作成・参照 (recall)・削除を実施し、
+誤配置と recall 失敗が無いこと、および関連 skill の文言が実挙動と一文ずつ一致することを
+確認する (2026-08-19 ユーザー指示: skill チェックを兼ねる)。
+
+Exit Criteria:
+
+- [ ] 再構築の復元: `claude_memory_sync --status` が baseline (org 41 / project 9+20+7+1 =
+  計 78・index 一致・push/pull 0・HEAD 3b386c6 以降) と整合する
+- [ ] 3 scope それぞれで作成 → 他 scope へ混入していない (clone の git log --stat で path
+  確認 + --status で当該 scope のみ +1)。user は dir 不在からの新規作成経路を通す
+- [ ] 3 scope それぞれで recall: hook 手動起動で当該 reminder が surface される — project
+  entry は当該 project cwd のみ / 他 project cwd では出ない / org はどの cwd でも出る
+- [ ] 3 scope それぞれで `--retire`: file 消滅 + index 件数が baseline へ復元 + push 0
+- [ ] 検証中に memory-routing / memory-sync skill の文言を一文ずつ実挙動と突合し、乖離ゼロ
+  (乖離があれば files/ 側を修正して deploy + commit)
+
+Work file: `last-session-handoff.md` の同名 section (検証手順・baseline・contingency)
+
 ### codex_task_sentinel: 敵対レビューの収束と上流依存 1 件
 
 Goal: 監視判定が plugin の実挙動と skill の 4 分岐に一致する状態にする。
