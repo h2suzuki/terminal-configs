@@ -13,31 +13,6 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 
 ## High
 
-### memory 3 名前空間 CRUD 検証 (全 wipe 再インストール後)
-
-Goal: /var/lib/claude-rag-memory 全削除 → ubuntu2404-wsl.sh → セッションレジューム後に、
-org / user / project の 3 名前空間で新規 entry の作成・参照 (recall)・削除を実施し、
-誤配置と recall 失敗が無いこと、および関連 skill の文言が実挙動と一文ずつ一致することを
-確認する (2026-08-19 ユーザー指示: skill チェックを兼ねる)。
-
-Exit Criteria:
-
-- [x] 再構築の復元: `claude_memory_sync --status` が baseline (org 41 / project 9+20+7+1 =
-  計 78・index 一致・push/pull 0・HEAD 3b386c6 以降) と整合する — 21:35 実測で HEAD
-  ちょうど 3b386c6・全数一致。sync.log は `full index: 78 entries, 0 error(s)` の 1 行のみ
-- [x] 3 scope それぞれで作成 → 他 scope へ混入していない — 21:38 auto-commit 3 件の
-  --stat path が全て意図 scope・scope 別 +1 のみ・push 残 0。user は dir 不在から新設
-  (dir 777 / entry 666 を stat 実測)
-- [x] 3 scope それぞれで recall — 21:39 probe 4/4: project は自 cwd で hit・他 project
-  cwd で 0 / org・user は他 cwd でも hit
-- [x] 3 scope それぞれで `--retire` — 21:40 file 3 件消滅・org 41 / tc 7 / user scope
-  消滅で baseline 復元・index 一致・push 0
-- [x] 検証中に memory-routing / memory-sync skill の文言を一文ずつ実挙動と突合し、乖離ゼロ
-  — --project-id / grant→直後 Write / gate 一発受理 / auto-sync (commit+push+index) /
-  retire 順序内蔵 / --status 表示項目、操作文 11 件すべて一致。skill 修正は不要だった
-
-Work file: `last-session-handoff.md` の同名 section (検証手順・baseline・contingency)
-
 ### codex_task_sentinel: 敵対レビューの収束と上流依存 1 件
 
 Goal: 監視判定が plugin の実挙動と skill の 4 分岐に一致する状態にする。
