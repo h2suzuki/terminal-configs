@@ -13,6 +13,26 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 
 ## High
 
+### handoff 実体強制 (7b1c2b4) の deploy と実運用確認
+
+Goal: commit 7b1c2b4 の hooks 5 本 + handoff SKILL.md を /etc/claude-code へ deploy し、
+入口 (skill_reminder_gate の handoff skill 要求) と出口 (stop_checks の
+handoff-doc-without-marker block) が実運用で駆動する状態にする。
+
+Exit Criteria:
+
+- [ ] ユーザーの sudo cp 実行後、canonical 6 file と deploy 先の `diff -q` 一致を確認
+- [ ] 実 session で handoff doc への書込 (Edit または Bash) に対し handoff skill 要求 deny が発火することを確認
+- [ ] 実 session で wind-down 宣言後の doc 更新 turn に marker 未出力 block が発火し、marker 出力で通過することを確認
+
+deploy コマンド (Claude Code 外の terminal で実行):
+
+```bash
+cd /home/h2suzuki/terminal-configs
+sudo cp files/claude_managed-hooks/{check_uncommitted_at_handoff,skill_reminder_gate,stop_checks,session_resume_context,session_cleanup}.py /etc/claude-code/hooks/
+sudo cp files/claude_managed-skills/handoff/SKILL.md /etc/claude-code/skills/handoff/SKILL.md
+```
+
 ### codex_task_sentinel: 敵対レビューの収束と上流依存 1 件
 
 Goal: 監視判定が plugin の実挙動と skill の 4 分岐に一致する状態にする。
