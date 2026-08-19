@@ -70,8 +70,9 @@ check_uncommitted_at_handoff の `_is_mask_stub` (非 regular node 前提) が�
 
 Exit Criteria:
 
-- [ ] 残骸の生成主体 (sandbox の version / 挙動変化か) を特定し、削除後に再発するかを確認
-- [ ] `git status --porcelain` がこの repo で空になり、wind-down 時の未コミット nag が偽発火しない
+- [x] 残骸の生成主体を特定 — 既知と判明: sandbox の read-only bind mask が対象 file 不在時に 0-byte placeholder を leak する (memory entry mcp-json-mask-stub、2026-08-13 判定。.mcp.json は実 file 化 + installer preflight 強化 `18d395d` で恒久対処済み)
+- [ ] 残骸を host 経路 (sandbox 除外コマンド先頭 or 外部 terminal) で削除し、再発の有無を確認 — **sandbox 内から rm しない** (bind 越しに実 ~/.claude を触る危険、同 entry How 節)
+- [ ] `git status --porcelain` がこの repo で空になり、wind-down 時の未コミット nag が偽発火しない (再発するなら .gitignore 収載 or .mcp.json 同様の実 file 化で構造対処)
 - [ ] `_is_mask_stub` の判定 (regular / non-regular) を確認結果と整合させる (修正 or 現状維持を根拠付きで判断)
 
 ### 方法論の実証: 小規模ツール新規作成で敵対レビューの収束を実測する
