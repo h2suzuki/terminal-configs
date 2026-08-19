@@ -62,23 +62,6 @@ Work file: `last-session-handoff.md` の同名 section (再開手順)、
 
 ## Medium
 
-### mask stub 偽 nag: filter 修正 (03d974c) の deploy
-
-Goal: 偽の「未コミット 20 件」注入を止める。手段は `_is_mask_stub` を leak 実態
-(既知 path ∧ 0 byte ∧ read-only regular file) に合わせた filter 修正 1 点のみ
-(削除・.gitignore・生成主体調査は無意味 or 既知のため却下済み — 2026-08-20 ユーザー裁定)。
-
-Exit Criteria:
-
-- [x] filter 修正の実装と検証 — `03d974c`、33 tests green + 実 repo への live 実行で stub 20 件の消滅と本物の変更 1 件の報告継続を確認
-- [x] deploy 後、実 session の wind-down prompt で偽 nag が出ないことを確認 — 2026-08-20 03:29 ユーザー実行の deploy を `diff -q` 一致で検証し、deploy 先 hook を実 repo cwd + wind-down prompt で直接実行して無出力 (rc=0) を実測
-
-deploy コマンド (Claude Code 外の terminal で実行):
-
-```bash
-sudo cp /home/h2suzuki/terminal-configs/files/claude_managed-hooks/check_uncommitted_at_handoff.py /etc/claude-code/hooks/
-```
-
 ### 方法論の実証: 小規模ツール新規作成で敵対レビューの収束を実測する
 
 Goal: sentinel 級に小さな要件 (またはそこまでブレイクダウンした要件) の新規ツール作成を
