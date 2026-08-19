@@ -21,15 +21,16 @@ memory が全経路 (installer / SessionStart pull / surface / perms / index) �
 
 Exit Criteria:
 
-- [ ] インストーラが 2 フェーズ (root / login user) ともエラーなし完走する — 前回出た
-  install.lock / .mcp.json の 2 リグレッションと `claude mcp list` diagnostics が再発しない
-  (toolbox の ADC 起因の接続失敗は対象外・ユーザー裁定 2026-08-19)
-- [ ] レジューム後: SessionStart の clone 不在警告なし + `claude_memory_sync --status` が
-  state: ok・push/pull 0・entry 計 73 (user 37 / project 9+20+6+1)・index 一致
-  (baseline 2026-08-19 15:58 実測)
-- [ ] memory surface が clone path (`/var/lib/claude-rag-memory/claude-lessons-learned/...`) の
-  entry を提示する
-- [ ] perms: clone top 0755 / scope dir 0777 / entry 0666 / index DB 0666
+- [x] インストーラが 2 フェーズ (root / login user) ともエラーなし完走する — 2026-08-19 16:12
+  fresh clone 成功 + ユーザーが「MCP エラーの解消を確認できました」と申告 (16:15)。
+  toolbox の ADC 起因の接続失敗は対象外・ユーザー裁定 2026-08-19
+- [x] レジューム後: SessionStart の clone 不在警告なし + `claude_memory_sync --status` が
+  state: ok・push/pull 0・entry 計 73 (user 37 / project 9+20+6+1)・index 一致 — 16:14 と
+  16:29 (sidecar 削減 deploy 後) の 2 回実測で baseline と一致
+- [x] memory surface が clone path (`/var/lib/claude-rag-memory/claude-lessons-learned/...`) の
+  entry を提示する — 16:30 手動起動で clone path 付き surface + upsert/wipe 往復 rc=0
+- [x] perms: clone top 0755 / scope dir 0777 / entry 0666 / index DB 0666 — 16:29 stat 実測
+  755/777/666/666
 - [ ] 検証 OK をユーザーへ報告し、承認を得て旧 backup 5 dir (`~/.claude/memory.pre-git` と
   `~/.claude/projects/*/memory.pre-git` ×4) を削除する
 
