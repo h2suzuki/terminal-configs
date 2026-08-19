@@ -73,9 +73,10 @@ memory-routing SKILL.md 改訂)。旧 parser のマシンは frontmatter 形式�
 
 Exit Criteria:
 
-- [ ] 本マシンの managed 側 deploy (sudo cp: memory_routing_gate.py /
+- [x] 本マシンの managed 側 deploy (sudo cp: memory_routing_gate.py /
   check_skill_writing.py / memory-routing・declare-and-proceed の SKILL.md) が
-  canonical と `diff -q` 一致
+  canonical と `diff -q` 一致 — 2026-08-20 ユーザー実行、4 対 identical・
+  hook 2 本の exec bit (0755) 確認済
 - [ ] 他の全マシンで terminal-configs を pull + base setup 再実行済み
   (確認: `grep -c dual-read ~/.claude/hooks/memory_surface.py` が 1 以上)
 - [ ] `drafts/memory-entry-format-migration.py --apply` を実行し全 entry 変換
