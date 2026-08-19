@@ -23,6 +23,8 @@ mechanism
           bash -c、変数 command、展開 subcommand、git alias、別言語 process 内は検出対象外。
           pathless / -a の commit は deny-broad-git-commit が deny するため到達しない。
           commit 対象の取得に失敗した場合は file kind を判定できないため deny。
+          また command 文字列に handoff doc への言及があれば、書込経路不問
+          (heredoc / redirect / 別言語 process) で handoff skill の invoke を要求する。
   record-skill
           PostToolUse:Skill hook。成功した Skill invoke を session/agent state に記録。
   declare model が Bash で実行する CLI:
@@ -61,6 +63,10 @@ kind 語彙 → skill (additive。else 必須):
   todos  → writing-todos
   memory → memory-routing  (実 gate は memory_routing_gate、本 hook は通す)
   else   → ∅  (skill の無い file。これが無いと拡張子なし file が Write 不能)
+
+file 名規則 (relevant_skills、 kind 語彙とは独立):
+  todos.md → writing-todos
+  handoff doc (handoff.md / *-handoff.md / *_handoff.md) → handoff
 
 gate mode の skill-active 窓 (現 turn かつ直近 5 分以内) の根拠
 ================================================================
@@ -119,6 +125,12 @@ STATE_DIR = os.path.join(HOME, ".claude", "hooks", "state", "skill_reminder")
 DECL_STALE_SECONDS = 7 * 24 * 3600  # 放置宣言 session dir の自己掃除閾値
 SKILL_WINDOW_SECONDS = 300  # skill-active 窓 = 現 turn かつ直近 5 分以内
 GATE_TOOLS = ("Edit", "Write", "MultiEdit")
+
+# handoff doc 観測は sibling hook が単一 source (欠損時は handoff 規則なし = fail-open)。
+try:
+    import check_uncommitted_at_handoff as _handoff_mod
+except Exception:
+    _handoff_mod = None  # fail-open sentinel, guarded by `is not None`
 
 GIT_COMMIT_RE = re.compile(r"\bgit\b(?:\s+-{1,2}\S+(?:[ =]\S+)?)*\s+commit\b(?![\w.])")
 COMMIT_QUOTED = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
@@ -308,6 +320,8 @@ def relevant_skills(path: str) -> set[str]:
     low = base.lower()
     if low == "todos.md":
         return {"writing-todos"}
+    if _handoff_mod is not None and _handoff_mod.is_handoff_doc(path):
+        return {"handoff"}
     skills: set[str] = set()
     ext = _effective_ext(base)
     if low == "skill.md" or (HOOK_DIR_RE.search(path) and ext in HOOK_SCRIPT_EXTS):
@@ -898,6 +912,20 @@ def cmd_commit_gate(payload: dict) -> None:
     command = inp.get("command") or ""
     if not isinstance(command, str):
         return
+    # handoff doc への言及は書込経路不問 (heredoc / redirect / python 等) で handoff skill を要求。
+    if _handoff_mod is not None and _handoff_mod.mentions_handoff_doc(command):
+        session_id = payload.get("session_id")
+        if session_id:
+            active = _active_skills_from_state(
+                session_id,
+                payload.get("agent_id") or "main",
+                time.time(),
+                SKILL_WINDOW_SECONDS,
+                payload.get("prompt_id"),
+            )
+            if active is not None and "handoff" not in active:
+                _deny_missing({"handoff"})
+                return
     commits = _find_commits(command)
     if not commits:
         return
@@ -1398,6 +1426,23 @@ class GateTest(unittest.TestCase):
             {"writing-skills", "writing-code", "writing-python"},
         )
 
+    def test_relevant_skills_handoff_doc(self):
+        self.assertEqual(relevant_skills("/p/drafts/rebuild-handoff.md"), {"handoff"})
+        self.assertEqual(relevant_skills("/p/last-session-handoff.md"), {"handoff"})
+        self.assertEqual(relevant_skills("/p/handoff.md"), {"handoff"})
+        self.assertEqual(relevant_skills("/p/handoff-notes.md"), set())
+
+    def test_gate_denies_handoff_doc_without_skill(self):
+        result = self._gate(
+            "/tmp/drafts/rebuild-handoff.md", [self._skill("writing-code")]
+        )
+        self.assertIn("handoff", self._reason(result))
+
+    def test_gate_allows_handoff_doc_with_skill(self):
+        self.assertIsNone(
+            self._gate("/tmp/drafts/rebuild-handoff.md", [self._skill("handoff")])
+        )
+
     def test_relevant_skills_strips_backup_suffix(self):
         self.assertEqual(
             relevant_skills("/p/foo.py.bak"), {"writing-code", "writing-python"}
@@ -1843,6 +1888,31 @@ class GateTest(unittest.TestCase):
         for command in ("git status", "grep 'git commit' foo.md"):
             with self.subTest(command=command):
                 self.assertIsNone(self._commit_gate(command, transcript=False))
+
+    def test_commit_gate_denies_bash_handoff_doc_mention_without_skill(self):
+        command = "python3 - <<'EOF'\nopen('drafts/rebuild-handoff.md','w')\nEOF"
+        result = self._commit_gate(command, entries=[self._skill("writing-code")])
+        self.assertIn("handoff", self._reason(result))
+
+    def test_commit_gate_allows_bash_handoff_doc_mention_with_skill(self):
+        self.assertIsNone(
+            self._commit_gate(
+                "cat last-session-handoff.md", entries=[self._skill("handoff")]
+            )
+        )
+
+    def test_commit_gate_denies_handoff_skill_outside_window(self):
+        result = self._commit_gate(
+            "echo x >> last-session-handoff.md",
+            entries=[self._skill("handoff", ts=time.time() - 400)],
+        )
+        self.assertIn("handoff", self._reason(result))
+
+    def test_commit_gate_handoff_module_missing_fails_open(self):
+        from unittest import mock
+
+        with mock.patch.object(sys.modules[__name__], "_handoff_mod", None):
+            self.assertIsNone(self._commit_gate("cat last-session-handoff.md"))
 
     def test_commit_gate_checks_payload_with_agent_id(self):
         result = self._commit_gate(

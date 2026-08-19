@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """SessionStart hook: point at possibly-interrupted prior sessions instead of injecting their tail (startup / clear only; fail-open).
 
-対象 = 直近 1 日以内に終了 ∧ handoff marker 無し ∧ open Task 残 の dead session。
-正規の再開路 (resume / handoff doc) が無い中断だけを pointer で提示し、 読むか
-どうかは最初の user prompt を見て agent が判断する (tail 本文は注入しない)。
+対象 = 直近 1 日以内に終了 ∧ handoff marker 無し ∧ (open Task 残 ∨ handoff doc
+言及) の dead session。 正規の再開路 (resume / handoff doc) が無い中断だけを
+pointer で提示し、 読むかどうかは最初の user prompt を見て agent が判断する
+(tail 本文は注入しない)。 marker / doc / open-task の観測は sibling hook
+check_uncommitted_at_handoff が単一 source。
 """
 
 from __future__ import annotations
@@ -11,7 +13,6 @@ from __future__ import annotations
 import glob
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -22,16 +23,15 @@ from unittest import mock
 HOME = os.path.expanduser("~")
 PROJECTS_DIR = os.path.join(HOME, ".claude", "projects")
 WINDOW_SECONDS = 24 * 3600  # 「中断されたかもしれない」とみなす終了からの窓
-TAIL_SCAN_BYTES = 128 * 1024  # marker 検出の後方走査幅 (wind-down 数 turn を覆う)
 MAX_SESSIONS = 3
 MAX_SUBJECTS = 3
 
-# open-task reader は sibling UserPromptSubmit hook が単一 source
+# open-task / marker / doc reader は sibling UserPromptSubmit hook が単一 source
 # (same deployed dir; absent/broken hook → 本 hook は沈黙 = fail-open)。
 try:
     import check_uncommitted_at_handoff as _handoff_mod
 except Exception:
-    _handoff_mod = None  # ty: ignore[invalid-assignment] — fail-open sentinel, guarded by `is not None`
+    _handoff_mod = None  # fail-open sentinel, guarded by `is not None`
 
 
 def _encoded_project_id(cwd: str) -> str:
@@ -65,27 +65,6 @@ def _live_session_ids() -> set[str] | None:
     return {a["sessionId"] for a in data if isinstance(a, dict) and a.get("sessionId")}
 
 
-# /handoff skill が chat 出力冒頭に出す区切りマーカー (~~~~ … Handoff (<sid>) … ~~~~)。
-# SKILL.md の例・body 抜粋・過去 handoff も同形ゆえ、 当該 session の full sid を含む marker のみ採用。
-_MARKER_RE = re.compile(r"~{4,}[^\n]*\bHandoff\b[^\n]*~{2,}", re.IGNORECASE)
-
-
-def _tail_text(path: str, nbytes: int = TAIL_SCAN_BYTES) -> str:
-    """Last nbytes of the file, utf-8 decoded lossily; '' on error."""
-    try:
-        with open(path, "rb") as f:
-            size = f.seek(0, os.SEEK_END)
-            f.seek(max(0, size - nbytes))
-            return f.read().decode("utf-8", errors="replace")
-    except OSError:
-        return ""
-
-
-def _has_handoff_marker(text: str, sid: str) -> bool:
-    """full sid 入り handoff marker の有無 (sid 無しの template / 省略引用は不採用)。"""
-    return bool(sid) and any(sid in m.group() for m in _MARKER_RE.finditer(text))
-
-
 def _open_tasks(session_id: str, cwd: str) -> list[str]:
     if _handoff_mod is None:
         return []
@@ -94,15 +73,17 @@ def _open_tasks(session_id: str, cwd: str) -> list[str]:
 
 def _interrupted_sessions(
     cwd: str, current_sid: str, now: float
-) -> list[tuple[str, float, list[str]]]:
-    """(jsonl path, age sec, open subjects) — 窓内・非 live・marker 無し・open Task 残のみ。"""
+) -> list[tuple[str, float, list[str], bool]]:
+    """(jsonl path, age sec, open subjects, doc 言及) — 窓内・非 live・marker 無しの候補。"""
+    if _handoff_mod is None:
+        return []
     project_dir = os.path.join(PROJECTS_DIR, _encoded_project_id(cwd))
     if not os.path.isdir(project_dir):
         return []
     files = glob.glob(os.path.join(project_dir, "*.jsonl"))
     files.sort(key=os.path.getmtime, reverse=True)
     live = _live_session_ids()
-    out: list[tuple[str, float, list[str]]] = []
+    out: list[tuple[str, float, list[str], bool]] = []
     for f in files:
         sid = os.path.basename(f).rsplit(".", 1)[0]
         if sid == current_sid or (live is not None and sid in live):
@@ -113,12 +94,14 @@ def _interrupted_sessions(
             continue
         if age > WINDOW_SECONDS:
             break  # mtime 降順ゆえ以降は全て窓外
-        if _has_handoff_marker(_tail_text(f), sid):
+        tail = _handoff_mod.tail_text(f)
+        if _handoff_mod.has_handoff_marker(tail, sid):
             continue
         subjects = _open_tasks(sid, cwd)
-        if not subjects:
+        doc_touch = _handoff_mod.mentions_handoff_doc(tail)
+        if not subjects and not doc_touch:
             continue
-        out.append((f, age, subjects))
+        out.append((f, age, subjects, doc_touch))
         if len(out) >= MAX_SESSIONS:
             break
     return out
@@ -143,19 +126,22 @@ def main() -> int:
     if not hits:
         return 0
     lines: list[str] = []
-    for path, age, subjects in hits:
-        shown = " / ".join(subjects[:MAX_SUBJECTS])
-        more = (
-            f" 他{len(subjects) - MAX_SUBJECTS}件"
-            if len(subjects) > MAX_SUBJECTS
-            else ""
-        )
-        lines.append(
-            f"- `{path}` ({_age_label(age)}前に終了, open {len(subjects)} 件: {shown}{more})"
-        )
+    for path, age, subjects, _doc_touch in hits:
+        if subjects:
+            shown = " / ".join(subjects[:MAX_SUBJECTS])
+            more = (
+                f" 他{len(subjects) - MAX_SUBJECTS}件"
+                if len(subjects) > MAX_SUBJECTS
+                else ""
+            )
+            detail = f"open {len(subjects)} 件: {shown}{more}"
+        else:
+            detail = "handoff doc に言及・完了 marker 無し"
+        lines.append(f"- `{path}` ({_age_label(age)}前に終了, {detail})")
     ctx = (
         "## 中断された可能性のある直前 session (pointer)\n\n"
-        "直近 1 日以内に終了し、 handoff 無しで open Task が残っている session:\n\n"
+        "直近 1 日以内に終了し、 handoff 完了 marker が無いまま open Task か "
+        "handoff doc への言及が残っている session:\n\n"
         + "\n".join(lines)
         + "\n\nresume でも handoff 由来でもない再開 (例: 「接続が切れたので再開します」) "
         "の時だけ関係します。 最初の user prompt がそれを示す場合のみ該当 jsonl を "
@@ -171,34 +157,9 @@ def main() -> int:
     return 0
 
 
-class HandoffMarkerTest(unittest.TestCase):
-    """_has_handoff_marker の sid-anchor 回帰 (handoff skill: marker は full session id を埋める)。
-    出所: 2026-06-08 実機 — SKILL.md template marker (placeholder sid) と body 内省略引用が
-    本物 marker と同形で混入し、 sid anchor 無しでは誤検出した。 Run: python3 -m unittest session_resume_context"""
-
-    SID = "5262c4b2-7933-4f6b-893f-35405925375c"
-
-    def test_sid_marker_detected(self):
-        text = f"wind-down\n\n~~~~~~~~ Monday Handoff ({self.SID}) ~~~~~~\n## 本体"
-        self.assertTrue(_has_handoff_marker(text, self.SID))
-
-    def test_template_marker_without_sid_ignored(self):
-        self.assertFalse(
-            _has_handoff_marker("例: ~~~~ Monday Handoff (session ID) ~~~~", self.SID)
-        )
-
-    def test_abbreviated_body_quote_ignored(self):
-        self.assertFalse(
-            _has_handoff_marker("(~~~~ … Handoff (5262c4b2…) ~~~~)", self.SID)
-        )
-
-    def test_no_marker_or_empty_sid(self):
-        self.assertFalse(_has_handoff_marker("ただの会話", self.SID))
-        self.assertFalse(_has_handoff_marker(f"~~~~ Handoff ({self.SID}) ~~~~", ""))
-
-
 class InterruptedSessionsTest(unittest.TestCase):
-    """_interrupted_sessions: 窓内・非 live・marker 無し・open Task 残 の AND filter。"""
+    """_interrupted_sessions: 窓内・非 live・marker 無し・(open Task 残 ∨ doc 言及) の filter。
+    marker / doc 判定の単体回帰は check_uncommitted_at_handoff の HandoffObservablesTest が持つ。"""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -237,7 +198,11 @@ class InterruptedSessionsTest(unittest.TestCase):
 
     def test_open_tasks_without_marker_listed(self):
         p = self._session("a", 3600, tasks=["#1 x"])
-        self.assertEqual(self._hits(), [(p, 3600, ["#1 x"])])
+        self.assertEqual(self._hits(), [(p, 3600, ["#1 x"], False)])
+
+    def test_doc_mention_without_tasks_listed(self):
+        p = self._session("a", 3600, text='{"command": "cat drafts/x-handoff.md"}')
+        self.assertEqual(self._hits(), [(p, 3600, [], True)])
 
     def test_handoff_marker_excluded(self):
         self._session("a", 3600, text="~~~~ Mon Handoff (a) ~~~~\n本体", tasks=["#1 x"])

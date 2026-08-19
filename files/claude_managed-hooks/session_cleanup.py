@@ -3,8 +3,9 @@
 #
 # SessionEnd hook: removes this session's per-session temp files — the
 # statusline cache (<cache>/claude-tui-statusline/<session_id>.json, written by
-# statusline.sh) and the turn counter (<transcript>.turns plus session-keyed fallback
-# <cache>/claude-turn-counter/<session_id>.turns, written by stop_checks.py's turn marker).
+# statusline.sh), the turn counter (<transcript>.turns plus session-keyed fallback
+# <cache>/claude-turn-counter/<session_id>.turns, written by stop_checks.py's turn marker),
+# and the wind-down signal/sticky state (written per session by the UserPromptSubmit hook).
 # It also drops this session's /tmp scratch dir (/tmp/claude-scratch-<session_id>/),
 # the temp-file-discipline skill's convention area for ephemeral files.
 #
@@ -77,10 +78,16 @@ def main():
         base = transcript[:-6] if transcript.endswith(".jsonl") else transcript
         _rm(base + ".turns")
 
+    wd_dir = os.path.expanduser("~/.claude/hooks/state/wind_down_signal")
+    if session_id:
+        _rm(os.path.join(wd_dir, session_id))
+        _rm(os.path.join(wd_dir, session_id + ".sticky"))
+
     # Best-effort GC of orphans from sessions that did not fire SessionEnd
     # (includes leftover atomic-write temps .<session_id>.XXXXXX.json).
     _sweep(sl_dir, ("*.json", ".*.json"))
     _sweep(tc_dir, ("*.turns",))
+    _sweep(wd_dir, ("*",))
 
     _clean_tmp_scratch(session_id)
 

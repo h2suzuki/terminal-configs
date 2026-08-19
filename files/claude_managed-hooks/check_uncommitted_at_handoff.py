@@ -10,6 +10,10 @@ message; Stop fires after every turn, so checking end-state there is noisy.
 The blocking backstop is stop_checks.py (open-tasks-at-wind-down family),
 which imports HANDOFF_RE / open_tasks from this module.
 
+本 module は handoff 観測の単一 source を兼ねる: doc path 判定 (is_handoff_doc /
+handoff_docs / mentions_handoff_doc) と完了 marker 判定 (has_handoff_marker) を
+stop_checks / session_resume_context / skill_reminder_gate が import する。
+
 Stdin: UserPromptSubmit payload JSON (`prompt`, `cwd`, `session_id`, `transcript_path`).
 Stdout: hookSpecificOutput additionalContext only when a wind-down phrase AND
 (uncommitted changes OR open tasks) hold; else empty.
@@ -55,6 +59,10 @@ def _signal_path(session_id: str) -> str:
     return os.path.join(WIND_DOWN_STATE_DIR, session_id)
 
 
+def _sticky_path(session_id: str) -> str:
+    return _signal_path(session_id) + ".sticky"
+
+
 def record_wind_down(session_id: str, signalled: bool) -> None:
     """最新 prompt の wind-down 判定を session state へ上書き記録 (IO 失敗は無視 = fail-open)。"""
     if not session_id:
@@ -63,6 +71,8 @@ def record_wind_down(session_id: str, signalled: bool) -> None:
         os.makedirs(WIND_DOWN_STATE_DIR, exist_ok=True)
         with open(_signal_path(session_id), "w", encoding="utf-8") as f:
             f.write("1" if signalled else "0")
+        if signalled:  # 宣言は session 内で不可逆 (完了側の判定は marker が担う)
+            open(_sticky_path(session_id), "w").close()
     except OSError:
         pass
 
@@ -76,6 +86,68 @@ def wind_down_signalled(session_id: str) -> bool:
             return f.read().strip() == "1"
     except OSError:
         return False
+
+
+def wind_down_declared(session_id: str) -> bool:
+    """session 内で一度でも wind-down 宣言があったか (sticky。 後続 prompt で消えない)。"""
+    return bool(session_id) and os.path.exists(_sticky_path(session_id))
+
+
+TAIL_SCAN_BYTES = 128 * 1024  # marker / doc token の後方走査幅 (数 turn を覆う)
+
+
+def tail_text(path: str, nbytes: int = TAIL_SCAN_BYTES) -> str:
+    """Last nbytes of the file, utf-8 decoded lossily; '' on error."""
+    try:
+        with open(path, "rb") as f:
+            size = f.seek(0, os.SEEK_END)
+            f.seek(max(0, size - nbytes))
+            return f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+# --- handoff 実体観測 (doc path / 完了 marker) の単一 source。 consumer: stop_checks /
+# session_resume_context / skill_reminder_gate。 代理指標 (open Task / wind-down 語) でなく実体を見る。
+
+# handoff skill 規約の doc 置き場 (repo top と drafts/)。
+HANDOFF_DOC_GLOBS = ("*handoff.md", os.path.join("drafts", "*handoff.md"))
+
+# text / Bash command 中の doc path token 抽出 (経路不問の loose 観測)。
+HANDOFF_DOC_TOKEN_RE = re.compile(r"[\w./-]*handoff\.md", re.IGNORECASE)
+
+# handoff skill が session-end message 冒頭に出す marker (~~~~ … Handoff (<sid>) ~~~~)。
+MARKER_RE = re.compile(r"~{4,}[^\n]*\bHandoff\b[^\n]*~{2,}", re.IGNORECASE)
+
+
+def is_handoff_doc(path: str) -> bool:
+    """basename が handoff doc 形 (handoff.md / *-handoff.md / *_handoff.md) か。"""
+    low = os.path.basename(path).lower()
+    return low == "handoff.md" or low.endswith(("-handoff.md", "_handoff.md"))
+
+
+def handoff_docs(cwd: str) -> list[str]:
+    """規約置き場に実在する handoff doc の path 一覧 (sorted)。 cwd 不正は []。"""
+    if not cwd or not os.path.isdir(cwd):
+        return []
+    found: list[str] = []
+    for pattern in HANDOFF_DOC_GLOBS:
+        found.extend(
+            p for p in glob.glob(os.path.join(cwd, pattern)) if is_handoff_doc(p)
+        )
+    return sorted(found)
+
+
+def mentions_handoff_doc(text: str) -> bool:
+    """text (Bash command / transcript 断片) が handoff doc path token を含むか。"""
+    return any(
+        is_handoff_doc(m.group()) for m in HANDOFF_DOC_TOKEN_RE.finditer(text or "")
+    )
+
+
+def has_handoff_marker(text: str, sid: str) -> bool:
+    """full sid 入り handoff marker の有無 (sid 無しの template / 省略引用は不採用)。"""
+    return bool(sid) and any(sid in m.group() for m in MARKER_RE.finditer(text))
 
 
 # sandbox が書き込み禁止 path へ被せる stub の実測 roster。 未収載の stub は従来通り報告する
@@ -375,6 +447,71 @@ class GitUncommittedTest(unittest.TestCase):
             self.assertEqual(_git_uncommitted(self.cwd), [])
 
 
+class HandoffObservablesTest(unittest.TestCase):
+    """is_handoff_doc / has_handoff_marker: handoff 実体観測の単一 source (stop_checks / session_resume_context が import)。
+    出所: 2026-06-08 実機 — template marker (placeholder sid) と省略引用が sid anchor 無しで誤検出。
+    2026-08-20 実機 — skill 不発動のまま handoff doc が 3 回編集され素通り (doc path 観測が不在だった)。"""
+
+    SID = "5262c4b2-7933-4f6b-893f-35405925375c"
+
+    def test_canonical_doc_paths_detected(self):
+        for path in (
+            "last-session-handoff.md",
+            "/repo/drafts/rebuild-handoff.md",
+            "/repo/handoff.md",
+            "/repo/my_handoff.md",
+            "/repo/drafts/Feature-X-Handoff.md",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(is_handoff_doc(path))
+
+    def test_non_doc_paths_ignored(self):
+        for path in ("/repo/handoff-notes.md", "/repo/todos.md", "/repo/handoff.py"):
+            with self.subTest(path=path):
+                self.assertFalse(is_handoff_doc(path))
+
+    def test_handoff_docs_lists_conventional_locations(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "drafts"))
+            expected = [
+                os.path.join(d, "drafts", "rebuild-handoff.md"),
+                os.path.join(d, "last-session-handoff.md"),
+            ]
+            for p in expected + [
+                os.path.join(d, "handoff-notes.md"),
+                os.path.join(d, "drafts", "misc.md"),
+            ]:
+                open(p, "w").close()
+            self.assertEqual(handoff_docs(d), sorted(expected))
+        self.assertEqual(handoff_docs(""), [])
+        self.assertEqual(handoff_docs("/nonexistent-dir"), [])
+
+    def test_mentions_handoff_doc_in_command_text(self):
+        cmd = "python3 - <<'EOF'\nopen('drafts/rebuild-handoff.md','w')\nEOF"
+        self.assertTrue(mentions_handoff_doc(cmd))
+        self.assertTrue(mentions_handoff_doc("cat last-session-handoff.md"))
+        self.assertFalse(mentions_handoff_doc("grep handoff-notes.md; ls todos.md"))
+        self.assertFalse(mentions_handoff_doc("echo check_uncommitted_at_handoff.py"))
+
+    def test_sid_marker_detected(self):
+        text = f"wind-down\n\n~~~~~~~~ Monday Handoff ({self.SID}) ~~~~~~\n## 本体"
+        self.assertTrue(has_handoff_marker(text, self.SID))
+
+    def test_template_marker_without_sid_ignored(self):
+        self.assertFalse(
+            has_handoff_marker("例: ~~~~ Monday Handoff (session ID) ~~~~", self.SID)
+        )
+
+    def test_abbreviated_body_quote_ignored(self):
+        self.assertFalse(
+            has_handoff_marker("(~~~~ … Handoff (5262c4b2…) ~~~~)", self.SID)
+        )
+
+    def test_no_marker_or_empty_sid(self):
+        self.assertFalse(has_handoff_marker("ただの会話", self.SID))
+        self.assertFalse(has_handoff_marker(f"~~~~ Handoff ({self.SID}) ~~~~", ""))
+
+
 class HandoffPhraseTest(unittest.TestCase):
     """HANDOFF_RE: 終了示唆だけを拾い、 同語の別用途は拾わない。
     出所: 2026-08-08 実機 — 「セッションを閉じます」が未収載で取りこぼした。"""
@@ -438,6 +575,14 @@ class WindDownSignalTest(unittest.TestCase):
         self._submit("お疲れさまでした")
         self._submit("次の実装をお願いします")
         self.assertFalse(wind_down_signalled(self.SID))
+
+    def test_declaration_is_sticky_across_prompts(self):
+        self.assertFalse(wind_down_declared(self.SID))
+        self._submit("セッションリセット後に取り組みます")
+        self._submit("次の実装をお願いします")
+        self.assertFalse(wind_down_signalled(self.SID))
+        self.assertTrue(wind_down_declared(self.SID))
+        self.assertFalse(wind_down_declared(""))
 
     def test_unwritable_state_dir_fails_open(self):
         with mock.patch.object(

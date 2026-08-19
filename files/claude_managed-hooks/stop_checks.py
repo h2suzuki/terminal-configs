@@ -62,6 +62,13 @@ Combined Stop hook for org-managed Claude Code:
     に open 項目が残っていれば block。 持ち越しは todos.md へ転記し全 open Task を close
     させる (handoff skill Task 残処理の deny 版。 同 sibling hook の inject が案内層)。
 
+  handoff-doc-without-marker (enforcement, exit 2):
+    wind-down 宣言が session 内に一度でもあり (sticky、 sibling hook が記録)、 当 turn に
+    handoff doc (規約置き場の mtime 観測 — Bash / python / subagent 経由の書込も捕捉) が
+    更新され、 transcript tail + 当 turn 出力に full-sid handoff marker が無ければ block。
+    protocol 完了 (cross-check readback + marker) を宣言後の doc 書込 turn に強制する。
+    宣言前の途中編集は skill_reminder_gate の handoff skill 要求のみで marker は求めない。
+
   deferral (warning-only, exit 0):
     「後で対処」「別タスクに切り出」等 は、 同 turn 内に TaskCreate/TaskUpdate/
     TodoWrite が無ければ warn。
@@ -535,7 +542,7 @@ except Exception:
 try:
     import check_uncommitted_at_handoff as _handoff_mod
 except Exception:
-    _handoff_mod = None  # ty: ignore[invalid-assignment] — fail-open sentinel, guarded by `is not None`
+    _handoff_mod = None  # fail-open sentinel, guarded by `is not None`
 
 # --- Pattern: meta-announce-silence (block on hit, no pairing) ---
 # 不実施宣言系 — rule 遵守を発話で能動的に話題化する pattern。
@@ -1269,6 +1276,32 @@ def _declare_proceed_active(entries: list[dict], now: float) -> bool:
     return False
 
 
+def _handoff_docs_awaiting_marker(
+    payload: dict, text: str, prompt_epoch: float | None
+) -> list[str]:
+    """宣言済 wind-down session で当 turn に mtime が動いた handoff doc (marker 未出力のもの)。
+    mtime 観測ゆえ Bash / python / subagent 経由の書込も捕捉。 判定不能は [] (fail-open)。"""
+    if _handoff_mod is None or prompt_epoch is None:
+        return []
+    try:
+        session_id = str(payload.get("session_id") or "")
+        if not session_id or not _handoff_mod.wind_down_declared(session_id):
+            return []
+        touched = [
+            p
+            for p in _handoff_mod.handoff_docs(str(payload.get("cwd") or ""))
+            if os.path.getmtime(p) >= prompt_epoch
+        ]
+        if not touched:
+            return []
+        scan = _handoff_mod.tail_text(str(payload.get("transcript_path") or "")) + text
+        if _handoff_mod.has_handoff_marker(scan, session_id):
+            return []
+        return touched
+    except Exception:
+        return []
+
+
 def _known_possible_denial(text: str) -> str | None:
     """Block message when an op known to be doable is asserted impossible on one line; else None."""
     for line in strip_fences(text).splitlines():
@@ -1301,6 +1334,7 @@ def _check(
     wind_down_open_tasks: list[str] | None = None,
     final_text_authoritative: bool = True,
     session_task_records: bool = True,
+    handoff_doc_without_marker: list[str] | None = None,
 ) -> tuple[int, list[str], list[str]]:
     """Return (exit_code, warnings, blocking)."""
     warnings: list[str] = []
@@ -1485,6 +1519,20 @@ def _check(
             f"再出力してください。"
         )
 
+    # handoff-doc-without-marker (declared wind-down + doc update this turn without the marker)
+    if handoff_doc_without_marker:
+        names = ", ".join(os.path.basename(p) for p in handoff_doc_without_marker)
+        # 文面は意図的に冗長 (deny-wording 規律)・trim 禁止。
+        blocking.append(
+            f"handoff-doc-without-marker: この session は終了示唆 (wind-down) 宣言済みで、 "
+            f"当 turn に handoff doc ({names}) が更新されましたが、 handoff 完了 marker が "
+            f"未出力です。 handoff skill の protocol を完了してください — cross-check readback "
+            f"(fresh subagent) を経て、 session-end message の 1 行目に full session id 入りの "
+            f"marker 行 (~~~~ <曜日>, <日時> Handoff (<full sid>) ~~~~) を出力して再出力。 "
+            f"まだ終了せず作業を継続する (途中の進捗反映) 場合は、 偽の marker を出さず、 "
+            f"継続の旨を 1 文添えて再出力してください。"
+        )
+
     # deferral (warning-only)
     m = DEFERRAL_RE.search(text)
     if m:
@@ -1642,6 +1690,9 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
         final_text_authoritative=final_text_authoritative,
         session_task_records=_session_has_task_records(
             session_id, str(payload.get("cwd") or "")
+        ),
+        handoff_doc_without_marker=_handoff_docs_awaiting_marker(
+            payload, text, prompt_epoch
         ),
     )
     # advise-once: a stop_hook_active retry never re-blocks — demote to pass (see docstring turn-marker / Exit).
@@ -2871,6 +2922,140 @@ class OpenTasksAtWindDownTest(unittest.TestCase):
 
     def test_run_passes_with_clean_tasks(self):
         self.assertEqual(self._run_with(True, []), 0)
+
+
+class HandoffDocWithoutMarkerTest(unittest.TestCase):
+    """handoff-doc-without-marker: 宣言済 session の doc 更新 turn に marker を強制。
+    出所: 2026-08-20 実機 — リセット宣言後に Bash heredoc で handoff doc を編集して
+    marker 無しで素通り (Edit/Write 観測・揮発 wind-down signal の双方が不発)。"""
+
+    SID = "sid-handoff-marker-test"
+
+    @staticmethod
+    def _c(docs):
+        return _check(
+            "done",
+            "done",
+            set(),
+            [],
+            [],
+            [],
+            False,
+            False,
+            None,
+            handoff_doc_without_marker=docs,
+        )
+
+    def test_unmarked_doc_blocks(self):
+        code, _w, blk = self._c(["/r/drafts/rebuild-handoff.md"])
+        self.assertEqual(code, 2)
+        self.assertTrue(any("handoff-doc-without-marker" in b for b in blk))
+        self.assertTrue(any("rebuild-handoff.md" in b for b in blk))
+
+    def test_no_docs_pass(self):
+        code, _w, blk = self._c([])
+        self.assertEqual(code, 0)
+        self.assertFalse(blk)
+
+    def _awaiting(
+        self, declared=True, mtime_delta=5.0, marker_in="none", broken_mod=False
+    ):
+        import tempfile
+        import types
+        from unittest import mock
+
+        import check_uncommitted_at_handoff as real
+
+        with tempfile.TemporaryDirectory() as d:
+            doc = os.path.join(d, "drafts", "x-handoff.md")
+            os.makedirs(os.path.dirname(doc))
+            open(doc, "w").close()
+            prompt_epoch = 1_000_000.0
+            stamp = prompt_epoch + mtime_delta
+            os.utime(doc, (stamp, stamp))
+            marker = f"~~~~ Mon Handoff ({self.SID}) ~~~~"
+            transcript = os.path.join(d, "t.jsonl")
+            with open(transcript, "w", encoding="utf-8") as f:
+                f.write(marker if marker_in == "tail" else "log")
+            text = "done" + (marker if marker_in == "text" else "")
+            fake = (
+                types.SimpleNamespace()
+                if broken_mod
+                else types.SimpleNamespace(
+                    wind_down_declared=lambda sid: declared,
+                    handoff_docs=real.handoff_docs,
+                    tail_text=real.tail_text,
+                    has_handoff_marker=real.has_handoff_marker,
+                )
+            )
+            payload = {"session_id": self.SID, "cwd": d, "transcript_path": transcript}
+            with mock.patch.object(sys.modules[__name__], "_handoff_mod", fake):
+                return _handoff_docs_awaiting_marker(payload, text, prompt_epoch)
+
+    def test_declared_touch_without_marker_returned(self):
+        docs = self._awaiting()
+        self.assertEqual(len(docs), 1)
+        self.assertTrue(docs[0].endswith("x-handoff.md"))
+
+    def test_undeclared_session_ignored(self):
+        self.assertEqual(self._awaiting(declared=False), [])
+
+    def test_pre_turn_mtime_ignored(self):
+        self.assertEqual(self._awaiting(mtime_delta=-5.0), [])
+
+    def test_marker_in_tail_or_text_satisfies(self):
+        self.assertEqual(self._awaiting(marker_in="tail"), [])
+        self.assertEqual(self._awaiting(marker_in="text"), [])
+
+    def test_stale_module_fails_open(self):
+        self.assertEqual(self._awaiting(broken_mod=True), [])
+
+    def _run_with(self, declared, mtime_delta, asst_text="done."):
+        import io
+        import tempfile
+        import types
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        import check_uncommitted_at_handoff as real
+
+        p = TurnMarkerTest._transcript(
+            [TurnMarkerTest._user(content="作業して"), TurnMarkerTest._asst(asst_text)]
+        )
+        with tempfile.TemporaryDirectory() as d:
+            doc = os.path.join(d, "last-session-handoff.md")
+            open(doc, "w").close()
+            stamp = _parse_ts(TurnMarkerTest.TS) + mtime_delta
+            os.utime(doc, (stamp, stamp))
+            fake = types.SimpleNamespace(
+                wind_down_signalled=lambda sid: False,
+                open_tasks=lambda sid, cwd: [],
+                wind_down_declared=lambda sid: declared,
+                handoff_docs=real.handoff_docs,
+                tail_text=real.tail_text,
+                has_handoff_marker=real.has_handoff_marker,
+            )
+            payload = {
+                "transcript_path": p,
+                "stop_hook_active": False,
+                "session_id": self.SID,
+                "cwd": d,
+            }
+            with (
+                mock.patch.object(sys.modules[__name__], "_handoff_mod", fake),
+                redirect_stderr(io.StringIO()),
+            ):
+                return _run(payload)[0]
+
+    def test_run_blocks_declared_session_doc_update(self):
+        self.assertEqual(self._run_with(True, 5.0), 2)
+
+    def test_run_passes_when_marker_emitted(self):
+        marked = f"~~~~ Mon Handoff ({self.SID}) ~~~~\ndone."
+        self.assertEqual(self._run_with(True, 5.0, asst_text=marked), 0)
+
+    def test_run_passes_without_declaration(self):
+        self.assertEqual(self._run_with(False, 5.0), 0)
 
 
 class ClaimRegexTest(unittest.TestCase):

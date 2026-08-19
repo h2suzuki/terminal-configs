@@ -41,6 +41,8 @@ session 終了時に作業が完結し次 session 再開不要なら、 該当 t
 
 - 一般的なセッション境界: `last-session-handoff.md` (repo top、 `.gitignore` 対象)
 - task-lineage が長期化・分離している作業: `drafts/<task-slug>-handoff.md` (`drafts/` も `.gitignore` 対象、 必要なら作成)
+- doc 名と置き場は上記規約に固定 (`handoff.md` / `*-handoff.md` / `*_handoff.md`、 repo top か `drafts/`): hook 群はこの規約 path だけを handoff doc として観測するため、 規約外 path は enforcement と次 session の中断検出から漏れる
+- handoff doc への書込は本 skill 発動下でのみ通る: `skill_reminder_gate` hook が書込経路不問 (Edit / Bash heredoc / python 等) で handoff skill の invoke を要求する
 - **section header = todos.md parent task name** (1-to-1 紐付け、 例 `## feature-cache-rename — bg dispatch verify`)
 - **update**: 同名 section が既にあれば該当 section を **overwrite** (最新進捗のみ保持、 history は残さない)、 無ければ **file 冒頭に append**
 - 既存の異 task section は触らない (並行 task の handoff section を破壊しない安全策)
@@ -105,7 +107,8 @@ next-me は handoff の該当 section を read 後 1 拍 verbalize する: Statu
 - **同一 task の並行 session は user 運用で回避**: 同じ task を 2 session で同時進行すると section overwrite で進捗ロスト risk あり。 「1 task 1 active session」 ルールで回避 (skill が race 検出する機構は持たない)
 - **Memory / rule 更新は当該 file に書き handoff には pointer のみ**: `~/.claude/CLAUDE.md` や memory entry に rule 追加した場合は当該 file 本体に書き、 handoff Caveat には「rule X 追加 (@<file>)」 形式の参照だけ
 - **Intent retention は当該 commit / comment / rule file に**: 「なぜそうしたか」 は commit message body / code comment / rule file に残す (Commander's Intent)。 handoff にダブって書かない
-- **resume マーカーを session-end message 冒頭に出す**: handoff を実施する session では、 ユーザーへの最終報告 message の **1 行目** に区切りマーカー `~~~~~~~~ <Weekday>, <YYYY>/<M>/<D> <HH:MM> Handoff (<session-id>) ~~~~~~` を出力する (例: `~~~~~~~~ Monday, 2026/6/8 8:58 Handoff (a1b2c3d4-5e6f-7890-abcd-ef0123456789) ~~~~~~`)。 日時は `date "+%A, %Y/%-m/%-d %H:%M"`、 `<session-id>` は `$CLAUDE_CODE_SESSION_ID` を **省略せず full で**埋める。 次 session 起動時に `session_resume_context` hook が transcript 内の **full sid を含む marker** を「handoff 済み session」の判定に使う (marker 無し ∧ open Task 残 の session だけを中断候補として pointer 提示する) ため、 file でなく **chat 出力** に出すこと。 full sid 必須なのは、 SKILL.md の例・body 抜粋・過去 session の handoff (いずれも短縮 sid) を本物と区別するため — 逆に同 session 内で marker を本文引用する時は短縮形 (`(sid…)` 等) にして本物の anchor と衝突させない。 handoff を skip する (再開不要) session では出さない
+- **resume マーカーを session-end message 冒頭に出す**: handoff を実施する session では、 ユーザーへの最終報告 message の **1 行目** に区切りマーカー `~~~~~~~~ <Weekday>, <YYYY>/<M>/<D> <HH:MM> Handoff (<session-id>) ~~~~~~` を出力する (例: `~~~~~~~~ Monday, 2026/6/8 8:58 Handoff (a1b2c3d4-5e6f-7890-abcd-ef0123456789) ~~~~~~`)。 日時は `date "+%A, %Y/%-m/%-d %H:%M"`、 `<session-id>` は `$CLAUDE_CODE_SESSION_ID` を **省略せず full で**埋める。 次 session 起動時に `session_resume_context` hook が transcript 内の **full sid を含む marker** を「handoff 済み session」の判定に使う (直近 1 日以内に終了 ∧ marker 無し ∧ (open Task 残 ∨ handoff doc 言及) の session だけを中断候補として pointer 提示する) ため、 file でなく **chat 出力** に出すこと。 full sid 必須なのは、 SKILL.md の例・body 抜粋・過去 session の handoff (いずれも短縮 sid) を本物と区別するため — 逆に同 session 内で marker を本文引用する時は短縮形 (`(sid…)` 等) にして本物の anchor と衝突させない。 handoff を skip する (再開不要) session では出さない
+- **wind-down 宣言後の handoff doc 更新は marker 出力まで閉じない**: wind-down 宣言済み session で handoff doc を更新した turn は、 protocol 完了 (cross-check readback まで) と full-sid marker の出力が揃うまで `stop_checks` hook (handoff-doc-without-marker) が block する。 宣言前の途中編集に marker は不要 (skill 発動のみ要求される)
 
 ## Output
 
