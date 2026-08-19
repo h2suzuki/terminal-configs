@@ -45,11 +45,15 @@ PreToolUse `^(Edit|Write|MultiEdit)$` → guard:
 
   内容不備の判定 (memory_surface._parse_entry / _build_query と同契約):
     - content が MAX_ENTRY_SIZE 超 → memory_surface が index しない。
-    - body に `oneline_summary:` (廃止形式) を含む。
-    - body に非空の `reminder:` 行が無い (^reminder:[ \t]*(.+)$ MULTILINE)。
-    - body に非空の `keywords:` 行が無い。
+    - basename が feedback_ / reference_ で始まらない (type 体系外)。
+    - `oneline_summary:` (廃止形式) を含む。
+    - frontmatter に非空の `reminder:` 行が無い (^reminder:[ \t]*(.+)$ MULTILINE)。
+    - frontmatter に非空の `keywords:` 行が無い。
     - keywords が FTS token を 1 つも産まない / 一般語 (STOPWORDS) のみ = 無効/広すぎ。
-    - body に非空の `models:` 行が無い / tag 書式不正 (観測 model の tag、例 fable-5)。
+    - frontmatter に非空の `models:` 行が無い / tag 書式不正 (観測 model の tag、例 fable-5)。
+    - feedback: 本文に ## Why / ## 事例 見出しが無い (## How / ## Related は任意)。
+    - 本文に絶対日付 (YYYY-MM-DD) が 1 つも無い。
+  旧形式 (3 field が本文先頭) の既存 entry は再 Write する機会に新書式へ引き上げる。
 
 PostToolUse `^Write$` → sync:
   entry の Write 成功後に claude_memory_sync --commit <abspath> を呼び、
@@ -94,6 +98,9 @@ OPT_OUT = "memory-guard: allow"
 # memory_surface._build_query と同じトークナイザ (CJK 3+, ASCII 4+)
 _CJK_RE = re.compile(r"[぀-ゟ゠-ヿ一-鿿]{3,}")
 _ASCII_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{3,}")
+
+ENTRY_PREFIXES = ("feedback_", "reference_")  # 行動是正の教訓 / 外部仕様の調査 snapshot
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 # 一般語 (=match に効かず context を flood する語; CJK 3+/ASCII 4+ のみ列挙) を deny する閾値判定用。保守的に
 # 「これらだけ」弾く: 1 つでも固有語があれば通す。tunable。
@@ -213,34 +220,44 @@ def _emit_deny(reason: str) -> None:
     sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
-def _strip_frontmatter(text: str) -> str:
+def _split_frontmatter(text: str) -> tuple[str, str]:
+    """(frontmatter 内側, body) を返す。frontmatter が無ければ ("", text)。"""
     if text.startswith("---"):
         end = text.find("\n---", 3)
         if end != -1:
             nl = text.find("\n", end + 4)
-            return text[nl + 1 :] if nl != -1 else ""
-    return text
+            body = text[nl + 1 :] if nl != -1 else ""
+            return text[text.find("\n") + 1 : end], body
+    return "", text
 
 
-def _content_problem(content: str) -> str | None:
+def _content_problem(path: str, content: str) -> str | None:
     """受理できない内容なら是正指示文字列、OK なら None。"""
     if len(content.encode("utf-8")) > MAX_ENTRY_SIZE:
         return (
             f"entry が {MAX_ENTRY_SIZE} byte 超で memory_surface が index "
             "しません。 短くしてから Write してください。"
         )
-    body = _strip_frontmatter(content)
-    if re.search(r"^oneline_summary:", body, flags=re.MULTILINE):
+    base = os.path.basename(path)
+    if not base.startswith(ENTRY_PREFIXES):
+        return (
+            "entry の file 名は feedback_* (行動是正の教訓) か reference_* "
+            "(外部仕様の調査 snapshot) で始めてください。 旧 prefix (project_* 等) "
+            "の entry は再 Write する機会に feedback_* へ rename します。"
+        )
+    if re.search(r"^oneline_summary:", content, flags=re.MULTILINE):
         return (
             "oneline_summary: は廃止形式 (read されません)。 reminder: と "
             "keywords: の 2 行に置き換えてください。"
         )
+    fm, body = _split_frontmatter(content)
     # [ \t]*: \s は改行を跨ぎ次行を値と誤認する (memory_surface._parse_entry と同契約)
-    m = re.search(r"^reminder:[ \t]*(.+)$", body, flags=re.MULTILINE)
+    m = re.search(r"^reminder:[ \t]*(.+)$", fm, flags=re.MULTILINE)
     if not (m and m.group(1).strip()):
         return (
-            "本文先頭に reminder: 行 (1 文の是正指示) が必要です。 "
-            "/memory-routing の書式に従ってください。"
+            "frontmatter 内に reminder: 行 (1 文の是正指示) が必要です。 本文でなく "
+            "frontmatter (--- で挟まれた区画) に置いてください。 旧形式 (本文先頭) の "
+            "entry を更新する時も frontmatter へ移してから Write してください。"
         )
     if len(m.group(1).strip()) > 150:
         return (
@@ -249,10 +266,10 @@ def _content_problem(content: str) -> str | None:
             "behavioral nudge に効かないので避け、 一般的な是正指示 1 文に縮めて "
             "ください (個別事案・事例は entry 本文に書く)。"
         )
-    mk = re.search(r"^keywords:[ \t]*(.+)$", body, flags=re.MULTILINE)
+    mk = re.search(r"^keywords:[ \t]*(.+)$", fm, flags=re.MULTILINE)
     if not (mk and mk.group(1).strip()):
         return (
-            "本文に keywords: 行 (選択的な match 語) が必要です。 "
+            "frontmatter 内に keywords: 行 (選択的な match 語) が必要です。 "
             "/memory-routing の書式に従ってください。"
         )
     keywords = mk.group(1)
@@ -264,10 +281,10 @@ def _content_problem(content: str) -> str | None:
             "固有語が無い、 または一般語のみ)。 tool 名・path・error code・"
             "固有名詞など選択的な語を入れてください。"
         )
-    mm = re.search(r"^models:[ \t]*(.+)$", body, flags=re.MULTILINE)
+    mm = re.search(r"^models:[ \t]*(.+)$", fm, flags=re.MULTILINE)
     if not (mm and mm.group(1).strip()):
         return (
-            "本文に models: 行 (この教訓を観測した model の tag) が必要です。 "
+            "frontmatter 内に models: 行 (この教訓を観測した model の tag) が必要です。 "
             "実行中の自分の model を短形式で記入してください (例 models: fable-5、 "
             "複数は space 区切り)。 /memory-routing の書式に従ってください。"
         )
@@ -276,6 +293,21 @@ def _content_problem(content: str) -> str | None:
         return (
             "models: の tag 書式が不正です (小文字英数と . - のみ、 例 opus-4.8 / "
             "fable-5)。 モデル ID 全体 (claude-fable-5) でも可 (index 時に正規化)。"
+        )
+    if base.startswith("feedback_") and not (
+        re.search(r"^## Why\b", body, flags=re.MULTILINE)
+        and re.search(r"^## 事例", body, flags=re.MULTILINE)
+    ):
+        return (
+            "feedback entry の本文には ## Why (原因/機序) と ## 事例 (絶対日付つきの "
+            "発生事例) の見出しが必要です (## How / ## Related は任意)。 "
+            "/memory-routing の本文構成に従ってください。"
+        )
+    if not _DATE_RE.search(body):
+        return (
+            "本文に絶対日付 (YYYY-MM-DD) がありません。 feedback は事例の発生日、 "
+            "reference は情報の確認日を書いてください (相対表現は session 境界で "
+            "意味を失います)。"
         )
     return None
 
@@ -346,7 +378,7 @@ def cmd_guard(payload: dict) -> None:
         )
         return
 
-    problem = _content_problem(inp.get("content") or "")
+    problem = _content_problem(path, inp.get("content") or "")
     if problem:
         _emit_deny(problem)  # grant は残す: 直して再 Write がそのまま通る
         return

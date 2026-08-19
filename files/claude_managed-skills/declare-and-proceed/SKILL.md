@@ -33,7 +33,7 @@ investigation / execution route の binary / ternary 質問抑止。 判断材�
 
 batch / iterative work では per-entry / per-batch に user 確認を求めない。 適用範囲:
 
-- memory entry の oneline_summary draft
+- memory entry の reminder / keywords 行 draft
 - 多数 file の一括 Edit / sweep
 - mechanical bulk transform (rename / format 統一 等)
 - 同種 review pass

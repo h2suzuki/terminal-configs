@@ -394,7 +394,7 @@ def _entry_tags(con: sqlite3.Connection, project_id: str) -> dict[str, str]:
 
 
 def _parse_entry(file_path: str) -> tuple[str, str, str, str] | None:
-    """Return (reminder, keywords, body_for_search, models); strips YAML frontmatter. FTS5 matches
+    """Return (reminder, keywords, body_for_search, models); the 3 fields are dual-read from frontmatter (canonical) or body (legacy), body_for_search excludes frontmatter. FTS5 matches
     `keywords`; `reminder` is the actionable past-mistake reminder (written to prevent repeat, not a summary) — kept separate so it need not be keyword-stuffed. `models` is the normalized space-joined tag list ('' = untagged -> MODELS_DEFAULT at query time)."""
     try:
         size = os.path.getsize(file_path)
@@ -413,12 +413,12 @@ def _parse_entry(file_path: str) -> tuple[str, str, str, str] | None:
         if end != -1:
             nl = text.find("\n", end + 4)
             body = text[nl + 1 :] if nl != -1 else ""
-    # [ \t]*: \s は改行を跨ぎ次行を値と誤認する (gate 側と同契約)
-    m = re.search(r"^reminder:[ \t]*(.+)$", body, flags=re.MULTILINE)
+    # text 全域 = frontmatter (正書式) / 本文 (旧形式) の両位置読み; [ \t]* は次行の値誤認防止 (gate と同契約)
+    m = re.search(r"^reminder:[ \t]*(.+)$", text, flags=re.MULTILINE)
     reminder = m.group(1).strip() if m else ""
-    mk = re.search(r"^keywords:[ \t]*(.+)$", body, flags=re.MULTILINE)
+    mk = re.search(r"^keywords:[ \t]*(.+)$", text, flags=re.MULTILINE)
     keywords = mk.group(1).strip() if mk else ""
-    mm = re.search(r"^models:[ \t]*(.+)$", body, flags=re.MULTILINE)
+    mm = re.search(r"^models:[ \t]*(.+)$", text, flags=re.MULTILINE)
     models = (
         " ".join(_normalize_model(t) for t in re.split(r"[\s,・]+", mm.group(1)) if t)
         if mm

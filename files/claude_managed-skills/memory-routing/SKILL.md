@@ -92,9 +92,20 @@ claude_memory_sync --retire <entry の絶対パス>
 
 未 cover 範囲を Managed skill / hook 化する場合は user と相談しながら段階的に。 完全に Managed cover された時点で Retirement protocol へ。
 
-### reminder + keywords + models lines in feedback body
+### Entry types (file 名 prefix)
 
-各 feedback entry の本文先頭 (frontmatter 直後) に **3 行** を置く。 UserPromptSubmit の SQLite hook が、 prompt に **keywords** が match した entry の **reminder** 文を inject する。 reminder (表示) と keywords (match) を分離するのは、 表示文を keyword 詰めにして「要約」化させないため。 **models** はその教訓を観測したモデルの tag で、 surface を model-scope 化する。
+entry の種別は file 名 prefix で表す (gate が検証し、 他 prefix は deny)。 frontmatter の `metadata.type` も prefix と揃える:
+
+| Prefix | 種別 | 本文の必須要素 |
+|---|---|---|
+| `feedback_*` | 行動是正の教訓 | `## Why` と `## 事例` (絶対日付 YYYY-MM-DD を含む) |
+| `reference_*` | 外部仕様の調査 snapshot | 確認日 (YYYY-MM-DD)。 見出しは自由 |
+
+`## How` (是正手順) / `## Related` (隣接 entry ・skill) は任意。 旧 prefix (project_* 等) の entry は再 Write する機会に feedback_* へ rename する。
+
+### reminder + keywords + models lines in frontmatter
+
+各 entry の frontmatter 内 (metadata の後) に **3 行** を置く。 UserPromptSubmit の SQLite hook が、 prompt に **keywords** が match した entry の **reminder** 文を inject する。 reminder (表示) と keywords (match) を分離するのは、 表示文を keyword 詰めにして「要約」化させないため。 **models** はその教訓を観測したモデルの tag で、 surface を model-scope 化する。
 
 ```markdown
 ---
@@ -102,14 +113,29 @@ name: foo
 description: ...
 metadata:
   type: feedback
----
-
 reminder: <同じミスを二度としないための actionable な是正指示。 1 文>
 keywords: <その状況が再発した時の prompt に出る選択的な match 語>
 models: <観測モデルの短形式 tag (例 fable-5)。 複数は space 区切り>
+---
 
-<本文 Why / How>
+## Why
+
+<原因 ・機序>
+
+## How
+
+<是正手順 (任意)>
+
+## 事例
+
+- YYYY-MM-DD: <発生事例>
+
+## Related
+
+<隣接 entry / skill (任意)>
 ```
+
+parser (memory_surface.py) は **dual-read** — frontmatter (正書式) と本文 (旧形式) の両位置を読むため、 旧形式の既存 entry はそのまま surface され続ける。 ただし再 Write 時は gate が新書式を要求するので、 その機会に frontmatter へ移す。
 
 **reminder (surface 時に表示・inject される文)**:
 
@@ -172,7 +198,7 @@ hook を通すには、 entry を Write する **直前に** grant ファイル�
 2. 直後に entry 本体を Write する (grant は hook が消費 = 1 回限り)。
 3. 複数 entry を書くなら各 entry の直前にそれぞれ grant を作る。
 
-内容も hook が検査し、 不備なら deny する (warn は無い → **一発で受理される内容を Write**): 非空の `reminder:` / `keywords:` / `models:` 行が必須、 `oneline_summary:` 禁止、 keywords は FTS で match する固有語を含む (一般語のみ ・空は不可)、 models は小文字短形式 tag (フル ID も可)。 書式は上記「reminder + keywords + models」に従う。
+内容も hook が検査し、 不備なら deny する (warn は無い → **一発で受理される内容を Write**): 非空の `reminder:` / `keywords:` / `models:` 行が **frontmatter 内** に必須、 file 名 prefix は feedback_ / reference_ のみ、 feedback は本文に `## Why` ・`## 事例` 見出し必須、 本文に絶対日付 (YYYY-MM-DD) 必須、 `oneline_summary:` 禁止、 keywords は FTS で match する固有語を含む (一般語のみ ・空は不可)、 models は小文字短形式 tag (フル ID も可)。 書式は上記「reminder + keywords + models」に従う。
 
 ### Hook sync after entry write
 
