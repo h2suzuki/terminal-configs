@@ -86,10 +86,12 @@ def lint(content: str, dir_name: str | None) -> list[str]:
                 '`when_to_use` の日本語 keyword は `「」` でなく `"..."` で quote'
             )
 
-    if not re.search(r"^#\s+\S", content, re.M):
+    # fenced code block 内の見出し様行 (書式 template 例) は節検査の対象外
+    prose = re.sub(r"^```[^\n]*\n.*?^```[ \t]*$", "", content, flags=re.M | re.S)
+    if not re.search(r"^#\s+\S", prose, re.M):
         issues.append("`# ` の H1 タイトルがありません")
 
-    headers = SECTION_RE.findall(content)
+    headers = SECTION_RE.findall(prose)
     preferred_seen = [h for h in headers if h in PREFERRED]
     if headers and not preferred_seen:
         issues.append("`## ` 節に Process/Rules/Output/Related が一つもありません")
