@@ -4,7 +4,7 @@ Memory-entry write enforcement hook for Claude Code.
 
 Purpose
 =======
-memory entry (共有 clone /var/lib/claude-rag-memory/memory-repo 配下の
+memory entry (共有 clone /var/lib/claude-rag-memory/claude-lessons-learned 配下の
 org/*.md, user/<login>/*.md, project/<enc>/*.md) への書込を /memory-routing
 skill 経由に強制する決定論的 gate。retrieval 層 (memory_surface.py の
 reminder/keywords surface) の上に乗る hard 層で、skill 非発火でも format /
@@ -79,7 +79,7 @@ import time
 HOME = os.path.expanduser("~")
 STATE_DIR = os.path.join(HOME, ".claude", "hooks", "state")
 GRANTS_DIR = os.path.join(STATE_DIR, "memory-routing", "grants")
-MEMORY_REPO_DIR = "/var/lib/claude-rag-memory/memory-repo"
+MEMORY_REPO_DIR = "/var/lib/claude-rag-memory/claude-lessons-learned"
 SYNC_CLI = "/usr/local/bin/claude_memory_sync"
 # Legacy pre-clone locations: writes there get a redirect deny.
 LEGACY_USER_MEM_DIR = os.path.join(HOME, ".claude", "memory")

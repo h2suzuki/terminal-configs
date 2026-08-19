@@ -40,6 +40,8 @@ check "commit: exits 0 on unborn HEAD" '[[ $rc -eq 0 ]]'
 check "commit: upsert called with user scope" 'calls | grep -q "^--upsert	$S/clone/user/alice/feedback_t.md	user-alice$"'
 branch=$(git -C "$S/clone" branch --show-current)
 check "commit: bg push reached remote branch" '[[ -n "$(git -C "$S/remote.git" rev-parse --quiet --verify "refs/heads/$branch")" ]]'
+check "commit: fix_perms opened entry file (666)" '[[ "$(stat -c %a "$S/clone/user/alice/feedback_t.md")" == 666 ]]'
+check "commit: fix_perms opened scope dir (777)" '[[ "$(stat -c %a "$S/clone/user/alice")" == 777 ]]'
 
 # 3. pull applies A/M/D from a second clone
 git clone --quiet "$S/remote.git" "$S/b" 2>/dev/null
@@ -56,6 +58,7 @@ check "pull: modified user entry upserted" 'calls | grep -q "^--upsert	$S/clone/
 check "pull: new project entry upserted with enc scope" 'calls | grep -q "^--upsert	$S/clone/project/-proj-x/feedback_p.md	-proj-x$"'
 check "pull: org entry upserted with NULL scope (no 3rd arg)" 'calls | grep -q "^--upsert	$S/clone/org/feedback_org.md$"'
 check "pull: README ignored" '! calls | grep -q README'
+check "pull: fix_perms opened pulled entry (666)" '[[ "$(stat -c %a "$S/clone/project/-proj-x/feedback_p.md")" == 666 ]]'
 
 # 4. rename handled as delete+upsert
 git -C "$S/b" mv project/-proj-x/feedback_p.md project/-proj-x/feedback_q.md

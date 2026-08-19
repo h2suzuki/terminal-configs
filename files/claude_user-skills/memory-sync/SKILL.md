@@ -7,7 +7,7 @@ when_to_use: TRIGGER when the user asks for memory sync state ("/memory-sync", "
 # Memory Sync
 
 memory entry の canonical store は private GitHub repo で、共有 clone
-`/var/lib/claude-rag-memory/memory-repo` はその local buffer。日常の同期は自動
+`/var/lib/claude-rag-memory/claude-lessons-learned` はその local buffer。日常の同期は自動
 (SessionStart hook が throttled background pull、entry Write 後の gate が
 commit + detached push) なので、本 skill は状態確認と手動介入のためにある。
 
@@ -41,8 +41,8 @@ commit + detached push) なので、本 skill は状態確認と手動介入の�
   /etc/gitconfig の `gh auth git-credential` helper 経由なので、gh が未認証だと
   pull/push だけが失敗する
 - **diverged (pull failed が続く) 時**: 自動 rebase が中断された状態。clone 内で
-  `git -C /var/lib/claude-rag-memory/memory-repo pull --rebase --autostash` を
-  実行して conflict を手で解消 → `claude_memory_sync --full` で index を揃える
+  `git -C /var/lib/claude-rag-memory/claude-lessons-learned pull --rebase --autostash`
+  を実行して conflict を手で解消 → `claude_memory_sync --full` で index を揃える
 - **clone MISSING/BROKEN**: `install_claude_extensions` の再実行が唯一の復旧手順
   (clone 専用 subcommand は持たない設計)
 - **--retire は順序を内蔵**: git rm → commit → push → index --delete の順を CLI

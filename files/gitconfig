@@ -30,7 +30,7 @@ hunk-header-style = file line-number syntax
 [safe]
 # Shared memory clone is written by whichever user set it up; exempt every
 # user from git's dubious-ownership refusal for this one path.
-directory = /var/lib/claude-rag-memory/memory-repo
+directory = /var/lib/claude-rag-memory/claude-lessons-learned
 
 [credential]
 helper = cache --timeout 259200

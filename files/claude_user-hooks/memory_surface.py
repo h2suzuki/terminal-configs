@@ -75,7 +75,7 @@ def _login() -> str:
 
 
 # Canonical entry store = shared git clone; the GitHub repo is the source of truth.
-MEMORY_REPO_DIR = "/var/lib/claude-rag-memory/memory-repo"
+MEMORY_REPO_DIR = "/var/lib/claude-rag-memory/claude-lessons-learned"
 USER_MEMORY_DIR = os.path.join(MEMORY_REPO_DIR, "user", _login())
 # project_id scopes: NULL = org (shared) / user-<login> = own user / <encoded-cwd> = project
 USER_SCOPE = "user-" + _login()

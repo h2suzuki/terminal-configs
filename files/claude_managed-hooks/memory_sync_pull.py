@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 
-REPO_DIR = "/var/lib/claude-rag-memory/memory-repo"
+REPO_DIR = "/var/lib/claude-rag-memory/claude-lessons-learned"
 SYNC_CLI = "/usr/local/bin/claude_memory_sync"
 ATTEMPT_STAMP = REPO_DIR + ".pull-attempt"
 WARN_STAMP = REPO_DIR + ".missing-warned"

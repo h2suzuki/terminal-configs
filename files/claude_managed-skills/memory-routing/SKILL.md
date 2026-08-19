@@ -33,7 +33,7 @@ CLAUDE.md は session 毎 token を食う auto-load file。 肥大化すると�
 
 ### Routing decision (priority 1 → 3)
 
-entry の置き場は共有 clone `/var/lib/claude-rag-memory/memory-repo` 配下 (canonical は private GitHub repo)。 index file (roster) は無い — **dir に file が存在する = 現役** (退役 = file 削除、 git 履歴が archive)。
+entry の置き場は共有 clone `/var/lib/claude-rag-memory/claude-lessons-learned` 配下 (canonical は同名の private GitHub repo)。 index file (roster) は無い — **dir に file が存在する = 現役** (退役 = file 削除、 git 履歴が archive)。
 
 #### 1. User (`<clone>/user/<login>/`) — cross-project scope
 
@@ -156,7 +156,7 @@ surface hook (UserPromptSubmit / Stop) は **実行中モデルの tag を持つ
 
 ### Write gate: entry を書く前に grant を mint
 
-memory entry (`<clone>/org/*.md` ・ `<clone>/user/<login>/*.md` ・ `<clone>/project/<enc>/*.md`) への書込は managed hook (`memory_routing_gate.py`) が gate する。 **この skill を経由せず直接 Write した entry は deny される** (Edit/MultiEdit も deny → 必ず full content で Write し直す)。 README.md 等の非 entry file は gate 対象外。 旧 location (`~/.claude/memory` / `~/.claude/projects/<enc>/memory`) への書込は clone への redirect deny、 clone 不在/破損時は閉塞 deny (install_claude_extensions 再実行で復旧)。
+memory entry (`<clone>/org/*.md` ・ `<clone>/user/<login>/*.md` ・ `<clone>/project/<enc>/*.md`; clone = `/var/lib/claude-rag-memory/claude-lessons-learned`) への書込は managed hook (`memory_routing_gate.py`) が gate する。 **この skill を経由せず直接 Write した entry は deny される** (Edit/MultiEdit も deny → 必ず full content で Write し直す)。 README.md 等の非 entry file は gate 対象外。 旧 location (`~/.claude/memory` / `~/.claude/projects/<enc>/memory`) への書込は clone への redirect deny、 clone 不在/破損時は閉塞 deny (install_claude_extensions 再実行で復旧)。
 
 hook を通すには、 entry を Write する **直前に** grant ファイルを Write tool で作る:
 

@@ -96,7 +96,7 @@ run install --mode 0755 --directory ~/.claude/hooks/state
 
 # Clone the canonical memory repo (soft-fail: without working gh auth the
 # memory feature stays closed until this script is re-run)
-MEMORY_REPO=/var/lib/claude-rag-memory/memory-repo
+MEMORY_REPO=/var/lib/claude-rag-memory/claude-lessons-learned
 if ! git -C "$MEMORY_REPO" rev-parse --git-dir >/dev/null 2>&1; then
     # Salvage a missing-.git leftover instead of deleting it
     [ -e "$MEMORY_REPO" ] && run mv "$MEMORY_REPO" "$MEMORY_REPO.broken.$(date +%s)"

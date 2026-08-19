@@ -2,10 +2,10 @@
 """Git transport for the shared memory-entry clone (stdlib-only).
 
 The private GitHub repo is the canonical store of memory entries; the clone
-under /var/lib/claude-rag-memory/memory-repo is a local buffer every session
-reads and writes. This CLI owns all git plumbing; index writes stay in the
-per-user memory_surface.py hook, driven here via its --upsert / --delete /
---rebuild / --wipe-scope subcommands.
+under /var/lib/claude-rag-memory/claude-lessons-learned (dir named after the
+repo) is a local buffer every session reads and writes. This CLI owns all git
+plumbing; index writes stay in the per-user memory_surface.py hook, driven
+here via its --upsert / --delete / --rebuild / --wipe-scope subcommands.
 
 Clone layout (scope = the index DB's project_id):
 
@@ -42,7 +42,8 @@ import sys
 import time
 
 REPO_DIR = (
-    os.environ.get("CLAUDE_MEMORY_REPO") or "/var/lib/claude-rag-memory/memory-repo"
+    os.environ.get("CLAUDE_MEMORY_REPO")
+    or "/var/lib/claude-rag-memory/claude-lessons-learned"
 )
 STATE_DIR = os.path.dirname(REPO_DIR)
 SURFACE_CLI = os.environ.get("CLAUDE_MEMORY_SURFACE") or os.path.expanduser(
@@ -197,6 +198,20 @@ def full_index() -> int:
     return errs
 
 
+def fix_perms() -> None:
+    """Re-open the clone to everyone — checkout/Write create files with the writer's umask."""
+    for root, dirs, files in os.walk(REPO_DIR):
+        for name in dirs:
+            with contextlib.suppress(OSError):
+                os.chmod(os.path.join(root, name), 0o777)
+        for name in files:
+            p = os.path.join(root, name)
+            with contextlib.suppress(OSError):
+                os.chmod(p, 0o777 if os.access(p, os.X_OK) else 0o666)
+    with contextlib.suppress(OSError):
+        os.chmod(REPO_DIR, 0o777)
+
+
 def spawn_push() -> None:
     """Detached so entry writes never wait on the network."""
     try:
@@ -225,6 +240,7 @@ def main_pull() -> int:
             note("pull failed (local buffer keeps working; see --status)")
             return 0
         touch(PULL_STAMP)
+        fix_perms()
         after = head()
         if after is None or before == after:
             return 0
@@ -260,6 +276,7 @@ def main_commit(argv: list[str]) -> int:
             logline("commit failed rc=%d: %s" % (r.returncode, r.stderr.strip()[:300]))
             note("commit failed (changes left staged; see --status)")
             return 1
+        fix_perms()
     spawn_push()
     return 1 if errs else 0
 
@@ -294,6 +311,7 @@ def main_retire(argv: list[str]) -> int:
                 )
                 note("retire commit failed; see --status")
                 errs += 1
+        fix_perms()
     spawn_push()
     errs += surface("--delete", path, *([] if scope is None else [str(scope)]))
     return 1 if errs else 0
