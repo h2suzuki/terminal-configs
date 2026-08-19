@@ -38,11 +38,11 @@ def _fresh(path: str, window: int) -> bool:
 
 
 def _touch(path: str) -> None:
-    # Best-effort: a foreign-owned stamp may be unwritable; the throttle then
-    # just re-fires, which only costs a redundant background pull/warning.
+    # Best-effort: an unwritable foreign-owned stamp just re-fires later (harmless).
     try:
         with open(path, "w", encoding="utf-8") as f:
             f.write("%d\n" % int(time.time()))
+        os.chmod(path, 0o666)
     except OSError:
         pass
 
@@ -57,16 +57,22 @@ def main() -> int:
         if not _fresh(ATTEMPT_STAMP, PULL_THROTTLE):
             _touch(ATTEMPT_STAMP)
             try:
-                with open(SYNC_LOG, "a", encoding="utf-8") as log:
-                    subprocess.Popen(
-                        [sys.executable, SYNC_CLI, "--pull"],
-                        stdout=log,
-                        stderr=log,
-                        stdin=subprocess.DEVNULL,
-                        start_new_session=True,
-                    )
+                log = open(SYNC_LOG, "a", encoding="utf-8")
+            except OSError:
+                log = None  # an unwritable foreign log must not veto the pull itself
+            try:
+                subprocess.Popen(
+                    [sys.executable, SYNC_CLI, "--pull"],
+                    stdout=log if log else subprocess.DEVNULL,
+                    stderr=log if log else subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
             except OSError:
                 pass
+            finally:
+                if log:
+                    log.close()
         return 0
     if not _fresh(WARN_STAMP, WARN_THROTTLE):
         _touch(WARN_STAMP)

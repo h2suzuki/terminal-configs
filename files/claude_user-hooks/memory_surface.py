@@ -183,8 +183,8 @@ _PIXEL_RES = [
 
 @contextlib.contextmanager
 def _write_lock():
-    # Serialize writers across processes/users (root + login user share one DB).
-    lock = _state_path("memory_index.lock")
+    # Lock path derives from DB_PATH so DB_PATH-patching tests never take the live lock.
+    lock = DB_PATH + ".lock"
     os.makedirs(os.path.dirname(lock), exist_ok=True)
     fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o664)
     try:

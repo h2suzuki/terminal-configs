@@ -61,6 +61,13 @@ check "pull: org entry upserted with NULL scope (no 3rd arg)" 'calls | grep -q "
 check "pull: README ignored" '! calls | grep -q README'
 check "pull: fix_perms opened pulled entry (666)" '[[ "$(stat -c %a "$S/clone/project/-proj-x/feedback_p.md")" == 666 ]]'
 
+# 3b. non-ASCII path survives diff parsing (core.quotePath)
+printf 'reminder: j\nkeywords: nihongo\n\nbody\n' > "$S/b/user/alice/feedback_日本語検証.md"
+git -C "$S/b" add "user/alice/feedback_日本語検証.md" && git -C "$S/b" commit --quiet -m jp && git -C "$S/b" push --quiet
+: > "$S/calls.log"
+"$CLI" --pull >/dev/null 2>&1
+check "pull: non-ASCII path upserted (quotePath)" 'calls | grep -q "^--upsert	$S/clone/user/alice/feedback_日本語検証.md	user-alice$"'
+
 # 4. rename handled as delete+upsert
 git -C "$S/b" mv project/-proj-x/feedback_p.md project/-proj-x/feedback_q.md
 git -C "$S/b" commit --quiet -m rename && git -C "$S/b" push --quiet
@@ -96,6 +103,45 @@ sleep 2
 check "push failure: stamp created" '[[ -e "$S/clone.push-failed" ]]'
 out=$("$CLI" --status 2>&1)
 check "status: reports commits to push + push failing" '[[ "$out" == *"to push"* && "$out" == *"push failing since"* ]]'
+
+# 7b. connectivity recovery: pull drains the buffered push
+git -C "$S/clone" remote set-url origin "$S/remote.git"
+"$CLI" --pull >/dev/null 2>&1
+sleep 2
+check "pull: drains pending push after recovery" '[[ ! -e "$S/clone.push-failed" ]]'
+git -C "$S/b" pull --quiet 2>/dev/null
+check "pull: buffered commit reached the remote" '[[ -e "$S/b/user/alice/feedback_z.md" ]]'
+
+# 7c. retire refuses an uncommitted entry (deleting would skip the archive)
+printf 'reminder: u\nkeywords: k\n\nbody\n' > "$S/clone/user/alice/feedback_untracked.md"
+"$CLI" --retire "$S/clone/user/alice/feedback_untracked.md" >/dev/null 2>&1
+check "retire: uncommitted entry refused (rc=1)" '[[ $? -eq 1 ]]'
+check "retire: uncommitted file preserved" '[[ -e "$S/clone/user/alice/feedback_untracked.md" ]]'
+rm -f "$S/clone/user/alice/feedback_untracked.md"
+
+# 7d. --full wipes emptied scope dirs (plus the always-wiped NULL scope)
+mkdir -p "$S/clone/project/-empty-proj"
+: > "$S/calls.log"
+"$CLI" --full >/dev/null 2>&1
+check "full: NULL scope always wiped" 'calls | grep -q "^--wipe-scope$"'
+check "full: emptied scope dir wiped" 'calls | grep -q "^--wipe-scope	-empty-proj$"'
+
+# 7e. unborn clone can pull a remote another clone initialized first
+git init --quiet --bare "$S/remote2.git"
+git clone --quiet "$S/remote2.git" "$S/c" 2>/dev/null
+git clone --quiet "$S/remote2.git" "$S/d" 2>/dev/null
+git -C "$S/c" symbolic-ref HEAD refs/heads/main
+git -C "$S/d" symbolic-ref HEAD refs/heads/main
+git -C "$S/d" config user.name smoke; git -C "$S/d" config user.email smoke@example.invalid
+mkdir -p "$S/d/user/alice"
+printf 'reminder: f\nkeywords: k\n\nbody\n' > "$S/d/user/alice/feedback_first.md"
+git -C "$S/d" add user/alice/feedback_first.md && git -C "$S/d" commit --quiet -m first && git -C "$S/d" push --quiet -u origin main
+export CLAUDE_MEMORY_REPO="$S/c"
+: > "$S/calls.log"
+"$CLI" --pull >/dev/null 2>&1
+check "pull: unborn clone catches up without upstream" '[[ -e "$S/c/user/alice/feedback_first.md" ]]'
+check "pull: unborn catch-up indexed via full rebuild" 'calls | grep -q "^--rebuild	$S/c/user/alice	user-alice$"'
+export CLAUDE_MEMORY_REPO="$S/clone"
 
 # 8. missing clone: fail-open pull, hard-fail full
 export CLAUDE_MEMORY_REPO="$S/absent"

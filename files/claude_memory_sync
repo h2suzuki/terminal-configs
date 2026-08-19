@@ -53,9 +53,12 @@ SURFACE_CLI = os.environ.get("CLAUDE_MEMORY_SURFACE") or os.path.expanduser(
 )
 DB_PATH = os.path.join(STATE_DIR, "memory_index.sqlite3")
 LOCK_PATH = REPO_DIR + ".lock"
+PUSH_LOCK_PATH = REPO_DIR + ".push.lock"  # a slow push must not starve commit/pull
 PULL_STAMP = REPO_DIR + ".last-pull"
 PUSH_FAIL_STAMP = REPO_DIR + ".push-failed"
+INDEX_RETRY_STAMP = REPO_DIR + ".index-retry"
 SYNC_LOG = REPO_DIR + ".sync.log"
+LOG_MAX_BYTES = 512_000
 GIT_TIMEOUT = 30
 INSTALL_HINT = "re-run install_claude_extensions"
 # Non-entry .md files an entry dir may carry (legacy rosters + repo docs).
@@ -67,11 +70,20 @@ def note(msg: str) -> None:
     sys.stderr.write("claude_memory_sync: %s\n" % msg)
 
 
+def _open_to_all(path: str) -> None:
+    # State files stay writable by every trusted local user (umask strips o+w).
+    with contextlib.suppress(OSError):
+        os.chmod(path, 0o666)
+
+
 def logline(msg: str) -> None:
     """Append to the sync log so detached runs stay diagnosable."""
     try:
+        if os.path.exists(SYNC_LOG) and os.path.getsize(SYNC_LOG) > LOG_MAX_BYTES:
+            os.replace(SYNC_LOG, SYNC_LOG + ".1")
         with open(SYNC_LOG, "a", encoding="utf-8") as f:
             f.write("%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
+        _open_to_all(SYNC_LOG)
     except OSError:
         pass
 
@@ -102,9 +114,11 @@ def head() -> str | None:
 
 
 @contextlib.contextmanager
-def lock():
+def lock(path: str = LOCK_PATH):
     # Serialize clone writers across processes/users (pull hook vs entry commits).
-    fd = os.open(LOCK_PATH, os.O_CREAT | os.O_RDWR, 0o666)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o666)
+    with contextlib.suppress(OSError):
+        os.fchmod(fd, 0o666)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield
@@ -117,6 +131,7 @@ def touch(path: str) -> None:
     try:
         with open(path, "w", encoding="utf-8") as f:
             f.write("%d\n" % int(time.time()))
+        _open_to_all(path)
     except OSError:
         pass
 
@@ -168,7 +183,10 @@ def index_change(status: str, rel: str) -> int:
 
 def apply_diff(before: str, after: str) -> int:
     """Index adds/edits/deletes/renames between two commits; error count."""
-    r = run_git("diff", "--name-status", "-M", before, after)
+    # quotePath=false: C-quoted non-ASCII paths would dodge entry_scope() otherwise
+    r = run_git(
+        "-c", "core.quotePath=false", "diff", "--name-status", "-M", before, after
+    )
     if r.returncode != 0:
         note("diff failed: " + r.stderr.strip()[:200])
         return 1
@@ -182,6 +200,19 @@ def apply_diff(before: str, after: str) -> int:
     return errs
 
 
+def _db_scopes() -> set[str]:
+    """Non-NULL scopes present in the index DB (read-only; empty on failure)."""
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % DB_PATH, uri=True, timeout=2.0)
+        rows = con.execute(
+            "SELECT DISTINCT project_id FROM entries_fts WHERE project_id IS NOT NULL"
+        ).fetchall()
+        con.close()
+    except sqlite3.Error:
+        return set()
+    return {r[0] for r in rows}
+
+
 def full_index() -> int:
     """Rebuild every scope present in the clone; error count."""
     # NULL wipe first: clears legacy pre-clone rows and org entries gone from the clone.
@@ -189,25 +220,43 @@ def full_index() -> int:
     org = os.path.join(REPO_DIR, "org")
     if os.path.isdir(org):
         errs += surface("--rebuild", org)
+    live: set[str] = set()
     for kind, prefix in (("user", "user-"), ("project", "")):
         base = os.path.join(REPO_DIR, kind)
         if not os.path.isdir(base):
             continue
         for name in sorted(os.listdir(base)):
             d = os.path.join(base, name)
-            if os.path.isdir(d):
-                errs += surface("--rebuild", d, prefix + name)
+            if not os.path.isdir(d):
+                continue
+            scope = prefix + name
+            if _count_entries(d):
+                live.add(scope)
+                errs += surface("--rebuild", d, scope)
+            else:
+                errs += surface("--wipe-scope", scope)  # emptied dir: rebuild skips it
+    for scope in sorted(_db_scopes() - live):
+        errs += surface("--wipe-scope", scope)  # scope dir vanished from the clone
     return errs
 
 
 def fix_perms() -> None:
     """Re-open the clone contents — checkout/Write create files with the writer's umask."""
     for root, dirs, files in os.walk(REPO_DIR):
+        if root == REPO_DIR:
+            dirs[:] = [
+                d for d in dirs if d != ".git"
+            ]  # .git modes: core.sharedRepository
         for name in dirs:
+            p = os.path.join(root, name)
+            if os.path.islink(p):  # never chmod through a symlink (escapes the clone)
+                continue
             with contextlib.suppress(OSError):
-                os.chmod(os.path.join(root, name), 0o777)
+                os.chmod(p, 0o777)
         for name in files:
             p = os.path.join(root, name)
+            if os.path.islink(p):
+                continue
             with contextlib.suppress(OSError):
                 os.chmod(p, 0o777 if os.access(p, os.X_OK) else 0o666)
     # Top stays 0755: new top-level dirs (a future org/) land via an owner-run pull.
@@ -218,41 +267,85 @@ def fix_perms() -> None:
 def spawn_push() -> None:
     """Detached so entry writes never wait on the network."""
     try:
-        with open(SYNC_LOG, "a", encoding="utf-8") as log:
-            subprocess.Popen(
-                [sys.executable, os.path.abspath(__file__), "--push-bg"],
-                stdout=log,
-                stderr=log,
-                stdin=subprocess.DEVNULL,
-                start_new_session=True,
-            )
+        log = open(SYNC_LOG, "a", encoding="utf-8")
+    except OSError:
+        log = None  # an unwritable foreign log must not veto the push itself
+    try:
+        subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "--push-bg"],
+            stdout=log if log else subprocess.DEVNULL,
+            stderr=log if log else subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
     except OSError as exc:
         note("push spawn failed: %s" % exc)
+    finally:
+        if log:
+            log.close()
+
+
+def _rebase_in_progress() -> bool:
+    git_dir = os.path.join(REPO_DIR, ".git")
+    return os.path.isdir(os.path.join(git_dir, "rebase-merge")) or os.path.isdir(
+        os.path.join(git_dir, "rebase-apply")
+    )
+
+
+def _drain_pending_push() -> None:
+    """Retry buffered commits once connectivity is back (push failures are sticky)."""
+    r = run_git("rev-list", "--count", "@{upstream}..HEAD")
+    ahead = r.returncode != 0 or r.stdout.strip() not in ("", "0")
+    if ahead or os.path.exists(PUSH_FAIL_STAMP):
+        spawn_push()
 
 
 def main_pull() -> int:
     if not repo_ok():
         note("clone missing/broken at %s; skip pull (%s)" % (REPO_DIR, INSTALL_HINT))
         return 0
+    if _rebase_in_progress():
+        note("a rebase is already in progress (manual recovery?); skip pull")
+        return 0
     with lock():
         before = head()
-        r = run_git("pull", "--rebase", "--autostash", "--quiet")
+        branch = run_git("branch", "--show-current").stdout.strip() or "main"
+        # explicit refspec: an unborn clone has no upstream until its first push
+        r = run_git("pull", "--rebase", "--autostash", "--quiet", "origin", branch)
         if r.returncode != 0:
-            run_git("rebase", "--abort")
-            logline("pull failed rc=%d: %s" % (r.returncode, r.stderr.strip()[:300]))
+            ab = run_git("rebase", "--abort")
+            logline(
+                "pull failed rc=%d (abort rc=%d): %s"
+                % (r.returncode, ab.returncode, r.stderr.strip()[:300])
+            )
             note("pull failed (local buffer keeps working; see --status)")
             return 0
         touch(PULL_STAMP)
-        fix_perms()
         after = head()
-        if after is None or before == after:
+        if after is None:
             return 0
-        # unborn -> first content arrived with this pull: index everything
-        errs = full_index() if before is None else apply_diff(before, after)
-        logline(
-            "pull %s -> %s indexed, %d error(s)"
-            % ((before or "unborn")[:9], after[:9], errs)
-        )
+        changed = before != after
+        retry = os.path.exists(INDEX_RETRY_STAMP)
+        errs = 0
+        if changed:
+            fix_perms()
+            # unborn -> first content arrived with this pull: index everything
+            errs = full_index() if before is None else apply_diff(before, after)
+            if errs:  # self-heal: a full rebuild beats a silently stale index
+                errs = full_index()
+            logline(
+                "pull %s -> %s indexed, %d error(s)"
+                % ((before or "unborn")[:9], after[:9], errs)
+            )
+        elif retry:
+            errs = full_index()
+            logline("index retry via full reindex, %d error(s)" % errs)
+        if errs:
+            touch(INDEX_RETRY_STAMP)
+        elif changed or retry:
+            with contextlib.suppress(OSError):
+                os.remove(INDEX_RETRY_STAMP)
+        _drain_pending_push()
         return 1 if errs else 0
 
 
@@ -269,7 +362,11 @@ def main_commit(argv: list[str]) -> int:
         note("clone missing/broken; indexed but NOT committed (%s)" % INSTALL_HINT)
         return 1
     with lock():
-        run_git("add", "-A")
+        r = run_git("add", "-A")
+        if r.returncode != 0:
+            logline("add failed rc=%d: %s" % (r.returncode, r.stderr.strip()[:300]))
+            note("git add failed; entry indexed but NOT committed (see --status)")
+            return 1
         if run_git("diff", "--cached", "--quiet").returncode == 0:
             return 1 if errs else 0
         r = run_git(
@@ -297,12 +394,13 @@ def main_retire(argv: list[str]) -> int:
     if not repo_ok():
         note("clone missing/broken; cannot retire (%s)" % INSTALL_HINT)
         return 1
-    errs = 0
     with lock():
-        if run_git("rm", "--quiet", "--", rel).returncode != 0:
-            with contextlib.suppress(OSError):  # untracked or already gone
-                os.remove(path)
-            run_git("add", "-A")
+        if run_git("rm", "--quiet", "--", rel).returncode != 0 and os.path.exists(path):
+            # untracked or locked: deleting now would skip the git-history archive
+            note(
+                "git rm failed and the file still exists; run --commit first, then retire"
+            )
+            return 1
         if run_git("diff", "--cached", "--quiet").returncode != 0:
             r = run_git(
                 "commit", "--quiet", "-m", "memory: Retire %s" % os.path.basename(path)
@@ -312,18 +410,21 @@ def main_retire(argv: list[str]) -> int:
                     "retire commit failed rc=%d: %s"
                     % (r.returncode, r.stderr.strip()[:300])
                 )
-                note("retire commit failed; see --status")
-                errs += 1
+                note(
+                    "retire commit failed; deletion left staged (rides the next commit)"
+                )
+                return 1
         fix_perms()
     spawn_push()
-    errs += surface("--delete", path, *([] if scope is None else [str(scope)]))
+    errs = surface("--delete", path, *([] if scope is None else [str(scope)]))
     return 1 if errs else 0
 
 
 def main_push_bg() -> int:
     if not repo_ok():
         return 0
-    with lock():
+    # Own lock: a 60s network push must not block commit/pull (the gate waits on those).
+    with lock(PUSH_LOCK_PATH):
         if head() is None:
             return 0
         # -u: the first push creates and binds the remote branch (empty-repo bootstrap).
@@ -394,7 +495,11 @@ def main_status() -> int:
         print("sync: %s commit(s) to push, %s to pull" % (ahead, behind))
     dirty = run_git("status", "--porcelain").stdout.splitlines()
     print("uncommitted: %d file(s)" % len([ln for ln in dirty if ln.strip()]))
-    stamps = ((PULL_STAMP, "last pull"), (PUSH_FAIL_STAMP, "push failing since"))
+    stamps = (
+        (PULL_STAMP, "last pull"),
+        (PUSH_FAIL_STAMP, "push failing since"),
+        (INDEX_RETRY_STAMP, "index retry pending since"),
+    )
     for stamp, label in stamps:
         with contextlib.suppress(OSError):
             age = _fmt_age(int(time.time() - os.path.getmtime(stamp)))
@@ -428,7 +533,8 @@ def main() -> int:
         if not repo_ok():
             note("clone missing/broken; nothing to index (%s)" % INSTALL_HINT)
             return 1
-        return 1 if full_index() else 0
+        with lock():
+            return 1 if full_index() else 0
     if cmd == "--status":
         return main_status()
     if cmd == "--push-bg":
