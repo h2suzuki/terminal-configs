@@ -23,7 +23,7 @@ Exit Criteria:
 
 - [x] ユーザーの sudo cp 実行後、canonical 6 file と deploy 先の `diff -q` 一致を確認 — 2026-08-20 02:54 実測、6/6 identical・exec bit 0755 維持
 - [x] 実 session で handoff doc への書込 (Edit または Bash) に対し handoff skill 要求 deny が発火することを確認 — 2026-08-20 02:55、skill 未 invoke の last-session-handoff.md への Edit を deploy 済み gate が deny (probe 編集は非着地)
-- [ ] 実 session で wind-down 宣言後の doc 更新 turn に marker 未出力 block が発火し、marker 出力で通過することを確認 (次回の実 handoff で自然観測する)
+- [x] 実 session で wind-down 宣言後の doc 更新 turn に marker 未出力 block が発火し、marker 出力で通過することを確認 — 2026-08-20 03:05-03:08、daily-stock-analyzer session (sid f291079a…) で block 発火と、実 handoff での full-sid marker 出力による Stop 素通りを transcript offset 順 (block 21,567,952 < marker 21,686,939、以降 block 無し) で確認
 
 deploy コマンド (Claude Code 外の terminal で実行):
 
