@@ -62,18 +62,22 @@ Work file: `last-session-handoff.md` の同名 section (再開手順)、
 
 ## Medium
 
-### sandbox mask stub の実体化残骸と未コミット nag の偽発火
+### mask stub 偽 nag: filter 修正 (03d974c) の deploy
 
-Goal: repo top に実体化した sandbox write-deny mask の残骸 (0-byte read-only regular file、
-.bashrc / .claude/hooks 等 20 件、2026-08-17 生成) を除去または .gitignore し、
-check_uncommitted_at_handoff の `_is_mask_stub` (非 regular node 前提) が実態と合う状態にする。
+Goal: 偽の「未コミット 20 件」注入を止める。手段は `_is_mask_stub` を leak 実態
+(既知 path ∧ 0 byte ∧ read-only regular file) に合わせた filter 修正 1 点のみ
+(削除・.gitignore・生成主体調査は無意味 or 既知のため却下済み — 2026-08-20 ユーザー裁定)。
 
 Exit Criteria:
 
-- [x] 残骸の生成主体を特定 — 既知と判明: sandbox の read-only bind mask が対象 file 不在時に 0-byte placeholder を leak する (memory entry mcp-json-mask-stub、2026-08-13 判定。.mcp.json は実 file 化 + installer preflight 強化 `18d395d` で恒久対処済み)
-- [ ] 残骸を host 経路 (sandbox 除外コマンド先頭 or 外部 terminal) で削除し、再発の有無を確認 — **sandbox 内から rm しない** (bind 越しに実 ~/.claude を触る危険、同 entry How 節)
-- [ ] `git status --porcelain` がこの repo で空になり、wind-down 時の未コミット nag が偽発火しない (再発するなら .gitignore 収載 or .mcp.json 同様の実 file 化で構造対処)
-- [ ] `_is_mask_stub` の判定 (regular / non-regular) を確認結果と整合させる (修正 or 現状維持を根拠付きで判断)
+- [x] filter 修正の実装と検証 — `03d974c`、33 tests green + 実 repo への live 実行で stub 20 件の消滅と本物の変更 1 件の報告継続を確認
+- [ ] deploy (下記 1 file の sudo cp) 後、実 session の wind-down prompt で偽 nag が出ないことを確認
+
+deploy コマンド (Claude Code 外の terminal で実行):
+
+```bash
+sudo cp /home/h2suzuki/terminal-configs/files/claude_managed-hooks/check_uncommitted_at_handoff.py /etc/claude-code/hooks/
+```
 
 ### 方法論の実証: 小規模ツール新規作成で敵対レビューの収束を実測する
 
