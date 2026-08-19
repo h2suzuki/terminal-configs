@@ -133,6 +133,14 @@ fi
 . $HOME/.nvm/nvm.sh
 
 
+# Fail fast: every claude call below parses $PWD/.mcp.json (claude requires a mcpServers record)
+if [ -f .mcp.json ] && ! python3 -c 'import json; assert isinstance(json.load(open(".mcp.json"))["mcpServers"], dict)'; then
+    run "ls -l .mcp.json >&2"
+    echo -e "${COLOR_RED}invalid .mcp.json in $PWD — aborting${COLOR_CLEAR}" >&2
+    exit 1
+fi
+
+
 # Seed the registry first: never-launched users have no marketplace, so bare `update` fails (re-add is idempotent, exit 0)
 run claude plugin marketplace add anthropics/claude-plugins-official
 run claude plugin marketplace update claude-plugins-official
