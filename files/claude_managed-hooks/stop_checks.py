@@ -44,6 +44,12 @@ Combined Stop hook for org-managed Claude Code:
     作業遂行宣言 (「やります」「実施します」「修正します」等) を、同 turn 内に TaskCreate/TaskUpdate/TodoWrite が無ければ block。
     全作業項目を Task で追跡する org rule (CLAUDE.md §計画と遂行) の機械 proxy。speech-act 動詞 (確認/説明/報告/共有/提案) は除外し FP 抑制。deferral (warn) の deny 版。
 
+  work-without-task (enforcement, exit 2):
+    session の Task 記録 (native store + mytask store、status 不問) がゼロのまま、
+    当 turn で Edit/Write を閾値以上実行したら block。intent-without-task が宣言
+    phrase 依存で取りこぼす「無宣言で作業に直行した session」を store 側から捕捉する
+    (§計画と遂行「まず最初の依頼を Task に登録する」の session 級 proxy)。
+
   continuation-claim (enforcement, exit 2):
     turn 最終 assistant message の未来形遂行宣言 (「進めます」「続けます」等) を block。
     発話時点で真偽が確定する 3 形式 (実行中 / 完了 / 停止) への書き直しを要求する。
@@ -800,9 +806,7 @@ CONTINUATION_SUBJECT_RE = re.compile(
 )
 
 
-def _continuation_line_is_explanatory(
-    line: str, match: re.Match[str]
-) -> bool:
+def _continuation_line_is_explanatory(line: str, match: re.Match[str]) -> bool:
     """Whether a matching line is a fixture/list label or impersonal explanation."""
     if CONTINUATION_TABLE_RE.search(line):
         return True
@@ -851,6 +855,8 @@ def _continuation_claim(text: str) -> re.Match[str] | None:
                 continue
             return match
     return None
+
+
 def _without_final_sentence_identities(text: str, final_text: str) -> str:
     """Drop every turn sentence whose stripped identity occurs in final_text."""
     final_units = {
@@ -863,6 +869,7 @@ def _without_final_sentence_identities(text: str, final_text: str) -> str:
         for unit in re.split(r"[。\n]", strip_fences(text))
         if unit.strip() and unit.strip() not in final_units
     )
+
 
 # --- Pattern: euphemism-for-error (block) ---
 # 自分の発言を 「誤解を招く X」 と評した時だけ捕まえる。 設計対象 (命名・ラベル・doc) への
@@ -1009,6 +1016,29 @@ TASK_TOOLS = {"TaskCreate", "TaskUpdate", "TodoWrite"}
 
 # mytask MCP tools that record work when native Task tools are gated off.
 MYTASK_MCP_TOOLS = {"mcp__mytask__TaskCreate", "mcp__mytask__TaskUpdate"}
+
+# work-without-task が「実質的な作業 turn」とみなす Edit/Write 回数の下限
+WORK_WITHOUT_TASK_MIN_EDITS = 3
+NATIVE_TASKS_DIR = os.path.expanduser(os.path.join("~", ".claude", "tasks"))
+
+
+def _session_has_task_records(session_id: str | None, cwd: str | None) -> bool:
+    """Any task record this session, any status; True on doubt (fail-open)."""
+    if not session_id:
+        return True
+    try:
+        if os.listdir(os.path.join(NATIVE_TASKS_DIR, session_id)):
+            return True
+    except OSError:
+        pass
+    path = os.path.join(cwd or ".", "drafts", "tasks", f"{session_id}.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return False
+    return isinstance(raw, list) and bool(raw)
+
 
 # Tools whose file_path / notebook_path inputs are recorded for path matching.
 PATH_RECORDING_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
@@ -1270,6 +1300,7 @@ def _check(
     worktree_warnings: list[str] | None = None,
     wind_down_open_tasks: list[str] | None = None,
     final_text_authoritative: bool = True,
+    session_task_records: bool = True,
 ) -> tuple[int, list[str], list[str]]:
     """Return (exit_code, warnings, blocking)."""
     warnings: list[str] = []
@@ -1423,6 +1454,22 @@ def _check(
                 f" System §計画と遂行: 全作業項目を大小に関わらず Task で計画・追跡。"
                 f" TaskCreate で作業を登録 (または既存タスクを TaskUpdate) してから再出力してください。"
             )
+
+    # work-without-task (block substantive edits while the session store is empty)
+    if (
+        not session_task_records
+        and len(edited_paths) >= WORK_WITHOUT_TASK_MIN_EDITS
+        and not (tool_names & TASK_TOOLS)
+        and not (tool_names & MYTASK_MCP_TOOLS)
+        and not any(_is_mytask_path(p) for p in edited_paths)
+    ):
+        blocking.append(
+            f"work-without-task: このターンで {len(edited_paths)} 件の Edit/Write を"
+            f"実行しましたが、session の Task 記録が 1 件もありません。System §計画と遂行"
+            f"「まず最初の依頼を Task に登録する」の store 側検査です (遂行宣言の文言に"
+            f"依存しない)。TaskCreate (Task tool が gate 中なら mytask MCP) で現在の"
+            f"作業項目を登録してから再出力してください。"
+        )
 
     # open-tasks-at-wind-down (block if a wind-down prompt leaves open tasks)
     if wind_down_open_tasks:
@@ -1591,6 +1638,9 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
         worktree_warnings=worktree_warnings,
         wind_down_open_tasks=wind_down_tasks,
         final_text_authoritative=final_text_authoritative,
+        session_task_records=_session_has_task_records(
+            session_id, str(payload.get("cwd") or "")
+        ),
     )
     # advise-once: a stop_hook_active retry never re-blocks — demote to pass (see docstring turn-marker / Exit).
     if exit_code == 2 and payload.get("stop_hook_active"):
@@ -2120,9 +2170,7 @@ class EnforcementFamilyTest(unittest.TestCase):
             with self.subTest(value=value):
                 code, _warnings, blocking = self._c(value)
                 self.assertEqual(code, 2)
-                self.assertTrue(
-                    any("continuation-claim" in item for item in blocking)
-                )
+                self.assertTrue(any("continuation-claim" in item for item in blocking))
 
     def test_continuation_claim_allows_grounded_forms(self):
         for value in (
@@ -2187,9 +2235,7 @@ class EnforcementFamilyTest(unittest.TestCase):
 
     def test_continuation_claim_question_tail_allows_sentence_particle(self):
         self.assertEqual(self._c("先に deploy しますかね?")[0], 0)
-        blocking = self._blk(
-            "先に deploy しますかね?\n完了", final_text="完了"
-        )
+        blocking = self._blk("先に deploy しますかね?\n完了", final_text="完了")
         self.assertFalse(any("intent-without-task" in item for item in blocking))
 
     def test_continuation_claim_allows_inline_quote(self):
@@ -2679,6 +2725,73 @@ class EnforcementFamilyTest(unittest.TestCase):
             self.assertEqual(self._c(t)[0], 2, t)
         for t in ("学びのある記事", "学びを深める設計"):
             self.assertEqual(self._c(t)[0], 0, t)
+
+
+class WorkWithoutTaskTest(unittest.TestCase):
+    """work-without-task: store 空のまま実質作業 turn なら block。 Run: python3 -m unittest stop_checks"""
+
+    @staticmethod
+    def _blk(edits, tools=(), records=False):
+        return _check(
+            "done",
+            "done",
+            set(tools),
+            list(edits),
+            list(edits),
+            [],
+            False,
+            False,
+            None,
+            session_task_records=records,
+        )[2]
+
+    def _hit(self, blk):
+        return any("work-without-task" in b for b in blk)
+
+    def test_blocks_three_edits_with_empty_store(self):
+        self.assertTrue(self._hit(self._blk(["/a.py", "/b.py", "/c.py"])))
+
+    def test_below_threshold_passes(self):
+        self.assertFalse(self._hit(self._blk(["/a.py", "/b.py"])))
+
+    def test_store_records_pass(self):
+        self.assertFalse(self._hit(self._blk(["/a", "/b", "/c"], records=True)))
+
+    def test_task_tool_this_turn_passes(self):
+        self.assertFalse(self._hit(self._blk(["/a", "/b", "/c"], tools={"TaskCreate"})))
+
+    def test_mytask_mcp_this_turn_passes(self):
+        self.assertFalse(
+            self._hit(self._blk(["/a", "/b", "/c"], tools={"mcp__mytask__TaskCreate"}))
+        )
+
+    def test_mytask_store_write_passes(self):
+        edits = ["/x/drafts/tasks/s1.json", "/a.py", "/b.py"]
+        self.assertFalse(self._hit(self._blk(edits)))
+
+    def test_store_probe_reads_native_and_mytask(self):
+        import tempfile
+        from unittest import mock
+
+        home = tempfile.mkdtemp()
+        cwd = tempfile.mkdtemp()
+        mod = sys.modules[__name__]
+        with mock.patch.object(mod, "NATIVE_TASKS_DIR", home):
+            self.assertFalse(_session_has_task_records("s1", cwd))
+            os.makedirs(os.path.join(home, "s1"))
+            self.assertFalse(_session_has_task_records("s1", cwd))  # 空 dir は記録なし
+            with open(os.path.join(home, "s1", "1.json"), "w", encoding="utf-8") as f:
+                f.write("{}")
+            self.assertTrue(_session_has_task_records("s1", cwd))
+            os.makedirs(os.path.join(cwd, "drafts", "tasks"))
+            with open(
+                os.path.join(cwd, "drafts", "tasks", "s2.json"), "w", encoding="utf-8"
+            ) as f:
+                f.write('[{"id": "1", "content": "x", "status": "completed"}]')
+            self.assertTrue(_session_has_task_records("s2", cwd))  # status 不問
+            self.assertTrue(
+                _session_has_task_records(None, cwd)
+            )  # 帰属不能は fail-open
 
 
 class OpenTasksAtWindDownTest(unittest.TestCase):
