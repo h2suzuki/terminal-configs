@@ -4,10 +4,13 @@ Memory-entry write enforcement hook for Claude Code.
 
 Purpose
 =======
-memory entry (~/.claude/memory/*.md, ~/.claude/projects/<enc>/memory/*.md)
-への書込を /memory-routing skill 経由に強制する決定論的 gate。retrieval 層
-(memory_surface.py の reminder/keywords surface) の上に乗る hard 層で、skill
-非発火でも format / keyword 品質 / DB 同期を担保する。
+memory entry (共有 clone /var/lib/claude-rag-memory/memory-repo 配下の
+org/*.md, user/<login>/*.md, project/<enc>/*.md) への書込を /memory-routing
+skill 経由に強制する決定論的 gate。retrieval 層 (memory_surface.py の
+reminder/keywords surface) の上に乗る hard 層で、skill 非発火でも format /
+keyword 品質 / DB 同期 / git commit+push を担保する。旧 location
+(~/.claude/memory, ~/.claude/projects/<enc>/memory) への書込は clone への
+redirect deny、clone 不在/破損時は閉塞 deny (installer 再実行が復旧手順)。
 
 なぜ skill 強制か: /memory-routing は routing 判断・正書式 (reminder:/keywords:)・
 FTS DB 同期 (--upsert) を 1 単位で行う。直接 Write はこれらを欠く。本 hook は
@@ -49,9 +52,9 @@ PreToolUse `^(Edit|Write|MultiEdit)$` → guard:
     - body に非空の `models:` 行が無い / tag 書式不正 (観測 model の tag、例 fable-5)。
 
 PostToolUse `^Write$` → sync:
-  entry の Write 成功後に memory_surface.py --upsert <abspath> [project_id] を
-  呼び DB を self-heal (skill の upsert 漏れ保険)。project_id は path から導出
-  (projects/<enc>/memory → <enc>、user memory → なし)。
+  entry の Write 成功後に claude_memory_sync --commit <abspath> を呼び、
+  index upsert (scope は path から CLI が導出) + git commit + detached push
+  を self-heal する (skill の同期漏れ保険)。
 
 deny 方式・fail-open
 ====================
@@ -76,17 +79,17 @@ import time
 HOME = os.path.expanduser("~")
 STATE_DIR = os.path.join(HOME, ".claude", "hooks", "state")
 GRANTS_DIR = os.path.join(STATE_DIR, "memory-routing", "grants")
-SURFACE_HOOK = os.path.join(HOME, ".claude", "hooks", "memory_surface.py")
-USER_MEM_DIR = os.path.join(HOME, ".claude", "memory")
+MEMORY_REPO_DIR = "/var/lib/claude-rag-memory/memory-repo"
+SYNC_CLI = "/usr/local/bin/claude_memory_sync"
+# Legacy pre-clone locations: writes there get a redirect deny.
+LEGACY_USER_MEM_DIR = os.path.join(HOME, ".claude", "memory")
+_LEGACY_PROJ_MEM_RE = re.compile(r".*/\.claude/projects/([^/]+)/memory/[^/]+\.md$")
 
 MAX_ENTRY_SIZE = 50_000  # memory_surface._parse_entry と一致
 GRANT_STALE_SECONDS = 3600  # 放置 grant を無効化 + 掃除する閾値
-SYNC_TIMEOUT_SECONDS = 10
-INDEX_NAMES = {"MEMORY.md", "OLD-MEMORY.md"}
+SYNC_TIMEOUT_SECONDS = 20  # index upsert + local git commit (push は detached)
+INDEX_NAMES = {"MEMORY.md", "OLD-MEMORY.md", "README.md"}
 OPT_OUT = "memory-guard: allow"
-
-# projects/<enc>/memory/<name>.md を判定 (basename は別途 index 除外)
-_PROJ_MEM_RE = re.compile(r".*/\.claude/projects/([^/]+)/memory/[^/]+\.md$")
 
 # memory_surface._build_query と同じトークナイザ (CJK 3+, ASCII 4+)
 _CJK_RE = re.compile(r"[぀-ゟ゠-ヿ一-鿿]{3,}")
@@ -149,20 +152,35 @@ def _canonical(raw_path: str, cwd: str) -> str:
     return os.path.realpath(expanded)
 
 
-def _is_memory_entry(path: str) -> bool:
-    if not path:
-        return False
+def _is_entry_name(path: str) -> bool:
     base = os.path.basename(path)
-    if base in INDEX_NAMES or not base.endswith(".md"):
+    return base.endswith(".md") and base not in INDEX_NAMES
+
+
+def _repo_rel(path: str) -> str | None:
+    """Repo-relative path, or None when outside the clone."""
+    rel = os.path.relpath(path, os.path.realpath(MEMORY_REPO_DIR))
+    return None if rel.startswith("..") else rel
+
+
+def _is_memory_entry(path: str) -> bool:
+    if not path or not _is_entry_name(path):
         return False
-    if os.path.dirname(path) == os.path.realpath(USER_MEM_DIR):
+    rel = _repo_rel(path)
+    if rel is None:
+        return False
+    parts = rel.split(os.sep)
+    return (len(parts) == 2 and parts[0] == "org") or (
+        len(parts) == 3 and parts[0] in ("user", "project")
+    )
+
+
+def _is_legacy_entry(path: str) -> bool:
+    if not path or not _is_entry_name(path):
+        return False
+    if os.path.dirname(path) == os.path.realpath(LEGACY_USER_MEM_DIR):
         return True
-    return bool(_PROJ_MEM_RE.match(path))
-
-
-def _project_id_for(path: str) -> str | None:
-    m = _PROJ_MEM_RE.match(path)
-    return m.group(1) if m else None
+    return bool(_LEGACY_PROJ_MEM_RE.match(path))
 
 
 def _grant_path(path: str) -> str:
@@ -287,9 +305,27 @@ def cmd_guard(payload: dict) -> None:
         return
     cwd = payload.get("cwd") or ""
     path = _canonical(inp.get("file_path") or "", cwd)
-    if not _is_memory_entry(path):
+    is_repo_entry = _is_memory_entry(path)
+    if not is_repo_entry and not _is_legacy_entry(path):
         return
     if OPT_OUT in _edit_content(tool, inp):
+        return
+    if not is_repo_entry:
+        _emit_deny(
+            "memory entry は git 管理の共有 clone へ移設されました。 この旧 path "
+            "ではなく "
+            f"{MEMORY_REPO_DIR}/user/<login>/ (user scope) または "
+            f"{MEMORY_REPO_DIR}/project/<encoded-cwd>/ (project scope) に "
+            "/memory-routing 経由で Write してください。"
+        )
+        return
+    if not os.path.isdir(os.path.join(MEMORY_REPO_DIR, ".git")):
+        _emit_deny(
+            "memory clone が不在/破損のため書込を閉塞しています。 "
+            "install_claude_extensions を再実行して clone を復旧してから "
+            "Write してください (復旧までは entry 化を保留し、教訓は "
+            "chat/todos.md に一時記録)。"
+        )
         return
 
     if tool in ("Edit", "MultiEdit"):
@@ -329,15 +365,11 @@ def cmd_sync(payload: dict) -> None:
     if not isinstance(inp, dict):
         return
     path = _canonical(inp.get("file_path") or "", payload.get("cwd") or "")
-    if not _is_memory_entry(path) or not os.path.exists(SURFACE_HOOK):
+    if not _is_memory_entry(path) or not os.path.exists(SYNC_CLI):
         return
-    args = [sys.executable, SURFACE_HOOK, "--upsert", path]
-    pid = _project_id_for(path)
-    if pid:
-        args.append(pid)
     try:
         subprocess.run(
-            args,
+            [sys.executable, SYNC_CLI, "--commit", path],
             timeout=SYNC_TIMEOUT_SECONDS,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
