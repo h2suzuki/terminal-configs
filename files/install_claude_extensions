@@ -99,12 +99,10 @@ run install --mode 0755 --directory ~/.claude/hooks/state
 # memory feature stays closed until this script is re-run)
 MEMORY_REPO=/var/lib/claude-rag-memory/claude-lessons-learned
 command -v flock >/dev/null 2>&1 || { echo "flock not found"; exit 1; }
-# flock: concurrent re-runs must not treat each other's half-made clone as broken
-# shellcheck disable=SC2094  # flock idiom: fd 9 is a lock, not data; chmod is metadata-only
+# flock the parent dir fd (no lock file, works for root and user phases alike):
+# concurrent re-runs must not treat each other's half-made clone as broken
 (
     flock 9
-    # Base setup runs this twice (root, then login user): open the lock for both
-    chmod 0666 "$MEMORY_REPO.install.lock" 2>/dev/null || true
     if ! git -C "$MEMORY_REPO" rev-parse --git-dir >/dev/null 2>&1; then
         # Salvage a missing-.git leftover instead of deleting it
         [ -e "$MEMORY_REPO" ] && run mv "$MEMORY_REPO" "$MEMORY_REPO.broken.$(date +%s)"
@@ -121,7 +119,11 @@ command -v flock >/dev/null 2>&1 || { echo "flock not found"; exit 1; }
             echo -e "${COLOR_RED}memory repo clone failed — run 'gh auth login' then re-run this script${COLOR_CLEAR}\n"
         fi
     fi
-) 9> "$MEMORY_REPO.install.lock" || exit 1
+) 9< "$(dirname "$MEMORY_REPO")" || exit 1
+
+# Sweep control files this tooling no longer uses (left behind by older deploys)
+rm -f "$MEMORY_REPO".{lock,push.lock,install.lock,last-pull,push-failed,index-retry,pull-attempt,missing-warned,sync.log.1} \
+      "$(dirname "$MEMORY_REPO")/memory_index.sqlite3.lock"
 
 # Index every scope present in the clone
 if [ -d "$MEMORY_REPO/.git" ]; then

@@ -183,10 +183,10 @@ _PIXEL_RES = [
 
 @contextlib.contextmanager
 def _write_lock():
-    # Lock path derives from DB_PATH so DB_PATH-patching tests never take the live lock.
-    lock = DB_PATH + ".lock"
-    os.makedirs(os.path.dirname(lock), exist_ok=True)
-    fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o666)
+    # flock the DB file itself: no sidecar lock file, independent of SQLite's fcntl
+    # locks, and it follows DB_PATH patches so tests never take the live lock.
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    fd = os.open(DB_PATH, os.O_CREAT | os.O_RDWR, 0o666)
     with contextlib.suppress(OSError):  # umask strips o+w at creation
         os.fchmod(fd, 0o666)
     try:

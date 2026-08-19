@@ -93,22 +93,21 @@ check "retire: index --delete called" 'calls | grep -q "^--delete	$S/clone/user/
 git -C "$S/b" pull --quiet 2>/dev/null
 check "retire: deletion pushed to remote" '[[ ! -e "$S/b/user/alice/feedback_t.md" ]]'
 
-# 7. pull failure is fail-open; push failure sets stamp
+# 7. pull failure is fail-open; a failed push leaves the commit counted as pending
 git -C "$S/clone" remote set-url origin "$S/nonexistent.git"
 "$CLI" --pull >/dev/null 2>&1
 check "pull: bad remote still exits 0 (fail-open)" '[[ $? -eq 0 ]]'
 printf 'reminder: z\nkeywords: k\n\nbody\n' > "$S/clone/user/alice/feedback_z.md"
 "$CLI" --commit "$S/clone/user/alice/feedback_z.md" >/dev/null 2>&1
 sleep 2
-check "push failure: stamp created" '[[ -e "$S/clone.push-failed" ]]'
 out=$("$CLI" --status 2>&1)
-check "status: reports commits to push + push failing" '[[ "$out" == *"to push"* && "$out" == *"push failing since"* ]]'
+check "status: failed push shows as commits to push" '[[ "$out" == *"1 commit(s) to push"* ]]'
+check "status: last fetch age comes from git FETCH_HEAD" '[[ "$out" == *"last fetch:"* ]]'
 
-# 7b. connectivity recovery: pull drains the buffered push
+# 7b. connectivity recovery: pull drains the buffered push (pending = ahead-of-upstream)
 git -C "$S/clone" remote set-url origin "$S/remote.git"
 "$CLI" --pull >/dev/null 2>&1
 sleep 2
-check "pull: drains pending push after recovery" '[[ ! -e "$S/clone.push-failed" ]]'
 git -C "$S/b" pull --quiet 2>/dev/null
 check "pull: buffered commit reached the remote" '[[ -e "$S/b/user/alice/feedback_z.md" ]]'
 
@@ -148,6 +147,9 @@ export CLAUDE_MEMORY_REPO="$S/absent"
 "$CLI" --pull  >/dev/null 2>&1; check "missing clone: pull exits 0" '[[ $? -eq 0 ]]'
 "$CLI" --full  >/dev/null 2>&1; check "missing clone: full exits 1" '[[ $? -eq 1 ]]'
 "$CLI" --status >/dev/null 2>&1; check "missing clone: status exits 1" '[[ $? -eq 1 ]]'
+
+# 9. sidecar reduction: the sync log is the only file the tooling keeps beside the clone
+check "sidecars: only clone.sync.log next to the clone" '[[ "$(ls -d "$S"/clone.* 2>/dev/null)" == "$S/clone.sync.log" ]]'
 
 echo "----------------------------------------"
 echo "smoke: $pass passed, $fail failed"

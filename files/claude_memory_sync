@@ -52,11 +52,8 @@ SURFACE_CLI = os.environ.get("CLAUDE_MEMORY_SURFACE") or os.path.expanduser(
     "~/.claude/hooks/memory_surface.py"
 )
 DB_PATH = os.path.join(STATE_DIR, "memory_index.sqlite3")
-LOCK_PATH = REPO_DIR + ".lock"
-PUSH_LOCK_PATH = REPO_DIR + ".push.lock"  # a slow push must not starve commit/pull
-PULL_STAMP = REPO_DIR + ".last-pull"
-PUSH_FAIL_STAMP = REPO_DIR + ".push-failed"
-INDEX_RETRY_STAMP = REPO_DIR + ".index-retry"
+# git itself refreshes FETCH_HEAD on every fetch: free "last fetch" stamp
+FETCH_STAMP = os.path.join(REPO_DIR, ".git", "FETCH_HEAD")
 SYNC_LOG = REPO_DIR + ".sync.log"
 LOG_MAX_BYTES = 512_000
 GIT_TIMEOUT = 30
@@ -80,7 +77,7 @@ def logline(msg: str) -> None:
     """Append to the sync log so detached runs stay diagnosable."""
     try:
         if os.path.exists(SYNC_LOG) and os.path.getsize(SYNC_LOG) > LOG_MAX_BYTES:
-            os.replace(SYNC_LOG, SYNC_LOG + ".1")
+            os.truncate(SYNC_LOG, 0)
         with open(SYNC_LOG, "a", encoding="utf-8") as f:
             f.write("%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
         _open_to_all(SYNC_LOG)
@@ -114,26 +111,16 @@ def head() -> str | None:
 
 
 @contextlib.contextmanager
-def lock(path: str = LOCK_PATH):
-    # Serialize clone writers across processes/users (pull hook vs entry commits).
-    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o666)
-    with contextlib.suppress(OSError):
-        os.fchmod(fd, 0o666)
+def lock(rel: str = "."):
+    # Serialize clone writers (pull hook vs entry commits) by flocking a repo dir fd:
+    # any user can open a dir read-only, so no lock file (nor its chmod dance) exists.
+    fd = os.open(os.path.join(REPO_DIR, rel), os.O_RDONLY)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
-
-
-def touch(path: str) -> None:
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("%d\n" % int(time.time()))
-        _open_to_all(path)
-    except OSError:
-        pass
 
 
 def surface(*args: str) -> int:
@@ -293,10 +280,9 @@ def _rebase_in_progress() -> bool:
 
 
 def _drain_pending_push() -> None:
-    """Retry buffered commits once connectivity is back (push failures are sticky)."""
+    """Retry buffered commits once connectivity is back (no upstream counts as ahead)."""
     r = run_git("rev-list", "--count", "@{upstream}..HEAD")
-    ahead = r.returncode != 0 or r.stdout.strip() not in ("", "0")
-    if ahead or os.path.exists(PUSH_FAIL_STAMP):
+    if r.returncode != 0 or r.stdout.strip() not in ("", "0"):
         spawn_push()
 
 
@@ -320,14 +306,11 @@ def main_pull() -> int:
             )
             note("pull failed (local buffer keeps working; see --status)")
             return 0
-        touch(PULL_STAMP)
         after = head()
         if after is None:
             return 0
-        changed = before != after
-        retry = os.path.exists(INDEX_RETRY_STAMP)
         errs = 0
-        if changed:
+        if before != after:
             fix_perms()
             # unborn -> first content arrived with this pull: index everything
             errs = full_index() if before is None else apply_diff(before, after)
@@ -337,14 +320,6 @@ def main_pull() -> int:
                 "pull %s -> %s indexed, %d error(s)"
                 % ((before or "unborn")[:9], after[:9], errs)
             )
-        elif retry:
-            errs = full_index()
-            logline("index retry via full reindex, %d error(s)" % errs)
-        if errs:
-            touch(INDEX_RETRY_STAMP)
-        elif changed or retry:
-            with contextlib.suppress(OSError):
-                os.remove(INDEX_RETRY_STAMP)
         _drain_pending_push()
         return 1 if errs else 0
 
@@ -423,18 +398,15 @@ def main_retire(argv: list[str]) -> int:
 def main_push_bg() -> int:
     if not repo_ok():
         return 0
-    # Own lock: a 60s network push must not block commit/pull (the gate waits on those).
-    with lock(PUSH_LOCK_PATH):
+    # Own lock (the .git dir fd): a 60s network push must not block commit/pull.
+    with lock(".git"):
         if head() is None:
             return 0
         # -u: the first push creates and binds the remote branch (empty-repo bootstrap).
         r = run_git("push", "--quiet", "-u", "origin", "HEAD", timeout=60)
     if r.returncode != 0:
-        touch(PUSH_FAIL_STAMP)
         logline("push failed rc=%d: %s" % (r.returncode, r.stderr.strip()[:300]))
         return 0
-    with contextlib.suppress(OSError):
-        os.remove(PUSH_FAIL_STAMP)
     logline("push ok")
     return 0
 
@@ -485,6 +457,9 @@ def main_status() -> int:
         "remote: %s"
         % (run_git("remote", "get-url", "origin").stdout.strip() or "(none)")
     )
+    with contextlib.suppress(OSError):  # read before our own fetch below refreshes it
+        age = _fmt_age(int(time.time() - os.path.getmtime(FETCH_STAMP)))
+        print("last fetch: %s ago" % age)
     fetched = run_git("fetch", "--quiet", timeout=10).returncode == 0
     print(
         "fetch: %s" % ("ok" if fetched else "FAILED (offline / no auth) — buffer mode")
@@ -495,15 +470,6 @@ def main_status() -> int:
         print("sync: %s commit(s) to push, %s to pull" % (ahead, behind))
     dirty = run_git("status", "--porcelain").stdout.splitlines()
     print("uncommitted: %d file(s)" % len([ln for ln in dirty if ln.strip()]))
-    stamps = (
-        (PULL_STAMP, "last pull"),
-        (PUSH_FAIL_STAMP, "push failing since"),
-        (INDEX_RETRY_STAMP, "index retry pending since"),
-    )
-    for stamp, label in stamps:
-        with contextlib.suppress(OSError):
-            age = _fmt_age(int(time.time() - os.path.getmtime(stamp)))
-            print("%s: %s ago" % (label, age))
     for scope_name, n in _disk_counts():
         print("entries[%s]: %d" % (scope_name, n))
     try:
