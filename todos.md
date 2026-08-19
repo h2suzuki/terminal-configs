@@ -71,7 +71,7 @@ Goal: 偽の「未コミット 20 件」注入を止める。手段は `_is_mask
 Exit Criteria:
 
 - [x] filter 修正の実装と検証 — `03d974c`、33 tests green + 実 repo への live 実行で stub 20 件の消滅と本物の変更 1 件の報告継続を確認
-- [ ] deploy (下記 1 file の sudo cp) 後、実 session の wind-down prompt で偽 nag が出ないことを確認
+- [x] deploy 後、実 session の wind-down prompt で偽 nag が出ないことを確認 — 2026-08-20 03:29 ユーザー実行の deploy を `diff -q` 一致で検証し、deploy 先 hook を実 repo cwd + wind-down prompt で直接実行して無出力 (rc=0) を実測
 
 deploy コマンド (Claude Code 外の terminal で実行):
 
