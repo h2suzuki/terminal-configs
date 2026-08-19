@@ -359,6 +359,7 @@ copy setup_user_environment         /usr/local/bin/setup_user_environment
 copy install_claude_extensions      /usr/local/bin/install_claude_extensions
 copy claude_user_settings           /usr/local/bin/claude_user_settings
 copy claude_memory_rag_builder      /usr/local/bin/claude_memory_rag_builder
+copy claude_memory_sync             /usr/local/bin/claude_memory_sync
 copy claude_memory_surface_analyzer /usr/local/bin/claude_memory_surface_analyzer
 copy toolbox_bigquery_mcp           /usr/local/bin/toolbox_bigquery_mcp
 copy claude_court_guard             /usr/local/bin/claude_court_guard

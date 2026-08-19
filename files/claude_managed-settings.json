@@ -35,6 +35,7 @@
     "excludedCommands": [
       "git *",
       "gh *",
+      "claude_memory_sync *",
       "docker *",
       "codex *",
       "node *codex-companion.mjs*",

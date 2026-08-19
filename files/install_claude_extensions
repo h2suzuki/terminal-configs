@@ -93,7 +93,29 @@ popd >/dev/null
 
 # Initialize the RAG memory for this user
 run install --mode 0755 --directory ~/.claude/hooks/state
-run ~/.claude/hooks/memory_surface.py --rebuild
+
+# Clone the canonical memory repo (soft-fail: without working gh auth the
+# memory feature stays closed until this script is re-run)
+MEMORY_REPO=/var/lib/claude-rag-memory/memory-repo
+if ! git -C "$MEMORY_REPO" rev-parse --git-dir >/dev/null 2>&1; then
+    # Salvage a missing-.git leftover instead of deleting it
+    [ -e "$MEMORY_REPO" ] && run mv "$MEMORY_REPO" "$MEMORY_REPO.broken.$(date +%s)"
+    if git clone -c core.sharedRepository=all \
+        https://github.com/h2suzuki/claude-lessons-learned.git "$MEMORY_REPO"; then
+        # An empty repo clones with an unborn HEAD; pin the branch name
+        git -C "$MEMORY_REPO" rev-parse -q --verify HEAD >/dev/null \
+            || run git -C "$MEMORY_REPO" symbolic-ref HEAD refs/heads/main
+        run chmod -R a+rwX "$MEMORY_REPO"
+    else
+        rm -rf "$MEMORY_REPO"
+        echo -e "${COLOR_RED}memory repo clone failed — run 'gh auth login' then re-run this script${COLOR_CLEAR}\n"
+    fi
+fi
+
+# Index every scope present in the clone
+if [ -d "$MEMORY_REPO/.git" ]; then
+    run claude_memory_sync --full
+fi
 
 
 
