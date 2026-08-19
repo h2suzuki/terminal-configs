@@ -30,6 +30,8 @@ Modes:
   NULL/org scope). Used by the git-sync CLI before a full rebuild so scopes
   that vanished from the clone (or legacy pre-clone rows) do not linger.
 
+- `--project-id [dir]` — print the scope id for dir (default cwd): normalized
+  origin URL, cwd-encode fallback. Entry writers use it to pick the project dir.
 - `--search <text> [project_id]` — cross-model ranked lookup for
   /memory-routing (no model filter, no throttle, no inject_log rows).
   Prints `score<TAB>models<TAB>path<TAB>reminder` per hit.
@@ -58,6 +60,7 @@ import os
 import re
 import sqlite3
 import struct
+import subprocess
 import sys
 import time
 import unicodedata
@@ -255,9 +258,48 @@ def _connect() -> sqlite3.Connection | None:
     return con
 
 
+def _origin_url(cwd: str) -> str:
+    """origin remote URL of the repo containing cwd; '' when absent (fail-open)."""
+    try:
+        r = subprocess.run(
+            ["git", "-C", cwd, "config", "--get", "remote.origin.url"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return ""
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def _normalize_origin(url: str) -> str:
+    """User/checkout/protocol-independent slug, e.g. github.com-<owner>-<repo>."""
+    u = url.strip()
+    head, _, tail = u.partition("://")
+    u = tail or head
+    first = u.split("/", 1)[0]
+    if "@" in first and ":" in first.split("@", 1)[1]:
+        u = u.replace(":", "/", 1)  # scp form git@host:path -> git@host/path
+    first = u.split("/", 1)[0]
+    if "@" in first:
+        u = u.split("@", 1)[1]
+    host, _, path = u.partition("/")
+    u = (host.lower() + "/" + path).rstrip("/").removesuffix(".git")
+    return u.replace("/", "-").replace(":", "-")
+
+
 def _encoded_project_id(cwd: str) -> str:
-    """Match Claude Code's projects/<encoded-cwd>/ form: '/' -> '-'."""
-    return cwd.replace("/", "-")
+    """Normalized origin URL (same repo = same scope for every user/checkout);
+    falls back to the legacy cwd '/' -> '-' encode when there is no origin."""
+    url = _origin_url(cwd)
+    return _normalize_origin(url) if url else cwd.replace("/", "-")
+
+
+def _main_project_id(args: list[str]) -> int:
+    """--project-id [dir]: print the scope id entry writers must use for dir/cwd."""
+    print(_encoded_project_id(os.path.abspath(args[0]) if args else os.getcwd()))
+    return 0
 
 
 def _normalize_model(model_id: str) -> str:
@@ -1256,6 +1298,8 @@ def main() -> int:
         return _main_wipe_scope(argv[1:])
     if cmd == "--search":
         return _main_search(argv[1:])
+    if cmd == "--project-id":
+        return _main_project_id(argv[1:])
     sys.stderr.write(f"unknown command: {cmd}\n")
     return 1
 
@@ -1921,6 +1965,81 @@ class RebuildEnumerationTest(unittest.TestCase):
             ["feedback_a.md", "reference_c.md"],
             sorted(os.path.basename(fp) for (fp,) in rows),
         )
+
+
+class ProjectIdTest(unittest.TestCase):
+    """project id = 正規化 remote URL (user/checkout path 非依存、2026-08-19 裁定)。repo/remote 無しは cwd encode に fallback。"""
+
+    def test_https_url_with_git_suffix(self):
+        self.assertEqual(
+            _normalize_origin("https://github.com/h2suzuki/terminal-configs.git"),
+            "github.com-h2suzuki-terminal-configs",
+        )
+
+    def test_scp_form_equals_https_form(self):
+        self.assertEqual(
+            _normalize_origin("git@github.com:h2suzuki/terminal-configs.git"),
+            _normalize_origin("https://github.com/h2suzuki/terminal-configs"),
+        )
+
+    def test_scheme_credentials_and_trailing_slash_stripped(self):
+        self.assertEqual(
+            _normalize_origin("ssh://git@example.com/a/b.git"), "example.com-a-b"
+        )
+        self.assertEqual(
+            _normalize_origin("https://user:tok@example.com/a/b/"), "example.com-a-b"
+        )
+
+    def test_host_lowercased_path_case_kept(self):
+        self.assertEqual(
+            _normalize_origin("https://GitHub.COM/Ab/Cd"), "github.com-Ab-Cd"
+        )
+
+    def test_non_git_dir_falls_back_to_cwd_encode(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(_encoded_project_id(d), d.replace("/", "-"))
+
+    def test_git_repo_without_origin_falls_back(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            subprocess.run(["git", "init", "-q", d], capture_output=True, check=True)
+            self.assertEqual(_encoded_project_id(d), d.replace("/", "-"))
+
+    def test_git_repo_with_origin_uses_normalized_url(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            subprocess.run(["git", "init", "-q", d], capture_output=True, check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    d,
+                    "remote",
+                    "add",
+                    "origin",
+                    "git@github.com:alice/proj.git",
+                ],
+                capture_output=True,
+                check=True,
+            )
+            self.assertEqual(_encoded_project_id(d), "github.com-alice-proj")
+
+    def test_cli_project_id_prints_id_for_cwd_and_explicit_dir(self):
+        import io
+        import tempfile
+        from contextlib import redirect_stdout
+
+        with io.StringIO() as buf, redirect_stdout(buf):
+            self.assertEqual(_main_project_id([]), 0)
+            self.assertEqual(buf.getvalue().strip(), _encoded_project_id(os.getcwd()))
+        with tempfile.TemporaryDirectory() as d, io.StringIO() as buf:
+            with redirect_stdout(buf):
+                self.assertEqual(_main_project_id([d]), 0)
+            self.assertEqual(buf.getvalue().strip(), d.replace("/", "-"))
 
 
 if __name__ == "__main__":

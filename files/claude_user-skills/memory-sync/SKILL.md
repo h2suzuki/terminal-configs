@@ -52,10 +52,11 @@ installer (clone + 初回 full index) 実行済みのマシンに旧ローカル
 4. **保存先の判断**: 新規の scope は memory-routing skill で判定する (org = user 非依存 /
    user = 個人情報を含む / project = project 固有)。反映はすべて memory-routing の
    grant + Write 経由 (auto-sync が commit + push + index まで行う)
-5. **project id はそのまま使う**: `~/.claude/projects/<enc>/memory/` の entry は clone の
-   `project/<enc>/` へ **同じ `<enc>` のまま**入れる (enc はそのマシンの project cwd 由来。
-   改名・再導出しない)。同一プロジェクトがマシン間で別 path にあり enc が食い違う場合は
-   設計どおり (scope = cwd) なので、統合はユーザーと相談してから
+5. **project id は --project-id で導出する**: 旧 `~/.claude/projects/<enc>/memory/` の
+   `<enc>` は旧方式 (cwd encode)。対応する project dir を引数に
+   `~/.claude/hooks/memory_surface.py --project-id <project_dir>` を実行して得た id の
+   `project/<id>/` へ入れる (origin URL 正規化形なので user・checkout path に依存しない。
+   remote 無し repo・非 git dir では旧 enc と同値に fallback)。暗算で id を導出しない
 6. **検証**: 旧 entry 全件が「マージ済 / 新規作成済 / 退役済で対象外」のいずれかに分類し
    尽くされたことを一覧で確認し、`--status` で entries と index の一致を見る
 7. **後始末**: 旧 dir を `<dir>.pre-git` に rename し、ユーザー承認を得てから削除する

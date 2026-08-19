@@ -11,7 +11,7 @@ Clone layout (scope = the index DB's project_id):
 
   org/<entry>.md                   -> NULL (shared with every user)
   user/<login>/<entry>.md          -> user-<login>
-  project/<encoded-cwd>/<entry>.md -> <encoded-cwd>
+  project/<project-id>/<entry>.md  -> <project-id> (origin-URL slug; cwd-encode fallback)
 
 Subcommands (each fails open: network/auth loss degrades to the buffer):
 

@@ -50,9 +50,12 @@ entry の置き場は共有 clone `/var/lib/claude-rag-memory/claude-lessons-lea
 - **ユーザーの普遍的 preference**: 複数プロジェクトに渡る言語 / 文体 / commit 慣習 / コミュニケーション流儀
 - 他のユーザーには当てはまらない working style の教訓
 
-#### 3. Project-local (`<clone>/project/<encoded-cwd>/`) — project-specific scope
+#### 3. Project-local (`<clone>/project/<project-id>/`) — project-specific scope
 
-以下は **project-local** に保存 (`<encoded-cwd>` = project cwd の `/` を `-` にした形):
+以下は **project-local** に保存。`<project-id>` は
+`~/.claude/hooks/memory_surface.py --project-id` で取得する (origin remote URL の正規化形
+`github.com-<owner>-<repo>`。remote 無し repo・非 git dir は cwd の `/`→`-` encode に
+fallback。ユーザーや checkout path に依存しない。暗算で導出しない):
 
 - 特定 file / 特定 module / 特定 deploy 手順に絡む rule
 - そのプロジェクト固有の convention / 設計選択
@@ -148,7 +151,7 @@ surface hook (UserPromptSubmit / Stop) は **実行中モデルの tag を持つ
 
 新しい教訓を entry 化する前に、 モデル横断で過去の教訓を検索し、 同じ教訓なら tag 追記・無ければ新規作成する:
 
-1. **横断検索**: `~/.claude/hooks/memory_surface.py --search "<学びの要旨>" [encoded-cwd]` — model filter / throttle / 記録なしで全 entry を対象に `score<TAB>models<TAB>path<TAB>reminder` を返す。 同じ教訓かは LLM が判断する
+1. **横断検索**: `~/.claude/hooks/memory_surface.py --search "<学びの要旨>" [project-id]` — model filter / throttle / 記録なしで全 entry を対象に `score<TAB>models<TAB>path<TAB>reminder` を返す。 同じ教訓かは LLM が判断する
 2. **hit (既存 entry が同じ教訓)** → その entry の `models:` に自分のモデル tag を追記し、 grant → full content Write → auto-upsert の通常手順で保存する
 3. **miss** → 新規 entry を作成し `models:` に自分のモデル tag を書く
 4. **mismatch 統計**: model 不一致で mute された would-be hit は inject_log に `kind='mismatch'` で記録される。 集計すると「他モデルの教訓で自モデルにも刺さりそうなもの」が見える (tag 追記候補の定量材料):
