@@ -1,12 +1,12 @@
 ---
 name: memory-routing
-description: Decide memory entry save location (user vs project-local scope in the shared git clone), save timing, absolute date format, and per-model tags (models: line, cross-model search, tag propagation); retire entries via claude_memory_sync --retire when fully covered by a Managed skill / hook / CLAUDE.md rule.
-when_to_use: TRIGGER when user gives a correction / feedback, about to say "memory に書く / 保存" etc, uncertain about user vs project-local routing, a feedback entry becomes covered by a new skill / hook / CLAUDE.md rule, or about to conclude "できない" / "実行不能" / "環境の制約" or hitting a second failure on the same work (pull side, not write).
+description: Decide memory entry save location (org / user / project scope in the shared git clone), save timing, absolute date format, and per-model tags (models: line, cross-model search, tag propagation); retire entries via claude_memory_sync --retire when fully covered by a Managed skill / hook / CLAUDE.md rule.
+when_to_use: TRIGGER when user gives a correction / feedback, about to say "memory に書く / 保存" etc, uncertain about org / user / project routing, a feedback entry becomes covered by a new skill / hook / CLAUDE.md rule, or about to conclude "できない" / "実行不能" / "環境の制約" or hitting a second failure on the same work (pull side, not write).
 ---
 
 # Memory Routing
 
-memory entry の保存先 (user vs project-local) と保存タイミングの rule、 および退役 protocol (file 削除 = git 履歴が archive)。 同じ指摘を二度受けないように、 また保存先を一貫させるための discipline。
+memory entry の保存先 (org / user / project-local) と保存タイミングの rule、 および退役 protocol (file 削除 = git 履歴が archive)。 同じ指摘を二度受けないように、 また保存先を一貫させるための discipline。
 
 ## Process
 
@@ -31,19 +31,26 @@ CLAUDE.md は session 毎 token を食う auto-load file。 肥大化すると�
 - **memory**: cross-session の reference value、 memory_surface hook で trigger 時 surface
 - **CLAUDE.md**: 上記いずれでも実現不可な、 全 session で必須の前提のみ。 **default NG、 user 承諾要**
 
-### Routing decision (priority 1 → 3)
+### Routing decision (priority 1 → 4)
 
 entry の置き場は共有 clone `/var/lib/claude-rag-memory/claude-lessons-learned` 配下 (canonical は同名の private GitHub repo)。 index file (roster) は無い — **dir に file が存在する = 現役** (退役 = file 削除、 git 履歴が archive)。
 
-#### 1. User (`<clone>/user/<login>/`) — cross-project scope
+#### 1. Org (`<clone>/org/`) — user-independent scope
 
-以下に該当する memory は **user (cross-project)** に保存:
+ユーザー個人に依らない教訓は **org (全ユーザーに surface)** に保存 (2026-08-19 ユーザー裁定で採用):
 
 - **LLM 一般の認知バイアス対策**: cut-off / hedging / confabulation 等、 モデルに普遍的な regression
-- **ユーザーの普遍的 preference**: 複数プロジェクトに渡る言語 / 文体 / commit 慣習 / コミュニケーション流儀
-- **複数プロジェクトで再現したパターン**: 1 プロジェクトで観測した issue が他でも起きると判明
+- **tool / 環境の一般教訓**: 使い方・落とし穴のうち、 特定ユーザーの好みに依らないもの
+- **複数プロジェクトで再現したパターン**: 1 プロジェクトで観測した issue が他でも起きると判明し、 内容が user 非依存のもの
 
-#### 2. Project-local (`<clone>/project/<encoded-cwd>/`) — project-specific scope
+#### 2. User (`<clone>/user/<login>/`) — personal preference scope
+
+そのユーザー本人に固有のものだけを **user** に保存 (判定基準: **個人情報を含むか** — 本人の呼称・好み・個人環境の事情が本文に入るなら user):
+
+- **ユーザーの普遍的 preference**: 複数プロジェクトに渡る言語 / 文体 / commit 慣習 / コミュニケーション流儀
+- 他のユーザーには当てはまらない working style の教訓
+
+#### 3. Project-local (`<clone>/project/<encoded-cwd>/`) — project-specific scope
 
 以下は **project-local** に保存 (`<encoded-cwd>` = project cwd の `/` を `-` にした形):
 
@@ -51,11 +58,9 @@ entry の置き場は共有 clone `/var/lib/claude-rag-memory/claude-lessons-lea
 - そのプロジェクト固有の convention / 設計選択
 - 特定 codebase の bug / regression / workaround
 
-#### 3. 迷ったら project-local
+#### 4. 迷ったら狭い scope
 
-**カテゴリ判断に迷う場合は project-local を優先**。 後で user (cross-project) に昇格させやすい (逆は難しい)。
-
-`<clone>/org/` は将来の org 共有 scope 用の予約 (現在未使用、 全ユーザーに surface される)。
+**カテゴリ判断に迷う場合は狭い scope (project > user > org の順) を優先**。 後で広い scope へ昇格させやすい (逆は難しい)。 org か user かで迷ったら user。
 
 ### Retirement (git history is the archive)
 
