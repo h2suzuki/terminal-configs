@@ -316,10 +316,11 @@ def main_pull() -> int:
             errs = full_index() if before is None else apply_diff(before, after)
             if errs:  # self-heal: a full rebuild beats a silently stale index
                 errs = full_index()
-            logline(
-                "pull %s -> %s indexed, %d error(s)"
-                % ((before or "unborn")[:9], after[:9], errs)
-            )
+            if errs:  # normal-path pulls stay silent: the log records trouble only
+                logline(
+                    "pull %s -> %s indexed with %d error(s)"
+                    % ((before or "unborn")[:9], after[:9], errs)
+                )
         _drain_pending_push()
         return 1 if errs else 0
 
@@ -404,10 +405,8 @@ def main_push_bg() -> int:
             return 0
         # -u: the first push creates and binds the remote branch (empty-repo bootstrap).
         r = run_git("push", "--quiet", "-u", "origin", "HEAD", timeout=60)
-    if r.returncode != 0:
+    if r.returncode != 0:  # a successful push stays silent (visible in --status)
         logline("push failed rc=%d: %s" % (r.returncode, r.stderr.strip()[:300]))
-        return 0
-    logline("push ok")
     return 0
 
 
@@ -500,7 +499,13 @@ def main() -> int:
             note("clone missing/broken; nothing to index (%s)" % INSTALL_HINT)
             return 1
         with lock():
-            return 1 if full_index() else 0
+            errs = full_index()
+        # the one lifecycle marker: initial ingestion after clone / recovery reindex
+        logline(
+            "full index: %d entries, %d error(s)"
+            % (sum(n for _, n in _disk_counts()), errs)
+        )
+        return 1 if errs else 0
     if cmd == "--status":
         return main_status()
     if cmd == "--push-bg":

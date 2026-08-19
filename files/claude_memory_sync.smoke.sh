@@ -151,6 +151,13 @@ export CLAUDE_MEMORY_REPO="$S/absent"
 # 9. sidecar reduction: the sync log is the only file the tooling keeps beside the clone
 check "sidecars: only clone.sync.log next to the clone" '[[ "$(ls -d "$S"/clone.* 2>/dev/null)" == "$S/clone.sync.log" ]]'
 
+# 10. log discipline: lifecycle (--full) + trouble only; normal-path syncs stay silent
+log="$S/clone.sync.log"
+check "log: --full leaves a one-line reindex marker" 'grep -q "full index: " "$log"'
+check "log: failed push recorded" 'grep -q "push failed" "$log"'
+check "log: successful push not recorded" '! grep -q "push ok" "$log"'
+check "log: clean pull not recorded" '! grep -q "indexed" "$log"'
+
 echo "----------------------------------------"
 echo "smoke: $pass passed, $fail failed"
 exit $((fail > 0))
