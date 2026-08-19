@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# Installs Claude Code extensions as an opt-in step after the base setup.
+# Installs Claude Code extensions. Run by the base setup as the login user
+# (via setup_user_environment); also re-runnable standalone for recovery.
 
 
 command -v tty      >/dev/null || { echo "Cannot find tty";         exit 1; }
