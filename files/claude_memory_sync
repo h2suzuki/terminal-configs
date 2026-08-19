@@ -1,0 +1,420 @@
+#!/usr/bin/env python3
+"""Git transport for the shared memory-entry clone (stdlib-only).
+
+The private GitHub repo is the canonical store of memory entries; the clone
+under /var/lib/claude-rag-memory/memory-repo is a local buffer every session
+reads and writes. This CLI owns all git plumbing; index writes stay in the
+per-user memory_surface.py hook, driven here via its --upsert / --delete /
+--rebuild / --wipe-scope subcommands.
+
+Clone layout (scope = the index DB's project_id):
+
+  org/<entry>.md                   -> NULL (shared with every user)
+  user/<login>/<entry>.md          -> user-<login>
+  project/<encoded-cwd>/<entry>.md -> <encoded-cwd>
+
+Subcommands (each fails open: network/auth loss degrades to the buffer):
+
+  --pull        rebase-pull, then index only the pulled diff (A/M/D/R)
+  --commit <p>  upsert <p>, commit the whole clone, detach a push
+  --retire <p>  git rm <p>, commit, detach a push, drop <p> from the index
+  --full        wipe the NULL scope, then per-scope --rebuild of the clone
+  --status      human-readable clone/index state (fetches, best-effort)
+  --push-bg     internal detached push helper
+
+The clone is created by the installer (install_claude_extensions); while it
+is missing or broken the write paths report and bail, and recovery is to
+re-run that installer step. The world-writable clone assumes mutually
+trusted local users — git config/hooks inside it are open by design.
+
+Test seams: CLAUDE_MEMORY_REPO / CLAUDE_MEMORY_SURFACE override the clone
+path and the index CLI so smoke tests can run against a file:// fixture.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import fcntl
+import os
+import sqlite3
+import subprocess
+import sys
+import time
+
+REPO_DIR = (
+    os.environ.get("CLAUDE_MEMORY_REPO") or "/var/lib/claude-rag-memory/memory-repo"
+)
+STATE_DIR = os.path.dirname(REPO_DIR)
+SURFACE_CLI = os.environ.get("CLAUDE_MEMORY_SURFACE") or os.path.expanduser(
+    "~/.claude/hooks/memory_surface.py"
+)
+DB_PATH = os.path.join(STATE_DIR, "memory_index.sqlite3")
+LOCK_PATH = REPO_DIR + ".lock"
+PULL_STAMP = REPO_DIR + ".last-pull"
+PUSH_FAIL_STAMP = REPO_DIR + ".push-failed"
+SYNC_LOG = REPO_DIR + ".sync.log"
+GIT_TIMEOUT = 30
+INSTALL_HINT = "re-run install_claude_extensions"
+# Non-entry .md files an entry dir may carry (legacy rosters + repo docs).
+NON_ENTRY_MD = {"MEMORY.md", "OLD-MEMORY.md", "README.md"}
+SKIP = object()
+
+
+def note(msg: str) -> None:
+    sys.stderr.write("claude_memory_sync: %s\n" % msg)
+
+
+def logline(msg: str) -> None:
+    """Append to the sync log so detached runs stay diagnosable."""
+    try:
+        with open(SYNC_LOG, "a", encoding="utf-8") as f:
+            f.write("%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
+    except OSError:
+        pass
+
+
+def run_git(*args: str, timeout: int = GIT_TIMEOUT) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(
+            ["git", "-C", REPO_DIR, *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return subprocess.CompletedProcess(list(args), 124, "", str(exc))
+
+
+def repo_ok() -> bool:
+    return (
+        os.path.isdir(os.path.join(REPO_DIR, ".git"))
+        and run_git("rev-parse", "--git-dir").returncode == 0
+    )
+
+
+def head() -> str | None:
+    r = run_git("rev-parse", "HEAD")
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+@contextlib.contextmanager
+def lock():
+    # Serialize clone writers across processes/users (pull hook vs entry commits).
+    fd = os.open(LOCK_PATH, os.O_CREAT | os.O_RDWR, 0o666)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def touch(path: str) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("%d\n" % int(time.time()))
+    except OSError:
+        pass
+
+
+def surface(*args: str) -> int:
+    """Run the index CLI; returns 0/1 error count so callers can sum failures."""
+    try:
+        r = subprocess.run(
+            [sys.executable, SURFACE_CLI, *args],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        note("index CLI unavailable (%s): %s" % (SURFACE_CLI, exc))
+        return 1
+    if r.returncode != 0:
+        note(
+            "index update failed (%s rc=%d): %s"
+            % (args[0], r.returncode, r.stderr.strip()[:200])
+        )
+        return 1
+    return 0
+
+
+def entry_scope(rel: str):
+    """Index scope for a repo-relative path; SKIP for non-entry files."""
+    parts = rel.split("/")
+    if not parts[-1].endswith(".md") or parts[-1] in NON_ENTRY_MD:
+        return SKIP
+    if len(parts) == 2 and parts[0] == "org":
+        return None
+    if len(parts) == 3 and parts[0] == "user":
+        return "user-" + parts[1]
+    if len(parts) == 3 and parts[0] == "project":
+        return parts[1]
+    return SKIP
+
+
+def index_change(status: str, rel: str) -> int:
+    scope = entry_scope(rel)
+    if scope is SKIP:
+        return 0
+    args = ["--delete" if status == "D" else "--upsert", os.path.join(REPO_DIR, rel)]
+    if scope is not None:
+        args.append(str(scope))
+    return surface(*args)
+
+
+def apply_diff(before: str, after: str) -> int:
+    """Index adds/edits/deletes/renames between two commits; error count."""
+    r = run_git("diff", "--name-status", "-M", before, after)
+    if r.returncode != 0:
+        note("diff failed: " + r.stderr.strip()[:200])
+        return 1
+    errs = 0
+    for line in r.stdout.splitlines():
+        parts = line.split("\t")
+        if parts[0].startswith("R") and len(parts) == 3:
+            errs += index_change("D", parts[1]) + index_change("A", parts[2])
+        elif len(parts) == 2:
+            errs += index_change(parts[0][:1], parts[1])
+    return errs
+
+
+def full_index() -> int:
+    """Rebuild every scope present in the clone; error count."""
+    # NULL wipe first: clears legacy pre-clone rows and org entries gone from the clone.
+    errs = surface("--wipe-scope")
+    org = os.path.join(REPO_DIR, "org")
+    if os.path.isdir(org):
+        errs += surface("--rebuild", org)
+    for kind, prefix in (("user", "user-"), ("project", "")):
+        base = os.path.join(REPO_DIR, kind)
+        if not os.path.isdir(base):
+            continue
+        for name in sorted(os.listdir(base)):
+            d = os.path.join(base, name)
+            if os.path.isdir(d):
+                errs += surface("--rebuild", d, prefix + name)
+    return errs
+
+
+def spawn_push() -> None:
+    """Detached so entry writes never wait on the network."""
+    try:
+        with open(SYNC_LOG, "a", encoding="utf-8") as log:
+            subprocess.Popen(
+                [sys.executable, os.path.abspath(__file__), "--push-bg"],
+                stdout=log,
+                stderr=log,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+    except OSError as exc:
+        note("push spawn failed: %s" % exc)
+
+
+def main_pull() -> int:
+    if not repo_ok():
+        note("clone missing/broken at %s; skip pull (%s)" % (REPO_DIR, INSTALL_HINT))
+        return 0
+    with lock():
+        before = head()
+        r = run_git("pull", "--rebase", "--autostash", "--quiet")
+        if r.returncode != 0:
+            run_git("rebase", "--abort")
+            logline("pull failed rc=%d: %s" % (r.returncode, r.stderr.strip()[:300]))
+            note("pull failed (local buffer keeps working; see --status)")
+            return 0
+        touch(PULL_STAMP)
+        after = head()
+        if after is None or before == after:
+            return 0
+        # unborn -> first content arrived with this pull: index everything
+        errs = full_index() if before is None else apply_diff(before, after)
+        logline(
+            "pull %s -> %s indexed, %d error(s)"
+            % ((before or "unborn")[:9], after[:9], errs)
+        )
+        return 1 if errs else 0
+
+
+def main_commit(argv: list[str]) -> int:
+    if not argv:
+        note("usage: --commit <abs_path>")
+        return 1
+    path = os.path.abspath(argv[0])
+    scope = entry_scope(os.path.relpath(path, REPO_DIR))
+    errs = 0
+    if scope is not SKIP and os.path.exists(path):
+        errs += surface("--upsert", path, *([] if scope is None else [str(scope)]))
+    if not repo_ok():
+        note("clone missing/broken; indexed but NOT committed (%s)" % INSTALL_HINT)
+        return 1
+    with lock():
+        run_git("add", "-A")
+        if run_git("diff", "--cached", "--quiet").returncode == 0:
+            return 1 if errs else 0
+        r = run_git(
+            "commit", "--quiet", "-m", "memory: Update %s" % os.path.basename(path)
+        )
+        if r.returncode != 0:
+            logline("commit failed rc=%d: %s" % (r.returncode, r.stderr.strip()[:300]))
+            note("commit failed (changes left staged; see --status)")
+            return 1
+    spawn_push()
+    return 1 if errs else 0
+
+
+def main_retire(argv: list[str]) -> int:
+    if not argv:
+        note("usage: --retire <abs_path>")
+        return 1
+    path = os.path.abspath(argv[0])
+    rel = os.path.relpath(path, REPO_DIR)
+    scope = entry_scope(rel)
+    if scope is SKIP:
+        note("not a memory entry inside the clone: %s" % path)
+        return 1
+    if not repo_ok():
+        note("clone missing/broken; cannot retire (%s)" % INSTALL_HINT)
+        return 1
+    errs = 0
+    with lock():
+        if run_git("rm", "--quiet", "--", rel).returncode != 0:
+            with contextlib.suppress(OSError):  # untracked or already gone
+                os.remove(path)
+            run_git("add", "-A")
+        if run_git("diff", "--cached", "--quiet").returncode != 0:
+            r = run_git(
+                "commit", "--quiet", "-m", "memory: Retire %s" % os.path.basename(path)
+            )
+            if r.returncode != 0:
+                logline(
+                    "retire commit failed rc=%d: %s"
+                    % (r.returncode, r.stderr.strip()[:300])
+                )
+                note("retire commit failed; see --status")
+                errs += 1
+    spawn_push()
+    errs += surface("--delete", path, *([] if scope is None else [str(scope)]))
+    return 1 if errs else 0
+
+
+def main_push_bg() -> int:
+    if not repo_ok():
+        return 0
+    with lock():
+        if head() is None:
+            return 0
+        # -u: the first push creates and binds the remote branch (empty-repo bootstrap).
+        r = run_git("push", "--quiet", "-u", "origin", "HEAD", timeout=60)
+    if r.returncode != 0:
+        touch(PUSH_FAIL_STAMP)
+        logline("push failed rc=%d: %s" % (r.returncode, r.stderr.strip()[:300]))
+        return 0
+    with contextlib.suppress(OSError):
+        os.remove(PUSH_FAIL_STAMP)
+    logline("push ok")
+    return 0
+
+
+def _fmt_age(seconds: int) -> str:
+    if seconds >= 86400:
+        return "%dd%dh" % (seconds // 86400, seconds % 86400 // 3600)
+    if seconds >= 3600:
+        return "%dh%dm" % (seconds // 3600, seconds % 3600 // 60)
+    return "%dm" % max(1, seconds // 60)
+
+
+def _count_entries(d: str) -> int:
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return 0
+    return sum(1 for n in names if n.endswith(".md") and n not in NON_ENTRY_MD)
+
+
+def _disk_counts() -> list[tuple[str, int]]:
+    out = []
+    org = os.path.join(REPO_DIR, "org")
+    if os.path.isdir(org):
+        out.append(("org", _count_entries(org)))
+    for kind in ("user", "project"):
+        base = os.path.join(REPO_DIR, kind)
+        if not os.path.isdir(base):
+            continue
+        for name in sorted(os.listdir(base)):
+            d = os.path.join(base, name)
+            if os.path.isdir(d):
+                out.append(("%s/%s" % (kind, name), _count_entries(d)))
+    return out
+
+
+def main_status() -> int:
+    print("clone: %s" % REPO_DIR)
+    if not os.path.isdir(REPO_DIR):
+        print("state: MISSING — %s to clone" % INSTALL_HINT)
+        return 1
+    if not repo_ok():
+        print("state: BROKEN (.git unusable) — %s" % INSTALL_HINT)
+        return 1
+    branch = run_git("branch", "--show-current").stdout.strip() or "(detached)"
+    print("state: ok (branch %s @ %s)" % (branch, (head() or "unborn")[:9]))
+    print(
+        "remote: %s"
+        % (run_git("remote", "get-url", "origin").stdout.strip() or "(none)")
+    )
+    fetched = run_git("fetch", "--quiet", timeout=10).returncode == 0
+    print(
+        "fetch: %s" % ("ok" if fetched else "FAILED (offline / no auth) — buffer mode")
+    )
+    ab = run_git("rev-list", "--left-right", "--count", "origin/%s...HEAD" % branch)
+    if ab.returncode == 0:
+        behind, ahead = ab.stdout.split()
+        print("sync: %s commit(s) to push, %s to pull" % (ahead, behind))
+    dirty = run_git("status", "--porcelain").stdout.splitlines()
+    print("uncommitted: %d file(s)" % len([ln for ln in dirty if ln.strip()]))
+    stamps = ((PULL_STAMP, "last pull"), (PUSH_FAIL_STAMP, "push failing since"))
+    for stamp, label in stamps:
+        with contextlib.suppress(OSError):
+            age = _fmt_age(int(time.time() - os.path.getmtime(stamp)))
+            print("%s: %s ago" % (label, age))
+    for scope_name, n in _disk_counts():
+        print("entries[%s]: %d" % (scope_name, n))
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % DB_PATH, uri=True, timeout=2.0)
+        rows = con.execute(
+            "SELECT coalesce(project_id, '(org)'), COUNT(*) FROM entries_fts "
+            "GROUP BY 1 ORDER BY 1"
+        ).fetchall()
+        con.close()
+        print("index: %s" % (", ".join("%s=%d" % r for r in rows) or "(empty)"))
+    except sqlite3.Error as exc:
+        print("index: unavailable (%s)" % exc)
+    return 0
+
+
+def main() -> int:
+    os.umask(0o002)  # group-writable clone/state artifacts (matches the DB convention)
+    argv = sys.argv[1:]
+    cmd = argv[0] if argv else "--status"
+    if cmd == "--pull":
+        return main_pull()
+    if cmd == "--commit":
+        return main_commit(argv[1:])
+    if cmd == "--retire":
+        return main_retire(argv[1:])
+    if cmd == "--full":
+        if not repo_ok():
+            note("clone missing/broken; nothing to index (%s)" % INSTALL_HINT)
+            return 1
+        return 1 if full_index() else 0
+    if cmd == "--status":
+        return main_status()
+    if cmd == "--push-bg":
+        return main_push_bg()
+    note("unknown command: %s" % cmd)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
