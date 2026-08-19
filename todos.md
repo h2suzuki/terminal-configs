@@ -79,12 +79,16 @@ Exit Criteria:
   hook 2 本の exec bit (0755) 確認済
 - [ ] 他の全マシンで terminal-configs を pull + base setup 再実行済み
   (確認: `grep -c dual-read ~/.claude/hooks/memory_surface.py` が 1 以上)
-- [ ] `drafts/memory-entry-format-migration.py --apply` を実行し全 entry 変換
-  (2026-08-20 dry-run 時点: moved=91 renamed=2 skipped=1)
-- [ ] clone を git commit + push し、`claude_memory_sync --full` 後の `--status` で
-  entries と index の件数一致
-- [ ] user_profile.md を /memory-routing 経由で user scope へ移設 (reminder/keywords
-  を起草、prefix は reference_) し、旧 file を retire
+- [x] `drafts/memory-entry-format-migration.py --apply` を実行し全 entry 変換 —
+  2026-08-20 実行、moved=91 renamed=2 skipped=1・再 dry-run moved=0 (冪等)・
+  deploy 済 parser での全数検証 92 件 抽出 NG 0 (吸い上げ完了済で並行書込なしと
+  ユーザー確認後に、他マシン deploy 完了を待たず前倒し実行)
+- [x] clone を git commit + push し、`claude_memory_sync --full` 後の `--status` で
+  entries と index の件数一致 — 2026-08-20 clone commit 2d3ea9e、push 残 0・
+  全 scope 一致 (org 49 / user 2 / project 41)
+- [x] user_profile.md を /memory-routing 経由で user scope へ移設 (reminder/keywords
+  を起草、prefix は reference_) し、旧 file を retire — 2026-08-20 実施。新 gate を
+  一発通過、--search で top hit (0.685) を確認
 - [ ] 実 prompt で新形式 entry の reminder が `<memory-surface>` に inject されることを確認
 
 Work file: `drafts/memory-entry-format-migration.py` (migration 本体、dry-run 検証済。
