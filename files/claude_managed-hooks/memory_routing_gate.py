@@ -51,7 +51,8 @@ PreToolUse `^(Edit|Write|MultiEdit)$` → guard:
     - frontmatter に非空の `keywords:` 行が無い。
     - keywords が FTS token を 1 つも産まない / 一般語 (STOPWORDS) のみ = 無効/広すぎ。
     - frontmatter に非空の `models:` 行が無い / tag 書式不正 (観測 model の tag、例 fable-5)。
-    - feedback: 本文に ## Why / ## 事例 見出しが無い (## How / ## Related は任意)。
+    - feedback: h2 が Why/How/事例/Related の固定語彙・固定順・各 1 回でない、
+      または ## Why / ## 事例 が無い (## How / ## Related は任意。自由見出しは h3)。
     - 本文に絶対日付 (YYYY-MM-DD) が 1 つも無い。
   旧形式 (3 field が本文先頭) の既存 entry は再 Write する機会に新書式へ引き上げる。
 
@@ -294,15 +295,32 @@ def _content_problem(path: str, content: str) -> str | None:
             "models: の tag 書式が不正です (小文字英数と . - のみ、 例 opus-4.8 / "
             "fable-5)。 モデル ID 全体 (claude-fable-5) でも可 (index 時に正規化)。"
         )
-    if base.startswith("feedback_") and not (
-        re.search(r"^## Why\b", body, flags=re.MULTILINE)
-        and re.search(r"^## 事例", body, flags=re.MULTILINE)
-    ):
-        return (
-            "feedback entry の本文には ## Why (原因/機序) と ## 事例 (絶対日付つきの "
-            "発生事例) の見出しが必要です (## How / ## Related は任意)。 "
-            "/memory-routing の本文構成に従ってください。"
+    if base.startswith("feedback_"):
+        # fence 内の見出し様行を除外 (check_skill_writing と同じ手当て)
+        prose = re.sub(
+            r"^```[^\n]*\n.*?^```[ \t]*$", "", body, flags=re.MULTILINE | re.DOTALL
         )
+        h2s = re.findall(r"^## (.+?)[ \t]*$", prose, flags=re.MULTILINE)
+        canon = ["Why", "How", "事例", "Related"]
+        bad = [h for h in h2s if h not in canon]
+        if bad:
+            return (
+                "feedback 本文の h2 は Why / How / 事例 / Related の 4 語彙に固定です "
+                f"(規約外: {', '.join(bad[:3])})。 自由な見出し (日付つき事案・深掘り) は "
+                "該当 h2 の下の ### に置いてください。"
+            )
+        if "Why" not in h2s or "事例" not in h2s:
+            return (
+                "feedback entry の本文には ## Why (原因/機序) と ## 事例 (絶対日付つきの "
+                "発生事例) の見出しが必要です (## How / ## Related は任意)。 "
+                "/memory-routing の本文構成に従ってください。"
+            )
+        idx = [canon.index(h) for h in h2s]
+        if idx != sorted(idx) or len(set(h2s)) != len(h2s):
+            return (
+                "feedback 本文の h2 は Why → How → 事例 → Related の順・各 1 回です。 "
+                "並べ替えるか、 重複分を ### に格下げしてください。"
+            )
     if not _DATE_RE.search(body):
         return (
             "本文に絶対日付 (YYYY-MM-DD) がありません。 feedback は事例の発生日、 "
