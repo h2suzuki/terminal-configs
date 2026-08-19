@@ -181,17 +181,19 @@ MASK_STUB_PATHS = frozenset(
 
 
 def _is_mask_stub(cwd: str, rel: str) -> bool:
-    """True only when known-masked path AND non-regular node AND zero size all hold."""
+    """True only when known-masked path AND zero size AND stub shape (non-regular node, or read-only regular file)."""
     if rel not in MASK_STUB_PATHS:
         return False
     try:
         st = os.lstat(os.path.join(cwd, rel))
     except OSError:
         return False  # 消えた path は削除された tracked file — 正当な未コミット変更ゆえ残す
-    is_node = not (
-        stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode) or stat.S_ISLNK(st.st_mode)
-    )
-    return is_node and st.st_size == 0
+    if st.st_size != 0:
+        return False
+    if stat.S_ISREG(st.st_mode):
+        # leak した stub は 0444 の regular file として実体化する (2026-08-17 実測)。
+        return not st.st_mode & stat.S_IWUSR
+    return not (stat.S_ISDIR(st.st_mode) or stat.S_ISLNK(st.st_mode))
 
 
 def _git_uncommitted(cwd: str) -> list[str]:
@@ -422,6 +424,20 @@ class GitUncommittedTest(unittest.TestCase):
 
     def test_masked_path_with_regular_file_kept(self):
         open(os.path.join(self.cwd, ".bashrc"), "w").close()
+        self.assertEqual(self._status("?? .bashrc"), [".bashrc"])
+
+    def test_masked_readonly_empty_regular_dropped(self):
+        # 出所: 2026-08-17 実機 — mask leak が 0-byte 0444 の regular file として実体化した。
+        path = os.path.join(self.cwd, ".bashrc")
+        open(path, "w").close()
+        os.chmod(path, 0o444)
+        self.assertEqual(self._status("?? .bashrc"), [])
+
+    def test_masked_readonly_regular_with_content_kept(self):
+        path = os.path.join(self.cwd, ".bashrc")
+        with open(path, "w") as f:
+            f.write("x")
+        os.chmod(path, 0o444)
         self.assertEqual(self._status("?? .bashrc"), [".bashrc"])
 
     def test_masked_node_with_size_kept(self):
