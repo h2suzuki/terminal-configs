@@ -1,7 +1,7 @@
 ---
 name: memory-sync
-description: Inspect and drive the git-backed shared memory clone via the claude_memory_sync CLI (status, pull, retire, full reindex).
-when_to_use: TRIGGER when the user asks for memory sync state ("/memory-sync", "sync 状態", "push できてる?", "memory の同期"), wants shared memory entries pulled now, retires a memory entry, or after a diverged/broken clone was fixed. SKIP for writing new memory entries (memory-routing) and for surface precision analysis (memory-surface-analyzer).
+description: Inspect and drive the git-backed shared memory clone via the claude_memory_sync CLI (status, pull, retire, full reindex), and run the one-time migration of legacy local memory into the clone.
+when_to_use: TRIGGER when the user asks for memory sync state ("/memory-sync", "sync 状態", "push できてる?", "memory の同期"), wants shared memory entries pulled now, retires a memory entry, after a diverged/broken clone was fixed, or migrating legacy local memory dirs into the clone ("移行", "吸い上げ", "旧メモリ", "~/.claude/memory"). SKIP for writing new memory entries (memory-routing) and for surface precision analysis (memory-surface-analyzer).
 ---
 
 # Memory Sync
@@ -19,8 +19,8 @@ commit + detached push) なので、本 skill は状態確認と手動介入の�
    claude_memory_sync --status
    ```
 
-   clone の有無 / branch / fetch 可否 / push・pull 残数 / 未 commit 数 /
-   最終 pull 時刻 / push 失敗 stamp / scope 別 entry 数と index 行数が出る。
+   clone の有無 / branch / 最終 fetch 時刻 / fetch 可否 / push・pull 残数 /
+   未 commit 数 / scope 別 entry 数と index 行数が出る。
 
 2. 必要な操作を選ぶ:
 
@@ -32,6 +32,33 @@ commit + detached push) なので、本 skill は状態確認と手動介入の�
    | 溜まった未 push commit を再送 | `claude_memory_sync --push-bg` |
 
 3. 実行後は `--status` を再表示して結果 (to push = 0 等) を確認する。
+
+## Legacy migration (旧ローカルメモリの吸い上げ)
+
+installer (clone + 初回 full index) 実行済みのマシンに旧ローカルメモリ
+(`~/.claude/memory/`・`~/.claude/projects/<enc>/memory/`) が残っている場合、
+以下を **1 entry ずつ** 実施する。一括 move / 一括 import / 一括 re-scope は禁止
+(2026-08-19 に bulk 再配置で scope 混乱を起こした実例がある)。
+
+1. **対象の列挙**: 旧 dir の `feedback_*.md` を list する。`MEMORY.md` / `OLD-MEMORY.md`
+   は roster (旧方式の名簿) であって entry ではない。**OLD-MEMORY.md 収載 = 退役済み**
+   なので取り込まない
+2. **突合**: entry ごとに `~/.claude/hooks/memory_surface.py --search "<要旨>"` で clone の
+   既存 entry と比較する (model filter 無しの全 scope 検索)
+3. **マージ vs 新規の判断**: hit 候補の reminder と本文を読み、「**同じ行動を正す教訓か**」
+   で決める。文言が違っても是正指示が同じ → 既存へマージ (`models:` に観測モデル tag を
+   追記し、固有の事例・絶対日付を本文へ追記)。正す行動や状況が異なる → 新規。
+   **迷ったら新規** (誤マージの分離は難しいが、重複は後から retire が容易)
+4. **保存先の判断**: 新規の scope は memory-routing skill で判定する (org = user 非依存 /
+   user = 個人情報を含む / project = project 固有)。反映はすべて memory-routing の
+   grant + Write 経由 (auto-sync が commit + push + index まで行う)
+5. **project id はそのまま使う**: `~/.claude/projects/<enc>/memory/` の entry は clone の
+   `project/<enc>/` へ **同じ `<enc>` のまま**入れる (enc はそのマシンの project cwd 由来。
+   改名・再導出しない)。同一プロジェクトがマシン間で別 path にあり enc が食い違う場合は
+   設計どおり (scope = cwd) なので、統合はユーザーと相談してから
+6. **検証**: 旧 entry 全件が「マージ済 / 新規作成済 / 退役済で対象外」のいずれかに分類し
+   尽くされたことを一覧で確認し、`--status` で entries と index の一致を見る
+7. **後始末**: 旧 dir を `<dir>.pre-git` に rename し、ユーザー承認を得てから削除する
 
 ## Rules
 
