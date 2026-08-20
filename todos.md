@@ -78,7 +78,10 @@ Exit Criteria:
   canonical と `diff -q` 一致 — 2026-08-20 ユーザー実行、4 対 identical・
   hook 2 本の exec bit (0755) 確認済
 - [ ] 他の全マシンで terminal-configs を pull + base setup 再実行済み
-  (確認: `grep -c dual-read ~/.claude/hooks/memory_surface.py` が 1 以上)
+  (確認 2 点: `grep -c dual-read ~/.claude/hooks/memory_surface.py` が 1 以上、
+  `grep -c 理由 /etc/claude-code/hooks/memory_routing_gate.py` が 1 以上 =
+  柱語彙 理由/対処/事例/関連 の gate。未更新機は frontmatter entry の surface が
+  劣化するのみで閲覧・検索は壊れない)
 - [x] `drafts/memory-entry-format-migration.py --apply` を実行し全 entry 変換 —
   2026-08-20 実行、moved=91 renamed=2 skipped=1・再 dry-run moved=0 (冪等)・
   deploy 済 parser での全数検証 92 件 抽出 NG 0 (吸い上げ完了済で並行書込なしと
@@ -93,8 +96,8 @@ Exit Criteria:
   2026-08-20 21:01 の UserPromptSubmit (feedback_try_host_ops) と Stop hook
   (reference_user_profile、frontmatter 化後の新規 entry) の 2 経路で live 観測
 
-Work file: `drafts/memory-entry-format-migration.py` (migration 本体、dry-run 検証済。
-apply 後の git/claude_memory_sync 手順は script docstring に記載)
+Work file: なし — migration・本文正規化・柱語彙の日本語化 (clone 26f58f3 / repo a600fab)
+まで 2026-08-20 に完了済み。残るは上記の他マシン更新確認のみで、手順は本 block で自己完結
 
 ## Medium
 
