@@ -98,10 +98,10 @@ entry の種別は file 名 prefix で表す (gate が検証し、 他 prefix �
 
 | Prefix | 種別 | 本文の必須要素 |
 |---|---|---|
-| `feedback_*` | 行動是正の教訓 | h2 は `Why` → `How` (任意) → `事例` → `Related` (任意) の固定語彙 ・固定順 ・各 1 回。 `## Why` と `## 事例` (絶対日付 YYYY-MM-DD を含む) は必須 |
+| `feedback_*` | 行動是正の教訓 | h2 は `理由` → `対処` (任意) → `事例` → `関連` (任意) の固定語彙 ・固定順 ・各 1 回。 `## 理由` と `## 事例` (絶対日付 YYYY-MM-DD を含む) は必須 |
 | `reference_*` | 外部仕様の調査 snapshot | 確認日 (YYYY-MM-DD)。 見出しは自由 |
 
-**2 層契約**: h2 = 固定の役割語彙、 h3 = 自由。 深掘り分析 (`### 技術的真相` 等) は `## Why` の下、 再発 ・追記は `## 事例` の下に `### YYYY-MM-DD — <要旨>` を積む (日付先頭 = 時系列 log として append)。 旧 prefix (project_* 等) の entry は再 Write する機会に feedback_* へ rename する。
+**2 層契約**: h2 = 固定の役割語彙、 h3 = 自由。 深掘り分析 (`### 技術的真相` 等) は `## 理由` の下、 再発 ・追記は `## 事例` の下に `### YYYY-MM-DD — <要旨>` を積む (日付先頭 = 時系列 log として append)。 旧 prefix (project_* 等) の entry は再 Write する機会に feedback_* へ rename する。
 
 ### reminder + keywords + models lines in frontmatter
 
@@ -118,11 +118,11 @@ keywords: <その状況が再発した時の prompt に出る選択的な match 
 models: <観測モデルの短形式 tag (例 fable-5)。 複数は space 区切り>
 ---
 
-## Why
+## 理由
 
 <原因 ・機序>
 
-## How
+## 対処
 
 <是正手順 (任意)>
 
@@ -130,7 +130,7 @@ models: <観測モデルの短形式 tag (例 fable-5)。 複数は space 区切
 
 - YYYY-MM-DD: <発生事例>
 
-## Related
+## 関連
 
 <隣接 entry / skill (任意)>
 ```
@@ -198,7 +198,7 @@ hook を通すには、 entry を Write する **直前に** grant ファイル�
 2. 直後に entry 本体を Write する (grant は hook が消費 = 1 回限り)。
 3. 複数 entry を書くなら各 entry の直前にそれぞれ grant を作る。
 
-内容も hook が検査し、 不備なら deny する (warn は無い → **一発で受理される内容を Write**): 非空の `reminder:` / `keywords:` / `models:` 行が **frontmatter 内** に必須、 file 名 prefix は feedback_ / reference_ のみ、 feedback は本文 h2 が固定語彙 ・固定順 (`## Why` ・`## 事例` 必須、 自由見出しは h3)、 本文に絶対日付 (YYYY-MM-DD) 必須、 `oneline_summary:` 禁止、 keywords は FTS で match する固有語を含む (一般語のみ ・空は不可)、 models は小文字短形式 tag (フル ID も可)。 書式は上記「reminder + keywords + models」に従う。
+内容も hook が検査し、 不備なら deny する (warn は無い → **一発で受理される内容を Write**): 非空の `reminder:` / `keywords:` / `models:` 行が **frontmatter 内** に必須、 file 名 prefix は feedback_ / reference_ のみ、 feedback は本文 h2 が固定語彙 ・固定順 (`## 理由` ・`## 事例` 必須、 自由見出しは h3)、 本文に絶対日付 (YYYY-MM-DD) 必須、 `oneline_summary:` 禁止、 keywords は FTS で match する固有語を含む (一般語のみ ・空は不可)、 models は小文字短形式 tag (フル ID も可)。 書式は上記「reminder + keywords + models」に従う。
 
 ### Hook sync after entry write
 
