@@ -162,6 +162,8 @@ Exit Criteria:
   (c) `--model` / `--effort` が job record に届かず default model で敵対レビューが走りかけた
   (弱いレビューの「指摘ゼロ」は空の合格になる)。script が flag を固定し、起動直後に job record の
   `request.model` / `request.effort` が指定と一致することを検証するところまでを含める
+  - **既定却下 (2026-08-21・ユーザー判断)**: opus 自発起票 (7324a55 → 4e71524、ユーザー指示の記録なし)。
+    残る穴は重複起動の検出のみで、必要なら sentinel 収束対策の柱 4 (体制) で再決定する
 
 Work file: `last-session-handoff.md` の同名 section
 
@@ -172,3 +174,4 @@ Goal: tool 失敗のたびに横断検索を起動し、mute された教訓も�
 Exit Criteria:
 
 - [ ] **失敗したら毎回、過去の教訓を横断検索する**: skill には書いたが hook は tool failure を観測しない。**要件変更 (2026-08-12・ユーザー判断): 「2 回目で起動」をやめ、失敗のたびに毎回起動する** — 2 回待つ理由が無い。current turn の tool_result 失敗を検知したら `search_unfiltered()` を回し、mute された候補も含めて提示する
+- **既定却下 (2026-08-21・ユーザー判断)**: opus 自発起票 (71154f2、codex レビュー指摘の一括登録)。手動代替 (memory-routing skill の横断検索 trigger) が既在
