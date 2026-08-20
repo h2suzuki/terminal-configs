@@ -89,7 +89,9 @@ Exit Criteria:
 - [x] user_profile.md を /memory-routing 経由で user scope へ移設 (reminder/keywords
   を起草、prefix は reference_) し、旧 file を retire — 2026-08-20 実施。新 gate を
   一発通過、--search で top hit (0.685) を確認
-- [ ] 実 prompt で新形式 entry の reminder が `<memory-surface>` に inject されることを確認
+- [x] 実 prompt で新形式 entry の reminder が `<memory-surface>` に inject されることを確認 —
+  2026-08-20 21:01 の UserPromptSubmit (feedback_try_host_ops) と Stop hook
+  (reference_user_profile、frontmatter 化後の新規 entry) の 2 経路で live 観測
 
 Work file: `drafts/memory-entry-format-migration.py` (migration 本体、dry-run 検証済。
 apply 後の git/claude_memory_sync 手順は script docstring に記載)
