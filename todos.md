@@ -77,11 +77,9 @@ Exit Criteria:
   check_skill_writing.py / memory-routing・declare-and-proceed の SKILL.md) が
   canonical と `diff -q` 一致 — 2026-08-20 ユーザー実行、4 対 identical・
   hook 2 本の exec bit (0755) 確認済
-- [ ] 他の全マシンで terminal-configs を pull + base setup 再実行済み
-  (確認 2 点: `grep -c dual-read ~/.claude/hooks/memory_surface.py` が 1 以上、
-  `grep -c 理由 /etc/claude-code/hooks/memory_routing_gate.py` が 1 以上 =
-  柱語彙 理由/対処/事例/関連 の gate。未更新機は frontmatter entry の surface が
-  劣化するのみで閲覧・検索は壊れない)
+- [x] 他の全マシンで terminal-configs を pull + base setup 再実行済み —
+  2026-08-21 ユーザー確認 (他マシン対応完了の申告)。確認 2 点 (dual-read /
+  柱語彙 gate の grep) は各マシン上でのみ実行可能なため、申告を完了根拠とする
 - [x] `drafts/memory-entry-format-migration.py --apply` を実行し全 entry 変換 —
   2026-08-20 実行、moved=91 renamed=2 skipped=1・再 dry-run moved=0 (冪等)・
   deploy 済 parser での全数検証 92 件 抽出 NG 0 (吸い上げ完了済で並行書込なしと
