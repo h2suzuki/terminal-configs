@@ -13,51 +13,43 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 
 ## High
 
-### codex_task_sentinel: 敵対レビューの収束と上流依存 1 件
+### codex_task_sentinel: 敵対レビューの収束
 
-Goal: 監視判定が plugin の実挙動と skill の 4 分岐に一致する状態にする。
+起票: user 2026-08-12 以前 (fable-5 が 2026-08-21 に r76 実態へ全面書き直し。旧記述は
+git 履歴 582a5d7 以前を参照)
+
+Goal: charter 正本 (`docs/sentinel-use-cases.md`) 基準の敵対レビューで U0 ゼロ計 2 巡
+(r60 を 1 巡目と数える) の収束条件を満たし、sentinel を確定版として凍結する。
 
 Exit Criteria:
 
-- [ ] レビューの新規 material 指摘がゼロで安定する — **53 巡完走、未達**。17〜53 巡で 179 件。
-  巡ごとの件数・処理ブロック・原因タイプ・由来・修正の効果は `docs/sentinel-review-analysis.md`
-  (毎巡ここへ追記する)。要点は 3 つ: self 率が 46〜53 巡で **88%**、修正が次巡に生んだ指摘が
-  **93 件 (52%)**、効果判定が **worsened 34 巡 / improved 0 巡**。件数自体は 12 (r19) → 2〜6 に
-  収束したが、中身が preexisting から自作欠陥に置き換わっただけである。
-  なお 53 巡で分かったが、**自作欠陥は直前の巡のものとは限らない** — 5 件の出所は r52 が 3 件、
-  r34 が 1 件、r19 が 1 件で、34 巡ぶん残っていたものがある
-- [ ] **指摘を生成側の癖として潰す** — 5 つの形 (配り漏れ / comment が code を追い越す /
-  虚偽の完了報告 / 再検査の半径不足 / 同一 commit 内の同型再発) を user memory の
-  `feedback_reading_the_outside_world.md` に記録済み。それでも 52 巡目の指摘 1 は 48 巡目と
-  同じ「期限 gate 外の early return」で、4 巡後の再演だった。**記録しただけでは止まっていない**
-- [x] **test で守れていない修正をゼロにする** — 51・52 巡と 2 巡続けて「差の出る fixture を作れない」として
-  test 無しで閉じていた 2 件 (`pin_hold` の持ち越しと `resolved_unknown` の非クリア) に、53 巡で test が付いた。
-  53 巡の発注書でその判断自体を開示して裁定を求めたところ、両方とも観測可能と返り、`complete=False` で
-  周を跨がせる 3 周 fixture の作り方まで示された。**作れないと思ったものが、開示したら作れた**
-- [ ] **収束対策 4 本柱の採否をユーザーが判断し、決定した柱を実行する** — 2026-08-12 に立案済
-  (詳細は `last-session-handoff.md` 同 section)。柱: (1) 構造 refactor = watch() の return 22 箇所を
-  単一 finish() funnel に集約 + 4 読取経路の Observation 層統一 (裁定 21 は「1 点に集約」と言うが実体は
-  `deadline_reached()` 手書き 12 箇所と実測)、(2) 47 裁定の機械化 = AST/grep の決定的 meta-test 化 +
-  裁定本文の docs/ 移管、(3) TOCTOU enumerator harness、(4) 体制 = codex 実装 / opus 5 xhigh 巡内レビュー /
-  収束認定は codex sol xhigh 2 巡連続ゼロ。根拠: 179 件の 73% (forgot 85 + contradictory 34 +
-  unfinished 12) が per-site 手配り型で、閉じたクラスは全て機構化 or 全数突合によるもの。
-  **ユーザー判断待ち 2 点**: 柱 1 の refactor まで踏み込むか / refactor 実装を sol medium から xhigh に上げるか
-- [x] **deploy の 23 巡分の遅れを解消する** — 2026-08-13 00:05 にユーザーが
-  `sudo install` を実行。`diff -q /usr/local/bin/codex_task_sentinel files/codex_task_sentinel`
-  IDENTICAL (meta-test 込みの `55c618e` 相当)・mode 0755 を確認済み
-- [x] log 由来の曖昧さが正常 job の cancel を招かない — 既定で cancel 導線 (exit 4/3) を出さず、
-  exit 14 で evidence を示して判断を呼び手に渡す (206ce7a)。断定したい呼び手は `--trust-log`。
-  12 巡目が 504 case の直積で「既定の exit 3/4 は 0 件」「`--trust-log` は旧判定と mismatch 0」を実測
-- [x] **worktree を作り直したときの plugin state dir 掃除を機構化する**: 同じ path で
-  `git worktree add` し直すと `plugin data/state/<worktree>-<hash>/` が再利用され、job が
-  `failed to load configuration: No such file or directory` で即死する (2026-08-09 に実際に踏んだ)。
-  `files/claude_managed-hooks/codex_worktree_gate.py` が plugin と同じ規則で state dir を導き
-  (`_state_dirs` / `_oldest_record`)、worktree より古い state dir が残っていれば deny して
-  `rm -rf` を指示する
+- [x] 収束対策 build 3 柱の実装 — 裁定の機械化 `55c618e` (08-12) / 構造 refactor 3 段
+  `c067c0b`・`0425a28`・`265ccfe` / TOCTOU harness `f109f59` (08-13)。いずれも opus xhigh
+  レビュー + fix round を経て main 着地 (`docs/sentinel-convergence-log.md` 柱別 status 表)
+- [x] 収束認定巡 r54〜r76 (23 巡・全て 2026-08-13) を実施 — selftest 244 → 325、裁定 47 → 60
+  (`LAST_RULING=60` を 2026-08-21 実測)。旧基準 (material ゼロ 2 巡連続) は r60 で 1/2 →
+  r61 reset で成立せず (`docs/sentinel-review-analysis.md` §8)
+- [x] 収束基準を charter v3 + 裁定 60 (U0/U1/U2) へ再定義 — 2026-08-13 ユーザー承認。根拠の
+  遡及実測「r60 以降の採用 28 件中 P0 級 3 件のみ = 旧条件は新規前提の無限発掘を課す構造」。
+  新体制 2 巡で「過剰実装検出 (r76 初の削る fix)」と「人間 escalation (U1)」の両方が設計どおり発動
+- [x] deploy 一致 — 2026-08-21 実測 `diff -q /usr/local/bin/codex_task_sentinel
+  files/codex_task_sentinel` IDENTICAL (325 selftests 版)
+- [ ] **ユーザー判断: loop を続行して認定を取り切るか** — r77 で認定完了を狙うか、現状
+  (r76 着地・deploy 一致) で未認定のまま凍結するか。U0 は r75=2 → r76=1 と減少中で、
+  認定成立まで残り 1 巡 (U0 ゼロ) の地点で 2026-08-13 21:25 に session 途絶により中断
+- [ ] **ユーザー判断: U1 決裁「(a) 撤去」の再確認** — 「別 inode 差し替え防御は過剰実装か」に
+  2026-08-13 21:21「(a) 撤去 + 裁定 38/39/44/45 改廃」と決裁済みだが、直後の session 途絶で
+  未実装・文書未反映 (唯一の一次記録 = transcript 68ddd1bf line 8749。当時の発注側推奨は
+  (b) 維持)。8 日経過につき有効性を再確認する
+- [ ] 裁定 61 (U1 の帰結) を `docs/sentinel-rulings.md` へ commit + `LAST_RULING` bump して
+  から、撤去 round を発注・着地する — ledger-first (決裁を文書に落としてから実装。今回の
+  8 日停止の真因 = 決裁が transcript にのみ存在)
+- [ ] r77 を発注し、U0 ゼロなら収束 2/2 成立を `docs/sentinel-convergence-log.md` へ記録して
+  凍結 — 再開手順は同 log 末尾「ここで停止」節が正本
 
-Work file: `last-session-handoff.md` の同名 section (再開手順)、
-`docs/sentinel-review-analysis.md` (17 巡以降の全指摘の集計)、
-`drafts/sentinel-review-r{17..53}.md` (発注書)、`drafts/sentinel-review-r{17..30,52,53}-report.md` (報告書)
+Work file: `docs/sentinel-convergence-log.md` 末尾「ここで停止」節 (再開点)、
+`docs/sentinel-review-analysis.md` §8 (r54〜r76 全記録)、`docs/sentinel-use-cases.md`
+(charter 正本)、`docs/sentinel-rulings.md` (裁定 60 まで)、`last-session-handoff.md` の同名 section
 
 ## Medium
 
@@ -69,7 +61,8 @@ Goal: sentinel 級に小さな要件 (またはそこまでブレイクダウン
 
 Exit Criteria:
 
-- [ ] 前提: sentinel の収束対策 (柱 1〜3 + 収束認定) が完了している
+- [ ] 前提: sentinel の収束認定が成立している (build 3 柱は 2026-08-13 完了済み。残るは
+  U1 裁定の再確認と r77 — sentinel block 参照)
 - [ ] ケース選定と成功基準 (収束 round 数の上限・material 残ゼロ・token 量) をユーザーと合意する
 - [ ] 各ケースの台帳 (由来列つき) を docs/ に記録し、結果を方法論 doc へ反映する
 
