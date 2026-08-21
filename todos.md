@@ -170,9 +170,17 @@ Exit Criteria:
   (main)・撤去 round 受け入れ済み `6b3d2ee` (wt-ruling61 branch・selftest 325→315 全緑)。
   main への取り込みは r77 認定後に行う
 - [ ] r77 を発注し、U0 ゼロなら収束 2/2 成立を `docs/sentinel-convergence-log.md` へ記録して
-  凍結 — 再開手順は同 log 末尾「ここで停止」節が正本。進捗 2026-08-21: r77 発注済み
-  (発注書 `wt-ruling61/drafts/sentinel-r77-review-order.md` 新 lint rc=0・sol xhigh・
-  verdict 6 項目 + per-finding 構造判定を要求・実行中)
+  凍結 — 再開手順は同 log 末尾「ここで停止」節が正本。**r77 実施済み 2026-08-21
+  (sol xhigh・verdict 6 項目形式)**: needs-attention U0 2 / U1 1 / U2 0
+  (報告書 `wt-ruling61/drafts/sentinel-r77-report.md`)。処置は全て削除・文書整合系:
+  旧 test 名の意味反転流用の解消 (撤去 diff 由来・受け入れの名前照合を素通し) +
+  未使用 helper 削除 + 裁定表の整合。fix 後に r78 で U0 ゼロなら r60 + r78 で 2/2
+- [ ] **ユーザー裁定 (判断待ち・r77 の U1)**: (1) 裁定 61 の廃止列挙の補完 — 裁定 35 の
+  「inode 不一致は無条件に移動」条項と裁定 55 の「候補履歴 cap (MAX_SEEN_PAIRS)」条項は
+  同じ防御 family で、実装は撤去済みだが台帳が未改廃 (reviewer の上流批評)。廃止追認の可否。
+  (2) 裁定 42/43 と裁定 61 の衝突 — 同 inode の truncate + 再書込 (正本 S-9 の正常系) を
+  永久 corrupt に固定しうる。reviewer 提案 = (a) 42/43 も廃止し retry で採る (S-9・削減方針に
+  整合) / (b) 保持し正本へ理由と期待 exit を明記。決裁後に fix round + r78 を 1 回で実施
 
 Work file: `docs/sentinel-convergence-log.md` 末尾「ここで停止」節 (再開点)、
 `docs/sentinel-review-analysis.md` §8 (r54〜r76 全記録)、`docs/sentinel-use-cases.md`
