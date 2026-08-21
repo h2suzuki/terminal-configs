@@ -88,8 +88,11 @@ Exit Criteria:
   **main merge 済み 2026-08-22** (`5bb0448`・否定断定語彙拡張 `b5aea25` を含む)。
   **deploy 完了 2026-08-22** (ユーザーが base setup 実行・stop_checks.py / codex_order_lint /
   managed extensions とも `diff -q` IDENTICAL 実測・審判 hook は新規 session から有効)。
-  残る実測対象: warn family 4 種 + 否定断定の新語彙 warn (誤爆率 → blocking 昇格判断) +
-  Stop の Sonnet 審判 hook `cc607a0` (発火頻度・誤爆 → rubric の締め/緩め調整)。
+  残る実測対象: warn family 4 種 + 否定断定の新語彙 warn (誤爆率 → blocking 昇格判断)。
+  ~~Stop の Sonnet 審判 hook~~ は **revert 済み 2026-08-22** (`7efefd4`) — 隣 session の
+  「承認済み」主張が本人未合意と確定したため (実装は `cc607a0` に保存・再実装は本人合意後)。
+  配備側の巻き戻しはユーザーの host copy 待ち。否定断定 warn 拡張 (依頼 1) の扱いも
+  ユーザー確認中。
   **live finding 1 (2026-08-22 実測)**: work-without-task が mytask 8 件登録済み session で
   誤 block — mytask store は repo top の `drafts/tasks/<sid>.json` に実在するが、payload cwd
   (repo 深部の subdir) 相対で探して 0 件と判定。処方候補 = store 解決を git root 起点へ
