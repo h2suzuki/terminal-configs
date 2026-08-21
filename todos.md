@@ -66,7 +66,14 @@ Exit Criteria:
   (`wt-gates/drafts/review-gates-fixes-10.md`・回帰 filter 全文 =
   `wt-gates/drafts/review-gates-fixes-9-regression-review.md`)。防止機構「上流指摘の断定は
   一次ソース照合」を方法論 §7.2 へ正本化 commit 済み。新 lint 4 検査は sentinel loopback
-  発注書で初実戦し依存閉包棚卸し節の欠落を正しく検出 (機能確認 1 例)
+  発注書で初実戦し依存閉包棚卸し節の欠落を正しく検出 (機能確認 1 例)。
+  **fix round 10 納品** → 決定的 gates 全緑 (発注側再実行) → **filter round 2 = 前巡 8 件中
+  7 解消・1 部分解消 (funnel 外 warning 2 family) + 新規 3 件 (計 findings 4)** —
+  passthrough 全捨ての振り子 (companion は `--` 以降を prompt 連結 = 検査の穴) / 偽 comment・
+  stale docstring / subTest 外 assert。同段不通過 2 回目 → 構造再審 =「gate の CLI model は
+  companion の写し」原則を明記し fix round 11 発注済み
+  (`wt-gates/drafts/review-gates-fixes-11.md`・両 lint rc=0・filter round 2 報告 =
+  `wt-gates/drafts/review-gates-fixes-10-regression-review.md`)
 - [ ] **(g) codex の直接起動を禁止する — 強固に** (2026-08-21 ユーザー決裁 + 同日「強固に
   おこなうべき」で強化) — codex_delegation_gate を「注意喚起」から「deny」へ:
   main agent の Bash からの companion 起動 (全 subcommand・`task-worker` 含む) は**一律 deny**。
