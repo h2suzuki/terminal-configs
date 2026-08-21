@@ -93,7 +93,17 @@ Exit Criteria:
   **live finding 1 (2026-08-22 実測)**: work-without-task が mytask 8 件登録済み session で
   誤 block — mytask store は repo top の `drafts/tasks/<sid>.json` に実在するが、payload cwd
   (repo 深部の subdir) 相対で探して 0 件と判定。処方候補 = store 解決を git root 起点へ
-  (是正 round で対応)
+  (是正 round で対応)。
+  **live finding 2 (2026-08-22 実測)**: 検査 (g) の deny が plugin 既製
+  adversarial-review command の起動 flow (main agent の Bash) と衝突 — command は model の
+  Bash 実行を規定するため、gate 配備後は model からこの command を実行できない。ユーザー
+  裁定 = 挑戦レビューは発注書方式 (rescue 経由) へ切替えて実施 (走行中)。処方候補 =
+  運用を発注書方式へ一本化するか、gate に plugin command 由来の実行だけ識別可能な許可を
+  設けるか — 是正 round で判断
+- [ ] **検問実装への挑戦レビュー (発注書方式・2026-08-22 ユーザー承認)** — 発注書
+  `wt-gates/drafts/gates-challenge-review-order.md` (lint rc=0)・対象 = 検問 line 全 diff
+  (3 file・+2210/−173)・sol xhigh 走行中。報告書 `wt-gates/drafts/gates-challenge-report.md`
+  の verdict を受けて処置を決める
 - [ ] **(g) codex の直接起動を禁止する — 強固に** (2026-08-21 ユーザー決裁 + 同日「強固に
   おこなうべき」で強化) — codex_delegation_gate を「注意喚起」から「deny」へ:
   main agent の Bash からの companion 起動 (全 subcommand・`task-worker` 含む) は**一律 deny**。
