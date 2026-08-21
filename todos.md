@@ -49,6 +49,12 @@ Exit Criteria:
 
 - [ ] 教訓 (1)〜(6) (Medium「方法論の実証」block に記録済み: 停止規則 / fix 型制限 /
   品質推定 / 計数と判定の分業 / 統計の適用領域 / round scope 分離) を doc へ反映
+- [ ] transcript 監査 (2026-08-21) で確定した doc 行き要素を per-member 対応表つきで反映:
+  round 0 の裁定 catalog 先渡し / finding round は read-only (直さず推定表へ) /
+  self P0 の rollback 規律 / 終盤 round で機構追加が必要なら 5 巡収束は失敗と判定
+  (黙って延長しない) / 裁定→fixture の粒度 pin / strangler 型 (全面 rewrite 不採用) /
+  capture-recapture の適用限定 (独立性成立時のみ) / 台帳集計 (分布 summary) の script 化。
+  定義済み列挙を doc へ転写する際は要素単位の対応表を必須とする (lossy 転写の禁止)
 - [ ] codex 意見書 (`drafts/quality-estimation-opinion-report.md` §5) の 5 巡 protocol と
   突合し、入場条件・round 別の入力/出力/判定・「巡数を黙って延長しない」規律を正本化
 - [ ] **fix diff の実物精査** — 認定 era の埋め込み ~10 件を commit diff 水準で分析し、
