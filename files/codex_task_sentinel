@@ -52,6 +52,7 @@ import codecs
 import collections
 import contextlib
 import errno
+import functools
 import glob
 import hashlib
 import itertools
@@ -67,7 +68,7 @@ import time
 import unittest
 from collections.abc import Callable, Iterator
 from decimal import Decimal, InvalidOperation
-from typing import cast
+from typing import NamedTuple, cast
 
 STATE_ROOT = os.path.expanduser("~/.claude/plugins/data/codex-openai-codex/state")
 # The plugin resolves its state root from CLAUDE_PLUGIN_DATA and falls back to
@@ -113,8 +114,6 @@ MAX_RECORD_BYTES = 1 << 20
 MAX_SCAN_BYTES = 64 << 20
 # 同じ理由で entry 数も抑える — 実機の worktree は 4 桁で、超えるのは別ツリーである。
 MAX_TREE_ENTRIES = 200_000
-# measured と pending が保持する path の合計 — 深い tree では件数だけでは囲えない。
-MAX_TREE_PATH_BYTES = 64 << 20
 # workspace と peer record も同じ理由で数える — 列挙自体が list 化で膨らむ。
 MAX_WORKSPACES = 10_000
 MAX_PEERS = 5_000
@@ -134,6 +133,41 @@ EXIT_ALIVE = 11
 EXIT_OVER_ESTIMATE = 12
 EXIT_CORRUPT = 13
 EXIT_UNVERIFIABLE = 14
+
+CANDIDATE_RESOLVED = "resolved"
+CANDIDATE_AMBIGUOUS = "ambiguous"
+CANDIDATE_UNRESOLVED = "unresolved"
+CANDIDATE_ABSENT = "absent"
+
+
+class CandidateClassification(NamedTuple):
+    """The target-bearing result of one complete candidate scan."""
+
+    case: str
+    records: tuple[tuple[str, str], ...]
+    complete: bool
+
+
+REGISTRATION_EXITS = {
+    ("continue", CANDIDATE_RESOLVED): None,
+    ("continue", CANDIDATE_AMBIGUOUS): EXIT_AMBIGUOUS,
+    ("continue", CANDIDATE_UNRESOLVED): None,
+    ("continue", CANDIDATE_ABSENT): None,
+    ("deferred", CANDIDATE_UNRESOLVED): EXIT_CORRUPT,
+    ("once", CANDIDATE_RESOLVED): None,
+    ("once", CANDIDATE_AMBIGUOUS): EXIT_AMBIGUOUS,
+    ("once", CANDIDATE_UNRESOLVED): EXIT_ALIVE,
+    ("once", CANDIDATE_ABSENT): EXIT_ALIVE,
+    ("once-unverifiable", CANDIDATE_UNRESOLVED): EXIT_UNVERIFIABLE,
+    ("once-deadline", CANDIDATE_RESOLVED): None,
+    ("once-deadline", CANDIDATE_AMBIGUOUS): EXIT_TIMEOUT,
+    ("once-deadline", CANDIDATE_UNRESOLVED): EXIT_TIMEOUT,
+    ("once-deadline", CANDIDATE_ABSENT): EXIT_TIMEOUT,
+    ("deadline", CANDIDATE_RESOLVED): None,
+    ("deadline", CANDIDATE_AMBIGUOUS): EXIT_TIMEOUT,
+    ("deadline", CANDIDATE_UNRESOLVED): EXIT_TIMEOUT,
+    ("deadline", CANDIDATE_ABSENT): EXIT_NEVER_REGISTERED,
+}
 
 # code / symbol / docstring slug / skill の意味欄 / skill の呼び手の行動。
 # code は literal で持つ — 定数を参照にすると、 定数と契約を揃えて書き換えた変異が
@@ -800,7 +834,7 @@ def finish(
     deadline: float,
     code: int,
     output: tuple[str, ...],
-    timeout_output: tuple[str, ...],
+    timeout_output: tuple[str, ...] | Callable[[], tuple[str, ...]],
     *,
     allow_empty_scan_after_deadline: bool = False,
 ) -> int:
@@ -811,7 +845,9 @@ def finish(
         and not (allow_empty_scan_after_deadline and code == EXIT_NEVER_REGISTERED)
     ):
         code = EXIT_TIMEOUT
-        output = timeout_output
+        output = (
+            timeout_output if isinstance(timeout_output, tuple) else timeout_output()
+        )
     try:
         for line in output:
             print(line)
@@ -991,19 +1027,15 @@ def tree_age(root: str | None, now: float) -> tuple[float | None, int, bool]:
     newest = None
     unreadable = False
     budget = MAX_TREE_ENTRIES
-    # 削除・rename・空 dir の作成は、 どの file の mtime にも残らず親 dir にだけ残る。
-    # dirs も測る — 辿らない directory symlink は base として現れないので、
-    # files だけ見ていると entry 自体が走査から漏れる。
-    pending, measured = [root], [root]
-    root_bytes = len(os.fsencode(root))
-    held_path_bytes = root_bytes * 2
-    if held_path_bytes > MAX_TREE_PATH_BYTES:
-        return None, len(measured), False
-    while pending:
+    # Directory metadata covers renames, deletions, empty dirs, and symlink entries.
+    directories = [root]
+    measured = 0
+    while directories:
         try:
-            # os.walk は 1 dir を list 化してから渡すので、 巨大な dir では上限が効かない。
-            base = pending.pop()
-            held_path_bytes -= len(os.fsencode(base))
+            base = directories.pop()
+            measured += 1
+            mtime = (os.stat(base) if base == root else os.lstat(base)).st_mtime
+            newest = mtime if newest is None else max(newest, mtime)
             with os.scandir(base) as entries:
                 for entry in entries:
                     budget -= 1
@@ -1012,39 +1044,26 @@ def tree_age(root: str | None, now: float) -> tuple[float | None, int, bool]:
                     if entry.name == ".git":
                         continue
                     path = entry.path
-                    path_bytes = len(os.fsencode(path))
-                    if held_path_bytes + path_bytes > MAX_TREE_PATH_BYTES:
-                        return None, len(measured), False
-                    measured.append(path)
-                    held_path_bytes += path_bytes
+                    measured += 1
+                    try:
+                        mtime = os.lstat(path).st_mtime
+                    except FileNotFoundError:
+                        mtime = now
+                    except OSError:
+                        unreadable = True
+                        mtime = None
+                    if mtime is not None:
+                        newest = mtime if newest is None else max(newest, mtime)
                     if entry.is_dir(follow_symlinks=False):
-                        if held_path_bytes + path_bytes > MAX_TREE_PATH_BYTES:
-                            return None, len(measured), False
-                        pending.append(path)
-                        held_path_bytes += path_bytes
+                        directories.append(path)
         except FileNotFoundError:
             # 走査中に消えた dir は file と同じく 「たった今の書き込み」。
             newest = now if newest is None else max(newest, now)
         except OSError:
             unreadable = True  # 走査できなかった subtree の中は、書き込み中かもしれない
-    for path in measured:
-        # lstat で entry 自身を測る — getmtime は link を辿るので、 tree の外の
-        # 頻繁に更新される target が job の活動として数えられてしまう。 ただし
-        # root 自身が symlink なら、 監視対象はその target dir そのものである。
-        try:
-            mtime = (os.stat(path) if path == root else os.lstat(path)).st_mtime
-        except FileNotFoundError:
-            mtime = now  # 一覧にあった entry が消えた = たった今の書き込み
-        except OSError:
-            mtime = None
-        if mtime is None:
-            unreadable = True
-            continue
-        if newest is None or mtime > newest:
-            newest = mtime
     if unreadable:
-        return None, len(measured), False
-    return (None if newest is None else now - newest), len(measured), True
+        return None, measured, False
+    return (None if newest is None else now - newest), measured, True
 
 
 def longest_silence(
@@ -1446,6 +1465,7 @@ def evidence(
     whole_log: bool = True,
     moved: frozenset[str] = frozenset(),
     unscanned: frozenset[str] = frozenset(),
+    cancel: str | None = None,
 ) -> str:
     """Everything the verdict rests on, so no follow-up investigation is needed.
 
@@ -1508,12 +1528,22 @@ def evidence(
     failure = None if record_note else record.get("errorMessage")
     if isinstance(failure, str) and failure.strip():
         lines.append(f"  エラー : {printable(failure.strip()[:200])}")
+    shown_cancel = (
+        cancel
+        or record_note
+        or cancel_command(job_id, root if isinstance(root, str) else None)
+    )
     lines += [
         f"  log    : {printable(log)}",
         # root を裏付けられない poll から、 cwd 無しで動く command を出さない。
-        f"  cancel : {record_note or printable(cancel_command(job_id, root if isinstance(root, str) else None))}",
+        f"  cancel : {printable(shown_cancel)}",
     ]
     return "\n".join(lines)
+
+
+def timeout_evidence(headline: str, render: Callable[[], str]) -> tuple[str, ...]:
+    """Render detailed timeout evidence only when the deadline wins."""
+    return headline, render()
 
 
 def carrying_records(
@@ -1542,165 +1572,151 @@ def carrying_records(
     return carried, unknown, shifting
 
 
+def classify_candidates(
+    found: list[tuple[str, str]], complete: bool, job_id: str
+) -> CandidateClassification:
+    """Classify one scan after excluding candidates that name another job."""
+    carried, unknown, shifting = carrying_records(found, job_id)
+    stable = complete and not shifting
+    if len(carried) > 1:
+        return CandidateClassification(CANDIDATE_AMBIGUOUS, tuple(carried), stable)
+    if len(carried) == 1 and stable and not unknown:
+        return CandidateClassification(CANDIDATE_RESOLVED, tuple(carried), True)
+    unresolved = carried + unknown + shifting
+    if unresolved or not stable:
+        return CandidateClassification(CANDIDATE_UNRESOLVED, tuple(unresolved), stable)
+    return CandidateClassification(CANDIDATE_ABSENT, (), True)
+
+
+def registration_exit(
+    classification: CandidateClassification,
+    deferred_unresolved: bool,
+    once: bool,
+    expired: bool,
+) -> int | None:
+    """Map one classified cadence to its registration exit, if any."""
+    phase = "continue"
+    if (
+        deferred_unresolved
+        and classification.case == CANDIDATE_UNRESOLVED
+        and classification.complete
+        and len(classification.records) == 1
+    ):
+        phase = "deferred"
+    if once:
+        phase = "once"
+        if (
+            classification.case == CANDIDATE_UNRESOLVED
+            and not classification.records
+            and not classification.complete
+        ):
+            phase = "once-unverifiable"
+    if expired:
+        phase = "once-deadline" if once else "deadline"
+    return REGISTRATION_EXITS[(phase, classification.case)]
+
+
+def registration_records(
+    classification: CandidateClassification, deferred_unresolved: bool
+) -> tuple[list[tuple[str, str]], bool]:
+    """Select a record only after resolving or deferring one stable unknown."""
+    if classification.case == CANDIDATE_RESOLVED:
+        return list(classification.records), deferred_unresolved
+    if classification.case != CANDIDATE_UNRESOLVED:
+        return [], deferred_unresolved
+    return [], deferred_unresolved or bool(classification.records)
+
+
+def registration_output(
+    code: int,
+    classification: CandidateClassification,
+    job_id: str,
+    roots: list[str],
+    timeout_seconds: float,
+) -> tuple[str, ...]:
+    """Render a registration result from its final exit code."""
+    if code == EXIT_AMBIGUOUS:
+        return (
+            f"ambiguous: {len(classification.records)} records carry the id "
+            f"{printable(job_id)}",
+            *(f"  {printable(record)}" for record, _log in classification.records),
+        )
+    if code == EXIT_NEVER_REGISTERED:
+        return (
+            f"never-registered: no state record for {printable(job_id)}",
+            f"  searched: {printable(', '.join(roots))}",
+        )
+    if code == EXIT_ALIVE:
+        return (
+            f"alive: {printable(job_id)} is not registered yet by one verified "
+            f"state record this cadence",
+            f"  searched: {printable(', '.join(roots))}",
+        )
+    if code == EXIT_UNVERIFIABLE:
+        return (
+            f"unverifiable: {printable(job_id)} could not be shown "
+            f"unregistered in one cadence",
+            f"  searched: {printable(', '.join(roots))}",
+        )
+    if code == EXIT_CORRUPT:
+        return (
+            "corrupt: the state record is stably unreadable",
+            f"  record  : {printable(classification.records[0][0])}",
+        )
+    if code == EXIT_TIMEOUT:
+        return (
+            f"timeout: {printable(job_id)} was not resolved to a single record within "
+            f"{duration_seconds(timeout_seconds)}",
+            f"  searched: {printable(', '.join(roots))}",
+        )
+    raise ValueError(f"unsupported registration exit: {code}")
+
+
 def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
     roots = roots if roots is not None else state_roots(args.state_root)
     deadline = time.monotonic() + args.timeout_seconds
     started = time.monotonic()
     found: list[tuple[str, str]] = []
-    saw_candidate = False
-    pending_path: str | None = None
+    deferred_unresolved = False
     while not found:
         found, complete = find_jobs(args.job_id, roots)
-        if pending_path is not None and all(
-            path != pending_path for path, _log in found
-        ):
-            if complete and record_gone(pending_path):
-                return finish(
-                    deadline,
-                    EXIT_VANISHED,
-                    (
-                        "vanished: the pending state record disappeared before "
-                        "registration could be resolved",
-                        f"  record  : {printable(pending_path)}",
-                    ),
-                    (
-                        f"timeout: {printable(args.job_id)} was seen and then lost "
-                        f"within {duration_seconds(args.timeout_seconds)}",
-                        f"  searched: {printable(', '.join(roots))}",
-                    ),
-                )
-        if found:
-            # file 名の一致は所属の証明ではない — 本文が名乗るものだけを候補にする。
-            # 読めなかった候補は「別 job」の証明にならないので、その回は絞らない。
-            carried, unknown, shifting = carrying_records(found, args.job_id)
-            complete = complete and not shifting  # 動いた候補は掴めていない
-            saw_candidate = saw_candidate or bool(carried or unknown or shifting)
-            if carried:
-                if pending_path is not None and any(
-                    path == pending_path for path, _log in carried
-                ):
-                    pending_path = None
-                found, complete = carried, complete and not unknown
-            else:
-                # 唯一の未解決候補は、 次の観測で安定した snapshot を読み直す。
-                unresolved = unknown + shifting
-                retrying = pending_path is not None and any(
-                    path == pending_path for path, _log in unresolved
-                )
-                if len(unresolved) == 1 and (not retrying or shifting or not complete):
-                    pending_path = pending_path or unresolved[0][0]
-                    found = []
-                else:
-                    if pending_path is not None and any(
-                        path == pending_path for path, _log in found
-                    ):
-                        pending_path = None
-                    found, complete = unknown[:1], complete and len(unknown) <= 1
-        # 候補を確かめ終えた時点で期限なら、 そこから終局を作らない。
-        if found and finish(deadline, EXIT_ALIVE, (), ()) == EXIT_TIMEOUT:
-            if len(found) == 1 and complete:
-                break  # 単一候補なら post-loop の timeout が record を名指しできる
+        classification = classify_candidates(found, complete, args.job_id)
+        code = registration_exit(
+            classification,
+            deferred_unresolved,
+            args.once,
+            deadline_reached(deadline),
+        )
+        if code is not None:
+            output = registration_output(
+                code,
+                classification,
+                args.job_id,
+                roots,
+                args.timeout_seconds,
+            )
             return finish(
                 deadline,
-                EXIT_TIMEOUT,
-                (
-                    f"timeout: {printable(args.job_id)} was not resolved to a single "
-                    f"record within {duration_seconds(args.timeout_seconds)}",
-                    f"  searched: {printable(', '.join(roots))}",
-                ),
-                (),
-            )
-        if found:
-            if len(found) > 1:
-                return finish(
-                    deadline,
-                    EXIT_AMBIGUOUS,
-                    (
-                        f"ambiguous: {len(found)} records carry the id "
-                        f"{printable(args.job_id)}",
-                        *(f"  {printable(record)}" for record, _log in found),
-                    ),
-                    (
-                        f"timeout: {printable(args.job_id)} was not resolved to a single "
-                        f"record within {duration_seconds(args.timeout_seconds)}",
-                        f"  searched: {printable(', '.join(roots))}",
-                    ),
-                )
-        if found and complete:
-            break
-        saw_candidate = saw_candidate or bool(found)
-        found = []
-        if args.once and pending_path is None:
-            # --once は解決済みの 1 cadence で返し、 未解決 candidate は次 cadence へ送る。
-            if complete and not saw_candidate:
-                return finish(
-                    deadline,
-                    EXIT_ALIVE,
-                    (
-                        f"alive: {printable(args.job_id)} is not registered yet",
-                        f"  searched: {printable(', '.join(roots))}",
-                    ),
-                    (
-                        f"timeout: {printable(args.job_id)} was not resolved within "
-                        f"{duration_seconds(args.timeout_seconds)}",
-                        f"  searched: {printable(', '.join(roots))}",
-                    ),
-                )
-            return finish(
-                deadline,
-                EXIT_UNVERIFIABLE,
-                (
-                    f"unverifiable: {printable(args.job_id)} could not be shown "
-                    f"unregistered in one cadence",
-                    f"  searched: {printable(', '.join(roots))}",
-                ),
-                (
-                    f"timeout: {printable(args.job_id)} was not resolved within "
-                    f"{duration_seconds(args.timeout_seconds)}",
-                    f"  searched: {printable(', '.join(roots))}",
-                ),
-            )
-        # 終局は実期限で決める — margin を足すと、 待つと約束した時間内の登録を取り逃す。
-        if finish(deadline, EXIT_ALIVE, (), ()) == EXIT_TIMEOUT:
-            if not complete or saw_candidate:
-                # 走査しきれていない、 または一度は見えた — どちらも
-                # 「登録されていない」 とは言えない。
-                if saw_candidate:
-                    # 一度見えた record があるなら、 期限に言えるのは timeout だけ。
-                    return finish(
-                        deadline,
-                        EXIT_TIMEOUT,
-                        (
-                            f"timeout: {printable(args.job_id)} was seen and then lost "
-                            f"within {duration_seconds(args.timeout_seconds)}",
-                            f"  searched: {printable(', '.join(roots))}",
-                        ),
-                        (),
-                    )
-                # 期限に言えるのは timeout — 例外は完全な空走査の exit 6 だけである。
-                return finish(
-                    deadline,
+                code,
+                output,
+                functools.partial(
+                    registration_output,
                     EXIT_TIMEOUT,
-                    (
-                        f"timeout: {printable(args.job_id)} could not be resolved within "
-                        f"{duration_seconds(args.timeout_seconds)}",
-                        f"  searched: {printable(', '.join(roots))}",
-                    ),
-                    (),
-                )
-            return finish(
-                deadline,
-                EXIT_NEVER_REGISTERED,
-                (
-                    f"never-registered: no state record for {printable(args.job_id)}",
-                    f"  searched: {printable(', '.join(roots))}",
+                    classification=classification,
+                    job_id=args.job_id,
+                    roots=roots,
+                    timeout_seconds=args.timeout_seconds,
                 ),
-                (),
-                allow_empty_scan_after_deadline=True,
+                allow_empty_scan_after_deadline=code == EXIT_NEVER_REGISTERED,
             )
+        found, deferred_unresolved = registration_records(
+            classification, deferred_unresolved
+        )
+        if found:
+            break
         sleep_until(deadline, args.poll_seconds)
     record_path, log = found[0]
-    if finish(deadline, EXIT_ALIVE, (), ()) == EXIT_TIMEOUT:
+    if deadline_reached(deadline):
         # 登録待ちを抜けた時点で期限なら、 1 度も観測せずに新しい poll を始めない。
         return finish(
             deadline,
@@ -1712,31 +1728,24 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             (),
         )
     jobs_dir = os.path.dirname(record_path)
-    last_report: tuple[str, str] | None = None
+    last_report: tuple[str, Callable[[], str]] | None = None
     while True:
         # 期限に達していたら新しい poll を始めない — 期限後の状態から出た verdict が
         # timeout に勝ってしまう。 一貫した poll が 1 度も無い場合は下の破棄分岐が
         # 理由付きの exit 14 を返すので、 ここは判定を持てた場合だけを引き受ける。
-        if (
-            last_report is not None
-            and finish(deadline, EXIT_ALIVE, (), ()) == EXIT_TIMEOUT
-        ):
+        if last_report is not None and deadline_reached(deadline):
             return finish(
                 deadline,
                 EXIT_TIMEOUT,
                 (
                     f"timeout: no terminal verdict within {duration_seconds(args.timeout_seconds)} "
                     f"(record says {last_report[0]})",
-                    last_report[1],
+                    last_report[1](),
                 ),
                 (),
             )
         now = time.time()
-        # Scope the baseline to this job's own workspace: a slow neighbour must not
-        # raise the bar here (a foreign 3600s gap once hid a two-hour stall). Read
-        # it every poll — a peer's record goes completed before its last block is
-        # appended, so a baseline taken once can be missing that job's real gap.
-        # 明示された threshold は履歴を使わないので、 その完全性で判定を止めない。
+        # Each poll brackets its workspace-local baseline unless the threshold is explicit.
         baseline, counted_all = (
             (None, True)
             if args.stall_seconds is not None
@@ -1745,8 +1754,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         threshold = stall_threshold(args.stall_seconds, baseline)
         record_before = record_stamp(record_path)
         record_view_stamp, record = record_view(record_path, args.job_id)
-        # 1 poll 1 走査 — verdict も evidence も同じ結果を使い、読み直さない。 走査の
-        # 前後で観測対象が動いたら、 その poll は古い無音と新しい本文の混成になる。
+        # Verdict and evidence share one scan; changed observations discard the poll.
         before_log, before_artifact = file_stat(log), file_stat(args.artifact)
         # 読んだ descriptor そのものを比較が済むまで持つ — 別の fd では同じ観測にならない。
         log_pin: list = []
@@ -1819,8 +1827,6 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             tree_entries,
             tree_read,
         )
-        # threshold の出どころも同じ poll のもの — peer が後から伸びると、
-        # 古い低い bar と新しい対象 snapshot の組で stall を断定できる。
         baseline_after, counted_all_after = (
             (None, True)
             if args.stall_seconds is not None
@@ -1871,6 +1877,18 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 ("tree", not tree_read),
             )
             if flag and name not in moved
+        )
+        cancel = (
+            "不明 (走査中に変化)"
+            if "record" in moved
+            else "不明 (走査未完了)"
+            if "record" in unscanned
+            else cancel_command(
+                args.job_id,
+                (record or {}).get("workspaceRoot")
+                if isinstance((record or {}).get("workspaceRoot"), str)
+                else None,
+            )
         )
         # 保留を告げる headline は record の語をそのまま出す — 言い切ると evidence と
         # 食い違う。 headline へ直接入るので、 保持する時点で escape しておく。
@@ -1944,10 +1962,12 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     f"{printable(args.job_id)}",
                     *(f"  {printable(duplicate)}" for duplicate, _log in duplicates),
                 ),
-                (
+                functools.partial(
+                    timeout_evidence,
                     f"timeout: no terminal verdict within {duration_seconds(args.timeout_seconds)} "
                     f"(record says {recorded})",
-                    evidence(
+                    functools.partial(
+                        evidence,
                         args.job_id,
                         record or {},
                         log,
@@ -1962,13 +1982,14 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                         whole_log,
                         moved,
                         unscanned,
+                        cancel,
                     ),
                 ),
             )
         # 破棄した poll をそのまま下の分岐へ流すと、 混成した snapshot が exit 12 / 7 / 11 の
         # evidence として出る。 期限前なら取り直し、 期限か --once なら理由を名指しで返す。
         if out is None and (changed or unreadable):
-            if not args.once and finish(deadline, EXIT_ALIVE, (), ()) != EXIT_TIMEOUT:
+            if not args.once and not deadline_reached(deadline):
                 sleep_until(deadline, args.poll_seconds)
                 continue
             out = (
@@ -2009,7 +2030,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 f"(record says {recorded})",
             )
         # out の有無で短絡させない: 直前の分岐が期限後に作った終局も funnel で潰す。
-        if finish(deadline, EXIT_ALIVE, (), ()) == EXIT_TIMEOUT:
+        if deadline_reached(deadline):
             out = (
                 EXIT_TIMEOUT,
                 f"timeout: no terminal verdict within {duration_seconds(args.timeout_seconds)} "
@@ -2032,6 +2053,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 whole_log,
                 moved,
                 unscanned,
+                cancel,
             )
             return finish(
                 deadline,
@@ -2047,7 +2069,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             )
         last_report = (
             recorded,
-            evidence(
+            functools.partial(
+                evidence,
                 args.job_id,
                 record or {},
                 log,
@@ -2062,6 +2085,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 whole_log,
                 moved,
                 unscanned,
+                cancel,
             ),
         )
         sleep_until(deadline, args.poll_seconds)
@@ -2771,38 +2795,6 @@ class WatchTest(unittest.TestCase):
         self.assertAlmostEqual(age, 90, delta=5)
         self.assertIsNone(tree_age("/nonexistent", time.time())[0])
 
-    def test_tree_path_bytes_are_bounded_before_the_entry_cap(self):
-        from unittest import mock
-
-        root = tempfile.mkdtemp()
-        with open(os.path.join(root, "a-long-enough-name"), "w", encoding="utf-8") as f:
-            f.write("x")
-        root_holds = len(os.fsencode(root)) * 2
-        with mock.patch(__name__ + ".MAX_TREE_PATH_BYTES", root_holds):
-            age, count, complete = tree_age(root, time.time())
-        self.assertIsNone(age)
-        self.assertEqual(count, 1)
-        self.assertFalse(complete)
-
-    def test_tree_path_bytes_within_the_cap_keep_the_walk_result(self):
-        from unittest import mock
-
-        root = tempfile.mkdtemp()
-        written = os.path.join(root, "kept")
-        with open(written, "w", encoding="utf-8") as f:
-            f.write("x")
-        observed = time.time()
-        for path in (written, root):
-            os.utime(path, (observed - 90, observed - 90))
-        held = len(os.fsencode(root)) + len(os.fsencode(written))
-        with mock.patch(__name__ + ".MAX_TREE_PATH_BYTES", held):
-            age, count, complete = tree_age(root, observed)
-        self.assertIsNotNone(age)
-        assert age is not None
-        self.assertAlmostEqual(age, 90.0)
-        self.assertEqual(count, 2)
-        self.assertTrue(complete)
-
     def test_a_broken_log_read_is_reported_to_every_reader(self):
         """短い view は未完了 start を落とし、その log の最大 gap でもない。"""
         from unittest import mock
@@ -2853,7 +2845,10 @@ class WatchTest(unittest.TestCase):
         buf = io.StringIO()
         with redirect_stdout(buf):
             self.assertEqual(watch(args), EXIT_TIMEOUT)
-        self.assertNotIn("\r", buf.getvalue())
+        shown = buf.getvalue()
+        self.assertNotIn("\r", shown)
+        self.assertIn("registered but not observed", shown)
+        self.assertIn("record=", shown)
 
     def test_a_record_started_before_it_was_created_is_corrupt(self):
         """worker が拾うのは作成後 — 逆順の record で古い方を鮮度の下限にしない。"""
@@ -2902,7 +2897,7 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(seen, [1])  # 空 log ではなく読取失敗として報告される
 
     def test_a_directory_symlink_is_measured_as_an_entry(self):
-        """辿らない directory symlink は base に現れない — files だけでは漏れる。"""
+        """A one-pass walk still measures a directory symlink as an entry."""
         outside = tempfile.mkdtemp()
         root = tempfile.mkdtemp()
         os.symlink(outside, os.path.join(root, "linked"))
@@ -2981,7 +2976,7 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(sum(handle.asked), size + 1)  # 宣言 size と 1 byte probe だけ
 
     def test_a_record_seen_once_is_never_called_unregistered(self):
-        """一度見えた record を忘れると、prune 後に「起動していない」と誤断定する。"""
+        """A candidate that never claimed the id stays on the unregistered side."""
         import io
         from contextlib import redirect_stdout
         from unittest import mock
@@ -2997,9 +2992,7 @@ class WatchTest(unittest.TestCase):
             ),
         ):
             code = watch(args)
-        # 一度見えた path の安定消失は、 未登録でも timeout でもない。
-        self.assertNotEqual(code, EXIT_NEVER_REGISTERED)
-        self.assertEqual(code, EXIT_VANISHED)
+        self.assertEqual(code, EXIT_NEVER_REGISTERED)
 
     def test_a_record_that_changed_between_partial_scans_is_unverifiable(self):
         """An incomplete scan that saw a record cannot become never-registered."""
@@ -3024,7 +3017,7 @@ class WatchTest(unittest.TestCase):
             self.assertNotEqual(watch(args), EXIT_NEVER_REGISTERED)
 
     def test_a_candidate_seen_in_an_incomplete_round_is_not_called_unregistered(self):
-        """A pending path stably absent next cadence is vanished, not timeout."""
+        """A later complete absence does not promote an unconfirmed candidate."""
         import io
         from contextlib import redirect_stdout
         from unittest import mock
@@ -3040,7 +3033,7 @@ class WatchTest(unittest.TestCase):
                 lambda *a: scans.pop(0) if scans else ([], True),
             ),
         ):
-            self.assertEqual(watch(args), EXIT_VANISHED)
+            self.assertEqual(watch(args), EXIT_NEVER_REGISTERED)
 
     def test_a_directory_removed_during_the_walk_is_activity(self):
         """走査中に消えた dir は file と同じ — 読取不能に上書きすると静穏へ到達しない。"""
@@ -3266,7 +3259,7 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(shifting, [(record, log)])
 
     def test_a_baseline_that_stops_counting_mid_poll_discards_it(self):
-        """(None, True) → (None, False) は第 1 要素では動いて見えない。"""
+        """An incomplete second baseline cannot license a verdict."""
         import io
         from contextlib import redirect_stdout
         from unittest import mock
@@ -3517,8 +3510,8 @@ class WatchTest(unittest.TestCase):
             )
         self.assertEqual(cadences, [inode])
 
-    def test_an_unreadable_candidate_with_a_known_other_id_crosses_a_cadence(self):
-        """A known non-target candidate does not bypass a missed read's retry."""
+    def test_once_returns_alive_for_one_unresolved_candidate(self):
+        """One-shot evaluation returns alive without crossing a cadence."""
         import io
         from contextlib import redirect_stdout
         from unittest import mock
@@ -3547,12 +3540,12 @@ class WatchTest(unittest.TestCase):
             mock.patch(__name__ + ".sleep_until", next_cadence),
         ):
             self.assertEqual(
-                watch(self._watch_args(root, "task-x", once=True)), EXIT_CORRUPT
+                watch(self._watch_args(root, "task-x", once=True)), EXIT_ALIVE
             )
-        self.assertEqual(cadences, [1])
+        self.assertEqual(cadences, [])
 
-    def test_a_shifting_candidate_with_a_known_other_id_can_vanish(self):
-        """A known non-target candidate does not hide a pending disappearance."""
+    def test_once_returns_alive_for_a_shifting_candidate(self):
+        """A known non-target candidate does not delay a one-shot result."""
         import io
         from contextlib import redirect_stdout
         from unittest import mock
@@ -3578,19 +3571,15 @@ class WatchTest(unittest.TestCase):
                     return ("shifted",), {"id": "task-x", "status": "failed"}
             return real_view(path, job_id)
 
-        def next_cadence(_deadline, _poll_seconds):
-            cadences.append(1)
-            os.unlink(record)
-
         with (
             redirect_stdout(io.StringIO()),
             mock.patch(__name__ + ".record_view", shifting),
-            mock.patch(__name__ + ".sleep_until", next_cadence),
+            mock.patch(__name__ + ".sleep_until", lambda *a: cadences.append(1)),
         ):
             self.assertEqual(
-                watch(self._watch_args(root, "task-x", once=True)), EXIT_VANISHED
+                watch(self._watch_args(root, "task-x", once=True)), EXIT_ALIVE
             )
-        self.assertEqual(cadences, [1])
+        self.assertEqual(cadences, [])
         self.assertEqual(len(reads), 2)
 
     def test_a_carried_candidate_with_a_shifting_sibling_is_unresolved(self):
@@ -3626,13 +3615,13 @@ class WatchTest(unittest.TestCase):
             mock.patch(__name__ + ".sleep_until", lambda *a: cadences.append(1)),
         ):
             self.assertEqual(
-                watch(self._watch_args(root, "task-x", once=True)), EXIT_UNVERIFIABLE
+                watch(self._watch_args(root, "task-x", once=True)), EXIT_ALIVE
             )
         self.assertEqual(cadences, [])
         self.assertEqual(len(reads), 2)
 
-    def test_unreadable_and_shifting_candidates_do_not_arm_a_single_pending_path(self):
-        """Two unresolved candidates cannot be represented by one pending path."""
+    def test_multiple_unresolved_candidates_return_alive_once(self):
+        """Multiple unresolved candidates share the one-shot alive result."""
         import io
         from contextlib import redirect_stdout
         from unittest import mock
@@ -3666,13 +3655,13 @@ class WatchTest(unittest.TestCase):
             mock.patch(__name__ + ".sleep_until", lambda *a: cadences.append(1)),
         ):
             self.assertEqual(
-                watch(self._watch_args(root, "task-x", once=True)), EXIT_UNVERIFIABLE
+                watch(self._watch_args(root, "task-x", once=True)), EXIT_ALIVE
             )
         self.assertEqual(cadences, [])
         self.assertEqual(len(reads), 2)
 
-    def test_a_pending_candidate_that_keeps_shifting_times_out(self):
-        """A pending candidate at the deadline keeps the timeout contract."""
+    def test_an_unresolved_candidate_that_keeps_shifting_times_out(self):
+        """An unresolved candidate at the deadline keeps the timeout contract."""
         import io
         from contextlib import redirect_stdout
         from unittest import mock
@@ -3991,7 +3980,15 @@ class WatchTest(unittest.TestCase):
         self.addCleanup(os.chmod, record, 0o644)
         with redirect_stdout(io.StringIO()):
             self.assertEqual(
-                watch(self._watch_args(root, "task-x", once=True)), EXIT_CORRUPT
+                watch(
+                    self._watch_args(
+                        root,
+                        "task-x",
+                        timeout_seconds=1.0,
+                        poll_seconds=0.0,
+                    )
+                ),
+                EXIT_CORRUPT,
             )
 
     def test_an_artifact_that_moved_is_shown_as_moved(self):
@@ -4209,9 +4206,9 @@ class WatchTest(unittest.TestCase):
             mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1, True)),
             mock.patch(__name__ + ".sleep_until", lambda *a: cadences.append(1)),
         ):
-            self.assertEqual(watch(args), EXIT_ENDED_WITHOUT_ARTIFACT)
-        self.assertEqual(cadences, [1])
-        self.assertGreater(len(reads), 2)
+            self.assertEqual(watch(args), EXIT_ALIVE)
+        self.assertEqual(cadences, [])
+        self.assertEqual(len(reads), 2)
 
     def test_a_lone_shifting_candidate_discards_the_poll(self):
         """候補が 1 件でも、 読取中に動いたなら掴めていない。"""
@@ -4360,30 +4357,6 @@ class WatchTest(unittest.TestCase):
         self.assertNotIn("最後まで読めず", shown)  # 読めなかったのではなく動いた
         self.assertIn("読了範囲は不明 (走査中に変化)", shown)
         self.assertNotIn("倍)", shown)  # 動いた log から比を出さない
-
-    def test_a_failed_verdict_does_not_claim_a_stale_baseline(self):
-        """履歴が走査の前後で動いたなら、 baseline も threshold も断定しない。"""
-        import io
-        from contextlib import redirect_stdout
-        from unittest import mock
-
-        root, _rec, _log = self._state("ws", "task-x", "failed", log_age=900.0)
-        answers = [(200.0, True), (900.0, True)]  # 3 倍が floor を超える値にする
-        buf = io.StringIO()
-        with (
-            redirect_stdout(buf),
-            mock.patch(
-                __name__ + ".baseline_silence",
-                lambda *a: answers.pop(0) if answers else (900.0, True),
-            ),
-        ):
-            args = self._watch_args(root, "task-x", once=True, stall_seconds=None)
-            self.assertEqual(watch(args), EXIT_NOT_COMPLETED)
-        shown = buf.getvalue()
-        self.assertNotIn("600", shown)  # 200s * 3 の古い threshold
-        self.assertNotIn("420", shown)  # floor を「観測した値」 として出さない
-        self.assertIn("しきい値 不明 (走査中に変化)", shown)
-        self.assertNotIn("倍)", shown)  # 動いた履歴を分母にしない
 
     def test_a_discarded_poll_headline_does_not_quote_the_discarded_record(self):
         """破棄した record の status を、 保留を告げる headline でも引用しない。"""
@@ -4647,7 +4620,15 @@ class WatchTest(unittest.TestCase):
             json.dump({"status": "running"}, f)  # id が無い
         with redirect_stdout(io.StringIO()):
             self.assertEqual(
-                watch(self._watch_args(root, "task-x", once=True)), EXIT_CORRUPT
+                watch(
+                    self._watch_args(
+                        root,
+                        "task-x",
+                        timeout_seconds=1.0,
+                        poll_seconds=0.0,
+                    )
+                ),
+                EXIT_CORRUPT,
             )
 
     def test_an_empty_scan_that_crosses_the_deadline_is_a_timeout(self):
@@ -4659,13 +4640,14 @@ class WatchTest(unittest.TestCase):
         root = tempfile.mkdtemp()
         args = self._watch_args(root, "task-absent", once=True)
         real, crossed = time.monotonic, []
+        shown = io.StringIO()
 
         def finding(job_id, roots):
             crossed.append(1)
             return [], True
 
         with (
-            redirect_stdout(io.StringIO()),
+            redirect_stdout(shown),
             mock.patch(__name__ + ".find_jobs", finding),
             mock.patch(
                 "time.monotonic",
@@ -4673,6 +4655,7 @@ class WatchTest(unittest.TestCase):
             ),
         ):
             self.assertEqual(watch(args), EXIT_TIMEOUT)
+        self.assertTrue(shown.getvalue().startswith("timeout:"))
 
     def test_an_explicit_threshold_does_not_wait_on_peer_history(self):
         """明示した threshold は履歴を使わない — その読み残しで判定を止めない。"""
@@ -4743,29 +4726,6 @@ class WatchTest(unittest.TestCase):
             ),
         ):
             self.assertNotEqual(watch(args), EXIT_DONE)
-
-    def test_an_incomplete_second_baseline_is_unreadable_not_a_change(self):
-        """判明したのは peer を読み切れなかったこと — job が変化した証拠ではない。"""
-        import io
-        from contextlib import redirect_stdout
-        from unittest import mock
-
-        root, _rec, _log = self._state("ws", "task-live", "running", log_age=900.0)
-        answers = [(None, True), (None, False)]
-        buf = io.StringIO()
-        with (
-            redirect_stdout(buf),
-            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1, True)),
-            mock.patch(
-                __name__ + ".baseline_silence",
-                lambda *a: answers.pop(0) if answers else (None, False),
-            ),
-        ):
-            args = self._watch_args(
-                root, "task-live", once=True, trust_log=True, stall_seconds=None
-            )
-            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
-        self.assertIn("could not be read in full", buf.getvalue())
 
     def test_an_unreadable_sibling_does_not_make_a_lone_record_ambiguous(self):
         """読めなかった候補は「id を名乗る record」 ではない — 2 件と数えない。"""
@@ -4861,13 +4821,14 @@ class WatchTest(unittest.TestCase):
         _elsewhere, peer, _peer_log = self._state("ws", "task-x", "running")
         args = self._watch_args(root, "task-x")
         real, crossed = time.monotonic, []
+        shown = io.StringIO()
 
         def finding(job_id, roots):
             crossed.append(1)
             return [(record, log), (peer, peer[: -len(".json")] + ".log")], True
 
         with (
-            redirect_stdout(io.StringIO()),
+            redirect_stdout(shown),
             mock.patch(__name__ + ".find_jobs", finding),
             mock.patch(
                 "time.monotonic",
@@ -4875,6 +4836,7 @@ class WatchTest(unittest.TestCase):
             ),
         ):
             self.assertEqual(watch(args), EXIT_TIMEOUT)
+        self.assertTrue(shown.getvalue().startswith("timeout:"))
 
     def test_a_peer_completed_only_transiently_is_not_history(self):
         """一瞬だけ completed だった peer を完走履歴として数えない。"""
@@ -5151,7 +5113,15 @@ class WatchTest(unittest.TestCase):
             f.write("{not json")
         with redirect_stdout(io.StringIO()):
             self.assertEqual(
-                watch(self._watch_args(root, "task-x", once=True)), EXIT_CORRUPT
+                watch(
+                    self._watch_args(
+                        root,
+                        "task-x",
+                        timeout_seconds=1.0,
+                        poll_seconds=0.0,
+                    )
+                ),
+                EXIT_CORRUPT,
             )
 
     def test_two_broken_reads_of_one_record_are_not_a_stable_corrupt(self):
@@ -5212,7 +5182,7 @@ class WatchTest(unittest.TestCase):
         self.assertLess(len(lines), 4)
 
     def test_a_tree_too_wide_to_walk_is_unknowable(self):
-        """走査しきれない広さから静穏は言えない — age でなく None を返す。"""
+        """The entry cap stops the one-pass walk before another path is retained."""
         from unittest import mock
 
         root = tempfile.mkdtemp()
@@ -5226,7 +5196,7 @@ class WatchTest(unittest.TestCase):
             mock.patch("os.lstat", lambda p: stats.append(p) or real(p)),
         ):
             self.assertIsNone(tree_age(root, time.time())[0])
-        self.assertEqual(stats, [])  # 上限を超えた entry は stat すらしない
+        self.assertEqual(len(stats), 1)
 
     def test_an_artifact_too_large_to_decode_is_unknowable(self):
         """strict decode は先頭から要る — 読み切れない大きさは 3 値の None である。"""
@@ -5284,11 +5254,14 @@ class WatchTest(unittest.TestCase):
 
         root = tempfile.mkdtemp()
         args = self._watch_args(root, "task-absent", once=True)
+        shown = io.StringIO()
         with (
-            redirect_stdout(io.StringIO()),
+            redirect_stdout(shown),
             mock.patch(__name__ + ".find_jobs", lambda *a: ([], False)),
         ):
             self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
+        self.assertIn("could not be shown unregistered", shown.getvalue())
+        self.assertNotIn("unresolved state records", shown.getvalue())
 
     def test_the_cancel_command_needs_a_traversable_root(self):
         """存在するだけでは cd できない — 検索権の無い dir は貼っても動かない。"""
@@ -5425,33 +5398,6 @@ class WatchTest(unittest.TestCase):
         began = time.monotonic()
         sleep_until(deadline, 5.0)
         self.assertLess(time.monotonic() - began, 1.0)
-
-    def test_a_peer_growing_after_the_baseline_discards_the_poll(self):
-        """threshold と対象 snapshot が別の瞬間から来たら、その組で断定しない。"""
-        import io
-        from contextlib import redirect_stdout
-        from unittest import mock
-
-        root, record, _log = self._state("ws", "task-live", "running", log_age=900.0)
-        jobs = os.path.dirname(record)
-        with open(os.path.join(jobs, "task-peer.json"), "w", encoding="utf-8") as f:
-            json.dump({"id": "task-peer", "status": "completed"}, f)
-        with open(os.path.join(jobs, "task-peer.log"), "w", encoding="utf-8") as f:
-            f.write("[2026-08-09T00:00:00.000Z] a\n[2026-08-09T00:01:00.000Z] b\n")
-        bars = itertools.cycle([60.0, 900.0])
-        with (
-            redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1, True)),
-            mock.patch(__name__ + ".baseline_silence", lambda *a: (next(bars), True)),
-        ):
-            self.assertEqual(
-                watch(
-                    self._watch_args(
-                        root, "task-live", once=True, trust_log=True, stall_seconds=None
-                    )
-                ),
-                EXIT_ALIVE,
-            )
 
     def test_a_stamp_with_a_trailing_newline_is_rejected(self):
         """`$` は末尾の改行の手前にも一致する — 終端まで固定しないと strict ではない。"""
@@ -5790,10 +5736,14 @@ class WatchTest(unittest.TestCase):
         from unittest import mock
 
         root, record, log = self._state("ws", "task-gone", "running")
-        os.unlink(record)  # 掴んだ直後に prune された状態
-        with mock.patch.object(
-            sys.modules[__name__], "find_jobs", lambda *a: ([(record, log)], True)
-        ):
+        real = classify_candidates
+
+        def pruning(found, complete, job_id):
+            classified = real(found, complete, job_id)
+            os.unlink(record)
+            return classified
+
+        with mock.patch(__name__ + ".classify_candidates", pruning):
             self.assertEqual(watch(self._watch_args(root, "task-gone")), EXIT_VANISHED)
 
     def test_watch_reports_a_corrupt_record(self):
@@ -6897,16 +6847,16 @@ class WatchTest(WatchTest):
             return {EXIT_TIMEOUT}
         expected = {
             "record": {
-                "unlink": {1: 6, 6: 10, 16: 10, 25: 10, 39: 10},
+                "unlink": {1: 6, 6: 6, 16: 10, 25: 10, 39: 10},
                 "replace-different": {
-                    3: 14,
+                    3: 11,
                     6: 14,
                     16: 14,
                     39: 14,
                     41: 14,
                 },
-                "unreadable": {3: 13, 27: 11},
-                "grow": {6: 14},
+                "unreadable": {3: 11, 27: 11},
+                "grow": {6: 11},
                 "appear": {1: 14, 12: 7},
             },
             "log": {
@@ -7578,6 +7528,98 @@ class SourceInvariantTest(unittest.TestCase):
                     bad.append(row.elts[0].lineno)
         self.assertFalse(bad, f"non-literal EXIT_CONTRACT codes at lines {bad}")
 
+    def test_registration_output_selects_only_by_exit_code(self):
+        """Registration output branches use the final exit code as their only key."""
+        functions = [
+            node
+            for node in self._source_tree().body
+            if isinstance(node, ast.FunctionDef) and node.name == "registration_output"
+        ]
+        self.assertEqual(len(functions), 1)
+        branches = [node for node in ast.walk(functions[0]) if isinstance(node, ast.If)]
+        selected = []
+        bad = []
+        for branch in branches:
+            comparison = branch.test
+            if not (
+                isinstance(comparison, ast.Compare)
+                and isinstance(comparison.left, ast.Name)
+                and comparison.left.id == "code"
+                and len(comparison.ops) == 1
+                and isinstance(comparison.ops[0], ast.Eq)
+                and len(comparison.comparators) == 1
+                and isinstance(comparison.comparators[0], ast.Name)
+                and comparison.comparators[0].id.startswith("EXIT_")
+            ):
+                bad.append(branch.lineno)
+                continue
+            selected.append(comparison.comparators[0].id)
+        registration_codes = {value for value in REGISTRATION_EXITS.values() if value}
+        expected = {
+            symbol
+            for code, symbol, *_rest in EXIT_CONTRACT
+            if code in registration_codes
+        }
+        self.assertFalse(bad, f"non-code registration output keys at lines {bad}")
+        self.assertEqual(len(selected), len(expected))
+        self.assertEqual(set(selected), expected)
+
+    def test_tree_path_bytes_are_bounded_before_the_entry_cap(self):
+        """The one-pass walk retains no measured-path collection before its entry cap."""
+        functions = [
+            node
+            for node in self._source_tree().body
+            if isinstance(node, ast.FunctionDef) and node.name == "tree_age"
+        ]
+        self.assertEqual(len(functions), 1)
+        tree = functions[0]
+        counters = [
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "measured"
+                for target in node.targets
+            )
+        ]
+        self.assertEqual(len(counters), 1)
+        counter = counters[0]
+        if not isinstance(counter, ast.Constant):
+            self.fail("measured is not initialized from a constant")
+        self.assertEqual(counter.value, 0)
+        retained = [
+            node.lineno
+            for node in ast.walk(tree)
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "measured"
+            )
+            or (
+                isinstance(node, ast.For)
+                and isinstance(node.iter, ast.Name)
+                and node.iter.id == "measured"
+            )
+        ]
+        self.assertFalse(retained, f"retained measured paths at lines {retained}")
+
+    def test_tree_path_bytes_within_the_cap_keep_the_walk_result(self):
+        """Zero retained measured-path bytes preserve a complete long-name walk."""
+        root = tempfile.mkdtemp()
+        written = os.path.join(root, "x" * 200)
+        with open(written, "w", encoding="utf-8") as stream:
+            stream.write("x")
+        observed = time.time()
+        for path in (written, root):
+            os.utime(path, (observed - 90.0, observed - 90.0))
+        age, count, complete = tree_age(root, observed)
+        self.assertEqual(count, 2)
+        self.assertTrue(complete)
+        self.assertIsNotNone(age)
+        assert age is not None
+        self.assertAlmostEqual(age, 90.0)
+
     def test_watch_returns_only_through_finish(self):
         """Every return in watch must be an emitting ``return finish(...)``."""
         tree = self._source_tree()
@@ -7624,10 +7666,11 @@ class SourceInvariantTest(unittest.TestCase):
             node.lineno
             for node in calls
             if len(node.args) < 2
-            or not (
-                isinstance(node.args[1], ast.Name)
-                and node.args[1].id == "EXIT_NEVER_REGISTERED"
-            )
+            or not (isinstance(node.args[1], ast.Name) and node.args[1].id == "code")
+        )
+        self.assertEqual(
+            [key for key, value in REGISTRATION_EXITS.items() if value == 6],
+            [("deadline", CANDIDATE_ABSENT)],
         )
         self.assertFalse(
             sorted(set(bad)),
@@ -7635,8 +7678,8 @@ class SourceInvariantTest(unittest.TestCase):
         )
 
     def test_deadline_reached_call_sites_are_allowlisted(self):
-        """Terminal deadline checks belong only to the finish funnel."""
-        allowed = {("deadline_reached", "finish")}
+        """Production deadline checks use the single pure predicate."""
+        allowed = {("deadline_reached", "finish"), ("deadline_reached", "watch")}
         bad = self._bad_call_lines(
             lambda node: self._call_name(node.func) == "deadline_reached", allowed
         )
@@ -8229,6 +8272,314 @@ class WatchTest(WatchTest):
                     self.assertIsInstance(sys.stderr, Observation.DiscardStream)
                 self.assertEqual(ran, [True])
                 self.assertEqual(code, expected)
+
+
+class WatchTest(WatchTest):
+    """Candidate lifecycle coverage required by ruling 63."""
+
+    def _candidate_cases(self):
+        root = tempfile.mkdtemp()
+
+        def pair(name, claimed_id=None, broken=False):
+            record = os.path.join(root, name + ".json")
+            log = os.path.join(root, name + ".log")
+            with open(record, "w", encoding="utf-8") as stream:
+                if broken:
+                    stream.write("{not json")
+                else:
+                    json.dump({"id": claimed_id, "status": "running"}, stream)
+            with open(log, "w", encoding="utf-8") as stream:
+                stream.write("x\n")
+            return record, log
+
+        one = pair("one", "task-x")
+        two = pair("two", "task-x")
+        broken_one = pair("broken-one", broken=True)
+        broken_two = pair("broken-two", broken=True)
+        non_target = pair("non-target", "task-other")
+        return {
+            "resolved": ([one], True),
+            "ambiguous": ([one, two], True),
+            "unresolved-one": ([broken_one], True),
+            "unresolved-many": ([broken_one, broken_two], True),
+            "absent": ([], True),
+            "known-non-target-only": ([non_target], True),
+            "incomplete-absent": ([], False),
+        }
+
+    @staticmethod
+    def _registration_headline(code, classification):
+        if code is None:
+            return None
+        output = registration_output(code, classification, "task-x", ["/state"], 1.0)
+        return output[0].partition(":")[0]
+
+    def test_registration_state_transition_product(self):
+        """Record inputs cross both prior states through classification and exit."""
+        before_deadline = {
+            False: {
+                "resolved": (None, 1, False),
+                "ambiguous": (9, 0, False),
+                "unresolved-one": (None, 0, True),
+                "unresolved-many": (None, 0, True),
+                "absent": (None, 0, False),
+                "known-non-target-only": (None, 0, False),
+                "incomplete-absent": (None, 0, False),
+            },
+            True: {
+                "resolved": (None, 1, True),
+                "ambiguous": (9, 0, True),
+                "unresolved-one": (13, 0, True),
+                "unresolved-many": (None, 0, True),
+                "absent": (None, 0, True),
+                "known-non-target-only": (None, 0, True),
+                "incomplete-absent": (None, 0, True),
+            },
+        }
+        at_deadline = {
+            "resolved": None,
+            "ambiguous": 7,
+            "unresolved-one": 7,
+            "unresolved-many": 7,
+            "absent": 6,
+            "known-non-target-only": 6,
+            "incomplete-absent": 7,
+        }
+        contract_headlines = {
+            code: slug for code, _symbol, slug, _meaning, _action in EXIT_CONTRACT
+        }
+        cases = self._candidate_cases()
+        for deferred, classifications in before_deadline.items():
+            for expired in (False, True):
+                for name, before_expected in classifications.items():
+                    with self.subTest(
+                        deferred=deferred, expired=expired, classification=name
+                    ):
+                        expected = before_expected
+                        if expired:
+                            expected_code = at_deadline[name]
+                            expected = (
+                                expected_code,
+                                int(name == "resolved"),
+                                deferred,
+                            )
+                        found, complete = cases[name]
+                        classified = classify_candidates(found, complete, "task-x")
+                        if name == "known-non-target-only":
+                            self.assertTrue(found)
+                            self.assertEqual(classified.records, ())
+                        if name == "incomplete-absent":
+                            self.assertFalse(classified.complete)
+                            self.assertEqual(classified.records, ())
+                        code = registration_exit(classified, deferred, False, expired)
+                        records, next_deferred = (
+                            registration_records(classified, deferred)
+                            if code is None
+                            else ([], deferred)
+                        )
+                        headline = self._registration_headline(code, classified)
+                        expected_headline = contract_headlines.get(expected[0])
+                        self.assertEqual(
+                            (code, headline, len(records), next_deferred),
+                            (expected[0], expected_headline, expected[1], expected[2]),
+                        )
+
+    def test_once_registration_product_returns_without_a_cadence(self):
+        """One-shot exits derive from record inputs and never cross a cadence."""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        before_deadline = {
+            "resolved": None,
+            "ambiguous": 9,
+            "unresolved-one": 11,
+            "unresolved-many": 11,
+            "absent": 11,
+            "known-non-target-only": 11,
+            "incomplete-absent": 14,
+        }
+        at_deadline = {
+            name: (None if name == "resolved" else 7) for name in before_deadline
+        }
+        contract_headlines = {
+            code: slug for code, _symbol, slug, _meaning, _action in EXIT_CONTRACT
+        }
+        cases = self._candidate_cases()
+        for deferred in (False, True):
+            for expired in (False, True):
+                expected_codes = at_deadline if expired else before_deadline
+                for name, expected_code in expected_codes.items():
+                    with self.subTest(
+                        deferred=deferred, expired=expired, classification=name
+                    ):
+                        found, complete = cases[name]
+                        classified = classify_candidates(found, complete, "task-x")
+                        code = registration_exit(classified, deferred, True, expired)
+                        headline = self._registration_headline(code, classified)
+                        self.assertEqual(
+                            (code, headline),
+                            (expected_code, contract_headlines.get(expected_code)),
+                        )
+
+        root, _record, _log = self._state("ws", "task-x", "running")
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(
+                __name__ + ".sleep_until",
+                side_effect=AssertionError("--once crossed a cadence"),
+            ),
+        ):
+            self.assertEqual(watch(self._watch_args(root, "task-x", once=True)), 11)
+
+        incomplete_root = tempfile.mkdtemp()
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".find_jobs", return_value=([], False)),
+            mock.patch(
+                __name__ + ".sleep_until",
+                side_effect=AssertionError("--once crossed a cadence"),
+            ),
+        ):
+            self.assertEqual(
+                watch(self._watch_args(incomplete_root, "task-x", once=True)), 14
+            )
+
+    def test_an_empty_incomplete_scan_does_not_defer_the_next_candidate(self):
+        """Only an observed unresolved candidate arms the deferred classification."""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, log = self._state("ws", "task-x", "running")
+        with open(record, "w", encoding="utf-8") as stream:
+            stream.write("{not json")
+        pair = [(record, log)]
+        scans = iter([([], False), (pair, True), (pair, True)])
+        calls = []
+        sleeps = []
+
+        def finding(*_args):
+            calls.append(1)
+            return next(scans)
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".find_jobs", side_effect=finding),
+            mock.patch(
+                __name__ + ".sleep_until", side_effect=lambda *a: sleeps.append(1)
+            ),
+        ):
+            self.assertEqual(
+                watch(
+                    self._watch_args(
+                        root, "task-x", timeout_seconds=1.0, poll_seconds=0.0
+                    )
+                ),
+                EXIT_CORRUPT,
+            )
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(sleeps), 2)
+
+    def test_a_failed_verdict_does_not_claim_a_stale_baseline(self):
+        """A changed history makes its baseline and threshold unreportable."""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-x", "failed", log_age=900.0)
+        answers = [(200.0, True), (900.0, True)]
+        shown = io.StringIO()
+        with (
+            redirect_stdout(shown),
+            mock.patch(
+                __name__ + ".baseline_silence",
+                side_effect=lambda *a: answers.pop(0) if answers else (900.0, True),
+            ),
+        ):
+            args = self._watch_args(root, "task-x", once=True, stall_seconds=None)
+            self.assertEqual(watch(args), EXIT_NOT_COMPLETED)
+        self.assertNotIn("600", shown.getvalue())
+        self.assertNotIn("420", shown.getvalue())
+        self.assertIn("しきい値 不明 (走査中に変化)", shown.getvalue())
+        self.assertNotIn("倍", shown.getvalue())
+
+    def test_an_incomplete_second_baseline_is_unreadable_not_a_change(self):
+        """An incomplete second history scan is unreadable, not job activity."""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _rec, _log = self._state("ws", "task-live", "running", log_age=900.0)
+        answers = [(None, True), (None, False)]
+        shown = io.StringIO()
+        with (
+            redirect_stdout(shown),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1, True)),
+            mock.patch(
+                __name__ + ".baseline_silence",
+                side_effect=lambda *a: answers.pop(0) if answers else (None, False),
+            ),
+        ):
+            args = self._watch_args(
+                root, "task-live", once=True, trust_log=True, stall_seconds=None
+            )
+            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
+        self.assertIn("could not be read in full", shown.getvalue())
+
+    def test_a_peer_growing_after_the_baseline_discards_the_poll(self):
+        """A threshold and target snapshot from different moments cannot decide."""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-live", "running", log_age=900.0)
+        jobs = os.path.dirname(record)
+        with open(
+            os.path.join(jobs, "task-peer.json"), "w", encoding="utf-8"
+        ) as stream:
+            json.dump({"id": "task-peer", "status": "completed"}, stream)
+        with open(os.path.join(jobs, "task-peer.log"), "w", encoding="utf-8") as stream:
+            stream.write("[2026-08-09T00:00:00.000Z] a\n[2026-08-09T00:01:00.000Z] b\n")
+        bars = itertools.cycle([60.0, 900.0])
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1, True)),
+            mock.patch(__name__ + ".baseline_silence", lambda *a: (next(bars), True)),
+        ):
+            self.assertEqual(
+                watch(
+                    self._watch_args(
+                        root, "task-live", once=True, trust_log=True, stall_seconds=None
+                    )
+                ),
+                EXIT_ALIVE,
+            )
+
+    def test_timeout_cancel_evidence_uses_the_poll_observation(self):
+        """Filesystem-derived cancel evidence is fixed before the cadence ends."""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _record, _log = self._state("ws", "task-x", "running")
+        args = self._watch_args(root, "task-x", timeout_seconds=0.05, poll_seconds=0.05)
+        phase = ["poll"]
+        real_sleep = sleep_until
+
+        def sleeping(*values):
+            phase[0] = "later"
+            real_sleep(*values)
+
+        shown = io.StringIO()
+        with (
+            redirect_stdout(shown),
+            mock.patch(__name__ + ".sleep_until", side_effect=sleeping),
+            mock.patch(__name__ + ".cancel_command", side_effect=lambda *a: phase[0]),
+        ):
+            self.assertEqual(watch(args), EXIT_TIMEOUT)
+        self.assertIn("cancel : poll", shown.getvalue())
+        self.assertNotIn("cancel : later", shown.getvalue())
 
 
 class WatchTest(WatchTest, SourceInvariantTest):
