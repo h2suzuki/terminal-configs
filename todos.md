@@ -290,6 +290,15 @@ Exit Criteria:
   (`wt-ruling61/drafts/sentinel-r81-review-order.md`・両 lint rc=0。U0 ゼロなら r60 と合わせ
   収束 2/2 成立、非ゼロなら延長せずユーザー判断)。filter round 3 報告 =
   `wt-ruling61/drafts/sentinel-structural-regression-review-3.md`。
+  **r81 verdict (2026-08-22) = needs-attention・U0 2 件** — 収束 2/2 不成立。決定保証の
+  終端規約により巡は自動延長せず**ユーザー判断待ち** (縮小再入場 / bounded-risk 受入):
+  (R81-1 medium・構造巡由来) tree 走査の DFS worklist が最大 20 万本の full path を保持するのに
+  byte 上限が無い — MAX_TREE_PATH_BYTES 削除は「保持ゼロ」という発注側の誤同定で、裁定 55・
+  正本 S-16 に反する。filter 3 巡も同じ誤同定を継承 (推定器が filter の見逃しを捕獲 =
+  役割分離の実証)。処方 = worklist に scalar byte budget を復元 + 境界 fixture の担保 test。
+  (R81-2 low・在庫) 裁定 23 の担保名・source method 名に廃止済み pin/inode 語彙が残存 —
+  裁定 63-4 の閉包を裁定 63 の担保欄だけに絞った部分実施が原因。処方 = 改称 + 未来形注記の
+  閉じ。r81 報告 = `wt-ruling61/drafts/sentinel-r81-report.md`。
   work file: `wt-ruling61/drafts/sentinel-r80-report.md` (codex 側) /
   `wt-ruling61/drafts/sentinel-r80-opus-review.md` (Opus 側・保存済み) /
   `wt-ruling61/drafts/sentinel-structural-order.md` (構造巡発注書) /
