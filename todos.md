@@ -105,7 +105,8 @@ Exit Criteria:
   本 session 実測: gate deny 3 回で 3 回とも即時に経路変更・謝罪ゼロ)。
   org CLAUDE.md への禁則追記の提案も同時に撤回 (常時 load 層はほぼ効かない実測に矛盾)。
   進捗 2026-08-21: fix round 6 で実装・受け入れ済み (wt-gates branch `1994751`・
-  gate unittest 65・escape 残骸 0 site)。判定器と deploy が残
+  gate unittest 65・escape 残骸 0 site)。**deploy 完了 2026-08-22**
+  (codex_delegation_gate.py `diff -q` IDENTICAL 実測)。残 = 判定器 round 4 (任意) と live 実測
 - [ ] **(i) 自作癖の抑制** (2026-08-21 ユーザー決裁: 「すぐ自分でコードを書こうとする。
   ジュニアエンジニアがよくやる悪癖」) — 2 層で: (1) tool-role-delegation skill の「trivial は
   直接編集可」境界を数値で明文化 (例: 単一 file・10 行以内・test 追加なし。超えたら委譲か、
@@ -119,7 +120,8 @@ Exit Criteria:
   「直接起動へ一本化」)、これが直接起動 pattern を制度化していた。発注書規律・worktree 隔離・
   監視規律は rescue 経由でも維持する形で書き直す。(g) と同時に land しないと skill が gate 違反を
   指示し続ける。進捗 2026-08-21: canonical を全面改訂・commit 済み (companion 言及 16 site
-  掃引・監視 = job record 直読・cancel = ユーザー起動へ)。/etc への deploy は (g) と同時に最終 step で
+  掃引・監視 = job record 直読・cancel = ユーザー起動へ)。**deploy 完了 2026-08-22**
+  (/etc の codex-delegation SKILL.md `diff -q` IDENTICAL 実測)
 - [ ] **判断待ちの Task 化を強制する hook family** — 型付き命名規約 (判断待ち Task は名前に
   `採否待ち|判断待ち|決裁待ち` を含める) を前提とする stop_checks family。
   「open Task 0 件」だけの検査は別件 Task 残存時に素通しするため不採用 (2026-08-21 ユーザー
