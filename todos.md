@@ -50,8 +50,12 @@ Exit Criteria:
   touch/ln 偽造 → 廃止可否のユーザー裁定待ち) + 独立 4 件 (並び順 bypass / lint 故障
   fail-open / blocked turn で warning 消失 / undercount 無言)。verdict 全文は
   `wt-gates/drafts/review-gates-verdict-3.md` へ verbatim 保存 (job log prune 対策)。
-  fix round 9 発注書 draft = `wt-gates/drafts/review-gates-fixes-9.md` (独立 4 件 +
-  方向 2 防止機構の lint 4 検査・lint rc=0・承認ファイル裁定待ちで発注保留)
+  fix round 9 発注書 = `wt-gates/drafts/review-gates-fixes-9.md` (独立 4 件 +
+  方向 2 防止機構の lint 4 検査 + 承認機構削除・lint rc=0)。
+  **決裁 2026-08-22: 承認ファイル方式は廃止** — ユーザー基準「ユーザー提示のユースケースに
+  由来しない機能は廃止」に該当 (出自は解除経路の実装選択・使用実績ゼロ・ユーザーは host 権限で
+  同等以上のことが常に可能)。緊急解除は管理者領域の hook 設定変更のみ。code 内に解除経路
+  (file / 環境変数 / flag) を置かない — fix round 9 の所見 6 として発注
 - [ ] **(g) codex の直接起動を禁止する — 強固に** (2026-08-21 ユーザー決裁 + 同日「強固に
   おこなうべき」で強化) — codex_delegation_gate を「注意喚起」から「deny」へ:
   main agent の Bash からの companion 起動 (全 subcommand・`task-worker` 含む) は**一律 deny**。
