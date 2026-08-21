@@ -114,6 +114,7 @@ MAX_RECORD_BYTES = 1 << 20
 MAX_SCAN_BYTES = 64 << 20
 # 同じ理由で entry 数も抑える — 実機の worktree は 4 桁で、超えるのは別ツリーである。
 MAX_TREE_ENTRIES = 200_000
+MAX_TREE_PATH_BYTES = 64 << 20
 # workspace と peer record も同じ理由で数える — 列挙自体が list 化で膨らむ。
 MAX_WORKSPACES = 10_000
 MAX_PEERS = 5_000
@@ -1029,10 +1030,12 @@ def tree_age(root: str | None, now: float) -> tuple[float | None, int, bool]:
     budget = MAX_TREE_ENTRIES
     # Directory metadata covers renames, deletions, empty dirs, and symlink entries.
     directories = [root]
+    held_path_bytes = len(os.fsencode(root))
     measured = 0
     while directories:
         try:
             base = directories.pop()
+            held_path_bytes -= len(os.fsencode(base))
             measured += 1
             mtime = (os.stat(base) if base == root else os.lstat(base)).st_mtime
             newest = mtime if newest is None else max(newest, mtime)
@@ -1055,7 +1058,11 @@ def tree_age(root: str | None, now: float) -> tuple[float | None, int, bool]:
                     if mtime is not None:
                         newest = mtime if newest is None else max(newest, mtime)
                     if entry.is_dir(follow_symlinks=False):
+                        path_bytes = len(os.fsencode(path))
+                        if held_path_bytes + path_bytes > MAX_TREE_PATH_BYTES:
+                            return None, measured, False
                         directories.append(path)
+                        held_path_bytes += path_bytes
         except FileNotFoundError:
             # 走査中に消えた dir は file と同じく 「たった今の書き込み」。
             newest = now if newest is None else max(newest, now)
@@ -3304,7 +3311,7 @@ class WatchTest(unittest.TestCase):
                 baseline_silence(jobs, "task-live", time.time()), (None, False)
             )
 
-    def test_a_cross_round_duplicate_precedes_the_inode_comparison(self):
+    def test_cross_round_confirmed_duplicates_are_ambiguous(self):
         """A new scan-order head still leaves two records ambiguous, not replaced."""
         import io
         from contextlib import redirect_stdout
@@ -3970,7 +3977,7 @@ class WatchTest(unittest.TestCase):
         self.assertTrue(held and held[-1])  # 後置比較の時点で開いている
         self.assertTrue(all(h.closed for h in handles))
 
-    def test_a_record_that_cannot_be_opened_is_corrupt_not_unpinnable(self):
+    def test_a_record_that_cannot_be_opened_is_stably_corrupt(self):
         """開けないままの record は「読めない」 — 掴めないことを不一致に化けさせない。"""
         import io
         from contextlib import redirect_stdout
@@ -7565,60 +7572,51 @@ class SourceInvariantTest(unittest.TestCase):
         self.assertEqual(set(selected), expected)
 
     def test_tree_path_bytes_are_bounded_before_the_entry_cap(self):
-        """The one-pass walk retains no measured-path collection before its entry cap."""
-        functions = [
-            node
-            for node in self._source_tree().body
-            if isinstance(node, ast.FunctionDef) and node.name == "tree_age"
-        ]
-        self.assertEqual(len(functions), 1)
-        tree = functions[0]
-        counters = [
-            node.value
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Assign)
-            and any(
-                isinstance(target, ast.Name) and target.id == "measured"
-                for target in node.targets
-            )
-        ]
-        self.assertEqual(len(counters), 1)
-        counter = counters[0]
-        if not isinstance(counter, ast.Constant):
-            self.fail("measured is not initialized from a constant")
-        self.assertEqual(counter.value, 0)
-        retained = [
-            node.lineno
-            for node in ast.walk(tree)
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id == "measured"
-            )
-            or (
-                isinstance(node, ast.For)
-                and isinstance(node.iter, ast.Name)
-                and node.iter.id == "measured"
-            )
-        ]
-        self.assertFalse(retained, f"retained measured paths at lines {retained}")
+        """A wide directory exhausts live path bytes before its entry allowance."""
+        from unittest import mock
+
+        root = tempfile.mkdtemp()
+        paths = [os.path.join(root, name) for name in ("aa", "bb", "cc")]
+        for path in paths:
+            os.mkdir(path)
+        path_bytes = len(os.fsencode(paths[0]))
+        with (
+            mock.patch(__name__ + ".MAX_TREE_ENTRIES", len(paths)),
+            mock.patch(__name__ + ".MAX_TREE_PATH_BYTES", path_bytes * 2),
+        ):
+            self.assertEqual(tree_age(root, time.time()), (None, 4, False))
+
+        selected = tempfile.mkdtemp()
+        os.mkdir(os.path.join(selected, ".git"))
+        with (
+            mock.patch(__name__ + ".MAX_TREE_ENTRIES", 0),
+            mock.patch(__name__ + ".MAX_TREE_PATH_BYTES", 1 << 20),
+        ):
+            self.assertEqual(tree_age(selected, time.time()), (None, -1, False))
 
     def test_tree_path_bytes_within_the_cap_keep_the_walk_result(self):
-        """Zero retained measured-path bytes preserve a complete long-name walk."""
+        """Walks below and exactly at the live path byte cap remain complete."""
+        from unittest import mock
+
         root = tempfile.mkdtemp()
-        written = os.path.join(root, "x" * 200)
-        with open(written, "w", encoding="utf-8") as stream:
-            stream.write("x")
+        paths = [os.path.join(root, name) for name in ("aa", "bb")]
+        for path in paths:
+            os.mkdir(path)
         observed = time.time()
-        for path in (written, root):
+        for path in (*paths, root):
             os.utime(path, (observed - 90.0, observed - 90.0))
-        age, count, complete = tree_age(root, observed)
-        self.assertEqual(count, 2)
-        self.assertTrue(complete)
-        self.assertIsNotNone(age)
-        assert age is not None
-        self.assertAlmostEqual(age, 90.0)
+        held = sum(len(os.fsencode(path)) for path in paths)
+        for cap in (held + 1, held):
+            with (
+                self.subTest(cap=cap),
+                mock.patch(__name__ + ".MAX_TREE_PATH_BYTES", cap),
+            ):
+                age, count, complete = tree_age(root, observed)
+                self.assertEqual(count, 5)
+                self.assertTrue(complete)
+                self.assertIsNotNone(age)
+                assert age is not None
+                self.assertAlmostEqual(age, 90.0)
 
     def test_watch_returns_only_through_finish(self):
         """Every return in watch must be an emitting ``return finish(...)``."""
