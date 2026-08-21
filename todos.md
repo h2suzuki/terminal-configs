@@ -100,8 +100,8 @@ Exit Criteria:
   (6) **レビュー scope は round 種別で設計する** (2026-08-21 ユーザー指摘) — sentinel の 76 巡は
   r1 の全体レビュー書式を cp 継承し続け、実際は「直前 fix の欠陥を最優先」の実質 diff レビューを
   全体 scope の発注で回していた (scope は一度も設計判断されていない)。正しくは fix 検証 =
-  diff round (plugin の `/codex:adversarial-review` が既製で適合・2026-08-13 10:17 から利用可能
-  だった) / 在庫掃引 = 全体 round (round 1 と構造変更後のみ) に分離する。分離は由来推定
+  diff round (plugin の `/codex:adversarial-review` が既製で適合・plugin 導入 2026-06-13 以来
+  利用可能だった) / 在庫掃引 = 全体 round (round 1 と構造変更後のみ) に分離する。分離は由来推定
   (fix 由来 vs 在庫) を構造的に自動化し、52% 自己交絡の再発を防ぐ
 
 Work file: `docs/adversarial-review-methodology.md` (§6 チェックリストを各ケースの入場 gate に使う)
