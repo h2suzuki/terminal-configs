@@ -1582,16 +1582,12 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     pending_path = None
                 found, complete = carried, complete and not unknown
             else:
-                # 唯一の読めない候補は、 次の観測で安定した snapshot を読み直す。
+                # 唯一の未解決候補は、 次の観測で安定した snapshot を読み直す。
                 unresolved = unknown + shifting
                 retrying = pending_path is not None and any(
                     path == pending_path for path, _log in unresolved
                 )
-                if (
-                    len(found) == 1
-                    and unresolved
-                    and (not retrying or shifting or not complete)
-                ):
+                if len(unresolved) == 1 and (not retrying or shifting or not complete):
                     pending_path = pending_path or unresolved[0][0]
                     found = []
                 else:
@@ -3520,6 +3516,160 @@ class WatchTest(unittest.TestCase):
                 EXIT_NOT_COMPLETED,
             )
         self.assertEqual(cadences, [inode])
+
+    def test_an_unreadable_candidate_with_a_known_other_id_crosses_a_cadence(self):
+        """A known non-target candidate does not bypass a missed read's retry."""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-x", "failed")
+        with open(record, "w", encoding="utf-8") as stream:
+            stream.write("{broken")
+        other_jobs = os.path.join(root, "other", "jobs")
+        os.makedirs(other_jobs)
+        other_record = os.path.join(other_jobs, "task-x.json")
+        with open(other_record, "w", encoding="utf-8") as stream:
+            json.dump({"id": "task-other", "status": "running"}, stream)
+        with open(
+            os.path.join(other_jobs, "task-x.log"), "w", encoding="utf-8"
+        ) as stream:
+            stream.write("x\n")
+        cadences = []
+        shown = io.StringIO()
+
+        def next_cadence(_deadline, _poll_seconds):
+            self.assertEqual(shown.getvalue(), "")
+            cadences.append(1)
+
+        with (
+            redirect_stdout(shown),
+            mock.patch(__name__ + ".sleep_until", next_cadence),
+        ):
+            self.assertEqual(
+                watch(self._watch_args(root, "task-x", once=True)), EXIT_CORRUPT
+            )
+        self.assertEqual(cadences, [1])
+
+    def test_a_shifting_candidate_with_a_known_other_id_can_vanish(self):
+        """A known non-target candidate does not hide a pending disappearance."""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("ws", "task-x", "failed")
+        other_jobs = os.path.join(root, "other", "jobs")
+        os.makedirs(other_jobs)
+        other_record = os.path.join(other_jobs, "task-x.json")
+        with open(other_record, "w", encoding="utf-8") as stream:
+            json.dump({"id": "task-other", "status": "running"}, stream)
+        with open(
+            os.path.join(other_jobs, "task-x.log"), "w", encoding="utf-8"
+        ) as stream:
+            stream.write("x\n")
+        real_view = record_view
+        reads = []
+        cadences = []
+
+        def shifting(path, job_id=None):
+            if path == record and job_id is None:
+                reads.append(1)
+                if len(reads) == 2:
+                    return ("shifted",), {"id": "task-x", "status": "failed"}
+            return real_view(path, job_id)
+
+        def next_cadence(_deadline, _poll_seconds):
+            cadences.append(1)
+            os.unlink(record)
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".record_view", shifting),
+            mock.patch(__name__ + ".sleep_until", next_cadence),
+        ):
+            self.assertEqual(
+                watch(self._watch_args(root, "task-x", once=True)), EXIT_VANISHED
+            )
+        self.assertEqual(cadences, [1])
+        self.assertEqual(len(reads), 2)
+
+    def test_a_carried_candidate_with_a_shifting_sibling_is_unresolved(self):
+        """A moving sibling prevents a carried candidate from resolving the scan."""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _record, _log = self._state("stable", "task-x", "failed")
+        peer_jobs = os.path.join(root, "shifting", "jobs")
+        os.makedirs(peer_jobs)
+        peer = os.path.join(peer_jobs, "task-x.json")
+        with open(peer, "w", encoding="utf-8") as stream:
+            json.dump({"id": "task-x", "status": "failed"}, stream)
+        with open(
+            os.path.join(peer_jobs, "task-x.log"), "w", encoding="utf-8"
+        ) as stream:
+            stream.write("x\n")
+        real_view = record_view
+        reads = []
+        cadences = []
+
+        def shifting(path, job_id=None):
+            if path == peer and job_id is None:
+                reads.append(1)
+                if len(reads) == 2:
+                    return ("shifted",), {"id": "task-x", "status": "failed"}
+            return real_view(path, job_id)
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".record_view", shifting),
+            mock.patch(__name__ + ".sleep_until", lambda *a: cadences.append(1)),
+        ):
+            self.assertEqual(
+                watch(self._watch_args(root, "task-x", once=True)), EXIT_UNVERIFIABLE
+            )
+        self.assertEqual(cadences, [])
+        self.assertEqual(len(reads), 2)
+
+    def test_unreadable_and_shifting_candidates_do_not_arm_a_single_pending_path(self):
+        """Two unresolved candidates cannot be represented by one pending path."""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, record, _log = self._state("unreadable", "task-x", "failed")
+        with open(record, "w", encoding="utf-8") as stream:
+            stream.write("{broken")
+        peer_jobs = os.path.join(root, "shifting", "jobs")
+        os.makedirs(peer_jobs)
+        peer = os.path.join(peer_jobs, "task-x.json")
+        with open(peer, "w", encoding="utf-8") as stream:
+            json.dump({"id": "task-x", "status": "failed"}, stream)
+        with open(
+            os.path.join(peer_jobs, "task-x.log"), "w", encoding="utf-8"
+        ) as stream:
+            stream.write("x\n")
+        real_view = record_view
+        reads = []
+        cadences = []
+
+        def shifting(path, job_id=None):
+            if path == peer and job_id is None:
+                reads.append(1)
+                if len(reads) == 2:
+                    return ("shifted",), {"id": "task-x", "status": "failed"}
+            return real_view(path, job_id)
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".record_view", shifting),
+            mock.patch(__name__ + ".sleep_until", lambda *a: cadences.append(1)),
+        ):
+            self.assertEqual(
+                watch(self._watch_args(root, "task-x", once=True)), EXIT_UNVERIFIABLE
+            )
+        self.assertEqual(cadences, [])
+        self.assertEqual(len(reads), 2)
 
     def test_a_pending_candidate_that_keeps_shifting_times_out(self):
         """A pending candidate at the deadline keeps the timeout contract."""
