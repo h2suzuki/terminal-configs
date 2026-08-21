@@ -353,7 +353,7 @@ class Observation:
     """Descriptor-backed file observation shared by every content reader.
 
     The primitive owns acquisition, bounded reads, descriptor fingerprints,
-    absence classification, and hold replacement. Readers receive bytes and
+    and absence classification. Readers receive bytes and
     interpret them without issuing descriptor syscalls themselves.
     """
 
@@ -448,12 +448,6 @@ class Observation:
         return observed.st_dev, observed.st_ino
 
     @staticmethod
-    def read_held(handle, limit: int) -> bytes:
-        """Re-read a held descriptor from its start, within the caller's cap."""
-        handle.seek(0)
-        return handle.read(limit)
-
-    @staticmethod
     def release(handles: list) -> None:
         """Release held descriptors in their existing order."""
         for handle in handles:
@@ -466,23 +460,10 @@ class Observation:
         sys.stdout = Observation.DiscardStream()
 
     @classmethod
-    def replace_hold(cls, previous: list, fresh: list) -> list:
-        """Install a newly acquired hold before releasing the previous one."""
-        if not fresh:
-            return previous
-        cls.release(previous)
-        return fresh
-
-    @classmethod
-    def record(cls, path: str, limit: int, hold: list | None = None) -> Observation:
+    def record(cls, path: str, limit: int) -> Observation:
         """One bounded record read and the fingerprint of those exact bytes."""
         try:
-            with contextlib.ExitStack() as opened:
-                handle = open_regular(path)
-                if hold is None:
-                    opened.enter_context(handle)
-                else:
-                    hold.append(handle)
+            with open_regular(path) as handle:
                 descriptor = cls.descriptor_stat(handle)
                 raw = handle.read(limit)
         except FileNotFoundError:
@@ -693,16 +674,14 @@ def job_record(record_path: str, job_id: str | None = None) -> dict | None:
     return record_view(record_path, job_id)[1]
 
 
-def record_view(
-    path: str, job_id: str | None = None, hold: list | None = None
-) -> tuple[tuple, dict | None]:
+def record_view(path: str, job_id: str | None = None) -> tuple[tuple, dict | None]:
     """The record and a fingerprint of the very bytes it was parsed from.
 
     One open for both: comparing an outer fingerprint taken before and after a
     separate parse proves nothing about the bytes the parse actually saw, so
     A -> B -> A reads B's status as a stable snapshot of A.
     """
-    observed = Observation.record(path, MAX_RECORD_BYTES + 1, hold)
+    observed = Observation.record(path, MAX_RECORD_BYTES + 1)
     if observed.state == Observation.ABSENT:
         return ("absent",), None
     if observed.state == Observation.UNSTABLE:
@@ -851,14 +830,6 @@ def sleep_until(deadline: float, poll_seconds: float) -> None:
     time.sleep(
         max(0.0, min(poll_seconds, deadline - time.monotonic(), MAX_SLEEP_SECONDS))
     )
-
-
-def heartbeat_age(log_path: str, now: float) -> float | None:
-    """Seconds since the job log last grew; None when the log is absent."""
-    try:
-        return now - os.path.getmtime(log_path)
-    except OSError:
-        return None
 
 
 def log_lines(
@@ -1546,7 +1517,7 @@ def evidence(
 
 
 def carrying_records(
-    found: list[tuple[str, str]], job_id: str, hold: list | None = None
+    found: list[tuple[str, str]], job_id: str
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[tuple[str, str]]]:
     """Candidates that claim the id, those unreadable, and those that moved mid-read.
 
@@ -1558,24 +1529,16 @@ def carrying_records(
     shifting = []
     for pair in found:
         before = record_stamp(pair[0])
-        view: list = []
-        keep_read = hold is not None and len(found) == 1
-        stamp, loaded = record_view(pair[0], hold=view if keep_read else None)
+        stamp, loaded = record_view(pair[0])
         # 判断に使った bytes そのものが、 前後どちらとも同じであることを要求する。
         if stamp != before or record_stamp(pair[0]) != before:
             shifting.append(pair)
-            Observation.release(view)
             continue
         if loaded is None or before[0] in ("absent", "unopenable"):
             unknown.append(pair)  # 読めなかっただけ — 名乗っていない証明にならない
-            Observation.release(view)
             continue
         if loaded.get("id") == job_id:
             carried.append(pair)
-            if keep_read and view:
-                hold.append((pair, view))
-                view = []
-        Observation.release(view)
     return carried, unknown, shifting
 
 
@@ -1584,27 +1547,20 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
     deadline = time.monotonic() + args.timeout_seconds
     started = time.monotonic()
     found: list[tuple[str, str]] = []
-    resolved_unknown = False
     saw_candidate = False
     while not found:
         found, complete = find_jobs(args.job_id, roots)
-        fresh_hold: list = []
         if found:
             # file 名の一致は所属の証明ではない — 本文が名乗るものだけを候補にする。
             # 読めなかった候補は「別 job」の証明にならないので、その回は絞らない。
-            carried, unknown, shifting = carrying_records(
-                found, args.job_id, hold=fresh_hold
-            )
+            carried, unknown, shifting = carrying_records(found, args.job_id)
             complete = complete and not shifting  # 動いた候補は掴めていない
             saw_candidate = saw_candidate or bool(carried or unknown or shifting)
             if carried:
                 found, complete = carried, complete and not unknown
             else:
-                # 唯一の候補が読めないだけなら、 corrupt 判定へ送る。
+                # 唯一の読めない候補は、 次の観測で安定した snapshot を読み直す。
                 found, complete = unknown[:1], complete and len(unknown) <= 1
-                # 一度立てたら消さない — 間に別状態を挟むと消える旗では、
-                # 検証できなかった候補を後発の record で置き換えられる。
-                resolved_unknown = resolved_unknown or bool(found)
         # 候補を確かめ終えた時点で期限なら、 そこから終局を作らない。
         if found and finish(deadline, EXIT_ALIVE, (), ()) == EXIT_TIMEOUT:
             if len(found) == 1 and complete:
@@ -1636,93 +1592,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     ),
                 )
         if found and complete:
-            if fresh_hold:
-                for _pair, descriptors in fresh_hold:
-                    Observation.release(descriptors)
-                break
-            # test stub 等で解決時の hold が無い時だけ開き直す。 読取前後の
-            # descriptor 全指紋が動いた view は corrupt でなく未解決へ戻す。
-            fallback_hold: list = []
-            try:
-                fallback = open_regular(found[0][0])
-                fallback_hold.append(fallback)
-                before = Observation.descriptor_stat(fallback)
-                raw = Observation.read_held(fallback, MAX_RECORD_BYTES + 1)
-                after = Observation.descriptor_stat(fallback)
-            except (FileNotFoundError, NotADirectoryError):
-                Observation.release(fallback_hold)
-                if not record_gone(found[0][0]):
-                    return finish(
-                        deadline,
-                        EXIT_CORRUPT,
-                        (
-                            "corrupt: the state record is present but unreadable — the job's "
-                            "outcome cannot be read from it, so do not treat this as a stall",
-                            f"  job    : record={printable(found[0][0])}",
-                        ),
-                        (
-                            f"timeout: the record could not be held within {duration_seconds(args.timeout_seconds)}",
-                        ),
-                    )
-                return finish(
-                    deadline,
-                    EXIT_VANISHED,
-                    (
-                        "vanished: the state record disappeared after registration — "
-                        "the plugin prunes old jobs, so this job's outcome is unknowable here",
-                        f"  job    : record={printable(found[0][0])}",
-                    ),
-                    (
-                        f"timeout: the record could not be held within {duration_seconds(args.timeout_seconds)}",
-                    ),
-                )
-            except OSError:
-                Observation.release(fallback_hold)
-                return finish(
-                    deadline,
-                    EXIT_CORRUPT,
-                    (
-                        "corrupt: the state record is present but unreadable — the job's "
-                        "outcome cannot be read from it, so do not treat this as a stall",
-                        f"  job    : record={printable(found[0][0])}",
-                    ),
-                    (
-                        f"timeout: the record could not be held within {duration_seconds(args.timeout_seconds)}",
-                    ),
-                )
-            before_fingerprint = (
-                before.st_mtime_ns,
-                before.st_ctime_ns,
-                before.st_size,
-            )
-            after_fingerprint = (
-                after.st_mtime_ns,
-                after.st_ctime_ns,
-                after.st_size,
-            )
-            if before_fingerprint != after_fingerprint:
-                Observation.release(fallback_hold)
-                complete = False
-            elif _parse_record(raw, args.job_id) is None:
-                Observation.release(fallback_hold)
-                return finish(
-                    deadline,
-                    EXIT_CORRUPT,
-                    (
-                        "corrupt: the state record is present but unreadable — the job's "
-                        "outcome cannot be read from it, so do not treat this as a stall",
-                        f"  job    : record={printable(found[0][0])}",
-                    ),
-                    (
-                        f"timeout: registered but not observed within {duration_seconds(args.timeout_seconds)}",
-                        f"  job    : {printable(args.job_id)} record={printable(found[0][0])}",
-                    ),
-                )
-            else:
-                Observation.release(fallback_hold)
-                break
-        for _pair, descriptors in fresh_hold:
-            Observation.release(descriptors)
+            break
         saw_candidate = saw_candidate or bool(found)
         found = []
         if args.once:
@@ -1808,22 +1678,6 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             (),
         )
     jobs_dir = os.path.dirname(record_path)
-    if resolved_unknown and not record_gone(record_path):
-        # 検証できなかった候補を、 後から読めた別 record で置き換えない。
-        # 消えている場合は別 — それは exit 10 が答えなので下の poll へ委ねる。
-        return finish(
-            deadline,
-            EXIT_CORRUPT,
-            (
-                "corrupt: the state record is present but unreadable — the job's "
-                "outcome cannot be read from it, so do not treat this as a stall",
-                f"  job    : record={printable(record_path)}",
-            ),
-            (
-                f"timeout: registered but not observed within {duration_seconds(args.timeout_seconds)}",
-                f"  job    : {printable(args.job_id)} record={printable(record_path)}",
-            ),
-        )
     last_report: tuple[str, str] | None = None
     while True:
         # 期限に達していたら新しい poll を始めない — 期限後の状態から出た verdict が
@@ -3135,7 +2989,7 @@ class WatchTest(unittest.TestCase):
         ):
             self.assertNotEqual(watch(args), EXIT_NEVER_REGISTERED)
 
-    def test_a_record_replaced_between_rounds_is_a_different_record(self):
+    def test_a_candidate_seen_in_an_incomplete_round_is_not_called_unregistered(self):
         """A candidate seen in an incomplete round cannot become unregistered."""
         import io
         from contextlib import redirect_stdout
@@ -3599,68 +3453,46 @@ class WatchTest(unittest.TestCase):
         self.assertIn("走査未完了", buf.getvalue())
         self.assertNotIn("走査中に変化", buf.getvalue())
 
-    def test_an_unvalidated_candidate_is_not_replaced_by_a_readable_one(self):
-        """検証できなかった候補を、 後から読めた別 record で置き換えない。"""
-        import io
-        from contextlib import redirect_stdout
-
-        from unittest import mock
-
-        root, record, _log = self._state("ws", "task-x", "running")
-        real = record_view
-
-        def unreadable_at_resolution(path, job_id=None, hold=None):
-            # 解決時は読めず、 pin 時には読める — 別 record を掴む窓である。
-            if path == record and job_id is None:
-                return ("unopenable", 13), None
-            return real(path, job_id)
-
-        with (
-            redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".record_view", unreadable_at_resolution),
-        ):
-            self.assertEqual(
-                watch(self._watch_args(root, "task-x", once=True)), EXIT_CORRUPT
-            )
-
-    def test_an_unvalidated_candidate_survives_a_round_that_is_neither(self):
-        """unknown → どちらでもない周 → carried の 3 周でも、 未検証の事実は残る。"""
+    def test_an_unreadable_candidate_is_retried_on_the_next_cadence(self):
+        """A missed read is retried from the producer's next stable snapshot."""
         import io
         from contextlib import redirect_stdout
         from unittest import mock
 
-        root, record, log = self._state("ws", "task-x", "completed")
-        pair, rounds = (record, log), []
+        root, record, log = self._state("ws", "task-x", "failed")
+        with open(record, "wb"):
+            pass
+        inode = os.stat(record).st_ino
+        real_find = find_jobs
+        real_carrying = carrying_records
+        scans = []
+        rewrites = []
 
-        def scripted(found, job_id, hold=None):
-            rounds.append(1)
-            if len(rounds) == 1:
-                return [], [pair], []  # 読めなかった唯一の候補
-            if len(rounds) == 2:
-                return [], [], [pair]  # carried でも unknown でもない周
-            return [pair], [], []  # 後から読めた record
+        def incomplete_then_complete(job_id, roots):
+            found, complete = real_find(job_id, roots)
+            scans.append(1)
+            return found, complete and len(scans) > 1
+
+        def rewrite_after_missed_read(found, job_id):
+            result = real_carrying(found, job_id)
+            if not rewrites:
+                self.assertEqual(result[1], [(record, log)])
+                with open(record, "w", encoding="utf-8") as stream:
+                    json.dump({"id": "task-x", "status": "failed"}, stream)
+                rewrites.append(os.stat(record).st_ino)
+            return result
 
         with (
             redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".carrying_records", scripted),
-            mock.patch(__name__ + ".find_jobs", lambda *a: ([pair], len(rounds) >= 2)),
+            mock.patch(__name__ + ".find_jobs", incomplete_then_complete),
+            mock.patch(__name__ + ".carrying_records", rewrite_after_missed_read),
         ):
             self.assertEqual(
                 watch(self._watch_args(root, "task-x", timeout_seconds=5.0)),
-                EXIT_CORRUPT,
+                EXIT_NOT_COMPLETED,
             )
-        self.assertGreaterEqual(len(rounds), 3)
-
-    def test_a_hold_kept_through_an_unheld_round_still_sees_the_swap(self):
-        """A fresh hold replaces an old hold without closing the fresh handle."""
-
-        old = open(os.devnull, "rb")
-        fresh = open(os.devnull, "rb")
-        self.addCleanup(fresh.close)
-        installed = Observation.replace_hold([old], [fresh])
-        self.assertEqual(installed, [fresh])
-        self.assertTrue(old.closed)
-        self.assertFalse(fresh.closed)
+        self.assertEqual(rewrites, [inode])
+        self.assertGreaterEqual(len(scans), 2)
 
     def test_an_artifact_seen_only_inside_the_read_is_a_change(self):
         """外側で不在の成果物を読取窓の中だけ読めたなら、 完成ではなく変化である。"""
@@ -3796,8 +3628,6 @@ class WatchTest(unittest.TestCase):
         with (
             redirect_stdout(buf),
             mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1, True)),
-            # 読取の合間にだけ現れた別 file を観測する path 側の呼び出し。
-            mock.patch(__name__ + ".heartbeat_age", lambda *a: 9000.0),
         ):
             watch(args)
         # 読んでいない file の mtime を数字として出さない。
@@ -3840,8 +3670,6 @@ class WatchTest(unittest.TestCase):
         with (
             redirect_stdout(io.StringIO()),
             mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1, True)),
-            # 読んだ後だけ「たった今書かれた」 ように見える path 観測。
-            mock.patch(__name__ + ".heartbeat_age", lambda *a: 0.0),
         ):
             self.assertEqual(watch(args), EXIT_STALL)
 
@@ -3913,38 +3741,6 @@ class WatchTest(unittest.TestCase):
                 hashlib.sha256(raw).digest(),
             ),
         )
-
-    def test_a_record_that_could_not_be_pinned_is_not_replaced(self):
-        """pin に失敗して entry が残るなら、 消失でなく読取不能である。"""
-        import io
-        from contextlib import redirect_stdout
-        from unittest import mock
-
-        root, record, _log = self._state("ws", "task-x", "running")
-        args = self._watch_args(root, "task-x", once=True)
-        real, opens = open_regular, []
-
-        def flaky(path):
-            if path == record:
-                opens.append(1)
-                # 登録解決の read が終わった後、 pin の瞬間だけ読めない。
-                if len(opens) == 4:
-                    raise FileNotFoundError(path)
-            return real(path)
-
-        real_view = record_view
-
-        def no_hold(path, job_id=None, hold=None):
-            return real_view(path, job_id)  # hold を返さない呼び手
-
-        buf = io.StringIO()
-        with (
-            redirect_stdout(buf),
-            mock.patch(__name__ + ".record_view", no_hold),
-            mock.patch(__name__ + ".open_regular", flaky),
-        ):
-            self.assertEqual(watch(args), EXIT_CORRUPT)
-        self.assertEqual(len(opens), 4)  # pin の呼び出しで落ちた
 
     def test_the_artifact_inode_is_held_until_the_comparison(self):
         """成果物も、 呼び手の後置比較が済むまで読んだ descriptor で押さえる。"""
@@ -7311,7 +7107,7 @@ class WatchTest(WatchTest):
             stream.write(b"final without LF")
         self.assertEqual(list(log_lines(log)), ["final without LF"])
 
-    def test_shifting_candidates_stop_at_the_history_cap(self):
+    def test_changing_candidates_keep_retrying_until_timeout(self):
         """Changing candidates do not create a retained per-candidate history."""
         import io
         from contextlib import redirect_stdout
@@ -7836,59 +7632,23 @@ class WatchTest(WatchTest):
     """Regressions fixed in the 67th review round."""
 
     def test_a_validated_pin_is_not_reread_during_a_truncate_window(self):
-        """A transient truncate after resolution is not stable corrupt evidence."""
-        import io
-        from contextlib import redirect_stdout
-        from unittest import mock
-
-        root, record, _log = self._state("ws", "task-x", "running")
-        with open(record, "rb") as stream:
-            original = stream.read()
-        real_read = Observation.read_held
-        rereads = []
-
-        def truncate_during_reread(handle, limit):
-            rereads.append(1)
-            with open(record, "wb"):
-                pass
-            raw = real_read(handle, limit)
-            with open(record, "wb") as stream:
-                stream.write(original)
-            return raw
-
-        with (
-            redirect_stdout(io.StringIO()),
-            mock.patch(
-                __name__ + ".Observation.read_held",
-                side_effect=truncate_during_reread,
-            ),
-        ):
-            code = watch(self._watch_args(root, "task-x", once=True))
-        self.assertNotEqual(code, EXIT_CORRUPT)
-        self.assertEqual(rereads, [], "the validated held descriptor was reread")
-
-    def test_a_stable_corrupt_fallback_record_is_still_corrupt(self):
-        """Only a stable fallback snapshot licenses the corrupt verdict."""
-        import io
-        from contextlib import redirect_stdout
-        from unittest import mock
-
-        root, record, _log = self._state("ws", "task-x", "running")
-        real_carrying = carrying_records
-
-        def carrying_without_hold(found, job_id, hold=None):
-            return real_carrying(found, job_id)
-
-        with open(record, "wb") as stream:
-            stream.write(b"{broken")
-        with (
-            redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".carrying_records", carrying_without_hold),
-        ):
-            self.assertEqual(
-                watch(self._watch_args(root, "task-x", once=True)),
-                EXIT_CORRUPT,
-            )
+        """No held-record reread API can turn a later truncate into corrupt evidence."""
+        with open(__file__, encoding="utf-8") as source:
+            tree = ast.parse(source.read())
+        record = next(
+            item
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "Observation"
+            for item in node.body
+            if isinstance(item, ast.FunctionDef) and item.name == "record"
+        )
+        calls = [
+            node.func.attr
+            for node in ast.walk(record)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        ]
+        self.assertEqual(calls.count("read"), 1)
+        self.assertNotIn("seek", calls)
 
     def test_a_future_mtime_from_before_the_run_is_not_ready(self):
         """A pre-run file cannot claim freshness through a forged future mtime."""
@@ -7991,22 +7751,6 @@ class WatchTest(WatchTest):
 
 class WatchTest(WatchTest):
     """Regressions fixed in the 70th review round."""
-
-    def test_a_dangling_record_at_fallback_pin_is_corrupt(self):
-        """A stable dangling record is present but unreadable, not vanished."""
-        import io
-        from contextlib import redirect_stdout
-        from unittest import mock
-
-        root, record, log = self._state("ws", "task-x", "running")
-        os.unlink(record)
-        os.symlink(record + ".missing", record)
-        with (
-            redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".find_jobs", return_value=([(record, log)], True)),
-        ):
-            code = watch(self._watch_args(root, "task-x", once=True))
-        self.assertEqual(code, EXIT_CORRUPT)
 
     def test_a_root_below_a_dangling_ancestor_is_not_an_empty_scan(self):
         """An unreachable root cannot establish that a job is unregistered."""
