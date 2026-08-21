@@ -65,6 +65,12 @@ Exit Criteria:
   承認) — decision 型 Task が open の時に短文決裁 (「(a)」「やってください」等) を受けた turn
   は、台帳 / todos への決裁記録を要求する reminder (warn tier)。U1 決裁が transcript にのみ
   残り 8 日消えた class の再発防止
+- [ ] **コミュニケーション規則の hook 強化 — CLAUDE.md は削らない** (2026-08-21 ユーザー決裁:
+  「stop が効いている実感がまだ無い。hook 強化に倒して本当に守られるようになってから考える。
+  効いていない状態で消すと正本が無くなり、ルールの所在が分散して埋もれるだけ」) —
+  最終行形式 (結論絵文字 / 質問 ? 終端)・自己採番参照の Stop family を corpus 実測から
+  warn tier で導入し、**発火と遵守の実測が揃うまで CLAUDE.md の該当節は正本として維持**する。
+  extraction の pair commit (実装 + 即削除) は本件には適用しない — 削除は実証後の別判断
 - [ ] 各 gate の canonical (files/) と deploy 先の diff -q 一致 + 発火の live 観測
 
 Work file: 4 gate の設計は本 block と `last-session-handoff.md` 不要 (本 block で自己完結)。
