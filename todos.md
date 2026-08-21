@@ -29,12 +29,20 @@ Exit Criteria:
   上流批評 / **概念診断**) の要求必須化、(f) G6 = fix 発注書の修正方式宣言 + 機構追加の
   failure-mode 列挙表 + **全 fix 所見への掃引節 (欠陥定義 + 機械列挙 + 単一 site 主張にも根拠)**
   — (e) 概念診断と (f) 掃引節は 2026-08-21 transcript 監査の欠落検出をユーザー承認で追加
-- [ ] **(g) codex の直接起動を禁止する** (2026-08-21 ユーザー決裁: 「既製 command 以外の
-  ルートでの codex 実行は本当は禁止にしたい。何度言っても node で companion を直接実行するのが
-  止められず実害が出ている」) — codex_delegation_gate を「注意喚起」から「deny」へ:
-  main agent の Bash からの `node *codex-companion.mjs*` 起動は**一律 deny** し、既製経路
-  (ユーザーが打つ /codex:* command・codex:rescue skill が spawn する rescue subagent 内の
-  実行) だけを許可する。緊急時の override は ユーザー承認を条件とする env 1 個に限定
+- [ ] **(g) codex の直接起動を禁止する — 強固に** (2026-08-21 ユーザー決裁 + 同日「強固に
+  おこなうべき」で強化) — codex_delegation_gate を「注意喚起」から「deny」へ:
+  main agent の Bash からの companion 起動 (全 subcommand・`task-worker` 含む) は**一律 deny**。
+  判定は先頭一致でなく command 文字列中の `codex-companion.mjs` の存在で行い、path 前置・
+  変数展開・wrapper 包みも捕捉する。許可は codex-rescue subagent 内の実行のみ。
+  **model が使える escape hatch は置かない** (解除はユーザーが書く承認 file のみ)。
+  deny message は実害台帳 (user memory `feedback_codex_plugin_route_only`) を引用し、
+  「大したことない」「thin だからよい」の minimization を message 内で先回りして反証する
+- [ ] **(i) 自作癖の抑制** (2026-08-21 ユーザー決裁: 「すぐ自分でコードを書こうとする。
+  ジュニアエンジニアがよくやる悪癖」) — 2 層で: (1) tool-role-delegation skill の「trivial は
+  直接編集可」境界を数値で明文化 (例: 単一 file・10 行以内・test 追加なし。超えたら委譲か、
+  委譲不採用の理由 1 行の記録を必須)、(2) warn-tier hook = session 内の main tree への
+  source 追加行数を累積計測し、しきい値超過かつ session 内に rescue job が無い場合に
+  stop_checks が「自作癖 checkpoint」を提示する。導入は warn tier → 実測 → 調整
 - [ ] **(h) codex-delegation skill と関連 memory entry を plugin-route 前提に改訂する** —
   現 skill は companion 直接起動の command 形を規定しており (launcher 不採用裁定 2026-08-13 の
   「直接起動へ一本化」)、これが直接起動 pattern を制度化していた。発注書規律・worktree 隔離・
