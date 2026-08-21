@@ -99,7 +99,12 @@ Exit Criteria:
   warn tier で導入し、**発火と遵守の実測が揃うまで CLAUDE.md の該当節は正本として維持**する。
   extraction の pair commit (実装 + 即削除) は本件には適用しない — 削除は実証後の別判断。
   進捗 2026-08-21: round 7 で実装・受け入れ済み (`5323179` communication lint family:
-  最終行形式 + 自己採番の 2 検査・code block / 引用は除外)。実測・deploy が残
+  最終行形式 + 自己採番の 2 検査・code block / 引用は除外)。実測・deploy が残。
+  **追加 2 項目 (2026-08-21 ユーザー要望「一発目で出せるように改善できたらうれしい」)**:
+  (1) 質問文に過去参照語 (「前ターンの」「上記のとおり」「先ほどの」等) が混ざったら warn
+  する自己完結性検査、(2) 判断依頼を検知した warn の文面に書式 template (決めてほしいこと
+  N 件・問題/やること/承認と却下の帰結・略語封印) を埋め込み、書く瞬間に想起させる。
+  次の実装 round で本 family へ追加
 - [ ] 各 gate の canonical (files/) と deploy 先の diff -q 一致 + 発火の live 観測
 
 Work file: 4 gate の設計は本 block と `last-session-handoff.md` 不要 (本 block で自己完結)。
@@ -192,12 +197,14 @@ Exit Criteria:
   (報告書 `wt-ruling61/drafts/sentinel-r77-report.md`)。処置は全て削除・文書整合系:
   旧 test 名の意味反転流用の解消 (撤去 diff 由来・受け入れの名前照合を素通し) +
   未使用 helper 削除 + 裁定表の整合。fix 後に r78 で U0 ゼロなら r60 + r78 で 2/2
-- [ ] **ユーザー裁定 (判断待ち・r77 の U1)**: (1) 裁定 61 の廃止列挙の補完 — 裁定 35 の
-  「inode 不一致は無条件に移動」条項と裁定 55 の「候補履歴 cap (MAX_SEEN_PAIRS)」条項は
-  同じ防御 family で、実装は撤去済みだが台帳が未改廃 (reviewer の上流批評)。廃止追認の可否。
-  (2) 裁定 42/43 と裁定 61 の衝突 — 同 inode の truncate + 再書込 (正本 S-9 の正常系) を
-  永久 corrupt に固定しうる。reviewer 提案 = (a) 42/43 も廃止し retry で採る (S-9・削減方針に
-  整合) / (b) 保持し正本へ理由と期待 exit を明記。決裁後に fix round + r78 を 1 回で実施
+- [ ] **ユーザー裁定 (r77 の U1)**: (1) 裁定 61 の廃止列挙の補完 — **2026-08-21 承認済み**
+  (「承知しました」)。裁定表へ反映 commit 済み (61 の列挙拡張 + 35/55 への廃止注記、
+  meta-test 13 件緑)。(2) 裁定 42/43 と裁定 61 の衝突 — 同 inode の truncate + 再書込
+  (正本 S-9 の正常系) を当該 watch の間 corrupt に固定しうる。reviewer 提案 = (a) 42/43 も
+  廃止し次 cadence の安定 snapshot で再判定 / (b) 保持し正本へ理由と期待 exit を明記。
+  **2026-08-21 ユーザーから「記憶と合致しない、詳しく」の差し戻し** — 裁定 20 (安定 snapshot の
+  parse 不能だけを corrupt とする・truncate 窓を破損に化けさせない) との関係を説明して再判断
+  待ち。決裁後に fix round + r78 を 1 回で実施
 
 Work file: `docs/sentinel-convergence-log.md` 末尾「ここで停止」節 (再開点)、
 `docs/sentinel-review-analysis.md` §8 (r54〜r76 全記録)、`docs/sentinel-use-cases.md`
