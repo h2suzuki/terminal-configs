@@ -1548,8 +1548,27 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
     started = time.monotonic()
     found: list[tuple[str, str]] = []
     saw_candidate = False
+    pending_path: str | None = None
     while not found:
         found, complete = find_jobs(args.job_id, roots)
+        if pending_path is not None and all(
+            path != pending_path for path, _log in found
+        ):
+            if complete and record_gone(pending_path):
+                return finish(
+                    deadline,
+                    EXIT_VANISHED,
+                    (
+                        "vanished: the pending state record disappeared before "
+                        "registration could be resolved",
+                        f"  record  : {printable(pending_path)}",
+                    ),
+                    (
+                        f"timeout: {printable(args.job_id)} was seen and then lost "
+                        f"within {duration_seconds(args.timeout_seconds)}",
+                        f"  searched: {printable(', '.join(roots))}",
+                    ),
+                )
         if found:
             # file 名の一致は所属の証明ではない — 本文が名乗るものだけを候補にする。
             # 読めなかった候補は「別 job」の証明にならないので、その回は絞らない。
@@ -1557,10 +1576,30 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             complete = complete and not shifting  # 動いた候補は掴めていない
             saw_candidate = saw_candidate or bool(carried or unknown or shifting)
             if carried:
+                if pending_path is not None and any(
+                    path == pending_path for path, _log in carried
+                ):
+                    pending_path = None
                 found, complete = carried, complete and not unknown
             else:
                 # 唯一の読めない候補は、 次の観測で安定した snapshot を読み直す。
-                found, complete = unknown[:1], complete and len(unknown) <= 1
+                unresolved = unknown + shifting
+                retrying = pending_path is not None and any(
+                    path == pending_path for path, _log in unresolved
+                )
+                if (
+                    len(found) == 1
+                    and unresolved
+                    and (not retrying or shifting or not complete)
+                ):
+                    pending_path = pending_path or unresolved[0][0]
+                    found = []
+                else:
+                    if pending_path is not None and any(
+                        path == pending_path for path, _log in found
+                    ):
+                        pending_path = None
+                    found, complete = unknown[:1], complete and len(unknown) <= 1
         # 候補を確かめ終えた時点で期限なら、 そこから終局を作らない。
         if found and finish(deadline, EXIT_ALIVE, (), ()) == EXIT_TIMEOUT:
             if len(found) == 1 and complete:
@@ -1595,9 +1634,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             break
         saw_candidate = saw_candidate or bool(found)
         found = []
-        if args.once:
-            # --once は 1 cadence で返す約束。 ただし走査が不完全、 または一度でも
-            # record を見ているなら 「未登録」 とは言えない。
+        if args.once and pending_path is None:
+            # --once は解決済みの 1 cadence で返し、 未解決 candidate は次 cadence へ送る。
             if complete and not saw_candidate:
                 return finish(
                     deadline,
@@ -2963,9 +3001,9 @@ class WatchTest(unittest.TestCase):
             ),
         ):
             code = watch(args)
-        # 一度見えた以上「未登録」 ではない。 期限に言えるのは timeout だけである。
+        # 一度見えた path の安定消失は、 未登録でも timeout でもない。
         self.assertNotEqual(code, EXIT_NEVER_REGISTERED)
-        self.assertEqual(code, EXIT_TIMEOUT)
+        self.assertEqual(code, EXIT_VANISHED)
 
     def test_a_record_that_changed_between_partial_scans_is_unverifiable(self):
         """An incomplete scan that saw a record cannot become never-registered."""
@@ -2990,7 +3028,7 @@ class WatchTest(unittest.TestCase):
             self.assertNotEqual(watch(args), EXIT_NEVER_REGISTERED)
 
     def test_a_candidate_seen_in_an_incomplete_round_is_not_called_unregistered(self):
-        """A candidate seen in an incomplete round cannot become unregistered."""
+        """A pending path stably absent next cadence is vanished, not timeout."""
         import io
         from contextlib import redirect_stdout
         from unittest import mock
@@ -3006,7 +3044,7 @@ class WatchTest(unittest.TestCase):
                 lambda *a: scans.pop(0) if scans else ([], True),
             ),
         ):
-            self.assertNotEqual(watch(args), EXIT_NEVER_REGISTERED)
+            self.assertEqual(watch(args), EXIT_VANISHED)
 
     def test_a_directory_removed_during_the_walk_is_activity(self):
         """走査中に消えた dir は file と同じ — 読取不能に上書きすると静穏へ到達しない。"""
@@ -3463,36 +3501,43 @@ class WatchTest(unittest.TestCase):
         with open(record, "wb"):
             pass
         inode = os.stat(record).st_ino
-        real_find = find_jobs
-        real_carrying = carrying_records
-        scans = []
-        rewrites = []
+        cadences = []
+        shown = io.StringIO()
 
-        def incomplete_then_complete(job_id, roots):
-            found, complete = real_find(job_id, roots)
-            scans.append(1)
-            return found, complete and len(scans) > 1
-
-        def rewrite_after_missed_read(found, job_id):
-            result = real_carrying(found, job_id)
-            if not rewrites:
-                self.assertEqual(result[1], [(record, log)])
-                with open(record, "w", encoding="utf-8") as stream:
-                    json.dump({"id": "task-x", "status": "failed"}, stream)
-                rewrites.append(os.stat(record).st_ino)
-            return result
+        def next_cadence(_deadline, _poll_seconds):
+            self.assertEqual(shown.getvalue(), "")
+            self.assertFalse(cadences)
+            with open(record, "w", encoding="utf-8") as stream:
+                json.dump({"id": "task-x", "status": "failed"}, stream)
+            cadences.append(os.stat(record).st_ino)
 
         with (
-            redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".find_jobs", incomplete_then_complete),
-            mock.patch(__name__ + ".carrying_records", rewrite_after_missed_read),
+            redirect_stdout(shown),
+            mock.patch(__name__ + ".sleep_until", next_cadence),
         ):
             self.assertEqual(
                 watch(self._watch_args(root, "task-x", timeout_seconds=5.0)),
                 EXIT_NOT_COMPLETED,
             )
-        self.assertEqual(rewrites, [inode])
-        self.assertGreaterEqual(len(scans), 2)
+        self.assertEqual(cadences, [inode])
+
+    def test_a_pending_candidate_that_keeps_shifting_times_out(self):
+        """A pending candidate at the deadline keeps the timeout contract."""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root, _record, _log = self._state("ws", "task-x", "failed")
+
+        def shifting(found, _job_id):
+            return [], [], found
+
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(__name__ + ".carrying_records", shifting),
+        ):
+            code = watch(self._watch_args(root, "task-x", timeout_seconds=0.03))
+        self.assertEqual(code, EXIT_TIMEOUT)
 
     def test_an_artifact_seen_only_inside_the_read_is_a_change(self):
         """外側で不在の成果物を読取窓の中だけ読めたなら、 完成ではなく変化である。"""
@@ -3999,7 +4044,7 @@ class WatchTest(unittest.TestCase):
 
         root, record, _log = self._state("ws", "task-done", "completed")
         args = self._watch_args(root, "task-done", once=True)
-        real, reads = record_view, []
+        real, reads, cadences = record_view, [], []
 
         def shifting(path, job_id=None, hold=None):
             if path == record and job_id is None:
@@ -4012,10 +4057,11 @@ class WatchTest(unittest.TestCase):
             redirect_stdout(io.StringIO()),
             mock.patch(__name__ + ".record_view", shifting),
             mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1, True)),
+            mock.patch(__name__ + ".sleep_until", lambda *a: cadences.append(1)),
         ):
-            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
-        # 2 回目で不一致が確定するので、 3 回目の読み直しは短絡で起きない。
-        self.assertEqual(len(reads), 2)
+            self.assertEqual(watch(args), EXIT_ENDED_WITHOUT_ARTIFACT)
+        self.assertEqual(cadences, [1])
+        self.assertGreater(len(reads), 2)
 
     def test_a_lone_shifting_candidate_discards_the_poll(self):
         """候補が 1 件でも、 読取中に動いたなら掴めていない。"""
@@ -6701,7 +6747,7 @@ class WatchTest(WatchTest):
             return {EXIT_TIMEOUT}
         expected = {
             "record": {
-                "unlink": {1: 6, 6: 7, 16: 10, 25: 10, 39: 10},
+                "unlink": {1: 6, 6: 10, 16: 10, 25: 10, 39: 10},
                 "replace-different": {
                     3: 14,
                     6: 14,
@@ -7631,8 +7677,8 @@ class SourceInvariantTest(unittest.TestCase):
 class WatchTest(WatchTest):
     """Regressions fixed in the 67th review round."""
 
-    def test_a_validated_pin_is_not_reread_during_a_truncate_window(self):
-        """No held-record reread API can turn a later truncate into corrupt evidence."""
+    def test_a_record_view_reads_its_descriptor_once(self):
+        """The record view reads one descriptor once without seeking."""
         with open(__file__, encoding="utf-8") as source:
             tree = ast.parse(source.read())
         record = next(
