@@ -45,7 +45,13 @@ Exit Criteria:
   model に届かない (additionalContext 未接続)、(中) Stop が全 transcript 走査で O(n²)。
   → fix round 8 で対応: 承認は route 迂回のみに限定 + 承認 path への書込を同 gate が deny +
   後続 lint 維持 / 語彙拡張 + 矛盾 deny / warn の additionalContext 接続 (bounded) /
-  transcript 走査に hard budget (全読み廃止・不足分は undercount 明示)
+  transcript 走査に hard budget (全読み廃止・不足分は undercount 明示)。
+  **判定器 round 3 (2026-08-21・base main) = needs-attention 5 件**: critical 1 (承認ファイル
+  touch/ln 偽造 → 廃止可否のユーザー裁定待ち) + 独立 4 件 (並び順 bypass / lint 故障
+  fail-open / blocked turn で warning 消失 / undercount 無言)。verdict 全文は
+  `wt-gates/drafts/review-gates-verdict-3.md` へ verbatim 保存 (job log prune 対策)。
+  fix round 9 発注書 draft = `wt-gates/drafts/review-gates-fixes-9.md` (独立 4 件 +
+  方向 2 防止機構の lint 4 検査・lint rc=0・承認ファイル裁定待ちで発注保留)
 - [ ] **(g) codex の直接起動を禁止する — 強固に** (2026-08-21 ユーザー決裁 + 同日「強固に
   おこなうべき」で強化) — codex_delegation_gate を「注意喚起」から「deny」へ:
   main agent の Bash からの companion 起動 (全 subcommand・`task-worker` 含む) は**一律 deny**。
@@ -224,9 +230,14 @@ Exit Criteria:
   欠落抽象に到達。+ Opus の削減系 4 件と上流裁定事項 5 点 (--once と裁定 62 の優先・exit 10 は
   名乗り確認済み限定・裁定 62 の記憶単位・裁定 55/23 の担保陳腐化)。
   **次の判断はユーザー**: 構造巡の方向を削減側 (pending 削除 + Resolution 型 + 全数列挙 test)
-  へ更新した (A') の発注可否 / (B) bounded-risk 凍結。
+  へ更新した (A') の発注可否 / (B) bounded-risk 凍結。**2 方向分析 2026-08-21 実施済み**
+  (方向 1 = 部位×処置の 11 件表: 局所 2 / 構造 7 / 要件 4。方向 2 = 起源 5 class と防止機構。
+  方法論 §7.2 へ「受領時の 2 方向分析 + 防止機構の同 round 実装」を正本化 commit 済み)。
+  構造巡の発注書 draft は lint rc=0 で作成済み — 裁定 63 案 4 点 (--once は 1 評価周期以内 /
+  記憶単位は事実 / exit 10 は名乗り確認済み限定 / 裁定 23 の廃止閉包) を裁定節に起草。
   work file: `wt-ruling61/drafts/sentinel-r80-report.md` (codex 側) /
-  `wt-ruling61/drafts/sentinel-r80-opus-review.md` (Opus 側・保存済み)
+  `wt-ruling61/drafts/sentinel-r80-opus-review.md` (Opus 側・保存済み) /
+  `wt-ruling61/drafts/sentinel-structural-order.md` (構造巡発注書 draft・裁定待ち)
 - [ ] **ユーザー裁定 (r77 の U1)**: (1) 裁定 61 の廃止列挙の補完 — **2026-08-21 承認済み**
   (「承知しました」)。裁定表へ反映 commit 済み (61 の列挙拡張 + 35/55 への廃止注記、
   meta-test 13 件緑)。(2) 裁定 42/43 と裁定 61 の衝突 — 同 inode の truncate + 再書込
