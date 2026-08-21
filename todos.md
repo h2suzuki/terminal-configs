@@ -36,11 +36,19 @@ Goal: 隣セッションから届く依頼を受領し、内容を本 block に�
 Exit Criteria:
 
 - [x] 依頼内容を受領し、本 block へ要旨と Exit Criteria の具体化を記録した (2026-08-22 本 commit)
-- [ ] 依頼 1: 設計を確定し、wt-gates line で実装 → 受け入れ鎖 (決定的 gates → 回帰 filter) 通過 → 凍結 commit
+- [x] 依頼 1: 設計を確定し、wt-gates line で実装 → 受け入れ鎖 (決定的 gates → 回帰 filter) 通過 → 凍結 commit。
+  **完了 2026-08-22**: corpus 実測 (1.6 MB / 36 session) で採用 8 / 不採用 4 裸形を確定 →
+  codex 実装 (red 27 → green 190) → gates 5/5 全緑 → Opus filter pass (差分実測・既存
+  5 family 影響ゼロ) → 凍結 `b5aea25` → main merge `5bb0448` + push。live 発火は
+  base setup 再実行 (deploy) 後
 - [ ] 依頼 2: prompt 型 hook 仕様を確認し、採否と設計を決定 — 実装または不採用理由の記録
-- [ ] 両依頼の結果 (採否含む) を依頼元セッションへ報告した
+  (進捗 2026-08-22: 実在確認済み・公式 doc 詳細を調査 agent で収集中・審判 model = Sonnet 訂正反映済み)
+- [ ] 両依頼の結果 (採否含む) を依頼元セッションへ報告した (進捗 2026-08-22: 依頼 1 の
+  採用・実装完了と依頼 2 の検討中 status を SendMessage で報告済み。依頼 2 の採否報告が残)
 
-Work file: 依頼 1 の発注書作成後に記載
+Work file: `wt-gates/drafts/negation-claim-order.md` (依頼 1 発注書) /
+`wt-gates/drafts/negation-claim-report.md` (納品報告) /
+`wt-gates/drafts/negation-claim-regression-review.md` (回帰 filter 報告・軽微 note 3 件を含む)
 
 ### 敵対レビュー運用の強制機構 (gate 化)
 
