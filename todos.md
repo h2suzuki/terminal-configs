@@ -89,7 +89,11 @@ Exit Criteria:
   **deploy 完了 2026-08-22** (ユーザーが base setup 実行・stop_checks.py / codex_order_lint /
   managed extensions とも `diff -q` IDENTICAL 実測・審判 hook は新規 session から有効)。
   残る実測対象: warn family 4 種 + 否定断定の新語彙 warn (誤爆率 → blocking 昇格判断) +
-  Stop の Sonnet 審判 hook `cc607a0` (発火頻度・誤爆 → rubric の締め/緩め調整)
+  Stop の Sonnet 審判 hook `cc607a0` (発火頻度・誤爆 → rubric の締め/緩め調整)。
+  **live finding 1 (2026-08-22 実測)**: work-without-task が mytask 8 件登録済み session で
+  誤 block — mytask store は repo top の `drafts/tasks/<sid>.json` に実在するが、payload cwd
+  (repo 深部の subdir) 相対で探して 0 件と判定。処方候補 = store 解決を git root 起点へ
+  (是正 round で対応)
 - [ ] **(g) codex の直接起動を禁止する — 強固に** (2026-08-21 ユーザー決裁 + 同日「強固に
   おこなうべき」で強化) — codex_delegation_gate を「注意喚起」から「deny」へ:
   main agent の Bash からの companion 起動 (全 subcommand・`task-worker` 含む) は**一律 deny**。
