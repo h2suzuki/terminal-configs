@@ -71,6 +71,10 @@ Exit Criteria:
   承認) — decision 型 Task が open の時に短文決裁 (「(a)」「やってください」等) を受けた turn
   は、台帳 / todos への決裁記録を要求する reminder (warn tier)。U1 決裁が transcript にのみ
   残り 8 日消えた class の再発防止
+- [ ] **「無駄」keyword の memory 記録 reminder** (2026-08-21 ユーザー発案: 「無駄という
+  キーワードに反応して memory する hook があってもよいぐらい」) — ユーザーの prompt に
+  無駄 / 浪費 / もったいない が含まれる turn に、memory-routing での記録検討を促す
+  UserPromptSubmit reminder (warn tier)。無駄の実例が entry 化されずに流れる class の防止
 - [ ] **コミュニケーション規則の hook 強化 — CLAUDE.md は削らない** (2026-08-21 ユーザー決裁:
   「stop が効いている実感がまだ無い。hook 強化に倒して本当に守られるようになってから考える。
   効いていない状態で消すと正本が無くなり、ルールの所在が分散して埋もれるだけ」) —
