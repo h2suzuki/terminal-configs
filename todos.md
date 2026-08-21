@@ -55,7 +55,11 @@ Exit Criteria:
   **決裁 2026-08-22: 承認ファイル方式は廃止** — ユーザー基準「ユーザー提示のユースケースに
   由来しない機能は廃止」に該当 (出自は解除経路の実装選択・使用実績ゼロ・ユーザーは host 権限で
   同等以上のことが常に可能)。緊急解除は管理者領域の hook 設定変更のみ。code 内に解除経路
-  (file / 環境変数 / flag) を置かない — fix round 9 の所見 6 として発注
+  (file / 環境変数 / flag) を置かない — fix round 9 の所見 6 として発注。
+  **経過 2026-08-22**: fix round 9 納品 (3 file・+343/-241・~14 分)。受け入れ第 1 段 =
+  決定的 gates 発注側再実行で全緑 (gate/stop/lint suite OK・ruff/ty/言語 lint/diff-check
+  クリーン)。第 2 段 = Opus 回帰 filter 実行中。納品された新 lint 4 検査は sentinel loopback
+  発注書で初実戦し、依存閉包棚卸し節の欠落を正しく検出 (機能確認 1 例)
 - [ ] **(g) codex の直接起動を禁止する — 強固に** (2026-08-21 ユーザー決裁 + 同日「強固に
   おこなうべき」で強化) — codex_delegation_gate を「注意喚起」から「deny」へ:
   main agent の Bash からの companion 起動 (全 subcommand・`task-worker` 含む) は**一律 deny**。
@@ -245,9 +249,17 @@ Exit Criteria:
   採用 (ユーザー発案・「役割固定 = filter は品質推定と enumerator を代替しない」を明示承認) —
   方法論 §7.3 へ正本化 commit 済み。受け入れ手順 = 決定的 gates → Opus 回帰 filter (diff scope・
   観点 1 つ + 下位観点表 + 注入事例) → r81 発注。
+  **経過 2026-08-22**: 構造巡納品 (正味 -37 行・分類第一級化・selftest 312/外部 13 緑) →
+  受け入れ鎖の初適用: 決定的 gates 全緑 → **Opus 回帰 filter = findings 7 (重大 2:
+  候補ゼロ走査で見送り成立→exit 13 早撃ち / baseline 断定で偽 stall exit 4。全指摘 A/B
+  実測つき)** → 規約どおり確認巡へ進まず loopback。fix round 6 を 2 方向分析 + 依存閉包
+  棚卸しつき発注書で発注済み (新 lint も rc=0 — fix round 9 納品物の初実戦)。防止機構
+  「削減所見は裁定担保と照合」を方法論 §7.3 へ正本化 commit 済み。
   work file: `wt-ruling61/drafts/sentinel-r80-report.md` (codex 側) /
   `wt-ruling61/drafts/sentinel-r80-opus-review.md` (Opus 側・保存済み) /
-  `wt-ruling61/drafts/sentinel-structural-order.md` (構造巡発注書・発注済み)
+  `wt-ruling61/drafts/sentinel-structural-order.md` (構造巡発注書) /
+  `wt-ruling61/drafts/sentinel-structural-regression-review.md` (回帰 filter 報告) /
+  `wt-ruling61/drafts/sentinel-structural-fixes.md` (loopback 発注書・実行中)
 - [ ] **ユーザー裁定 (r77 の U1)**: (1) 裁定 61 の廃止列挙の補完 — **2026-08-21 承認済み**
   (「承知しました」)。裁定表へ反映 commit 済み (61 の列挙拡張 + 35/55 への廃止注記、
   meta-test 13 件緑)。(2) 裁定 42/43 と裁定 61 の衝突 — 同 inode の truncate + 再書込
