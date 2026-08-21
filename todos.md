@@ -13,47 +13,6 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 
 ## High
 
-### 隣セッションからの依頼の受領・処理
-
-起票: user 2026-08-22 (「隣セッションから依頼が来ると思うので、todo 登録してください。
-コンパクト後に codex かな」)
-
-Goal: 隣セッションから届く依頼を受領し、内容を本 block に記録した上で処理する
-(codex 委譲になる見込み — その場合は codex-delegation の lifecycle で実施する)。
-
-受領記録 (2026-08-22・claude-design-fe-starter session より・いずれも H.S. 承認済み):
-
-1. 依頼 1 (優先): stop_checks.py の claim-without-evidence 検査を否定断定語
-   (無い / 存在しない / 未 install / できない / 不可能 / 無理 系) へ拡張する検討。
-   turn 内に証跡 tool (Read/Grep/Glob/WebFetch 等) が無ければ捕捉。採用条件 =
-   過剰 block にならないこと (語彙絞り込み・段階導入・効果測定・不採用判断も委任)。
-   契機の実例と教訓は org entry feedback_env_blocker_empirical_test.md (対処 7) に記録済み
-2. 依頼 2 (補完・後順): prompt 型 Stop hook による LLM 審判「ツッコミ役」の実装検討 —
-   否定断定・手続き skip・根拠なき完了宣言を Stop 点で審査。審判 model は Sonnet
-   (H.S. 裁定 2026-08-22 の訂正 message で上位 model 案を上書き)。advisory 開始 →
-   blocking 昇格の段階設計。依頼 1 の決定的 gate と 2 層構え。採否・優先度判断も委任
-
-Exit Criteria:
-
-- [x] 依頼内容を受領し、本 block へ要旨と Exit Criteria の具体化を記録した (2026-08-22 本 commit)
-- [x] 依頼 1: 設計を確定し、wt-gates line で実装 → 受け入れ鎖 (決定的 gates → 回帰 filter) 通過 → 凍結 commit。
-  **完了 2026-08-22**: corpus 実測 (1.6 MB / 36 session) で採用 8 / 不採用 4 裸形を確定 →
-  codex 実装 (red 27 → green 190) → gates 5/5 全緑 → Opus filter pass (差分実測・既存
-  5 family 影響ゼロ) → 凍結 `b5aea25` → main merge `5bb0448` + push。live 発火は
-  base setup 再実行 (deploy) 後
-- [x] 依頼 2: prompt 型 hook 仕様を確認し、採否と設計を決定 — 実装または不採用理由の記録。
-  **採用・実装済み 2026-08-22** (`cc607a0`): Stop へ prompt 型審判 hook (claude-sonnet-5・
-  timeout 30s・保守的 rubric 3 点 = 証跡なし否定断定 / 手続き skip / 根拠なき完了宣言・
-  疑わしきは ok・修正済み応答は ok で loop 防止) を `files/claude_managed-extensions.json` へ
-  追加。Stop 入力に tool 履歴が無いため審判は応答文の根拠明示を判定する設計 (公式 doc 確認済み)。
-  live 発火の実測は deploy 後
-- [x] 両依頼の結果 (採否含む) を依頼元セッションへ報告した — 2026-08-22 SendMessage 2 通
-  (依頼 1 = 採用・merge 済み / 依頼 2 = 採用・実装済み・deploy 待ち)
-
-Work file: `wt-gates/drafts/negation-claim-order.md` (依頼 1 発注書) /
-`wt-gates/drafts/negation-claim-report.md` (納品報告) /
-`wt-gates/drafts/negation-claim-regression-review.md` (回帰 filter 報告・軽微 note 3 件を含む)
-
 ### 敵対レビュー運用の強制機構 (gate 化)
 
 起票: user 2026-08-21 (「強制が必要な事項 2 つ」の列挙)
@@ -125,7 +84,10 @@ Exit Criteria:
   推移 8 → 4 → 2 → 0 で**検問 line も回帰 filter 通過**。production mutation 7 種で matrix の
   非 vacuous 性まで確認。**凍結 commit `0a0dc2e`** (`gates: Harden lint checks and warning
   delivery`・3 file・tree clean)。残 = 判定器 round 4 (ユーザー起動) と deploy (最終 step・
-  filter 指摘どおり /etc の stop_checks.py は 2026-08-20 版のまま)
+  filter 指摘どおり /etc の stop_checks.py は 2026-08-20 版のまま)。
+  **main merge 済み 2026-08-22** (`5bb0448`・否定断定語彙拡張 `b5aea25` を含む)。deploy 後の
+  実測対象: warn family 4 種 + 否定断定の新語彙 warn (誤爆率 → blocking 昇格判断) +
+  Stop の Sonnet 審判 hook `cc607a0` (発火頻度・誤爆 → rubric の締め/緩め調整)
 - [ ] **(g) codex の直接起動を禁止する — 強固に** (2026-08-21 ユーザー決裁 + 同日「強固に
   おこなうべき」で強化) — codex_delegation_gate を「注意喚起」から「deny」へ:
   main agent の Bash からの companion 起動 (全 subcommand・`task-worker` 含む) は**一律 deny**。
