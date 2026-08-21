@@ -57,9 +57,16 @@ Exit Criteria:
   同等以上のことが常に可能)。緊急解除は管理者領域の hook 設定変更のみ。code 内に解除経路
   (file / 環境変数 / flag) を置かない — fix round 9 の所見 6 として発注。
   **経過 2026-08-22**: fix round 9 納品 (3 file・+343/-241・~14 分)。受け入れ第 1 段 =
-  決定的 gates 発注側再実行で全緑 (gate/stop/lint suite OK・ruff/ty/言語 lint/diff-check
-  クリーン)。第 2 段 = Opus 回帰 filter 実行中。納品された新 lint 4 検査は sentinel loopback
-  発注書で初実戦し、依存閉包棚卸し節の欠落を正しく検出 (機能確認 1 例)
+  決定的 gates 発注側再実行で全緑。第 2 段 = **Opus 回帰 filter = findings 8 (high 1)** —
+  fail-closed 化が既存 deny を置換で消した (read-only × prompt-file が素通り) / lint 新検査の
+  否定形誤検知 (既存 corpus 7/7 が誤 fail) / undercount 常時発火の誤誘導 / passthrough の
+  prompt 混入 / **元の判定器指摘 (option 前置) 自体が companion 実装と不一致という前提誤りの
+  検出** / FIX_METHOD_RE の片側未拡張 / warning 配達が実質未達 + test が現状固定 / 表層 2 件。
+  → loopback fix round 10 を 2 方向分析つき発注書 (deployed lint rc=0) で発注済み
+  (`wt-gates/drafts/review-gates-fixes-10.md`・回帰 filter 全文 =
+  `wt-gates/drafts/review-gates-fixes-9-regression-review.md`)。防止機構「上流指摘の断定は
+  一次ソース照合」を方法論 §7.2 へ正本化 commit 済み。新 lint 4 検査は sentinel loopback
+  発注書で初実戦し依存閉包棚卸し節の欠落を正しく検出 (機能確認 1 例)
 - [ ] **(g) codex の直接起動を禁止する — 強固に** (2026-08-21 ユーザー決裁 + 同日「強固に
   おこなうべき」で強化) — codex_delegation_gate を「注意喚起」から「deny」へ:
   main agent の Bash からの companion 起動 (全 subcommand・`task-worker` 含む) は**一律 deny**。
@@ -255,6 +262,8 @@ Exit Criteria:
   実測つき)** → 規約どおり確認巡へ進まず loopback。fix round 6 を 2 方向分析 + 依存閉包
   棚卸しつき発注書で発注済み (新 lint も rc=0 — fix round 9 納品物の初実戦)。防止機構
   「削減所見は裁定担保と照合」を方法論 §7.3 へ正本化 commit 済み。
+  **fix round 6 納品** (selftest 319・回帰 12 red → green・決定的 gates 発注側再実行で全緑・
+  累積 diff +604/-355) → filter round 2 (前回 7 指摘の解消確認 + delta の回帰審査) 実行中。
   work file: `wt-ruling61/drafts/sentinel-r80-report.md` (codex 側) /
   `wt-ruling61/drafts/sentinel-r80-opus-review.md` (Opus 側・保存済み) /
   `wt-ruling61/drafts/sentinel-structural-order.md` (構造巡発注書) /
