@@ -79,7 +79,12 @@ Exit Criteria:
   誤測と判明・filter が実路検証で自己訂正 / E: comment の latch 極性反転)。指摘推移
   8 → 4 → 2 で収束中と判断し、fix round 12 (到達不能枝の削除 + matrix 実路化 + comment 訂正)
   を発注済み (`wt-gates/drafts/review-gates-fixes-12.md`・両 lint rc=0・filter round 3 報告 =
-  `wt-gates/drafts/review-gates-fixes-11-regression-review.md`)
+  `wt-gates/drafts/review-gates-fixes-11-regression-review.md`)。
+  **fix round 12 納品 → 決定的 gates 全緑 → filter round 4 = VERDICT: pass (2026-08-22)** —
+  推移 8 → 4 → 2 → 0 で**検問 line も回帰 filter 通過**。production mutation 7 種で matrix の
+  非 vacuous 性まで確認。**凍結 commit `0a0dc2e`** (`gates: Harden lint checks and warning
+  delivery`・3 file・tree clean)。残 = 判定器 round 4 (ユーザー起動) と deploy (最終 step・
+  filter 指摘どおり /etc の stop_checks.py は 2026-08-20 版のまま)
 - [ ] **(g) codex の直接起動を禁止する — 強固に** (2026-08-21 ユーザー決裁 + 同日「強固に
   おこなうべき」で強化) — codex_delegation_gate を「注意喚起」から「deny」へ:
   main agent の Bash からの companion 起動 (全 subcommand・`task-worker` 含む) は**一律 deny**。
