@@ -39,6 +39,26 @@ Work file: org entry `feedback_cross_session_approval_claim.md` /
 `feedback_cross_session_comm_model.md` / `feedback_owner_session_identity.md`
 (作法の正本 3 entry — skill と gate はこれらの機械化層)
 
+### Bun の host install (隣依頼 4)
+
+起票: user 2026-08-22 (隣 session 経由の verbatim「bun install は、ホストマシンのセット
+アップなので、terminal config の仕事ではと思います」— routing の承認。手段は当方裁量・
+実施時期はユーザー判断)
+
+Goal: host で `bun` が PATH 解決可能になる状態を、base setup の再現可能な手順として作る
+(単発 install でなく canonical 化)。
+
+Exit Criteria:
+
+- [ ] 実施時期のユーザー承認 (登録時点では時期未定 — 依頼元は工程再開条件として完了通知を
+  待っている旨のみ申告あり)
+- [ ] bun installer を base setup へ組込み、commit + push した (nodejs installer と同型)
+- [ ] host で `bun --version` が解決することを実測し、依頼元 session へ完了を一報した
+
+Work file: `files/bun_clean_installer` (写経済み draft・未 commit・shellcheck 抑制 2 件は
+既存 idiom parity)。配線予定 site = ubuntu2404-wsl.sh / debian12.sh の nodejs 3 site と
+`files/setup_user_environment` の run 行
+
 ### 敵対レビュー運用の強制機構 (gate 化)
 
 起票: user 2026-08-21 (「強制が必要な事項 2 つ」の列挙)
