@@ -36,7 +36,9 @@ Exit Criteria:
   並行更新・64KB 窓) は修正でなく発生源ごと消滅。残余 = job 記録の prune による古い巡の
   数え漏れ (巡番号突合で補う・うっかり対策としては充分と裁定)。fix round 5 に併せ
   **修正方式「機構追加」の 2 巡連続を lint warn** で検知する (アーキテクチャ再審 trigger の
-  機械化・方法論 block の段階設計と対、2026-08-21 設計確定)
+  機械化・方法論 block の段階設計と対、2026-08-21 設計確定)。
+  進捗 2026-08-21: (a)〜(f) + stateless 化 + warn は fix round 5 で実装・受け入れ済み
+  (wt-gates branch `bd886d0`・lint selftest 31 / gate 65)。判定器と deploy が残
 - [ ] **(g) codex の直接起動を禁止する — 強固に** (2026-08-21 ユーザー決裁 + 同日「強固に
   おこなうべき」で強化) — codex_delegation_gate を「注意喚起」から「deny」へ:
   main agent の Bash からの companion 起動 (全 subcommand・`task-worker` 含む) は**一律 deny**。
@@ -50,18 +52,23 @@ Exit Criteria:
   当初案の「SessionStart での回数表示・台帳追記の弁済要求」は撤回 (2026-08-21 ユーザー指摘:
   可視化は謝罪文の量産になるだけで行動を変えない。行動を変えるのは事前 deny のみ —
   本 session 実測: gate deny 3 回で 3 回とも即時に経路変更・謝罪ゼロ)。
-  org CLAUDE.md への禁則追記の提案も同時に撤回 (常時 load 層はほぼ効かない実測に矛盾)
+  org CLAUDE.md への禁則追記の提案も同時に撤回 (常時 load 層はほぼ効かない実測に矛盾)。
+  進捗 2026-08-21: fix round 6 で実装・受け入れ済み (wt-gates branch `1994751`・
+  gate unittest 65・escape 残骸 0 site)。判定器と deploy が残
 - [ ] **(i) 自作癖の抑制** (2026-08-21 ユーザー決裁: 「すぐ自分でコードを書こうとする。
   ジュニアエンジニアがよくやる悪癖」) — 2 層で: (1) tool-role-delegation skill の「trivial は
   直接編集可」境界を数値で明文化 (例: 単一 file・10 行以内・test 追加なし。超えたら委譲か、
   委譲不採用の理由 1 行の記録を必須)、(2) warn-tier hook = session 内の main tree への
   source 追加行数を累積計測し、しきい値超過かつ session 内に rescue job が無い場合に
-  stop_checks が「自作癖 checkpoint」を提示する。導入は warn tier → 実測 → 調整
+  stop_checks が「自作癖 checkpoint」を提示する。導入は warn tier → 実測 → 調整。
+  進捗 2026-08-21: (1) は canonical へ明文化・commit 済み (数値境界 + 統治原則)。
+  (2) は fix round 7 (warn family 4 種) で発注・実行中
 - [ ] **(h) codex-delegation skill と関連 memory entry を plugin-route 前提に改訂する** —
   現 skill は companion 直接起動の command 形を規定しており (launcher 不採用裁定 2026-08-13 の
   「直接起動へ一本化」)、これが直接起動 pattern を制度化していた。発注書規律・worktree 隔離・
   監視規律は rescue 経由でも維持する形で書き直す。(g) と同時に land しないと skill が gate 違反を
-  指示し続ける
+  指示し続ける。進捗 2026-08-21: canonical を全面改訂・commit 済み (companion 言及 16 site
+  掃引・監視 = job record 直読・cancel = ユーザー起動へ)。/etc への deploy は (g) と同時に最終 step で
 - [ ] **判断待ちの Task 化を強制する hook family** — 型付き命名規約 (判断待ち Task は名前に
   `採否待ち|判断待ち|決裁待ち` を含める) を前提とする stop_checks family。
   「open Task 0 件」だけの検査は別件 Task 残存時に素通しするため不採用 (2026-08-21 ユーザー
