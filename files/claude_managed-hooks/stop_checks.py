@@ -104,9 +104,9 @@ Combined Stop hook for org-managed Claude Code:
   worktree-cleanup (warning-only, exit 0):
     payload の cwd に属する linked worktree が clean かつ本線の祖先なら、削除候補と
     実行可能な git worktree remove コマンドを知らせる。判定不能時は fail-open。
-    stderr に加え、 memory-surface と同じ additionalContext 経由で model にも届ける
-    (単独 stderr は exit 0 では model 非可視のため)。 memory-surface reason と同 turn なら
-    1 payload に結合 (reason が先)。 stop_hook_active gate + .wt latch で turn 内 1 回。
+    block 時は blocking reason、pass / retry 時は additionalContext 経由で model に届ける。
+    memory-surface reason と同 turn なら 1 payload に結合 (reason が先)。
+    .wt latch は初回を通して turn 内の 2 回目以降を抑えるが stop_hook_active retry は再配達する。
     射程: 本線は refs/heads/main / master のみ (他 trunk の repo では無音)、
     入れ子 worktree の子は候補外。 いずれも鳴らない側の限界。
 
@@ -119,7 +119,8 @@ Combined Stop hook for org-managed Claude Code:
   implementation-checkpoint (warning-only, exit 0):
     session 内の repo source への Edit / Write / MultiEdit の純増行を概算し、
     50 行超かつ同 session の codex task job が無ければ委譲判定の言語化を促す。
-    transcript 読取は末尾 2MB で打ち切り、超過時の warn に undercount を明記する。
+    transcript 読取は末尾 2MB で打ち切り、超過時は観測できた行数と
+    undercount を分けて明記する。観測行が 0 なら warn しない。
 
   decision-question-task / decision-record (warning-only, exit 0):
     質問終端時の open decision 型 task の欠落と、短文決裁受領時の
@@ -129,9 +130,8 @@ Combined Stop hook for org-managed Claude Code:
     最終非空行が絵文字始まりまたは質問終端でない場合と、散文の
     自己採番参照を検知する。code block・inline code・Markdown 引用は除外する。
 
-  上記 4 family は family ごと 1 行・合計 4 行以内にし、stderr と
-  worktree-cleanup と同じ additionalContext / systemMessage の両方へ出す。
-  stop_hook_active と既存 .wt latch で同一 turn の再出力を抑止する。
+  上記 4 family は family ごと 1 行・合計 4 行以内にし、block 時は reason
+  本文、pass 時は additionalContext / systemMessage へ出す。stop_hook_active retry でも再生成する。
 
   turn-marker (bonus, exit 0 only):
     enforcement が pass した turn 終了時のみ、 per-turn marker (時刻 / Turn #N / context
@@ -534,11 +534,6 @@ def _codex_shared_write_warnings(payload: dict) -> list[str]:
         return lines
     except Exception:
         return []
-
-
-def _emit_worktree_warnings(warnings: list[str]) -> None:
-    for line in warnings:
-        sys.stderr.write(line + "\n")
 
 
 def _court_contaminated(text: str) -> bool:
@@ -1288,18 +1283,23 @@ def _implementation_checkpoint_warning(
     added = sum(
         _tool_added_source_lines(block, cwd) for block in _tool_use_blocks(entries)
     )
-    if added <= IMPLEMENTATION_CHECKPOINT_LINES:
+    if added == 0 or (added <= IMPLEMENTATION_CHECKPOINT_LINES and not undercount):
         return None
     if any(record.get("kind") == "task" for record in _codex_job_records(session_id)):
         return None
-    warning = (
-        f"implementation-checkpoint: 直接実装が {added} 行です。"
-        "codex task への委譲有無を判定した根拠を verbalize し、"
+    if undercount:
+        count = (
+            f"観測できた範囲で {added} 行の直接実装があります。"
+            " 末尾 2MB よりそれ以前は数えていません (undercount)。"
+        )
+    else:
+        count = f"直接実装が {added} 行です。"
+    return (
+        "implementation-checkpoint: "
+        + count
+        + "codex task への委譲有無を判定した根拠を verbalize し、"
         "必要ならここで委譲してください。"
     )
-    if undercount:
-        warning += " 末尾 2MB よりそれ以前の行数は数えていません (undercount)。"
-    return warning
 
 
 def _open_task_records(session_id: str | None, cwd: str | None) -> list[dict] | None:
@@ -1994,25 +1994,20 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
     # Returns (exit_code, prompt_epoch, text, surfaced_warnings); main() feeds text/warnings onward.
     if not isinstance(payload, dict):
         return 0, None, "", []
-    first_warning_stop = not payload.get("stop_hook_active") and _stop_latch_claim(
-        payload, ".wt"
-    )
+    stop_hook_active = bool(payload.get("stop_hook_active"))
+    warning_stop_allowed = stop_hook_active or _stop_latch_claim(payload, ".wt")
     worktree_warnings = _worktree_cleanup_warnings(payload.get("cwd"))
-    if worktree_warnings and not first_warning_stop:
+    if worktree_warnings and not warning_stop_allowed:
         worktree_warnings = []
     codex_warnings = []
-    if not payload.get("stop_hook_active") and _stop_latch_claim(
-        payload, _CODEX_LATCH_SUFFIX
-    ):
+    if stop_hook_active or _stop_latch_claim(payload, _CODEX_LATCH_SUFFIX):
         codex_warnings = _codex_shared_write_warnings(payload)
     worktree_warnings += codex_warnings
     transcript_path = payload.get("transcript_path")
     if not isinstance(transcript_path, str) or not transcript_path:
-        _emit_worktree_warnings(worktree_warnings)
         return 0, None, "", worktree_warnings
     entries = _load_tail(transcript_path)
     if not entries:
-        _emit_worktree_warnings(worktree_warnings)
         return 0, None, "", worktree_warnings
     (
         text,
@@ -2034,7 +2029,6 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
         text = (text + "\n" + last_msg) if text else last_msg
         final_text = last_msg
     if not text:
-        _emit_worktree_warnings(worktree_warnings)
         return 0, prompt_epoch, "", worktree_warnings
     declare_active = _declare_proceed_active(entries, time.time())
     # wind-down 判定は prompt を受け取れる UserPromptSubmit hook が記録済 (transcript は見ない)。
@@ -2066,7 +2060,7 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
         ),
     )
     new_warnings: list[str] = []
-    if first_warning_stop:
+    if warning_stop_allowed:
         checkpoint_entries, checkpoint_undercount = _load_session_tail(transcript_path)
         new_warnings = _new_warning_families(
             entries,
@@ -2078,15 +2072,10 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
         )
         warnings.extend(new_warnings)
     surfaced_warnings = worktree_warnings + new_warnings
-    # advise-once: a stop_hook_active retry never re-blocks — demote to pass (see docstring turn-marker / Exit).
-    if exit_code == 2 and payload.get("stop_hook_active"):
-        for line in blocking:
-            sys.stderr.write("advise-once (block demoted to pass): " + line + "\n")
-        for line in warnings:
-            sys.stderr.write(line + "\n")
+    if exit_code == 2 and stop_hook_active:
+        _deliver_stop_feedback(warnings, blocking, surfaced_warnings, demoted=True)
         return 0, prompt_epoch, text, surfaced_warnings
-    for line in warnings + blocking:
-        sys.stderr.write(line + "\n")
+    _deliver_stop_feedback(warnings, blocking, surfaced_warnings)
     if exit_code != 0:
         # block した turn は main() の bonus 経路に届かず継続 Stop も gate される — 出すならここだけ。
         try:
@@ -2096,6 +2085,25 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
         if muted:
             sys.stderr.write(muted + "\n")
     return exit_code, prompt_epoch, text, surfaced_warnings
+
+
+def _deliver_stop_feedback(
+    warnings: list[str],
+    blocking: list[str],
+    surfaced_warnings: list[str],
+    demoted: bool = False,
+) -> None:
+    surfaced = set(surfaced_warnings)
+    feedback = [
+        ("advise-once (block demoted to pass): " if demoted else "") + line
+        for line in blocking
+    ]
+    if blocking and not demoted:
+        feedback.extend(warnings)
+    else:
+        feedback.extend(line for line in warnings if line not in surfaced)
+    if feedback:
+        sys.stderr.write("\n".join(feedback) + "\n")
 
 
 def _stop_latch_key(payload: dict, suffix: str = ".surf") -> tuple[str, str] | None:
@@ -2116,7 +2124,7 @@ def _stop_latch_key(payload: dict, suffix: str = ".surf") -> tuple[str, str] | N
 
 
 def _stop_latch_claim(payload: dict, suffix: str = ".surf") -> bool:
-    """True if this Stop is the turn's first for `suffix`; one locked read-modify-write so two Stops cannot both claim it. 掴めない環境では発火側に倒し stop_hook_active gate に委ねる。"""
+    """suffix ごとに同一 turn の最初の Stop だけを排他的に取得し、取得不能時は True へ fail-open する。"""
     k = _stop_latch_key(payload, suffix)
     if k is None:
         return True
@@ -3350,7 +3358,20 @@ class ImplementationCheckpointWarningTest(unittest.TestCase):
         )
         assert warning is not None
         self.assertIn("undercount", warning)
-        self.assertIn("それ以前の行数は数えていません", warning)
+        self.assertIn("観測できた範囲で 51 行", warning)
+        self.assertIn("それ以前は数えていません", warning)
+
+    def test_budget_undercount_requires_observed_implementation_lines(self):
+        entries = [self._edit("Write", "/repo/a.py", content="x\n")]
+        warning = _implementation_checkpoint_warning(
+            entries, "sid", "/repo", undercount=True
+        )
+        assert warning is not None
+        self.assertIn("観測できた範囲で 1 行", warning)
+        self.assertIn("undercount", warning)
+        self.assertIsNone(
+            _implementation_checkpoint_warning([], "sid", "/repo", undercount=True)
+        )
 
 
 class DecisionQuestionWarningTest(_DecisionStoreFixture, unittest.TestCase):
@@ -3510,7 +3531,7 @@ class CommunicationLintWarningTest(unittest.TestCase):
         self.assertIn("communication-a", warnings[-1])
         self.assertIn("communication-b", warnings[-1])
 
-    def test_run_returns_new_warnings_for_additional_context_once(self):
+    def test_run_returns_new_warnings_for_active_retry_delivery(self):
         import io
         from contextlib import redirect_stderr
         from unittest import mock
@@ -3530,7 +3551,106 @@ class CommunicationLintWarningTest(unittest.TestCase):
             first = _run(payload)[3]
             retry = _run({**payload, "stop_hook_active": True})[3]
         self.assertIn("MODEL-WARN", first)
-        self.assertNotIn("MODEL-WARN", retry)
+        self.assertIn("MODEL-WARN", retry)
+
+    def test_each_warning_family_crosses_pass_block_and_active_paths(self):
+        import io
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        module = sys.modules[__name__]
+        for family in (
+            "implementation",
+            "question",
+            "record",
+            "communication",
+            "worktree",
+            "codex-shared-write",
+        ):
+            marker = f"{family.upper()}-WARN"
+            for mode in ("pass", "block", "active"):
+                with self.subTest(family=family, mode=mode):
+                    active = mode == "active"
+                    blocked = mode in {"block", "active"}
+                    transcript = TurnMarkerTest._transcript(
+                        [
+                            TurnMarkerTest._user(),
+                            TurnMarkerTest._asst(
+                                "省略しません" if blocked else "✅ done"
+                            ),
+                        ]
+                    )
+                    with (
+                        mock.patch.object(
+                            module, "_stop_latch_claim", return_value=True
+                        ),
+                        mock.patch.object(
+                            module,
+                            "_worktree_cleanup_warnings",
+                            return_value=[marker] if family == "worktree" else [],
+                        ),
+                        mock.patch.object(
+                            module,
+                            "_codex_shared_write_warnings",
+                            return_value=[marker]
+                            if family == "codex-shared-write"
+                            else [],
+                        ),
+                        mock.patch.object(
+                            module,
+                            "_load_session_tail",
+                            return_value=([TurnMarkerTest._user()], False),
+                        ),
+                        mock.patch.object(
+                            module,
+                            "_implementation_checkpoint_warning",
+                            return_value=marker if family == "implementation" else None,
+                        ),
+                        mock.patch.object(
+                            module,
+                            "_decision_question_warning",
+                            return_value=marker if family == "question" else None,
+                        ),
+                        mock.patch.object(
+                            module,
+                            "_decision_record_warning",
+                            return_value=marker if family == "record" else None,
+                        ),
+                        mock.patch.object(
+                            module,
+                            "_communication_lint_warnings",
+                            return_value=[marker] if family == "communication" else [],
+                        ),
+                    ):
+                        err = io.StringIO()
+                        with redirect_stderr(err):
+                            code, _epoch, _text, surfaced = _run(
+                                {
+                                    "transcript_path": transcript,
+                                    "stop_hook_active": active,
+                                }
+                            )
+                    output = err.getvalue()
+                    if mode == "pass":
+                        self.assertEqual(code, 0)
+                        self.assertNotIn(marker, output)
+                        self.assertIn(marker, surfaced)
+                    elif mode == "block":
+                        self.assertEqual(code, 2)
+                        self.assertIn(marker, output)
+                        self.assertIn("meta-announce-silence:", output)
+                        self.assertLess(
+                            output.index("meta-announce-silence:"), output.index(marker)
+                        )
+                    else:
+                        self.assertEqual(code, 0)
+                        self.assertNotIn(marker, output)
+                        self.assertIn(marker, surfaced)
+                        self.assertIn(
+                            "advise-once (block demoted to pass): "
+                            "meta-announce-silence:",
+                            output,
+                        )
 
 
 class TranscriptBudgetTest(unittest.TestCase):
@@ -4517,7 +4637,7 @@ class WorktreeCleanupTest(WorktreeFixtureMixin, unittest.TestCase):
         self.assertEqual(len(warnings), 1)
         self.assertIn(str(linked), warnings[0])
 
-    def test_run_emits_warning_on_stderr_and_keeps_exit_zero(self):
+    def test_run_returns_warning_for_additional_context_and_keeps_exit_zero(self):
         import io
         from contextlib import redirect_stderr
         from pathlib import Path
@@ -4549,10 +4669,10 @@ class WorktreeCleanupTest(WorktreeFixtureMixin, unittest.TestCase):
             )
 
         self.assertEqual(code, 0)
-        self.assertIn(str(linked), stderr.getvalue())
+        self.assertNotIn(str(linked), stderr.getvalue())
         self.assertIn(str(linked), warnings[0])
 
-    def test_run_warns_without_transcript_text(self):
+    def test_run_routes_warning_without_transcript_text(self):
         import io
         from contextlib import redirect_stderr
 
@@ -4563,7 +4683,7 @@ class WorktreeCleanupTest(WorktreeFixtureMixin, unittest.TestCase):
             code, _prompt_epoch, _text, warnings = _run({"cwd": str(repo)})
 
         self.assertEqual(code, 0)
-        self.assertIn(str(linked), stderr.getvalue())
+        self.assertNotIn(str(linked), stderr.getvalue())
         self.assertIn(str(linked), warnings[0])
 
     def test_dirty_linked_worktree_is_silent(self):
@@ -4690,14 +4810,12 @@ class WorktreeCleanupTest(WorktreeFixtureMixin, unittest.TestCase):
 
         self.assertEqual(first_code, 0)
         self.assertEqual(second_code, 0)
-        self.assertIn(str(linked), first_stderr.getvalue())
+        self.assertNotIn(str(linked), first_stderr.getvalue())
         self.assertNotIn(str(linked), second_stderr.getvalue())
         self.assertIn(str(linked), first_wt[0])
         self.assertEqual(second_wt, [])  # same-turn latch suppresses the repeat
 
-    def test_stop_hook_active_retry_suppresses_before_turns_file_exists(self):
-        # Fresh session: no .turns file yet, so the .wt latch alone is inert;
-        # stop_hook_active must suppress the retry regardless (mirrors memory-surface).
+    def test_stop_hook_active_retry_redelivers_before_turns_file_exists(self):
         import io
         from contextlib import redirect_stderr
 
@@ -4716,7 +4834,7 @@ class WorktreeCleanupTest(WorktreeFixtureMixin, unittest.TestCase):
         self.assertEqual(first_code, 0)
         self.assertIn(str(linked), first_wt[0])
         self.assertEqual(second_code, 0)
-        self.assertEqual(second_wt, [])
+        self.assertIn(str(linked), second_wt[0])
 
     def test_prunable_worktree_is_silent_but_other_candidates_continue(self):
         import io
@@ -5019,7 +5137,7 @@ class CodexSharedWriteTest(WorktreeFixtureMixin, unittest.TestCase):
         self.assertIn("wt2", third[0])
         self.assertIn("job-2", third[1])
 
-    def test_stop_hook_active_suppresses_both_checks(self):
+    def test_stop_hook_active_delivers_both_checks(self):
         import io
         from contextlib import redirect_stderr
         from unittest import mock
@@ -5036,8 +5154,8 @@ class CodexSharedWriteTest(WorktreeFixtureMixin, unittest.TestCase):
             redirect_stderr(io.StringIO()),
         ):
             _code, _epoch, _text, warnings = _run(payload)
-        self.assertEqual(warnings, [])
-        codex_check.assert_not_called()
+        self.assertEqual(warnings, ["wt", "codex"])
+        codex_check.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -41,7 +41,7 @@ codex-rescue subagent は `tools: Bash` のみで skill を invoke できず、 
 「何も返さない」 と指示されているため、 subagent を deny すると回復手段も deny 文面も
 無い沈黙失敗になる。 checkpoint は委譲元 main agent の spawn 時点で取り、 subagent 側は
 「session 内で一度も invoke されていない」 場合だけ止める。 main bucket が空のときは
-記録経路の故障と区別できないので通す。 自分の bucket は見ない (自己承認の防止)。
+記録経路の故障と区別できないので通す。 自分の bucket は見ない (自己解除の防止)。
 
 軸 B の違反 id
 ==============
@@ -64,14 +64,7 @@ codex-rescue subagent は `tools: Bash` のみで skill を invoke できず、 
 
 `unknown-task-flag` / `review-swallowed-flag` の受理集合は companion の
 parseCommandInput が subcommand ごとに宣言する集合をそのまま写している。 `--` 以降は
-passthrough なので対象外。
-
-直接起動の解除
-==============
-main agent の companion 起動を 1 回だけ許可するには、 ユーザーが
-`~/.claude/hooks/state/codex_delegation_gate/user-approval` を作る。 hook は許可の使用前に
-file を削除し、 削除できなければ deny する。 承認は直接 route だけを迂回し invocation lint は維持する。
-model が設定できる環境変数と tool からの承認 file 書込では解除しない。
+flag 解釈の対象外だが、 companion が prompt に連結するため内容検査の対象に含める。
 
 既存 hook との境界 (重複実装しない)
 ===================================
@@ -166,7 +159,8 @@ REVIEW_OPTIONS = frozenset(
 )
 TASK_VALUE_OPTIONS = frozenset({"--model", "-m", "--effort", "--cwd", "--prompt-file"})
 REVIEW_VALUE_OPTIONS = frozenset({"--base", "--scope", "--model", "-m", "--cwd"})
-VALUE_OPTIONS = TASK_VALUE_OPTIONS | REVIEW_VALUE_OPTIONS
+WORKTREE_VALUE_OPTIONS = frozenset({"--cwd", "-C", "--model", "--log"})
+VALUE_OPTIONS = TASK_VALUE_OPTIONS | REVIEW_VALUE_OPTIONS | WORKTREE_VALUE_OPTIONS
 # 実際に flag として解釈されうる形だけを対象にする (先頭が `--` の prompt 本文を除く)。
 FLAG_SHAPE = re.compile(r"^--?[A-Za-z][\w-]*(=.*)?$")
 
@@ -385,10 +379,14 @@ def _subcommand(args: list[str]) -> str | None:
 
 
 def _positional(args: list[str]) -> list[str]:
+    """subcommand 後の prompt 部。 `--` 以降は flag 解釈せず prompt に含める。"""
     result: list[str] = []
     index = 0
     while index < len(args):
         token = args[index]
+        if token == "--":
+            result.extend(args[index + 1 :])
+            break
         if token in VALUE_OPTIONS:
             index += 2
             continue
@@ -397,7 +395,7 @@ def _positional(args: list[str]) -> list[str]:
             continue
         result.append(token)
         index += 1
-    return result[1:]  # subcommand を除いた prompt 部
+    return result[1:]
 
 
 def _unknown_flags(args: list[str], accepted: frozenset[str]) -> list[str]:
@@ -693,7 +691,7 @@ def _bash_violations(command: str, cwd: str) -> tuple[list[str], bool]:
                     f"[order-lint] 発注書 {order} が規約違反です:\n"
                     + "\n".join(str(finding) for finding in metadata["findings"])
                 )
-        elif metadata_error and _option_value(launch.args, "--prompt-file"):
+        elif metadata_error:
             violations.append(f"[order-lint] {metadata_error}")
         if order is not None:
             report_path = metadata.get("report_path") if metadata else None
@@ -817,84 +815,6 @@ def _direct_route_denial(payload: dict) -> str | None:
     return None
 
 
-def _consume_user_approval() -> bool:
-    path = _user_approval_path()
-    if not os.path.lexists(path):
-        return False
-    try:
-        os.unlink(path)
-    except OSError:
-        return False
-    return True
-
-
-def _user_approval_path() -> str:
-    return os.path.join(DIRECT_STATE_DIR, "user-approval")
-
-
-def _path_targets_approval(path: str, cwd: str) -> bool:
-    expanded = os.path.expanduser(path)
-    absolute = expanded if os.path.isabs(expanded) else os.path.join(cwd, expanded)
-    return os.path.realpath(absolute) == os.path.realpath(_user_approval_path())
-
-
-def _bash_writes_approval(command: str, cwd: str) -> bool:
-    for segment in _segments(command):
-        for index, token in enumerate(segment[:-1]):
-            if ">" in token and not token.strip("<>&|"):
-                if _path_targets_approval(segment[index + 1], cwd):
-                    return True
-        executable, _wrappers, _escaped = _strip_prefix(segment)
-        if executable >= len(segment):
-            continue
-        name = os.path.basename(segment[executable])
-        args = segment[executable + 1 :]
-        if name == "tee":
-            targets = [arg for arg in args if arg == "-" or not arg.startswith("-")]
-            if any(_path_targets_approval(arg, cwd) for arg in targets):
-                return True
-        if name not in {"cp", "mv"}:
-            continue
-        for index, arg in enumerate(args[:-1]):
-            if arg in {"-t", "--target-directory"} and _path_targets_approval(
-                args[index + 1], cwd
-            ):
-                return True
-            if arg.startswith("--target-directory=") and _path_targets_approval(
-                arg.partition("=")[2], cwd
-            ):
-                return True
-        operands = [arg for arg in args if arg == "-" or not arg.startswith("-")]
-        if operands and _path_targets_approval(operands[-1], cwd):
-            return True
-    return False
-
-
-def _approval_write_denial(payload: dict) -> str | None:
-    tool = payload.get("tool_name")
-    tool_input = payload.get("tool_input")
-    if not isinstance(tool_input, dict):
-        return None
-    cwd = payload.get("cwd")
-    cwd = cwd if isinstance(cwd, str) and cwd else os.getcwd()
-    targets = []
-    if tool in {"Write", "Edit", "MultiEdit"}:
-        targets = [tool_input.get("file_path"), tool_input.get("path")]
-    elif tool in {"Bash", "Monitor"}:
-        command = tool_input.get("command")
-        if isinstance(command, str) and _bash_writes_approval(command, cwd):
-            targets = [_user_approval_path()]
-    if not any(
-        isinstance(path, str) and _path_targets_approval(path, cwd) for path in targets
-    ):
-        return None
-    return (
-        "codex-delegation-gate: 承認 file への書込を deny しました。"
-        f" `{_user_approval_path()}` はユーザーがホスト側で手動作成してください。"
-        " model 自身は Write / Edit / MultiEdit / Bash で作成できません。"
-    )
-
-
 def _log_direct_attempt(command: str, event: str = "direct-launch-attempt") -> None:
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     line = f"{stamp}\t{event}\t{json.dumps(command, ensure_ascii=True)}"
@@ -912,12 +832,9 @@ def _log_direct_attempt(command: str, event: str = "direct-launch-attempt") -> N
 
 
 def _direct_deny_text(surface: str, detail: str) -> str:
-    approval = os.path.join(DIRECT_STATE_DIR, "user-approval")
     route = (
         f"codex-delegation-gate: {surface} の companion 直接起動を deny しました。 {detail} "
-        "正規ルートは codex:rescue skill 経由です。 cancel / status はユーザーが起動します。 "
-        f"ユーザーが例外を認める場合だけ `{approval}` を手で作成してください。 "
-        "存在により次の 1 回を許可し、 hook が使用前に削除します。"
+        "正規ルートは codex:rescue skill 経由です。 cancel / status はユーザーが起動します。"
     )
     harm = (
         "直接起動 habit の実害:\n"
@@ -1037,33 +954,20 @@ def cmd(payload: object) -> int:
         return 0
     if payload.get("hook_event_name") not in (None, "PreToolUse"):
         return 0
-    approval_write = _approval_write_denial(payload)
-    if approval_write is not None:
-        _emit_deny(approval_write)
-        return 0
     direct = _direct_companion(payload)
-    approval_consumed = False
     if direct is not None:
         direct_surface, command = direct
         route_denial = _direct_route_denial(payload)
         if route_denial is not None:
-            if _consume_user_approval():
-                approval_consumed = True
-                _log_direct_attempt(command, "approval-consumed")
-            else:
-                _log_direct_attempt(command)
-                _emit_deny(_direct_deny_text(direct_surface, route_denial))
-                return 0
+            _log_direct_attempt(command)
+            _emit_deny(_direct_deny_text(direct_surface, route_denial))
+            return 0
     found = _surface(payload)
     if found is None:
         return 0
     surface, violations, delegating = found
     skill_missing = False
-    if (
-        delegating
-        and not approval_consumed
-        and _skill_active(payload, time.time()) is False
-    ):
+    if delegating and _skill_active(payload, time.time()) is False:
         skill_missing = True
     if violations or skill_missing:
         if direct is not None:
@@ -1337,106 +1241,10 @@ class GateTest(unittest.TestCase):
             "launcher 試作の全損廃棄",
             "版固定による古い companion の誤用",
             "今回だけ・thin だから・status を見るだけだから",
-            "user-approval",
         ):
             self.assertIn(fact, reason)
         self.assertNotIn("telemetry", reason)
         self.assertNotIn("direct-launch-attempts.log", reason)
-
-    def test_user_approval_is_consumed_before_one_main_launch(self):
-        approval = os.path.join(DIRECT_STATE_DIR, "user-approval")
-        os.makedirs(os.path.dirname(approval), exist_ok=True)
-        with open(approval, "w", encoding="utf-8") as handle:
-            handle.write("ユーザー承認")
-        command = f"node {self.COMPANION} status --json"
-        parsed, _ = self._bash(command, agent_id=None)
-        self.assertIsNone(parsed)
-        self.assertFalse(os.path.lexists(approval))
-        parsed, _ = self._bash(command, agent_id=None)
-        self.assertIn("直接起動を deny", self._reason(parsed))
-
-    def test_user_approval_consumption_failure_denies(self):
-        from unittest.mock import patch
-
-        approval = os.path.join(DIRECT_STATE_DIR, "user-approval")
-        os.makedirs(os.path.dirname(approval), exist_ok=True)
-        with open(approval, "w", encoding="utf-8") as handle:
-            handle.write("ユーザー承認")
-        with patch(__name__ + ".os.unlink", side_effect=PermissionError):
-            parsed, _ = self._bash(
-                f"node {self.COMPANION} status --json", agent_id=None
-            )
-        self.assertIn("直接起動を deny", self._reason(parsed))
-        self.assertTrue(os.path.lexists(approval))
-
-    def test_user_approval_waives_route_but_not_invocation_lint(self):
-        approval = os.path.join(DIRECT_STATE_DIR, "user-approval")
-        os.makedirs(os.path.dirname(approval), exist_ok=True)
-        with open(approval, "w", encoding="utf-8") as handle:
-            handle.write("ユーザー承認")
-        order = self._order()
-        parsed, _ = self._bash(
-            f"node {self.COMPANION} task --write --effort impossible {order}",
-            agent_id=None,
-        )
-        self.assertIn("[effort]", self._reason(parsed))
-        log = os.path.join(DIRECT_STATE_DIR, "direct-launch-attempts.log")
-        with open(log, encoding="ascii") as handle:
-            self.assertIn("approval-consumed", handle.read())
-
-    def test_approval_path_write_tools_are_denied_for_path_spellings(self):
-        from unittest.mock import patch
-
-        approval = os.path.join(DIRECT_STATE_DIR, "user-approval")
-        os.makedirs(os.path.dirname(approval), exist_ok=True)
-        alias_dir = os.path.join(self.tmp, "alias")
-        os.symlink(os.path.dirname(approval), alias_dir)
-        cases = (
-            ("Write", approval),
-            ("Edit", os.path.relpath(approval, self.tmp)),
-            ("MultiEdit", os.path.join(alias_dir, "user-approval")),
-        )
-        for tool, path in cases:
-            with self.subTest(tool=tool, path=path):
-                parsed, _ = self._run(
-                    {
-                        "tool_name": tool,
-                        "tool_input": {"file_path": path},
-                        "cwd": self.tmp,
-                    }
-                )
-                reason = self._reason(parsed)
-                self.assertIn("ホスト側", reason)
-        host_state = os.path.join(
-            HOME, ".claude", "hooks", "state", "codex_delegation_gate"
-        )
-        with patch.object(sys.modules[__name__], "DIRECT_STATE_DIR", host_state):
-            parsed, _ = self._run(
-                {
-                    "tool_name": "Write",
-                    "tool_input": {
-                        "file_path": "~/.claude/hooks/state/codex_delegation_gate/user-approval"
-                    },
-                    "cwd": self.tmp,
-                }
-            )
-        self.assertIn("ホスト側", self._reason(parsed))
-
-    def test_approval_path_bash_destinations_are_denied_but_unlink_is_not(self):
-        approval = os.path.join(DIRECT_STATE_DIR, "user-approval")
-        commands = (
-            f"printf yes > {approval}",
-            f"printf yes >> {approval}",
-            f"printf yes | tee {approval}",
-            f"cp seed {approval}",
-            f"mv seed {approval}",
-        )
-        for command in commands:
-            with self.subTest(command=command):
-                parsed, _ = self._bash(command)
-                self.assertIn("ホスト側", self._reason(parsed))
-        parsed, _ = self._bash(f"rm -- {approval}")
-        self.assertIsNone(parsed)
 
     def test_direct_attempt_log_is_single_line_capped_and_append_failure_is_quiet(self):
         from unittest.mock import patch
@@ -1531,6 +1339,7 @@ class GateTest(unittest.TestCase):
 
     def test_subagent_other_skill_denies_and_corrupt_state_allows(self):
         order = self._order()
+        self._metadata_lint(order)
         self._seed(skill="writing-code")
         parsed, _ = self._bash(f"node {self.COMPANION} task --write {order}")
         self.assertIn(REQUIRED_SKILL, self._reason(parsed))
@@ -1551,6 +1360,7 @@ class GateTest(unittest.TestCase):
 
     def test_subagent_passes_on_any_main_record_regardless_of_turn(self):
         order = self._order()
+        self._metadata_lint(order)
         self._seed(prompt_id="parent-turn", ts=time.time() - 6 * 3600)
         parsed, _ = self._bash(
             f"node {self.COMPANION} task --write {order}", agent_id="agent-1"
@@ -1567,6 +1377,7 @@ class GateTest(unittest.TestCase):
 
     def test_subagent_allowed_when_main_bucket_absent(self):
         order = self._order()
+        self._metadata_lint(order)
         parsed, _ = self._bash(
             f"node {self.COMPANION} task --write {order}", agent_id="agent-1"
         )
@@ -1688,7 +1499,7 @@ class GateTest(unittest.TestCase):
         )
         self.assertIsNone(parsed)
 
-    def test_subagent_own_bucket_does_not_self_approve(self):
+    def test_subagent_own_bucket_does_not_self_authorize(self):
         order = self._order()
         self._seed(skill="writing-code")  # main は別 skill だけ invoke
         self._seed(agent_key="agent-1")  # subagent 自身は codex-delegation を持つ
@@ -1712,9 +1523,18 @@ class GateTest(unittest.TestCase):
 
     # --- 軸 B: invocation lint ---
 
+    def test_companion_dispatch_and_worktree_value_options_are_pinned(self):
+        launch = Launch("companion", ["--cwd", self.tmp, "task"], frozenset())
+        self.assertEqual(launch.subcommand, "--cwd")
+        self.assertEqual(
+            WORKTREE_VALUE_OPTIONS, frozenset({"--cwd", "-C", "--model", "--log"})
+        )
+        self.assertLessEqual(WORKTREE_VALUE_OPTIONS, VALUE_OPTIONS)
+
     def test_effort_and_model_are_option_position_only(self):
         self._seed()
         order = self._order()
+        self._metadata_lint(order)
         parsed, _ = self._bash(
             f"node {self.COMPANION} task --write --effort max --model sol {order}"
         )
@@ -1731,6 +1551,7 @@ class GateTest(unittest.TestCase):
     def test_valid_effort_and_official_model_pass(self):
         self._seed()
         order = self._order()
+        self._metadata_lint(order)
         parsed, _ = self._bash(
             f"node {self.COMPANION} task --write --effort xhigh --model gpt-5.6-sol {order}"
         )
@@ -1745,6 +1566,7 @@ class GateTest(unittest.TestCase):
     def test_transparent_wrapper_passes(self):
         self._seed()
         order = self._order()
+        self._metadata_lint(order)
         parsed, _ = self._bash(
             f"CODEX_ROUTE_OK=1 timeout 60 node {self.COMPANION} task --write {order}"
         )
@@ -1762,6 +1584,7 @@ class GateTest(unittest.TestCase):
     def test_order_path_inside_quoted_prompt_counts(self):
         self._seed()
         order = self._order()
+        self._metadata_lint(order)
         parsed, _ = self._bash(
             f'node {self.COMPANION} task --write "Read {order} and follow it"'
         )
@@ -1788,6 +1611,7 @@ class GateTest(unittest.TestCase):
     def test_kill_by_port_only_in_executable_position(self):
         self._seed()
         order = self._order()
+        self._metadata_lint(order)
         parsed, _ = self._bash(
             f"node {self.COMPANION} task --write {order} && fuser -k 5273/tcp"
         )
@@ -1805,6 +1629,48 @@ class GateTest(unittest.TestCase):
         )
         parsed, _ = self._bash(f"node {self.COMPANION} task --write {order}")
         self.assertIn("[order-lint]", self._reason(parsed))
+
+    def test_missing_lint_denies_all_mode_and_order_route_cells(self):
+        self._seed()
+        order = self._order()
+        for writable in (False, True):
+            for prompt_file in (False, True):
+                route = f"--prompt-file {order}" if prompt_file else order
+                write = "--write " if writable else ""
+                with self.subTest(writable=writable, prompt_file=prompt_file):
+                    parsed, _ = self._bash(f"node {self.COMPANION} task {write}{route}")
+                    self.assertIn("[order-lint]", self._reason(parsed))
+
+    def test_corrupt_lint_denies_both_writable_order_routes(self):
+        self._seed()
+        order = self._order()
+        script = os.path.join(self.tmp, "corrupt-lint")
+        with open(script, "w", encoding="utf-8") as handle:
+            handle.write("#!/bin/sh\nprintf 'not-json\\n'\n")
+        os.chmod(script, 0o755)
+        globals()["ORDER_LINT"] = script
+        for route in (order, f"--prompt-file {order}"):
+            with self.subTest(route=route):
+                parsed, _ = self._bash(f"node {self.COMPANION} task --write {route}")
+                self.assertIn("[order-lint]", self._reason(parsed))
+
+    def test_lint_timeout_denies_both_writable_order_routes(self):
+        from unittest import mock
+
+        self._seed()
+        order = self._order()
+        self._metadata_lint(order)
+        for route in (order, f"--prompt-file {order}"):
+            with (
+                self.subTest(route=route),
+                mock.patch.object(
+                    subprocess,
+                    "run",
+                    side_effect=subprocess.TimeoutExpired("lint", ORDER_LINT_TIMEOUT),
+                ),
+            ):
+                parsed, _ = self._bash(f"node {self.COMPANION} task --write {route}")
+                self.assertIn("[order-lint]", self._reason(parsed))
 
     def test_referenced_doc_that_is_not_an_order_is_not_linted(self):
         self._seed()
@@ -1915,10 +1781,43 @@ class GateTest(unittest.TestCase):
     def test_passthrough_and_prompt_text_are_not_flags(self):
         self._seed()
         order = self._order()
+        self._metadata_lint(order)
         parsed, _ = self._bash(
-            f"node {self.COMPANION} task --write {order} -- --effort max"
+            f"node {self.COMPANION} task --write {order} -- --review-focus x"
         )
-        self.assertIsNone(parsed)
+        reason = self._reason(parsed)
+        self.assertIn("[review-metadata]", reason)
+        self.assertNotIn("[unknown-task-flag]", reason)
+
+    def test_prompt_content_checks_cover_both_sides_of_passthrough(self):
+        self._seed()
+        order = self._order()
+        self._metadata_lint(order)
+        cases = (
+            ("review", "--write", "adversarial review", "[review-metadata]"),
+            ("report", "", "報告書 を書く", "[report-without-write]"),
+            (
+                "cjk",
+                "--write",
+                "あ" * (CJK_INLINE_MAX + 1),
+                "[cjk-inline]",
+            ),
+            ("harmless", "--write", "implement safely", None),
+        )
+        # args.mjs:12-20 と codex-companion.mjs:648 の prompt 連結仕様。
+        for side in ("before", "after"):
+            for family, write, content, expected in cases:
+                separator = "-- " if side == "after" else ""
+                command = (
+                    f"node {self.COMPANION} task {write} {order} "
+                    f"{separator}{shlex.quote(content)}"
+                )
+                with self.subTest(side=side, family=family):
+                    parsed, _ = self._bash(command)
+                    if expected is None:
+                        self.assertIsNone(parsed)
+                    else:
+                        self.assertIn(expected, self._reason(parsed))
 
     def test_bare_cli_bisection_allowed_with_escape_hatch(self):
         self._seed()
@@ -1949,14 +1848,14 @@ class GateTest(unittest.TestCase):
         )
         self.assertIsNone(parsed)
 
-    def test_order_lint_absent_binary_is_skipped(self):
+    def test_order_lint_absent_binary_is_denied(self):
         self._seed()
         order = self._order()
         old = globals()["ORDER_LINT"]
         globals()["ORDER_LINT"] = os.path.join(self.tmp, "no-such-lint")
         try:
             parsed, _ = self._bash(f"node {self.COMPANION} task --write {order}")
-            self.assertIsNone(parsed)
+            self.assertIn("[order-lint]", self._reason(parsed))
         finally:
             globals()["ORDER_LINT"] = old
 
