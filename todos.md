@@ -213,9 +213,20 @@ Exit Criteria:
   台帳の裁定 23 に撤去済み文言が残存。fix 由来 1: 保留対象の入れ替え時に旧 path を保持)。
   指摘推移 3 → 4 → 1 → 3 で乾いておらず、候補状態の整合という**同 class が 3 巡反復** —
   構造 signal。reviewer の概念診断 =「分類後候補の lifecycle」を不変条件 4 つで一本化すれば
-  同源で消える (構造巡の処方あり)。**次の判断はユーザー**: (A) 構造巡 1 回 (点修正でなく
-  候補状態の組み直し + r81) / (B) 残余 3 件を明記して bounded-risk 凍結。
-  work file: `wt-ruling61/drafts/sentinel-r80-report.md`
+  同源で消える (構造巡の処方あり)。**Opus 5 独立レビュー実験 2026-08-21** (同一凍結版
+  c2a951c・codex 報告書は非開示): codex r80 の 3 件中 2 件を Opus も発見 (saw_candidate の
+  sticky 化・台帳裁定 23 の残存文言)。codex 固有 1 件 (pending の入れ替え漏れ)。**Opus 固有の
+  大物 2 件**: (i) `--once` (単発評価) が pending 発動時に 1 cadence で返らず 30 秒〜最大
+  deadline まで block — codex 処方が凍結した test 自体がこの契約破りを固定 (正本 U-5 違反・
+  high)、(ii) pending 機構自体が過剰実装 — main poll loop の読取窓が既に裁定 62 の保証を持ち、
+  bool 1 個 + 既存 discard 経路で置換して約 45 行削減可 (裁定 61 の「跨ぎ記憶の廃止」と 62 の
+  「path 1 件記憶」の境界未定義も指摘)。両者は「分類結果の第一級型 (Resolution)」という同じ
+  欠落抽象に到達。+ Opus の削減系 4 件と上流裁定事項 5 点 (--once と裁定 62 の優先・exit 10 は
+  名乗り確認済み限定・裁定 62 の記憶単位・裁定 55/23 の担保陳腐化)。
+  **次の判断はユーザー**: 構造巡の方向を削減側 (pending 削除 + Resolution 型 + 全数列挙 test)
+  へ更新した (A') の発注可否 / (B) bounded-risk 凍結。
+  work file: `wt-ruling61/drafts/sentinel-r80-report.md` (codex 側) /
+  `wt-ruling61/drafts/sentinel-r80-opus-review.md` (Opus 側・保存済み)
 - [ ] **ユーザー裁定 (r77 の U1)**: (1) 裁定 61 の廃止列挙の補完 — **2026-08-21 承認済み**
   (「承知しました」)。裁定表へ反映 commit 済み (61 の列挙拡張 + 35/55 への廃止注記、
   meta-test 13 件緑)。(2) 裁定 42/43 と裁定 61 の衝突 — 同 inode の truncate + 再書込
