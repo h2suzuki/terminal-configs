@@ -250,24 +250,29 @@ Exit Criteria:
   新体制 2 巡で「過剰実装検出 (r76 初の削る fix)」と「人間 escalation (U1)」の両方が設計どおり発動
 - [x] deploy 一致 — 2026-08-21 実測 `diff -q /usr/local/bin/codex_task_sentinel
   files/codex_task_sentinel` IDENTICAL (325 selftests 版)
-- [ ] **出口の実行 — 改訂方法論を適用して収束させる** (方向は 2026-08-21 ユーザー列挙
+- [ ] 収束版の deploy 一致 — main の `files/codex_task_sentinel` (97743bd・selftest 320 版) を
+  base setup 再実行 (host 権限・ユーザー実施) で配備し、`diff -q` IDENTICAL を再実測する
+- [x] **出口の実行 — 改訂方法論を適用して収束させる** (方向は 2026-08-21 ユーザー列挙
   「sentinel に実際に適用して収束させる」で確定。残る選択 = 確認巡の時間箱設定):
   改訂方法論 (diff round・verdict routing・severity gate) を適用した確認巡を時間箱つきで
   実施し、認定または bounded-risk 受入のどちらかへ**必ず**意思決定して凍結する。
   データ: 認定 23 巡でゼロは r60 の 1 回のみ・巡あたり 1〜4 件で横ばい、charter 後も
-  r75=2・r76=1。「あと 1 巡」は counter の形式値であって予測ではない (2026-08-21 再分析)
+  r75=2・r76=1。「あと 1 巡」は counter の形式値であって予測ではない (2026-08-21 再分析)。
+  **達成 2026-08-22**: r82 (sol xhigh) = ship・U0/U1/U2 = 0/0/0 — r60 と合わせ収束 2/2 成立。
+  凍結 `97743bd` → main merge `879821e` + origin push 済み (記録 = 収束 log 末尾)
 - [x] **ユーザー判断: U1 決裁「(a) 撤去」の再確認** — 「別 inode 差し替え防御は過剰実装か」に
   2026-08-13 21:21「(a) 撤去 + 裁定 38/39/44/45 改廃」と決裁済みだが、直後の session 途絶で
   未実装・文書未反映 (唯一の一次記録 = transcript 68ddd1bf line 8749。当時の発注側推奨は
   (b) 維持)。**2026-08-21 再確認済み**: ユーザー指示「裁定 61 として文書に記録してから
   撤去 round を発注してください」で (a) の有効を確認 (裁定 61 記録 = `c557cde`)
-- [ ] 裁定 61 (U1 の帰結) を `docs/sentinel-rulings.md` へ commit + `LAST_RULING` bump して
+- [x] 裁定 61 (U1 の帰結) を `docs/sentinel-rulings.md` へ commit + `LAST_RULING` bump して
   から、撤去 round を発注・着地する — ledger-first (決裁を文書に落としてから実装。今回の
   8 日停止の真因 = 決裁が transcript にのみ存在)。進捗 2026-08-21: 裁定 61 記録 `c557cde`
   (main)・撤去 round 受け入れ済み `6b3d2ee` (wt-ruling61 branch・selftest 325→315 全緑)。
-  main への取り込みは r77 認定後に行う
-- [ ] r77 を発注し、U0 ゼロなら収束 2/2 成立を `docs/sentinel-convergence-log.md` へ記録して
-  凍結 — 再開手順は同 log 末尾「ここで停止」節が正本。**r77 実施済み 2026-08-21
+  **main への取り込み完了 2026-08-22**: merge `879821e` (r82 認定後)
+- [x] r77 を発注し、U0 ゼロなら収束 2/2 成立を `docs/sentinel-convergence-log.md` へ記録して
+  凍結 — 再開手順は同 log 末尾「ここで停止」節が正本。**完結 2026-08-22**: r77〜r82 の
+  全経過と収束 2/2 成立を同 log へ記録 (`61fceff`)。以下は経過の詳細。**r77 実施済み 2026-08-21
   (sol xhigh・verdict 6 項目形式)**: needs-attention U0 2 / U1 1 / U2 0
   (報告書 `wt-ruling61/drafts/sentinel-r77-report.md`)。処置は全て削除・文書整合系:
   旧 test 名の意味反転流用の解消 (撤去 diff 由来・受け入れの名前照合を素通し) +
@@ -334,20 +339,21 @@ Exit Criteria:
   裁定 63-4 の閉包を裁定 63 の担保欄だけに絞った部分実施が原因。処方 = 改称 + 未来形注記の
   閉じ。r81 報告 = `wt-ruling61/drafts/sentinel-r81-report.md`。
   **決裁 2026-08-22: 縮小再入場** (ユーザー「いまは進みましょう」= 推奨案の採用) — R81 の
-  2 件だけの小 fix → 回帰 filter → 確認巡 1 回で収束を狙う。
-  work file: `wt-ruling61/drafts/sentinel-r80-report.md` (codex 側) /
-  `wt-ruling61/drafts/sentinel-r80-opus-review.md` (Opus 側・保存済み) /
-  `wt-ruling61/drafts/sentinel-structural-order.md` (構造巡発注書) /
-  `wt-ruling61/drafts/sentinel-structural-regression-review.md` (回帰 filter 報告) /
-  `wt-ruling61/drafts/sentinel-structural-fixes.md` (loopback 発注書・実行中)
-- [ ] **ユーザー裁定 (r77 の U1)**: (1) 裁定 61 の廃止列挙の補完 — **2026-08-21 承認済み**
+  2 件だけの小 fix → 回帰 filter → 確認巡 1 回で収束を狙う。**実施済み**: fix round 8
+  (byte 予算復元 + 改称・red→green 記録) → 回帰 filter pass → 決定的 gates 全緑 → 凍結
+  `97743bd` → **r82 = ship・U0 ゼロで収束 2/2 成立** (2026-08-22)。
+  work file: `wt-ruling61/drafts/` の各巡 発注書・報告書・回帰レビュー一式 (r77〜r82) /
+  `docs/sentinel-convergence-log.md` 末尾 (収束記録・正本)
+- [x] **ユーザー裁定 (r77 の U1)**: (1) 裁定 61 の廃止列挙の補完 — **2026-08-21 承認済み**
   (「承知しました」)。裁定表へ反映 commit 済み (61 の列挙拡張 + 35/55 への廃止注記、
   meta-test 13 件緑)。(2) 裁定 42/43 と裁定 61 の衝突 — 同 inode の truncate + 再書込
   (正本 S-9 の正常系) を当該 watch の間 corrupt に固定しうる。reviewer 提案 = (a) 42/43 も
   廃止し次 cadence の安定 snapshot で再判定 / (b) 保持し正本へ理由と期待 exit を明記。
   **2026-08-21 ユーザーから「記憶と合致しない、詳しく」の差し戻し** — 裁定 20 (安定 snapshot の
   parse 不能だけを corrupt とする・truncate 窓を破損に化けさせない) との関係を説明して再判断
-  待ち。決裁後に fix round + r78 を 1 回で実施
+  待ち。決裁後に fix round + r78 を 1 回で実施。**決着 2026-08-22 確認**: (2) は裁定 62 として
+  台帳化 — 裁定 42/43 を廃止し corrupt 確定を裁定 20 の「安定 snapshot の parse 不能」へ一本化
+  (台帳 62 行に 2026-08-21 ユーザー確認の引用あり)。r78 以降の巡で検証済み
 
 Work file: `docs/sentinel-convergence-log.md` 末尾「ここで停止」節 (再開点)、
 `docs/sentinel-review-analysis.md` §8 (r54〜r76 全記録)、`docs/sentinel-use-cases.md`
