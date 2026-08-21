@@ -36,7 +36,12 @@ Exit Criteria:
   変数展開・wrapper 包みも捕捉する。許可は codex-rescue subagent 内の実行のみ。
   **model が使える escape hatch は置かない** (解除はユーザーが書く承認 file のみ)。
   deny message は実害台帳 (user memory `feedback_codex_plugin_route_only`) を引用し、
-  「大したことない」「thin だからよい」の minimization を message 内で先回りして反証する
+  「大したことない」「thin だからよい」の minimization を message 内で先回りして反証する。
+  **ペナルティー相当の 3 段** (2026-08-21 ユーザー「ペナルティーを与えたいぐらい禁止したい」):
+  (1) deny した試行を command 全文 + 時刻で永続違反 log へ自動追記 (忘れても消えない記録)、
+  (2) SessionStart が過去の違反回数・直近日時を毎 session 冒頭に表示し、stop_checks が
+  session 中の違反試行を終了時に名指し報告 (可視化がコスト)、(3) deny message は
+  「正規経路でやり直す前に本試行を台帳の事例へ追記せよ」の弁済を要求する
 - [ ] **(i) 自作癖の抑制** (2026-08-21 ユーザー決裁: 「すぐ自分でコードを書こうとする。
   ジュニアエンジニアがよくやる悪癖」) — 2 層で: (1) tool-role-delegation skill の「trivial は
   直接編集可」境界を数値で明文化 (例: 単一 file・10 行以内・test 追加なし。超えたら委譲か、
