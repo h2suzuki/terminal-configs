@@ -53,6 +53,8 @@ codex-rescue subagent は `tools: Bash` のみで skill を invoke できず、 
   review-swallowed-flag review 系が受理しない flag。 focus text へ流れ job record に届かない
   order-file            発注書 file を渡していない write 委譲
   order-lint            発注書が codex_order_lint に不合格
+  review-without-lint-pass task 経由の review が発注書 lint を通過していない
+  review-metadata        review 発注書の metadata が破損または曖昧
   report-without-write  報告書を成果物とする発注を --write 無しで起動
   cjk-inline            起動 command 行への長い日本語直書き
   kill-by-port          委譲と同じ command 内の fuser -k / pkill
@@ -92,8 +94,7 @@ residual (閉じない・既知)
 - Workflow / SendMessage の被覆は harness が tool_input を payload に載せることに依存する
 - `cjk-inline` の閾値は SKILL.md に数値が無いため本 hook が定める契約値
 - kill-by-port は codex 起動を含む command に限って見る。 単独の pkill は射程外
-- `order-lint` は発注書らしき file (`--prompt-file` 指定、 または規約の節見出しを持つ
-  file) だけに掛ける。 参照しただけの既存 doc と fix round の追記 file は対象外
+- `order-lint` の parse と発注書本文の読取は codex_order_lint に一本化する
 - resume で write 権限を引き継げるかは plugin state を読まないと分からない。
   `--write` × `--resume` は stderr warning に留める
 
@@ -113,6 +114,7 @@ import sys
 import tempfile
 import time
 import unittest
+from typing import Any
 
 HOME = os.path.expanduser("~")
 STATE_DIR = os.path.join(HOME, ".claude", "hooks", "state", "skill_reminder")
@@ -121,7 +123,6 @@ FALLBACK_WINDOW_SECONDS = 1800
 ORDER_LINT = "/usr/local/bin/codex_order_lint"
 ORDER_LINT_TIMEOUT = 10
 CJK_INLINE_MAX = 200
-ORDER_READ_LIMIT = 65536
 
 COMPANION_SCRIPT = "codex-companion.mjs"
 CODEX_CLI = "codex"
@@ -163,11 +164,6 @@ REVIEW_VALUE_OPTIONS = frozenset({"--base", "--scope", "--model", "-m", "--cwd"}
 VALUE_OPTIONS = TASK_VALUE_OPTIONS | REVIEW_VALUE_OPTIONS
 # 実際に flag として解釈されうる形だけを対象にする (先頭が `--` の prompt 本文を除く)。
 FLAG_SHAPE = re.compile(r"^--?[A-Za-z][\w-]*(=.*)?$")
-ORDER_SECTION = re.compile(
-    r"^##\s*(スコープ|成果物|作業量上限|実行してよい command|適用される既存裁定"
-    r"|出力言語規約|所要見積もり)",
-    re.MULTILINE,
-)
 
 SEGMENT_OPERATORS = frozenset({"&&", "||", ";", "|", "&", "(", ")", ";;"})
 ASSIGNMENT = re.compile(r"^\w+=")
@@ -188,6 +184,7 @@ SCRIPT_READ_LIMIT = 65536
 CJK = re.compile(r"[぀-ヿ㐀-䶿一-鿿ｦ-ﾟ]")
 MARKDOWN_TOKEN = re.compile(r"[\w./~-]+\.md\b")
 REPORT_HINT = re.compile(r"-report\.md|報告書")
+REVIEW_PROMPT = re.compile(r"敵対レビュー|adversarial|レビュー観点", re.IGNORECASE)
 MONITOR_LOOP = re.compile(r"\b(while|until|for)\b")
 # workflow script は shell ではないので、 起動の形をそのまま探す。 file 名の言及だけでは
 # 発火しない (hook 自身をレビューする workflow を誤って止めないため)。
@@ -431,7 +428,7 @@ def _indirect_sources(segment: list[str], start: int, cwd: str) -> list[str]:
             continue
         path = token if os.path.isabs(token) else os.path.join(cwd or os.curdir, token)
         if os.path.isfile(path):
-            sources.append(_read_head(path, SCRIPT_READ_LIMIT))
+            sources.append(_read_regular_head(path, SCRIPT_READ_LIMIT))
         break
     return sources
 
@@ -507,7 +504,9 @@ def _order_path(launch: Launch, cwd: str) -> str | None:
     return path if os.path.isfile(path) else None
 
 
-def _read_head(path: str, limit: int) -> str:
+def _read_regular_head(path: str, limit: int) -> str:
+    if not os.path.isfile(path):
+        return ""
     try:
         with open(path, encoding="utf-8", errors="replace") as handle:
             return handle.read(limit)
@@ -515,35 +514,59 @@ def _read_head(path: str, limit: int) -> str:
         return ""
 
 
-def _order_text(path: str) -> str:
-    return _read_head(path, ORDER_READ_LIMIT)
-
-
-def _is_order_document(launch: Launch, path: str) -> bool:
-    """発注書らしき file だけを lint 対象にする。 参照した既存 doc や fix round の
-    追記 file を 「7 節が無い」 で deny しないため。"""
-    if _option_value(launch.args, "--prompt-file"):
-        return True
-    return bool(ORDER_SECTION.search(_order_text(path)))
-
-
-def _lint_order(path: str) -> str | None:
+def _lint_order(path: str) -> tuple[dict[str, Any] | None, str | None]:
     if not os.path.isfile(ORDER_LINT):
-        return None
+        return None, f"lint script {ORDER_LINT} が存在しません。"
     try:
         done = subprocess.run(
-            [ORDER_LINT, path],
+            [ORDER_LINT, "--metadata", path],
             capture_output=True,
             text=True,
             timeout=ORDER_LINT_TIMEOUT,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError) as error:
-        sys.stderr.write(f"codex-delegation-gate: order lint skipped ({error}).\n")
-        return None
-    if done.returncode != 1:
-        return None
-    return done.stdout.strip() or done.stderr.strip()
+    except (OSError, UnicodeDecodeError, subprocess.SubprocessError) as error:
+        return None, f"発注書 lint を実行できません ({error})。"
+    if done.stderr:
+        sys.stderr.write(done.stderr)
+    try:
+        metadata = json.loads(done.stdout)
+    except (TypeError, ValueError) as error:
+        detail = done.stdout.strip() or "出力なし"
+        return (
+            None,
+            f"発注書 lint metadata が不正です ({error}; rc={done.returncode}; {detail})。",
+        )
+    if done.returncode not in {0, 1}:
+        return None, f"発注書 lint が rc={done.returncode} でした。"
+    if not isinstance(metadata, dict):
+        return None, "発注書 lint metadata が object ではありません。"
+    findings = metadata.get("findings")
+    if not isinstance(findings, list) or not all(
+        isinstance(finding, str) for finding in findings
+    ):
+        return None, "発注書 lint metadata の findings が不正です。"
+    if not isinstance(metadata.get("order_document"), bool):
+        return None, "発注書 lint metadata の order_document が不正です。"
+    review_kind = metadata.get("review_kind")
+    if review_kind not in {None, "none", "adversarial", "acceptance"}:
+        return None, "発注書 lint metadata の review_kind が不正です。"
+    if metadata.get("scope") not in {None, "diff", "artifact"}:
+        return None, "発注書 lint metadata の scope が不正です。"
+    round_number = metadata.get("round")
+    if round_number is not None and (type(round_number) is not int or round_number < 1):
+        return None, "発注書 lint metadata の round が不正です。"
+    if not isinstance(metadata.get("methods"), list):
+        return None, "発注書 lint metadata の methods が不正です。"
+    if not isinstance(metadata.get("has_previous_verdict"), bool):
+        return None, "発注書 lint metadata の has_previous_verdict が不正です。"
+    if metadata.get("report_path") is not None and not isinstance(
+        metadata["report_path"], str
+    ):
+        return None, "発注書 lint metadata の report_path が不正です。"
+    if metadata.get("path") != os.path.abspath(path):
+        return None, "発注書 lint metadata の path が入力と一致しません。"
+    return metadata, None
 
 
 def _bash_violations(command: str, cwd: str) -> tuple[list[str], bool]:
@@ -606,6 +629,14 @@ def _bash_violations(command: str, cwd: str) -> tuple[list[str], bool]:
         prompt = " ".join(_positional(launch.args))
         resume = _has_flag(launch.args, RESUME_FLAGS)
         order = _order_path(launch, cwd)
+        metadata, metadata_error = (
+            _lint_order(order) if order is not None else (None, None)
+        )
+        review_kind = metadata.get("review_kind") if metadata else None
+        review_requested = bool(REVIEW_PROMPT.search(prompt)) or review_kind in {
+            "adversarial",
+            "acceptance",
+        }
         # 発注書を要求するのは write 権限のある起動だけ。 read-only の調査 rescue に
         # 7 節の発注書を強いると、 委譲 cost が作業 cost を上回って委譲自体が消える。
         writable = _has_flag(launch.args, frozenset({"--write"})) or resume
@@ -621,15 +652,46 @@ def _bash_violations(command: str, cwd: str) -> tuple[list[str], bool]:
                 " 依頼は chat 文でなく発注書 file に固定し、"
                 " その path (または --prompt-file) を起動に含めてください。"
             )
-        if order is not None:
-            findings = _lint_order(order) if _is_order_document(launch, order) else None
-            if findings:
+        elif writable and not resume and order is None:
+            violations.append(
+                "[order-file] 発注書 path が一意な regular file ではありません。"
+            )
+        if review_requested:
+            if order is None or metadata_error or metadata is None:
+                detail = metadata_error or "regular file の発注書 path がありません。"
                 violations.append(
-                    f"[order-lint] 発注書 {order} が規約違反です:\n{findings}"
+                    "[review-without-lint-pass] task 経由の review は"
+                    f" codex_order_lint 通過が必須です。 {detail}"
                 )
-            if not _has_flag(
-                launch.args, frozenset({"--write"})
-            ) and REPORT_HINT.search(_order_text(order) + prompt):
+            elif REVIEW_PROMPT.search(prompt) and review_kind == "none":
+                violations.append(
+                    "[review-metadata] prompt roster と review-kind: none が矛盾しています。"
+                )
+            elif review_kind not in {"adversarial", "acceptance"}:
+                violations.append(
+                    "[review-metadata] review-kind が一意な adversarial / acceptance"
+                    " ではありません。"
+                )
+            elif metadata["findings"]:
+                violations.append(
+                    "[review-without-lint-pass] task 経由の review 発注書が規約違反です:\n"
+                    + "\n".join(str(finding) for finding in metadata["findings"])
+                )
+        elif metadata is not None and (
+            metadata["order_document"] or _option_value(launch.args, "--prompt-file")
+        ):
+            if metadata["findings"]:
+                violations.append(
+                    f"[order-lint] 発注書 {order} が規約違反です:\n"
+                    + "\n".join(str(finding) for finding in metadata["findings"])
+                )
+        elif metadata_error and _option_value(launch.args, "--prompt-file"):
+            violations.append(f"[order-lint] {metadata_error}")
+        if order is not None:
+            report_path = metadata.get("report_path") if metadata else None
+            if not _has_flag(launch.args, frozenset({"--write"})) and (
+                report_path or REPORT_HINT.search(prompt)
+            ):
                 violations.append(
                     "[report-without-write] 報告書を成果物とする発注を"
                     " --write 無しで起動しています。"
@@ -682,8 +744,13 @@ def _active_path(session_id: str, agent_key: str) -> str:
 
 
 def _load_active(session_id: str, agent_key: str) -> dict | None:
+    path = _active_path(session_id, agent_key)
+    if not os.path.lexists(path):
+        return {}
+    if not os.path.isfile(path):
+        return None
     try:
-        with open(_active_path(session_id, agent_key), encoding="utf-8") as handle:
+        with open(path, encoding="utf-8") as handle:
             state = json.load(handle)
     except FileNotFoundError:
         return {}
@@ -788,7 +855,11 @@ def _surface(payload: dict) -> tuple[str, list[str], bool] | None:
         script = tool_input.get("script")
         if not isinstance(script, str):
             path = tool_input.get("scriptPath")
-            script = _order_text(path) if isinstance(path, str) and path else ""
+            script = (
+                _read_regular_head(path, SCRIPT_READ_LIMIT)
+                if isinstance(path, str) and path
+                else ""
+            )
         if not WORKFLOW_CODEX.search(script or ""):
             return None
         return (
@@ -908,6 +979,38 @@ class GateTest(unittest.TestCase):
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(body)
         return path
+
+    def _metadata_lint(
+        self,
+        order,
+        *,
+        review_kind="none",
+        findings=None,
+        order_document=True,
+        report_path=None,
+        returncode=0,
+    ):
+        metadata = {
+            "path": os.path.abspath(order),
+            "order_document": order_document,
+            "review_kind": review_kind,
+            "round": None,
+            "scope": None,
+            "methods": [],
+            "has_previous_verdict": False,
+            "report_path": report_path,
+            "findings": findings or [],
+        }
+        script = os.path.join(self.tmp, "metadata-lint")
+        with open(script, "w", encoding="utf-8") as handle:
+            handle.write(
+                "#!/bin/sh\nprintf '%s\\n' '"
+                + json.dumps(metadata, ensure_ascii=False)
+                + f"'\nexit {returncode}\n"
+            )
+        os.chmod(script, 0o755)
+        globals()["ORDER_LINT"] = script
+        return script
 
     # --- 経路検出 ---
 
@@ -1320,6 +1423,7 @@ class GateTest(unittest.TestCase):
     def test_report_artifact_requires_write(self):
         self._seed()
         order = self._order(body="## 成果物\n\ndrafts/x-report.md を書く\n")
+        self._metadata_lint(order, report_path="drafts/x-report.md")
         parsed, _ = self._bash(f"node {self.COMPANION} task {order}")
         self.assertIn("[report-without-write]", self._reason(parsed))
         parsed, _ = self._bash(f"node {self.COMPANION} task --write {order}")
@@ -1347,28 +1451,80 @@ class GateTest(unittest.TestCase):
     def test_order_lint_failure_denies(self):
         self._seed()
         order = self._order(body="## スコープ\n\n節が 1 つしかない発注書\n")
-        script = os.path.join(self.tmp, "fake_lint")
-        with open(script, "w", encoding="utf-8") as handle:
-            handle.write("#!/bin/sh\necho '必須の節がない: ## スコープ'\nexit 1\n")
-        os.chmod(script, 0o755)
-        old = globals()["ORDER_LINT"]
-        globals()["ORDER_LINT"] = script
-        try:
-            parsed, _ = self._bash(f"node {self.COMPANION} task --write {order}")
-            self.assertIn("[order-lint]", self._reason(parsed))
-        finally:
-            globals()["ORDER_LINT"] = old
+        self._metadata_lint(
+            order, findings=["必須の節がない: ## スコープ"], returncode=1
+        )
+        parsed, _ = self._bash(f"node {self.COMPANION} task --write {order}")
+        self.assertIn("[order-lint]", self._reason(parsed))
 
     def test_referenced_doc_that_is_not_an_order_is_not_linted(self):
         self._seed()
         doc = self._order(name="methodology.md", body="# 手順書\n\n本文\n")
-        script = os.path.join(self.tmp, "fail_lint")
-        with open(script, "w", encoding="utf-8") as handle:
-            handle.write("#!/bin/sh\necho '必須の節がない'\nexit 1\n")
-        os.chmod(script, 0o755)
-        globals()["ORDER_LINT"] = script
+        self._metadata_lint(
+            doc,
+            findings=["必須の節がない"],
+            order_document=False,
+            returncode=1,
+        )
         parsed, _ = self._bash(f'node {self.COMPANION} task --write "{doc} の手順で"')
         self.assertIsNone(parsed)
+
+    def test_task_review_requires_lint_metadata_and_uses_it_statelessly(self):
+        self._seed()
+        parsed, _ = self._bash(f'node {self.COMPANION} task "敵対レビューを実施"')
+        self.assertIn("[review-without-lint-pass]", self._reason(parsed))
+        order = self._order(body="review-kind: adversarial\ntarget: auth-fix\n")
+        self._metadata_lint(order, review_kind="adversarial")
+        parsed, _ = self._bash(
+            f'node {self.COMPANION} task "敵対レビューを実施 {order}"'
+        )
+        self.assertIsNone(parsed)
+        self.assertEqual(
+            set(os.listdir(self.tmp)), {"active", "metadata-lint", "x-order.md"}
+        )
+
+    def test_review_prompt_and_lint_metadata_must_agree(self):
+        self._seed()
+        order = self._order()
+        self._metadata_lint(order, review_kind="none")
+        parsed, _ = self._bash(
+            f'node {self.COMPANION} task "敵対レビューを実施 {order}"'
+        )
+        self.assertIn("[review-metadata]", self._reason(parsed))
+        self._metadata_lint(
+            order,
+            review_kind="adversarial",
+            findings=["review contract が不正"],
+            returncode=1,
+        )
+        parsed, _ = self._bash(f"node {self.COMPANION} task {order}")
+        self.assertIn("[review-without-lint-pass]", self._reason(parsed))
+
+    def test_gate_does_not_open_the_order_document(self):
+        from unittest.mock import patch
+
+        self._seed()
+        order = self._order()
+        self._metadata_lint(order)
+        real_open = open
+
+        def reject_order(path, *args, **kwargs):
+            if os.fspath(path) == order:
+                raise AssertionError("gate opened order")
+            return real_open(path, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=reject_order):
+            parsed, _ = self._bash(f"node {self.COMPANION} task --write {order}")
+        self.assertIsNone(parsed)
+
+    def test_special_order_file_is_denied_without_opening_it(self):
+        self._seed()
+        pipe = os.path.join(self.tmp, "pipe.md")
+        link = os.path.join(self.tmp, "link.md")
+        os.mkfifo(pipe)
+        os.symlink(pipe, link)
+        parsed, _ = self._bash(f"node {self.COMPANION} task --write {link}")
+        self.assertIn("regular file", self._reason(parsed))
 
     def test_review_swallows_unsupported_flags(self):
         self._seed()
