@@ -80,11 +80,14 @@ Exit Criteria:
   存在すること」(否定形 guard つき・命名規約は 2026-08-21 採用済みで以後の task に適用中)。
   検出語彙に corpus 実測の言い回し (ご判断待ち / ご回答待ち / ご指示待ち) を追加。
   warn tier で導入 → 実 session で誤検知/見逃しを観測 → blocking 化判断。
-  併せて intent-without-task family の roster に提案宣言語 (「実装しますか」「採否」等) を追加
+  併せて intent-without-task family の roster に提案宣言語 (「実装しますか」「採否」等) を追加。
+  進捗 2026-08-21: 改訂設計で fix round 7 実装・受け入れ済み (wt-gates branch `5323179`・
+  stop_checks unittest 178・warn 接続のみ 0 block site)。実測・deploy が残
 - [ ] **決裁受領の記録強制を上記 family に併合** (2026-08-21 transcript 監査で検出・ユーザー
   承認) — decision 型 Task が open の時に短文決裁 (「(a)」「やってください」等) を受けた turn
   は、台帳 / todos への決裁記録を要求する reminder (warn tier)。U1 決裁が transcript にのみ
-  残り 8 日消えた class の再発防止
+  残り 8 日消えた class の再発防止。進捗 2026-08-21: round 7 で実装・受け入れ済み
+  (`5323179` decision-record family)。実測・deploy が残
 - [ ] **「無駄」keyword の memory 記録 reminder** (2026-08-21 ユーザー発案: 「無駄という
   キーワードに反応して memory する hook があってもよいぐらい」) — ユーザーの prompt に
   無駄 / 浪費 / もったいない が含まれる turn に、memory-routing での記録検討を促す
@@ -94,7 +97,9 @@ Exit Criteria:
   効いていない状態で消すと正本が無くなり、ルールの所在が分散して埋もれるだけ」) —
   最終行形式 (結論絵文字 / 質問 ? 終端)・自己採番参照の Stop family を corpus 実測から
   warn tier で導入し、**発火と遵守の実測が揃うまで CLAUDE.md の該当節は正本として維持**する。
-  extraction の pair commit (実装 + 即削除) は本件には適用しない — 削除は実証後の別判断
+  extraction の pair commit (実装 + 即削除) は本件には適用しない — 削除は実証後の別判断。
+  進捗 2026-08-21: round 7 で実装・受け入れ済み (`5323179` communication lint family:
+  最終行形式 + 自己採番の 2 検査・code block / 引用は除外)。実測・deploy が残
 - [ ] 各 gate の canonical (files/) と deploy 先の diff -q 一致 + 発火の live 観測
 
 Work file: 4 gate の設計は本 block と `last-session-handoff.md` 不要 (本 block で自己完結)。
