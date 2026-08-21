@@ -116,6 +116,18 @@ Combined Stop hook for org-managed Claude Code:
     job record の field 名 (write / workspaceRoot / sessionId) と status 語彙
     (queued / running を停止可能とみなす) に依存し、変われば静かに劣化する。
 
+  implementation-checkpoint (warning-only, exit 0):
+    session 内の repo source への Edit / Write / MultiEdit の純増行を概算し、
+    50 行超かつ同 session の codex task job が無ければ委譲判定の言語化を促す。
+
+  decision-question-task / decision-record (warning-only, exit 0):
+    質問終端時の open decision 型 task の欠落と、短文決裁受領時の
+    open decision 型 task を照合し、状態記録の自己確認を促す。
+
+  communication-final-line / communication-self-number (warning-only, exit 0):
+    最終非空行が絵文字始まりまたは質問終端でない場合と、散文の
+    自己採番参照を検知する。code block・inline code・Markdown 引用は除外する。
+
   turn-marker (bonus, exit 0 only):
     enforcement が pass した turn 終了時のみ、 per-turn marker (時刻 / Turn #N / context
     size / User Prompt からの経過) を JSON `systemMessage` で USER に表示 (Claude には非可視)。
@@ -1027,6 +1039,76 @@ MYTASK_MCP_TOOLS = {"mcp__mytask__TaskCreate", "mcp__mytask__TaskUpdate"}
 # work-without-task が「実質的な作業 turn」とみなす Edit/Write 回数の下限
 WORK_WITHOUT_TASK_MIN_EDITS = 3
 NATIVE_TASKS_DIR = os.path.expanduser(os.path.join("~", ".claude", "tasks"))
+OPEN_TASK_STATUSES = frozenset({"pending", "in_progress", "blocked"})
+DECISION_TASK_RE = re.compile(
+    r"(?:採否待ち|判断待ち|決裁待ち|ご判断待ち|ご回答待ち|ご指示待ち)"
+    r"(?!(?:ではな|でなく))"
+)
+SHORT_DECISION_RE = re.compile(
+    r"(?:\(?[a-z0-9]\)?|(?:やって|進めて)(?:ください|下さい)|"
+    r"お願いします|承認(?:します|です)?|よい|良い|いい|はい|"
+    r"ok|オーケー|それで|その案で|採用|却下)",
+    re.IGNORECASE,
+)
+
+
+def _session_task_store(
+    session_id: str | None, cwd: str | None
+) -> tuple[list[dict], bool]:
+    """Normalized native + mytask records and whether every present store parsed."""
+    if not session_id:
+        return [], False
+    records: list[dict] = []
+    native_dir = os.path.join(NATIVE_TASKS_DIR, session_id)
+    try:
+        native_entries = list(os.scandir(native_dir))
+    except FileNotFoundError:
+        native_entries = []
+    except OSError:
+        return [], False
+    for entry in sorted(native_entries, key=lambda item: item.name):
+        try:
+            is_task_file = entry.is_file() and entry.name.endswith(".json")
+        except OSError:
+            return [], False
+        if not is_task_file:
+            continue
+        try:
+            with open(entry.path, encoding="utf-8") as stream:
+                task = json.load(stream)
+        except (OSError, ValueError):
+            return [], False
+        if not isinstance(task, dict):
+            return [], False
+        records.append(
+            {
+                "id": task.get("id", "?"),
+                "name": task.get("subject", ""),
+                "status": task.get("status"),
+            }
+        )
+
+    mytask_path = os.path.join(cwd or ".", "drafts", "tasks", f"{session_id}.json")
+    try:
+        with open(mytask_path, encoding="utf-8") as stream:
+            raw = json.load(stream)
+    except FileNotFoundError:
+        raw = []
+    except (OSError, ValueError):
+        return [], False
+    if not isinstance(raw, list):
+        return [], False
+    for task in raw:
+        if not isinstance(task, dict):
+            return [], False
+        records.append(
+            {
+                "id": task.get("id", "?"),
+                "name": task.get("content", ""),
+                "status": task.get("status"),
+            }
+        )
+    return records, True
 
 
 def _session_has_task_records(session_id: str | None, cwd: str | None) -> bool:
@@ -1034,17 +1116,10 @@ def _session_has_task_records(session_id: str | None, cwd: str | None) -> bool:
     if not session_id:
         return True
     try:
-        if os.listdir(os.path.join(NATIVE_TASKS_DIR, session_id)):
-            return True
-    except OSError:
-        pass
-    path = os.path.join(cwd or ".", "drafts", "tasks", f"{session_id}.json")
-    try:
-        with open(path, encoding="utf-8") as f:
-            raw = json.load(f)
-    except (OSError, ValueError):
-        return False
-    return isinstance(raw, list) and bool(raw)
+        records, reliable = _session_task_store(session_id, cwd)
+    except Exception:
+        return True
+    return bool(records) if reliable else True
 
 
 # Tools whose file_path / notebook_path inputs are recorded for path matching.
@@ -1081,6 +1156,263 @@ def strip_fences(text: str) -> str:
     return re.sub(r"`[^`\n]*`", " ", text)
 
 
+IMPLEMENTATION_CHECKPOINT_LINES = 50
+SOURCE_SUFFIXES = frozenset({".py", ".sh"})
+SELF_NUMBER_RE = re.compile(r"(?:候補|案|選択肢|パターン)\s?[0-9]")
+EMOJI_START_RE = re.compile(r"[☀-➿\U0001f1e6-\U0001f1ff\U0001f300-\U0001faff]")
+
+
+def _strip_code_and_quotes(text: str) -> str:
+    prose = strip_fences(text)
+    return "\n".join(
+        "" if re.match(r"^\s*>", line) else line for line in prose.splitlines()
+    )
+
+
+def _last_prose_line(text: str) -> str:
+    return next(
+        (
+            line.strip()
+            for line in reversed(_strip_code_and_quotes(text).splitlines())
+            if line.strip()
+        ),
+        "",
+    )
+
+
+def _latest_user_prompt(entries: list[dict]) -> str:
+    for obj in reversed(entries):
+        if obj.get("type") != "user":
+            continue
+        message = obj.get("message")
+        if isinstance(message, dict) and isinstance(message.get("content"), str):
+            return message["content"]
+    return ""
+
+
+def _tool_use_blocks(entries: list[dict]):
+    for obj in entries:
+        if obj.get("type") != "assistant":
+            continue
+        message = obj.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                yield block
+
+
+def _repo_relative_source(path: str, cwd: str, texts: list[str]) -> bool:
+    absolute = os.path.abspath(path if os.path.isabs(path) else os.path.join(cwd, path))
+    repo = os.path.abspath(cwd)
+    try:
+        relative = os.path.relpath(absolute, repo)
+    except ValueError:
+        return False
+    if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+        return False
+    normalized = relative.replace(os.sep, "/")
+    if (
+        normalized == "todos.md"
+        or normalized.startswith(("drafts/", "docs/"))
+        or normalized.lower().endswith(".md")
+    ):
+        return False
+    suffix = os.path.splitext(normalized)[1].lower()
+    if suffix in SOURCE_SUFFIXES:
+        return True
+    if suffix:
+        return False
+    if any(text.startswith("#!") for text in texts):
+        return True
+    try:
+        with open(absolute, encoding="utf-8") as stream:
+            return stream.readline().startswith("#!")
+    except OSError:
+        return False
+
+
+def _line_count(text) -> int:
+    return len(text.splitlines()) if isinstance(text, str) else 0
+
+
+def _tool_added_source_lines(block: dict, cwd: str) -> int:
+    name = block.get("name")
+    inputs = block.get("input")
+    if name not in {"Edit", "Write", "MultiEdit"} or not isinstance(inputs, dict):
+        return 0
+    path = inputs.get("file_path")
+    if not isinstance(path, str) or not path:
+        return 0
+    changes = inputs.get("edits") if name == "MultiEdit" else [inputs]
+    if not isinstance(changes, list) or not all(
+        isinstance(item, dict) for item in changes
+    ):
+        return 0
+    texts = [
+        value
+        for item in changes
+        for value in (
+            item.get("content"),
+            item.get("old_string"),
+            item.get("new_string"),
+        )
+        if isinstance(value, str)
+    ]
+    if not _repo_relative_source(path, cwd, texts):
+        return 0
+    if name == "Write":
+        return _line_count(inputs.get("content"))
+    return sum(
+        max(
+            0, _line_count(item.get("new_string")) - _line_count(item.get("old_string"))
+        )
+        for item in changes
+    )
+
+
+def _implementation_checkpoint_warning(
+    entries: list[dict], session_id: str | None, cwd: str | None
+) -> str | None:
+    if not session_id or not cwd:
+        return None
+    added = sum(
+        _tool_added_source_lines(block, cwd) for block in _tool_use_blocks(entries)
+    )
+    if added <= IMPLEMENTATION_CHECKPOINT_LINES:
+        return None
+    if any(record.get("kind") == "task" for record in _codex_job_records(session_id)):
+        return None
+    return (
+        f"implementation-checkpoint: 直接実装が {added} 行です。"
+        "codex task への委譲有無を判定した根拠を verbalize し、"
+        "必要ならここで委譲してください。"
+    )
+
+
+def _open_task_records(session_id: str | None, cwd: str | None) -> list[dict] | None:
+    records, reliable = _session_task_store(session_id, cwd)
+    if not reliable:
+        return None
+    return [record for record in records if record.get("status") in OPEN_TASK_STATUSES]
+
+
+def _decision_task(record: dict) -> bool:
+    name = record.get("name")
+    return isinstance(name, str) and bool(DECISION_TASK_RE.search(name))
+
+
+def _task_listing(records: list[dict]) -> str:
+    if not records:
+        return "(なし)"
+    labels = [
+        f"#{record.get('id', '?')} {record.get('name', '')}".strip()
+        for record in records
+    ]
+    listing = ", ".join(labels[:10])
+    return listing + (f", 他 {len(labels) - 10} 件" if len(labels) > 10 else "")
+
+
+def _decision_question_warning(
+    final_text: str, session_id: str | None, cwd: str | None
+) -> str | None:
+    final_line = _last_prose_line(final_text)
+    if not final_line.endswith(("?", "？")):
+        return None
+    open_tasks = _open_task_records(session_id, cwd)
+    if open_tasks is None or any(_decision_task(record) for record in open_tasks):
+        return None
+    return (
+        "decision-question-task: 最終行が質問ですが open な decision 型 task "
+        f"がありません。open task: {_task_listing(open_tasks)}。"
+        "質問と task の対応を自己照合してください。"
+    )
+
+
+def _decision_record_warning(
+    user_prompt: str, session_id: str | None, cwd: str | None
+) -> str | None:
+    prompt = user_prompt.strip()
+    if len(prompt) > 20 or SHORT_DECISION_RE.fullmatch(prompt) is None:
+        return None
+    open_tasks = _open_task_records(session_id, cwd)
+    if open_tasks is None:
+        return None
+    decisions = [record for record in open_tasks if _decision_task(record)]
+    if not decisions:
+        return None
+    return (
+        f"decision-record: 短文決裁「{prompt}」と open decision 型 task "
+        f"({_task_listing(decisions)}) を検出しました。"
+        "決裁内容を台帳 / todos へ記録し、task 状態を更新したか確認してください。"
+    )
+
+
+def _communication_lint_warnings(
+    final_text: str, assistant_text: str | None = None
+) -> list[str]:
+    prose = _strip_code_and_quotes(
+        final_text if assistant_text is None else assistant_text
+    )
+    final_line = _last_prose_line(final_text)
+    warnings: list[str] = []
+    if (
+        final_line
+        and not final_line.endswith(("?", "？"))
+        and not EMOJI_START_RE.match(final_line)
+    ):
+        warnings.append(
+            "communication-final-line: 最終非空行が絵文字始まりでも "
+            "`?` / `？` 終端でもありません。org 規約の最終行形式に直してください。"
+        )
+    match = SELF_NUMBER_RE.search(prose)
+    if match:
+        warnings.append(
+            f"communication-self-number: 自己採番参照「{match.group(0)}」を検出しました。"
+            "番号ではなく選択内容を言い換えてください。"
+        )
+    return warnings
+
+
+def _new_warning_families(
+    entries: list[dict],
+    final_text: str,
+    payload: dict,
+    assistant_text: str | None = None,
+) -> list[str]:
+    warnings: list[str] = []
+    session_id = payload.get("session_id")
+    session_id = session_id if isinstance(session_id, str) else None
+    cwd = payload.get("cwd")
+    cwd = cwd if isinstance(cwd, str) else None
+    try:
+        warning = _implementation_checkpoint_warning(entries, session_id, cwd)
+        if warning:
+            warnings.append(warning)
+    except Exception:
+        pass
+    try:
+        warning = _decision_question_warning(final_text, session_id, cwd)
+        if warning:
+            warnings.append(warning)
+    except Exception:
+        pass
+    try:
+        warning = _decision_record_warning(
+            _latest_user_prompt(entries), session_id, cwd
+        )
+        if warning:
+            warnings.append(warning)
+    except Exception:
+        pass
+    try:
+        warnings.extend(_communication_lint_warnings(final_text, assistant_text))
+    except Exception:
+        pass
+    return warnings
+
+
 _TAIL_BUFSIZE = 128 * 1024  # 実測 2545 turn の mean≈110KB / p75≈119KB を 1 read で覆う
 
 
@@ -1089,8 +1421,10 @@ def _is_prompt(obj: dict) -> bool:
     return obj.get("type") == "user" and isinstance(msg.get("content"), str)
 
 
-def _load_tail(path: str, turns: int = 1, bufsize: int = _TAIL_BUFSIZE) -> list[dict]:
-    """末尾から turn boundary を turns 個含むまで後方読みで返す; boundary が turns 未満なら全件。"""
+def _load_tail(
+    path: str, turns: int | None = 1, bufsize: int = _TAIL_BUFSIZE
+) -> list[dict]:
+    """末尾から turn boundary を turns 個含むまで返す; None は全件。"""
     try:
         with open(path, "rb") as f:
             pos = f.seek(0, os.SEEK_END)
@@ -1114,7 +1448,7 @@ def _load_tail(path: str, turns: int = 1, bufsize: int = _TAIL_BUFSIZE) -> list[
                     tail.append(obj)
                     if _is_prompt(obj):
                         seen += 1
-                        if seen >= turns:
+                        if turns is not None and seen >= turns:
                             tail.reverse()
                             return tail
             line = pending.strip()  # BOF: 先頭断片はこの時点で完全な 1 行
@@ -1640,7 +1974,7 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
     if not isinstance(transcript_path, str) or not transcript_path:
         _emit_worktree_warnings(worktree_warnings)
         return 0, None, "", worktree_warnings
-    entries = _load_tail(transcript_path, turns=2)
+    entries = _load_tail(transcript_path, turns=None)
     if not entries:
         _emit_worktree_warnings(worktree_warnings)
         return 0, None, "", worktree_warnings
@@ -1695,6 +2029,7 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
             payload, text, prompt_epoch
         ),
     )
+    warnings.extend(_new_warning_families(entries, final_text, payload, text))
     # advise-once: a stop_hook_active retry never re-blocks — demote to pass (see docstring turn-marker / Exit).
     if exit_code == 2 and payload.get("stop_hook_active"):
         for line in blocking:
@@ -2866,6 +3201,227 @@ class WorkWithoutTaskTest(unittest.TestCase):
             )  # 帰属不能は fail-open
 
 
+class _DecisionStoreFixture:
+    SID = "sid-warn-family"
+
+    def setUp(self):
+        import tempfile
+        from unittest import mock
+
+        assert isinstance(self, unittest.TestCase)
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.cwd = temp.name
+        self.native = os.path.join(temp.name, "native-tasks")
+        patcher = mock.patch.object(
+            sys.modules[__name__], "NATIVE_TASKS_DIR", self.native
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _native(self, tid, status, subject):
+        directory = os.path.join(self.native, self.SID)
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, f"{tid}.json"), "w", encoding="utf-8") as f:
+            json.dump({"id": tid, "subject": subject, "status": status}, f)
+
+    def _mytask(self, items):
+        directory = os.path.join(self.cwd, "drafts", "tasks")
+        os.makedirs(directory, exist_ok=True)
+        with open(
+            os.path.join(directory, f"{self.SID}.json"), "w", encoding="utf-8"
+        ) as f:
+            json.dump(items, f)
+
+
+class ImplementationCheckpointWarningTest(unittest.TestCase):
+    @staticmethod
+    def _edit(name, path, **inputs):
+        return {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": name,
+                        "input": {"file_path": path, **inputs},
+                    }
+                ]
+            },
+        }
+
+    def test_warns_over_fifty_pure_added_source_lines(self):
+        entries = [
+            self._edit(
+                "Edit",
+                "/repo/app.py",
+                old_string="\n".join(["old"] * 10),
+                new_string="\n".join(["new"] * 61),
+            )
+        ]
+        warning = _implementation_checkpoint_warning(entries, "sid", "/repo")
+        assert warning is not None
+        self.assertIn("51 行", warning)
+
+    def test_excludes_non_source_and_counts_shebang_multiedit(self):
+        entries = [
+            self._edit("Write", "/repo/docs/a.py", content="x\n" * 80),
+            self._edit("Write", "/repo/drafts/a.sh", content="x\n" * 80),
+            self._edit("Write", "/repo/a.md", content="x\n" * 80),
+            self._edit(
+                "MultiEdit",
+                "/repo/bin/tool",
+                edits=[
+                    {
+                        "old_string": "#!/bin/sh",
+                        "new_string": "#!/bin/sh\n" + "x\n" * 51,
+                    }
+                ],
+            ),
+        ]
+        warning = _implementation_checkpoint_warning(entries, "sid", "/repo")
+        assert warning is not None
+        self.assertIn("51 行", warning)
+
+    def test_task_job_in_another_workspace_suppresses_warning(self):
+        from unittest import mock
+
+        entries = [self._edit("Write", "/repo/a.py", content="x\n" * 51)]
+        jobs = [{"sessionId": "sid", "kind": "task", "workspaceRoot": "/other"}]
+        with mock.patch.object(
+            sys.modules[__name__], "_codex_job_records", return_value=jobs
+        ):
+            self.assertIsNone(
+                _implementation_checkpoint_warning(entries, "sid", "/repo")
+            )
+
+
+class DecisionQuestionWarningTest(_DecisionStoreFixture, unittest.TestCase):
+    def test_question_without_decision_task_warns_and_lists_open_tasks(self):
+        self._native("1", "pending", "API 調査")
+        warning = _decision_question_warning("どちらにしますか？", self.SID, self.cwd)
+        assert warning is not None
+        self.assertIn("#1 API 調査", warning)
+
+    def test_open_decision_task_in_either_store_suppresses_warning(self):
+        for store in ("native", "mytask"):
+            with self.subTest(store=store):
+                if store == "native":
+                    self._native("1", "pending", "判断待ち: API")
+                else:
+                    self._mytask(
+                        [
+                            {
+                                "id": "1",
+                                "content": "ご回答待ち: API",
+                                "status": "blocked",
+                            }
+                        ]
+                    )
+                self.assertIsNone(
+                    _decision_question_warning("どちらにしますか?", self.SID, self.cwd)
+                )
+                if store == "native":
+                    os.unlink(os.path.join(self.native, self.SID, "1.json"))
+
+    def test_negated_decision_name_does_not_count(self):
+        self._native("1", "pending", "判断待ちではなく実装中")
+        self.assertIsNotNone(
+            _decision_question_warning("実行しますか?", self.SID, self.cwd)
+        )
+
+    def test_code_block_question_and_numbering_are_ignored(self):
+        text = "```\n候補 1 ですか?\n```"
+        self.assertIsNone(_decision_question_warning(text, self.SID, self.cwd))
+        self.assertEqual(_communication_lint_warnings(text), [])
+
+    def test_malformed_store_skips_only_store_dependent_family(self):
+        from unittest import mock
+
+        directory = os.path.join(self.cwd, "drafts", "tasks")
+        os.makedirs(directory, exist_ok=True)
+        with open(
+            os.path.join(directory, f"{self.SID}.json"), "w", encoding="utf-8"
+        ) as f:
+            f.write("not json")
+        entries = [
+            {"type": "user", "message": {"content": "q"}},
+            TurnMarkerTest._asst("通常行"),
+        ]
+        warnings = _new_warning_families(
+            entries,
+            "質問ですか?\n通常行",
+            {"session_id": self.SID, "cwd": self.cwd},
+        )
+        self.assertFalse(any("decision-question-task" in item for item in warnings))
+        self.assertTrue(any("communication-final-line" in item for item in warnings))
+        with mock.patch.object(
+            sys.modules[__name__],
+            "_decision_question_warning",
+            side_effect=RuntimeError,
+        ):
+            warnings = _new_warning_families(entries, "通常行", {})
+        self.assertTrue(any("communication-final-line" in item for item in warnings))
+
+
+class DecisionRecordWarningTest(_DecisionStoreFixture, unittest.TestCase):
+    def test_short_decision_with_open_decision_task_warns(self):
+        self._mytask(
+            [{"id": "1", "content": "決裁待ち: deploy", "status": "in_progress"}]
+        )
+        warning = _decision_record_warning("承認", self.SID, self.cwd)
+        assert warning is not None
+        self.assertIn("台帳 / todos", warning)
+
+    def test_non_decision_or_long_turn_does_not_warn(self):
+        self._native("1", "pending", "ご指示待ち: deploy")
+        self.assertIsNone(_decision_record_warning("検討中です", self.SID, self.cwd))
+        self.assertIsNone(
+            _decision_record_warning(
+                "やってください。ただし先に調査してください", self.SID, self.cwd
+            )
+        )
+
+
+class CommunicationLintWarningTest(unittest.TestCase):
+    def test_final_line_requires_emoji_or_question(self):
+        warnings = _communication_lint_warnings("作業は完了しました。")
+        self.assertTrue(any("communication-final-line" in item for item in warnings))
+        for text in ("完了です\n✅ 完了", "どうしますか？"):
+            with self.subTest(text=text):
+                self.assertFalse(
+                    any(
+                        "communication-final-line" in item
+                        for item in _communication_lint_warnings(text)
+                    )
+                )
+
+    def test_self_numbering_ignores_code_and_quotes(self):
+        text = "```\n候補 1\n```\n> 案 2\n✅ 終了"
+        self.assertFalse(
+            any(
+                "communication-self-number" in item
+                for item in _communication_lint_warnings(text)
+            )
+        )
+        self.assertTrue(
+            any(
+                "communication-self-number" in item
+                for item in _communication_lint_warnings("選択肢 3 を採用\n✅ 完了")
+            )
+        )
+
+    def test_all_new_families_are_warning_only(self):
+        entries = [TurnMarkerTest._asst("通常行")]
+        warnings = _new_warning_families(entries, "案 1 で完了", {})
+        self.assertTrue(warnings)
+        code, _old_warnings, blocking = _check(
+            "done", "done", set(), [], [], [], False, False
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(blocking, [])
+
+
 class OpenTasksAtWindDownTest(unittest.TestCase):
     """open-tasks-at-wind-down: wind-down prompt で open Task 残があれば block。"""
 
@@ -3944,7 +4500,7 @@ class WorktreeCleanupTest(WorktreeFixtureMixin, unittest.TestCase):
         self.assertEqual(first_code, 0)
         self.assertEqual(second_code, 0)
         self.assertIn(str(linked), first_stderr.getvalue())
-        self.assertEqual(second_stderr.getvalue(), "")
+        self.assertNotIn(str(linked), second_stderr.getvalue())
         self.assertIn(str(linked), first_wt[0])
         self.assertEqual(second_wt, [])  # same-turn latch suppresses the repeat
 
