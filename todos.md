@@ -26,9 +26,12 @@ Exit Criteria:
   つき発注書以外は deny)、(c) **5 巡 circuit-breaker** (対象ごとの round 台帳 + 5 巡到達で
   発注 deny・解除 = ユーザー承認の出口決定記録)、(d) review 発注書の `scope: diff|artifact`
   宣言必須化 (artifact には正当化)
-- [ ] **判断待ちの Task 化を強制する hook family** — 最終 message に決裁質問 (org 規約の
-  ❓ marker) があるのに open Task が 0 件なら指摘する stop_checks family。blocking 化は
-  実 corpus での誤検知実測を経てから (測定なしの blocking regex 禁止の既存教訓に従う)。
+- [ ] **判断待ちの Task 化を強制する hook family** — 型付き命名規約 (判断待ち Task は名前に
+  `採否待ち|判断待ち|決裁待ち` を含める) を前提に、最終行が質問 (`?`/`？` 終端・絵文字非依存)
+  の turn は「open な decision 型 Task が 1 件以上 + 直近 K turn 内の作成/更新」を要求する
+  stop_checks family。指摘時は open decision Task 一覧を提示して質問との対応を自己照合させる。
+  「open Task 0 件」だけの検査は別件 Task 残存時に素通しするため不採用 (2026-08-21 ユーザー
+  指摘)。warn tier で導入 → 実 session で誤検知/見逃しを観測 → K 調整 → blocking 化判断。
   併せて intent-without-task family の roster に提案宣言語 (「実装しますか」「採否」等) を追加
 - [ ] 各 gate の canonical (files/) と deploy 先の diff -q 一致 + 発火の live 観測
 
