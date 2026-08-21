@@ -1327,3 +1327,23 @@ wt 内 commit `34ca0d5` → cherry-pick `7176368`。worktree / branch / exclude 
 running 0。**ここで停止 — 再開条件 = 指摘 2 (U1) の裁定: (a) 別 inode 差し替え防御の撤去 +
 裁定 38/39/44/45 改廃 / (b) charter に根拠追記して維持 (発注側は b 推奨)**。r77 の発注は
 裁定確定後 (U0 ゼロなら収束 2/2 目)。
+
+### 2026-08-22 — r77〜r82: 裁定 61〜63・構造巡・縮小再入場を経て収束 2/2 成立
+
+U1 は (a) 撤去で決裁 (裁定 61)。以降: 撤去 round (selftest 325→315) → r77 = U0 2 + U1 1
+(裁定 42/43 は裁定 62 で廃止・安定 snapshot 一本化) → fix round → r78 = U0 3 → 是正 →
+r79 = U0 1 → 仕上げ → r80 = U0 3 (候補状態の整合 class が 3 巡反復 = 構造 signal。Opus 5
+独立レビューが同源の欠落抽象「分類の第一級型」に到達) → 裁定 63 台帳化 + 構造巡
+(CandidateClassification 第一級化・code 起点 output・pending 削除。受け入れ鎖へ Opus 回帰
+専任 filter を導入 — filter 推移 7 → 1 → 0 で通過) → r81 = needs-attention U0 2 (byte
+予算欠落・廃止語彙残存。filter 見逃し 2 件を推定巡が捕獲 = 役割分離の実証) → ユーザー裁定
+「縮小再入場」→ fix round 8 (worklist の scalar byte 予算復元 + 担保 test の境界 fixture 化 +
+改称。回帰 filter pass・決定的 gates 全緑) → 凍結 `97743bd` → **r82 (sol xhigh) = ship・
+U0/U1/U2 = 0/0/0**。r60 (2026-08-13) と合わせ **収束 2/2 成立**。selftest 320・外部
+suite 13・ruff / ty / lang lint / diff check 全緑。main へ merge `879821e` + origin push 済み。
+各巡の発注書・報告書・回帰レビューは `wt-ruling61/drafts/`、受け入れ鎖と 2 方向分析の正本は
+`docs/adversarial-review-methodology.md` §7。
+
+**ここで停止 — 再開条件 = 収束版の deploy**: base setup 再実行 (host 権限・ユーザー実施) で
+配備し、`diff -q /usr/local/bin/codex_task_sentinel files/codex_task_sentinel` の IDENTICAL
+再実測をもって本 line は完了。
