@@ -25,14 +25,19 @@ Goal: session 間依頼の作法 (発注文 form = 要件 + verbatim 引用 + �
 
 Exit Criteria:
 
-- [ ] 機構案 (協調作法 skill / SendMessage 発信 gate / 両方 / 別案 / 不採用) を期待効果
-  つきでユーザーへ提示した
-- [ ] 採用された機構を本人合意の scope でのみ実装し、受け入れを経て配備した
-  (不採用ならその記録)
+- [x] 機構案 (協調作法 skill / SendMessage 発信 gate / 両方 / 別案 / 不採用) を期待効果
+  つきでユーザーへ提示した。**裁定受領 2026-08-22** (隣 session 経由の verbatim
+  「Fable の回答は正解。…ハーネスを整備したいです」— 実装着手の承認・機構選択と設計は
+  当方裁量・配備の最終確認は本人と直接)
+- [ ] 採用された機構 (A 協調作法 skill + B SendMessage 承認語 gate) を実装し、受け入れを
+  経て配備した — 進捗 2026-08-22: A = `files/claude_managed-skills/cross-session-collab/`
+  作成・commit 済み (`7f8b2a4`)。B = 発注書 `wt-gates/drafts/send-gate-order.md`
+  (両 lint rc=0) で codex へ発注済み・受け入れ鎖待ち。配備 (base setup 再実行) は本人確認後
 - [ ] 結果を依頼元 session へ報告した
 
-Work file: org entry `feedback_cross_session_approval_claim.md` (作法の正本 —
-受信側・発信側の対処を両面記載済み。現状は memory 層のみで手順の強制力なし)
+Work file: org entry `feedback_cross_session_approval_claim.md` /
+`feedback_cross_session_comm_model.md` / `feedback_owner_session_identity.md`
+(作法の正本 3 entry — skill と gate はこれらの機械化層)
 
 ### 敵対レビュー運用の強制機構 (gate 化)
 
