@@ -36,7 +36,16 @@ Exit Criteria:
   並行更新・64KB 窓) は修正でなく発生源ごと消滅。残余 = job 記録の prune による古い巡の
   数え漏れ (巡番号突合で補う・うっかり対策としては充分と裁定)。fix round 5 に併せ
   **修正方式「機構追加」の 2 巡連続を lint warn** で検知する (アーキテクチャ再審 trigger の
-  機械化・方法論 block の段階設計と対、2026-08-21 設計確定)
+  機械化・方法論 block の段階設計と対、2026-08-21 設計確定)。
+  進捗 2026-08-21: (a)〜(f) + stateless 化 + warn は fix round 5 で実装・受け入れ済み
+  (wt-gates branch `bd886d0`・lint selftest 31 / gate 65)。判定器と deploy が残。
+  **判定器 round 1 (2026-08-21 ユーザー起動・base main)**: no-ship 4 件 — (高) 承認 file が
+  model の Write で偽造可能 + 承認消費が後続 lint も飛ばす (発注書由来の仕様欠陥)、(中)
+  review 語彙が review/audit 単体を拾わない、(中) round 7 の warn 4 種が stderr のみで
+  model に届かない (additionalContext 未接続)、(中) Stop が全 transcript 走査で O(n²)。
+  → fix round 8 で対応: 承認は route 迂回のみに限定 + 承認 path への書込を同 gate が deny +
+  後続 lint 維持 / 語彙拡張 + 矛盾 deny / warn の additionalContext 接続 (bounded) /
+  transcript 走査に hard budget (全読み廃止・不足分は undercount 明示)
 - [ ] **(g) codex の直接起動を禁止する — 強固に** (2026-08-21 ユーザー決裁 + 同日「強固に
   おこなうべき」で強化) — codex_delegation_gate を「注意喚起」から「deny」へ:
   main agent の Bash からの companion 起動 (全 subcommand・`task-worker` 含む) は**一律 deny**。
@@ -50,29 +59,42 @@ Exit Criteria:
   当初案の「SessionStart での回数表示・台帳追記の弁済要求」は撤回 (2026-08-21 ユーザー指摘:
   可視化は謝罪文の量産になるだけで行動を変えない。行動を変えるのは事前 deny のみ —
   本 session 実測: gate deny 3 回で 3 回とも即時に経路変更・謝罪ゼロ)。
-  org CLAUDE.md への禁則追記の提案も同時に撤回 (常時 load 層はほぼ効かない実測に矛盾)
+  org CLAUDE.md への禁則追記の提案も同時に撤回 (常時 load 層はほぼ効かない実測に矛盾)。
+  進捗 2026-08-21: fix round 6 で実装・受け入れ済み (wt-gates branch `1994751`・
+  gate unittest 65・escape 残骸 0 site)。判定器と deploy が残
 - [ ] **(i) 自作癖の抑制** (2026-08-21 ユーザー決裁: 「すぐ自分でコードを書こうとする。
   ジュニアエンジニアがよくやる悪癖」) — 2 層で: (1) tool-role-delegation skill の「trivial は
   直接編集可」境界を数値で明文化 (例: 単一 file・10 行以内・test 追加なし。超えたら委譲か、
   委譲不採用の理由 1 行の記録を必須)、(2) warn-tier hook = session 内の main tree への
   source 追加行数を累積計測し、しきい値超過かつ session 内に rescue job が無い場合に
-  stop_checks が「自作癖 checkpoint」を提示する。導入は warn tier → 実測 → 調整
+  stop_checks が「自作癖 checkpoint」を提示する。導入は warn tier → 実測 → 調整。
+  進捗 2026-08-21: (1) は canonical へ明文化・commit 済み (数値境界 + 統治原則)。
+  (2) は fix round 7 (warn family 4 種) で発注・実行中
 - [ ] **(h) codex-delegation skill と関連 memory entry を plugin-route 前提に改訂する** —
   現 skill は companion 直接起動の command 形を規定しており (launcher 不採用裁定 2026-08-13 の
   「直接起動へ一本化」)、これが直接起動 pattern を制度化していた。発注書規律・worktree 隔離・
   監視規律は rescue 経由でも維持する形で書き直す。(g) と同時に land しないと skill が gate 違反を
-  指示し続ける
+  指示し続ける。進捗 2026-08-21: canonical を全面改訂・commit 済み (companion 言及 16 site
+  掃引・監視 = job record 直読・cancel = ユーザー起動へ)。/etc への deploy は (g) と同時に最終 step で
 - [ ] **判断待ちの Task 化を強制する hook family** — 型付き命名規約 (判断待ち Task は名前に
-  `採否待ち|判断待ち|決裁待ち` を含める) を前提に、最終行が質問 (`?`/`？` 終端・絵文字非依存)
-  の turn は「open な decision 型 Task が 1 件以上 + 直近 K turn 内の作成/更新」を要求する
-  stop_checks family。指摘時は open decision Task 一覧を提示して質問との対応を自己照合させる。
+  `採否待ち|判断待ち|決裁待ち` を含める) を前提とする stop_checks family。
   「open Task 0 件」だけの検査は別件 Task 残存時に素通しするため不採用 (2026-08-21 ユーザー
-  指摘)。warn tier で導入 → 実 session で誤検知/見逃しを観測 → K 調整 → blocking 化判断。
-  併せて intent-without-task family の roster に提案宣言語 (「実装しますか」「採否」等) を追加
+  指摘)。**corpus 実測済み 2026-08-21** (`drafts/decision-task-corpus-study.md`・5 session
+  123 turn): 質問 turn 14 件中 genuine 決裁依頼 12 件に対し、当初案の「直近 K turn 内の
+  keyword task 作成/更新」は recall 0/12 (K=3,5)〜1/12 (K=10) で**不成立**。否定形
+  (「判断待ちではなく」を含む task 名) への誤 match も実証。**設計改訂**: 窓でなく停止時点の
+  状態検査 —「最終行が `?`/`？` 終端の turn は、型付き命名の open decision Task が 1 件以上
+  存在すること」(否定形 guard つき・命名規約は 2026-08-21 採用済みで以後の task に適用中)。
+  検出語彙に corpus 実測の言い回し (ご判断待ち / ご回答待ち / ご指示待ち) を追加。
+  warn tier で導入 → 実 session で誤検知/見逃しを観測 → blocking 化判断。
+  併せて intent-without-task family の roster に提案宣言語 (「実装しますか」「採否」等) を追加。
+  進捗 2026-08-21: 改訂設計で fix round 7 実装・受け入れ済み (wt-gates branch `5323179`・
+  stop_checks unittest 178・warn 接続のみ 0 block site)。実測・deploy が残
 - [ ] **決裁受領の記録強制を上記 family に併合** (2026-08-21 transcript 監査で検出・ユーザー
   承認) — decision 型 Task が open の時に短文決裁 (「(a)」「やってください」等) を受けた turn
   は、台帳 / todos への決裁記録を要求する reminder (warn tier)。U1 決裁が transcript にのみ
-  残り 8 日消えた class の再発防止
+  残り 8 日消えた class の再発防止。進捗 2026-08-21: round 7 で実装・受け入れ済み
+  (`5323179` decision-record family)。実測・deploy が残
 - [ ] **「無駄」keyword の memory 記録 reminder** (2026-08-21 ユーザー発案: 「無駄という
   キーワードに反応して memory する hook があってもよいぐらい」) — ユーザーの prompt に
   無駄 / 浪費 / もったいない が含まれる turn に、memory-routing での記録検討を促す
@@ -82,7 +104,14 @@ Exit Criteria:
   効いていない状態で消すと正本が無くなり、ルールの所在が分散して埋もれるだけ」) —
   最終行形式 (結論絵文字 / 質問 ? 終端)・自己採番参照の Stop family を corpus 実測から
   warn tier で導入し、**発火と遵守の実測が揃うまで CLAUDE.md の該当節は正本として維持**する。
-  extraction の pair commit (実装 + 即削除) は本件には適用しない — 削除は実証後の別判断
+  extraction の pair commit (実装 + 即削除) は本件には適用しない — 削除は実証後の別判断。
+  進捗 2026-08-21: round 7 で実装・受け入れ済み (`5323179` communication lint family:
+  最終行形式 + 自己採番の 2 検査・code block / 引用は除外)。実測・deploy が残。
+  **追加 2 項目 (2026-08-21 ユーザー要望「一発目で出せるように改善できたらうれしい」)**:
+  (1) 質問文に過去参照語 (「前ターンの」「上記のとおり」「先ほどの」等) が混ざったら warn
+  する自己完結性検査、(2) 判断依頼を検知した warn の文面に書式 template (決めてほしいこと
+  N 件・問題/やること/承認と却下の帰結・略語封印) を埋め込み、書く瞬間に想起させる。
+  次の実装 round で本 family へ追加
 - [ ] 各 gate の canonical (files/) と deploy 先の diff -q 一致 + 発火の live 観測
 
 Work file: 4 gate の設計は本 block と `last-session-handoff.md` 不要 (本 block で自己完結)。
@@ -124,8 +153,11 @@ Exit Criteria:
 - [x] codex 意見書 (`drafts/quality-estimation-opinion-report.md` §5) の 5 巡 protocol と
   突合し、入場条件・round 別の入力/出力/判定・「巡数を黙って延長しない」規律を正本化 —
   `78a2a80` §7.4 に inline 化 (drafts への参照は doc 本文に残さない)
-- [ ] **fix diff の実物精査** — 認定 era の埋め込み ~10 件を commit diff 水準で分析し、
-  「新しく仮定した次元」列挙表 (意見書 §4) の実効性を検証して fix 型制限の設計に反映
+- [x] **fix diff の実物精査** — 認定 era の埋め込み ~10 件を commit diff 水準で分析し、
+  「新しく仮定した次元」列挙表 (意見書 §4) の実効性を検証して fix 型制限の設計に反映 —
+  2026-08-21 実施: 注入 12 件を commit hunk まで遡及 (`drafts/fix-injection-diff-audit.md`
+  374 行・AUDIT_COMPLETE)。機構追加型 92% (11/12)。列挙義務は新設系 4 件に有効・
+  境界条件の未掃引 4 件は class 掃引・転写ミス 1 件は裁定照合の担当と確定し doc §7.3 へ追記
 
 Work file: `drafts/quality-estimation-opinion-report.md` (codex 第三者意見書)
 
@@ -156,15 +188,30 @@ Exit Criteria:
   実施し、認定または bounded-risk 受入のどちらかへ**必ず**意思決定して凍結する。
   データ: 認定 23 巡でゼロは r60 の 1 回のみ・巡あたり 1〜4 件で横ばい、charter 後も
   r75=2・r76=1。「あと 1 巡」は counter の形式値であって予測ではない (2026-08-21 再分析)
-- [ ] **ユーザー判断: U1 決裁「(a) 撤去」の再確認** — 「別 inode 差し替え防御は過剰実装か」に
+- [x] **ユーザー判断: U1 決裁「(a) 撤去」の再確認** — 「別 inode 差し替え防御は過剰実装か」に
   2026-08-13 21:21「(a) 撤去 + 裁定 38/39/44/45 改廃」と決裁済みだが、直後の session 途絶で
   未実装・文書未反映 (唯一の一次記録 = transcript 68ddd1bf line 8749。当時の発注側推奨は
-  (b) 維持)。8 日経過につき有効性を再確認する
+  (b) 維持)。**2026-08-21 再確認済み**: ユーザー指示「裁定 61 として文書に記録してから
+  撤去 round を発注してください」で (a) の有効を確認 (裁定 61 記録 = `c557cde`)
 - [ ] 裁定 61 (U1 の帰結) を `docs/sentinel-rulings.md` へ commit + `LAST_RULING` bump して
   から、撤去 round を発注・着地する — ledger-first (決裁を文書に落としてから実装。今回の
-  8 日停止の真因 = 決裁が transcript にのみ存在)
+  8 日停止の真因 = 決裁が transcript にのみ存在)。進捗 2026-08-21: 裁定 61 記録 `c557cde`
+  (main)・撤去 round 受け入れ済み `6b3d2ee` (wt-ruling61 branch・selftest 325→315 全緑)。
+  main への取り込みは r77 認定後に行う
 - [ ] r77 を発注し、U0 ゼロなら収束 2/2 成立を `docs/sentinel-convergence-log.md` へ記録して
-  凍結 — 再開手順は同 log 末尾「ここで停止」節が正本
+  凍結 — 再開手順は同 log 末尾「ここで停止」節が正本。**r77 実施済み 2026-08-21
+  (sol xhigh・verdict 6 項目形式)**: needs-attention U0 2 / U1 1 / U2 0
+  (報告書 `wt-ruling61/drafts/sentinel-r77-report.md`)。処置は全て削除・文書整合系:
+  旧 test 名の意味反転流用の解消 (撤去 diff 由来・受け入れの名前照合を素通し) +
+  未使用 helper 削除 + 裁定表の整合。fix 後に r78 で U0 ゼロなら r60 + r78 で 2/2
+- [ ] **ユーザー裁定 (r77 の U1)**: (1) 裁定 61 の廃止列挙の補完 — **2026-08-21 承認済み**
+  (「承知しました」)。裁定表へ反映 commit 済み (61 の列挙拡張 + 35/55 への廃止注記、
+  meta-test 13 件緑)。(2) 裁定 42/43 と裁定 61 の衝突 — 同 inode の truncate + 再書込
+  (正本 S-9 の正常系) を当該 watch の間 corrupt に固定しうる。reviewer 提案 = (a) 42/43 も
+  廃止し次 cadence の安定 snapshot で再判定 / (b) 保持し正本へ理由と期待 exit を明記。
+  **2026-08-21 ユーザーから「記憶と合致しない、詳しく」の差し戻し** — 裁定 20 (安定 snapshot の
+  parse 不能だけを corrupt とする・truncate 窓を破損に化けさせない) との関係を説明して再判断
+  待ち。決裁後に fix round + r78 を 1 回で実施
 
 Work file: `docs/sentinel-convergence-log.md` 末尾「ここで停止」節 (再開点)、
 `docs/sentinel-review-analysis.md` §8 (r54〜r76 全記録)、`docs/sentinel-use-cases.md`
