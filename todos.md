@@ -166,9 +166,13 @@ Exit Criteria:
   撤去 round を発注してください」で (a) の有効を確認 (裁定 61 記録 = `c557cde`)
 - [ ] 裁定 61 (U1 の帰結) を `docs/sentinel-rulings.md` へ commit + `LAST_RULING` bump して
   から、撤去 round を発注・着地する — ledger-first (決裁を文書に落としてから実装。今回の
-  8 日停止の真因 = 決裁が transcript にのみ存在)
+  8 日停止の真因 = 決裁が transcript にのみ存在)。進捗 2026-08-21: 裁定 61 記録 `c557cde`
+  (main)・撤去 round 受け入れ済み `6b3d2ee` (wt-ruling61 branch・selftest 325→315 全緑)。
+  main への取り込みは r77 認定後に行う
 - [ ] r77 を発注し、U0 ゼロなら収束 2/2 成立を `docs/sentinel-convergence-log.md` へ記録して
-  凍結 — 再開手順は同 log 末尾「ここで停止」節が正本
+  凍結 — 再開手順は同 log 末尾「ここで停止」節が正本。進捗 2026-08-21: r77 発注済み
+  (発注書 `wt-ruling61/drafts/sentinel-r77-review-order.md` 新 lint rc=0・sol xhigh・
+  verdict 6 項目 + per-finding 構造判定を要求・実行中)
 
 Work file: `docs/sentinel-convergence-log.md` 末尾「ここで停止」節 (再開点)、
 `docs/sentinel-review-analysis.md` §8 (r54〜r76 全記録)、`docs/sentinel-use-cases.md`
