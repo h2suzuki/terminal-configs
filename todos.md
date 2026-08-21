@@ -73,7 +73,13 @@ Exit Criteria:
   stale docstring / subTest 外 assert。同段不通過 2 回目 → 構造再審 =「gate の CLI model は
   companion の写し」原則を明記し fix round 11 発注済み
   (`wt-gates/drafts/review-gates-fixes-11.md`・両 lint rc=0・filter round 2 報告 =
-  `wt-gates/drafts/review-gates-fixes-10-regression-review.md`)
+  `wt-gates/drafts/review-gates-fixes-10-regression-review.md`)。
+  **fix round 11 納品 → 決定的 gates 全緑 → filter round 3 = 前巡 4 件全解消・新規 low 2 件**
+  (D: round 11 の funnel 補強枝が production 到達不能 — 前巡「指摘 7 残余」自体が mock 由来の
+  誤測と判明・filter が実路検証で自己訂正 / E: comment の latch 極性反転)。指摘推移
+  8 → 4 → 2 で収束中と判断し、fix round 12 (到達不能枝の削除 + matrix 実路化 + comment 訂正)
+  を発注済み (`wt-gates/drafts/review-gates-fixes-12.md`・両 lint rc=0・filter round 3 報告 =
+  `wt-gates/drafts/review-gates-fixes-11-regression-review.md`)
 - [ ] **(g) codex の直接起動を禁止する — 強固に** (2026-08-21 ユーザー決裁 + 同日「強固に
   おこなうべき」で強化) — codex_delegation_gate を「注意喚起」から「deny」へ:
   main agent の Bash からの companion 起動 (全 subcommand・`task-worker` 含む) は**一律 deny**。
