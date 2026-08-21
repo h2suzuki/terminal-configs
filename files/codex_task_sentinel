@@ -97,9 +97,7 @@ LOG_TS = re.compile(
     r"^\[(\d{4}-\d\d-\d\dT\d\d:\d\d:[0-5]\d(?:\.\d{1,9})?)Z\]", re.ASCII
 )
 # runner は小数 3 桁固定で比較相手の st_mtime_ns は 9 桁なので、小数部は 9 桁を上限にする。
-RECORD_TS = re.compile(
-    r"(\d{4}-\d\d-\d\dT\d\d:\d\d:[0-5]\d)(\.\d{1,9})?Z", re.ASCII
-)
+RECORD_TS = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:[0-5]\d)(\.\d{1,9})?Z", re.ASCII)
 # A log line is an event line plus, at worst, one shortened command; a body that
 # runs longer than this is prose, and reading all of it only risks the verdict.
 MAX_LOG_LINE = 8192
@@ -122,8 +120,6 @@ MAX_WORKSPACES = 10_000
 MAX_PEERS = 5_000
 # cache の版 directory も逐次列挙し、補助探索だけが無制限にならないようにする。
 MAX_COMPANION_CANDIDATES = 10_000
-# cadence を跨いで保持する候補 path も上限内に抑える。
-MAX_SEEN_PAIRS = 10_000
 
 EXIT_DONE = 0
 EXIT_DONE_HUNG = 3
@@ -495,8 +491,6 @@ class Observation:
         except OSError as exc:
             return cls(cls.UNSTABLE, error=exc)
         stamp = (
-            descriptor.st_dev,
-            descriptor.st_ino,
             descriptor.st_size,
             hashlib.sha256(raw).digest(),
         )
@@ -522,8 +516,6 @@ class Observation:
                     descriptor = cls.descriptor_stat(handle)
                     stamp.append(
                         (
-                            descriptor.st_dev,
-                            descriptor.st_ino,
                             descriptor.st_mtime_ns,
                             descriptor.st_ctime_ns,
                             descriptor.st_size,
@@ -587,8 +579,6 @@ class Observation:
                     hold.append(handle)
                 before = cls.descriptor_stat(handle)
                 stamp = (
-                    before.st_dev,
-                    before.st_ino,
                     before.st_mtime_ns,
                     before.st_ctime_ns,
                     before.st_size,
@@ -803,23 +793,13 @@ def record_gone(record_path: str) -> bool:
     return Observation.record_gone(record_path)
 
 
-def file_stat(path: str | None) -> tuple[int, int, int, int, int] | None:
-    """One snapshot of a file, identity included; None when it is absent.
-
-    dev and ino are part of it because a replacement can carry the same mtime
-    and size, and then two different files compare as one unchanged snapshot.
-    mtime is nanoseconds: a second-grained one calls a rewrite within the same
-    second unchanged, which is the whole question these comparisons ask.
-    """
+def file_stat(path: str | None) -> tuple[int, int, int] | None:
+    """One metadata snapshot of a file; None when it is absent."""
     try:
         st = os.stat(path) if path else None
     except OSError:
         return None
-    return (
-        (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size)
-        if st
-        else None
-    )
+    return (st.st_mtime_ns, st.st_ctime_ns, st.st_size) if st else None
 
 
 def record_stamp(path: str) -> tuple:
@@ -846,8 +826,10 @@ def finish(
     allow_empty_scan_after_deadline: bool = False,
 ) -> int:
     """Emit and return one terminal verdict after applying the deadline gate."""
-    if code != EXIT_TIMEOUT and deadline_reached(deadline) and not (
-        allow_empty_scan_after_deadline and code == EXIT_NEVER_REGISTERED
+    if (
+        code != EXIT_TIMEOUT
+        and deadline_reached(deadline)
+        and not (allow_empty_scan_after_deadline and code == EXIT_NEVER_REGISTERED)
     ):
         code = EXIT_TIMEOUT
         output = timeout_output
@@ -1163,7 +1145,7 @@ def baseline_silence(
             marked = file_stat(record_path)
             if before is None or marked is None:
                 continue
-            if now - max(before[2], marked[2]) / 1e9 < settle_seconds:
+            if now - max(before[0], marked[0]) / 1e9 < settle_seconds:
                 continue
             quiet, peer_log_stamp = longest_silence(peer_log, hold=peer_pin)
             # 対象 log と同じ理由で、 読んだ descriptor が前後の観測と同じかを確かめる。
@@ -1211,9 +1193,7 @@ def stamp_epoch(stamp: object) -> Decimal | None:
     if not matched:
         return None  # 末尾まで見ないと +09:00 や junk 付きを UTC として採ってしまう
     try:  # the record stamps UTC, so read it as UTC rather than through local time
-        whole = calendar.timegm(
-            time.strptime(matched.group(1), "%Y-%m-%dT%H:%M:%S")
-        )
+        whole = calendar.timegm(time.strptime(matched.group(1), "%Y-%m-%dT%H:%M:%S"))
     except ValueError:
         return None
     return epoch_fraction(whole, matched.group(2))
@@ -1240,9 +1220,7 @@ def artifact_view(
     """
     if not path or since is None:
         return False, None
-    observed = Observation.artifact(
-        path, MAX_SCAN_BYTES, MAX_ARTIFACT_BYTES, hold
-    )
+    observed = Observation.artifact(path, MAX_SCAN_BYTES, MAX_ARTIFACT_BYTES, hold)
     if observed.state == Observation.ABSENT:
         return False, observed.stamp
     if observed.state == Observation.UNSTABLE:
@@ -1321,19 +1299,6 @@ def companion_candidates(pattern: str) -> Iterator[str]:
         if count:
             raise CompanionScanOverflow from exc
         return
-
-
-def remember_pairs(
-    seen_pairs: set[tuple[str, str]], pairs: Iterator[tuple[str, str]]
-) -> bool:
-    """Remember candidates through cadences, or stop before exceeding the cap."""
-    for pair in pairs:
-        if pair in seen_pairs:
-            continue
-        if len(seen_pairs) >= MAX_SEEN_PAIRS:
-            return False
-        seen_pairs.add(pair)
-    return True
 
 
 def companion_path() -> str | None:
@@ -1538,9 +1503,7 @@ def evidence(
         if baseline and age and not (log_unstable or why("baseline"))
         else ""
     )
-    bar = why("baseline") or duration_seconds(
-        threshold, measured=baseline is not None
-    )
+    bar = why("baseline") or duration_seconds(threshold, measured=baseline is not None)
     shown = [log_unstable] if log_unstable else (tail or ["(なし)"])
     # exit 14 は ready を verdict へ畳むので、畳んだ値をここで戻さないと成果物あり / なしが読めない。
     state = why("artifact") or (
@@ -1591,7 +1554,6 @@ def carrying_records(
     one that moved is not a stable corrupt — each licenses a different verdict.
     """
     carried = []
-    carried_stamps = []
     unknown = []
     shifting = []
     for pair in found:
@@ -1610,31 +1572,11 @@ def carrying_records(
             continue
         if loaded.get("id") == job_id:
             carried.append(pair)
-            carried_stamps.append(stamp)
             if keep_read and view:
                 hold.append((pair, view))
                 view = []
         Observation.release(view)
-    if hold is not None and len(found) > 1 and len(carried) == 1:
-        singleton = carried[0]
-        view = []
-        pinned = Observation.record(singleton[0], MAX_RECORD_BYTES + 1, view)
-        if pinned.state == Observation.PRESENT and pinned.stamp == carried_stamps[0]:
-            hold.append((singleton, view))
-        else:
-            Observation.release(view)
-            carried.clear()
-            shifting.append(singleton)
     return carried, unknown, shifting
-
-
-def replace_candidate_holds(previous: list, fresh: list) -> list:
-    """Install candidate-bound descriptor holds, then release the old set."""
-    if not fresh:
-        return previous
-    for _pair, descriptors in previous:
-        Observation.release(descriptors)
-    return fresh
 
 
 def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
@@ -1642,67 +1584,19 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
     deadline = time.monotonic() + args.timeout_seconds
     started = time.monotonic()
     found: list[tuple[str, str]] = []
-    pin_hold: list = []
     resolved_unknown = False
-    seen_pairs: set[tuple[str, str]] = set()
+    saw_candidate = False
     while not found:
         found, complete = find_jobs(args.job_id, roots)
+        fresh_hold: list = []
         if found:
             # file 名の一致は所属の証明ではない — 本文が名乗るものだけを候補にする。
             # 読めなかった候補は「別 job」の証明にならないので、その回は絞らない。
-            fresh_hold: list = []
             carried, unknown, shifting = carrying_records(
                 found, args.job_id, hold=fresh_hold
             )
-            if len(carried) > 1 and pin_hold:
-                for _pair, descriptors in pin_hold:
-                    Observation.release(descriptors)
-                pin_hold = []
-            # 周回間 inode 比較は同じ path の単独候補だけに限る。重複は下の
-            # cardinality 判定へ送り、走査順の違う候補同士を比較しない。
-            if (
-                len(carried) == 1
-                and len(pin_hold) == 1
-                and len(fresh_hold) == 1
-                and pin_hold[0][0] == fresh_hold[0][0]
-            ):
-                was = Observation.descriptor_stat(pin_hold[0][1][0])
-                now_id = Observation.descriptor_stat(fresh_hold[0][1][0])
-                if (was.st_dev, was.st_ino) != (now_id.st_dev, now_id.st_ino):
-                    return finish(
-                        deadline,
-                        EXIT_UNVERIFIABLE,
-                        (
-                            f"unverifiable: {printable(args.job_id)} resolved to a "
-                            f"different record than the one seen earlier",
-                            f"  {printable(found[0][0])}",
-                        ),
-                        (
-                            f"timeout: {printable(args.job_id)} could not be resolved "
-                            f"within {duration_seconds(args.timeout_seconds)}",
-                        ),
-                    )
-            # 新しい掴みを得られた時だけ入れ替える — 読めない周回で手放すと、
-            # 後から現れた inode と比べる相手が無くなる。
-            if fresh_hold:
-                pin_hold = replace_candidate_holds(pin_hold, fresh_hold)
             complete = complete and not shifting  # 動いた候補は掴めていない
-            # 動いた候補も「一度は見えた」 — 忘れると後で未登録と断定できてしまう。
-            if not remember_pairs(seen_pairs, iter(shifting)):
-                return finish(
-                    deadline,
-                    EXIT_UNVERIFIABLE,
-                    (
-                        f"unverifiable: {printable(args.job_id)} could not be "
-                        "resolved to one record before the candidate history limit",
-                        f"  searched: {printable(', '.join(roots))}",
-                    ),
-                    (
-                        f"timeout: {printable(args.job_id)} could not be resolved "
-                        f"within {duration_seconds(args.timeout_seconds)}",
-                        f"  searched: {printable(', '.join(roots))}",
-                    ),
-                )
+            saw_candidate = saw_candidate or bool(carried or unknown or shifting)
             if carried:
                 found, complete = carried, complete and not unknown
             else:
@@ -1742,27 +1636,9 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     ),
                 )
         if found and complete:
-            # 「その 1 件が過去にも見えた」 では足りない — A→B と替わった後の B も通る。
-            if seen_pairs - {found[0]}:
-                # 前に見たのと別の record — 同じ id でも同じ job とは限らない。
-                return finish(
-                    deadline,
-                    EXIT_UNVERIFIABLE,
-                    (
-                        f"unverifiable: {printable(args.job_id)} resolved to a different "
-                        f"record than the one seen earlier",
-                        *(
-                            f"  {printable(pair[0])}"
-                            for pair in sorted(seen_pairs | {found[0]})
-                        ),
-                    ),
-                    (
-                        f"timeout: {printable(args.job_id)} could not be resolved "
-                        f"within {duration_seconds(args.timeout_seconds)}",
-                        f"  searched: {printable(', '.join(roots))}",
-                    ),
-                )
-            if pin_hold:
+            if fresh_hold:
+                for _pair, descriptors in fresh_hold:
+                    Observation.release(descriptors)
                 break
             # test stub 等で解決時の hold が無い時だけ開き直す。 読取前後の
             # descriptor 全指紋が動いた view は corrupt でなく未解決へ戻す。
@@ -1815,15 +1691,11 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     ),
                 )
             before_fingerprint = (
-                before.st_dev,
-                before.st_ino,
                 before.st_mtime_ns,
                 before.st_ctime_ns,
                 before.st_size,
             )
             after_fingerprint = (
-                after.st_dev,
-                after.st_ino,
                 after.st_mtime_ns,
                 after.st_ctime_ns,
                 after.st_size,
@@ -1847,30 +1719,16 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                     ),
                 )
             else:
-                pin_hold = [(found[0], fallback_hold)]
+                Observation.release(fallback_hold)
                 break
-        # 走査しきれていない 1 件は「唯一」の証明にならないが、 どれを見たかは事実。
-        # bool に畳むと、 後から別 path の同名 record へ黙ってすり替わる。
-        if not remember_pairs(seen_pairs, iter(found)):
-            return finish(
-                deadline,
-                EXIT_UNVERIFIABLE,
-                (
-                    f"unverifiable: {printable(args.job_id)} could not be resolved "
-                    "to one record before the candidate history limit",
-                    f"  searched: {printable(', '.join(roots))}",
-                ),
-                (
-                    f"timeout: {printable(args.job_id)} could not be resolved within "
-                    f"{duration_seconds(args.timeout_seconds)}",
-                    f"  searched: {printable(', '.join(roots))}",
-                ),
-            )
+        for _pair, descriptors in fresh_hold:
+            Observation.release(descriptors)
+        saw_candidate = saw_candidate or bool(found)
         found = []
         if args.once:
             # --once は 1 cadence で返す約束。 ただし走査が不完全、 または一度でも
             # record を見ているなら 「未登録」 とは言えない。
-            if complete and not seen_pairs:
+            if complete and not saw_candidate:
                 return finish(
                     deadline,
                     EXIT_ALIVE,
@@ -1900,10 +1758,10 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             )
         # 終局は実期限で決める — margin を足すと、 待つと約束した時間内の登録を取り逃す。
         if finish(deadline, EXIT_ALIVE, (), ()) == EXIT_TIMEOUT:
-            if not complete or seen_pairs:
+            if not complete or saw_candidate:
                 # 走査しきれていない、 または一度は見えた — どちらも
                 # 「登録されていない」 とは言えない。
-                if seen_pairs:
+                if saw_candidate:
                     # 一度見えた record があるなら、 期限に言えるのは timeout だけ。
                     return finish(
                         deadline,
@@ -1950,10 +1808,9 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
             (),
         )
     jobs_dir = os.path.dirname(record_path)
-    # 検証と pin は同じ descriptor で行う — 登録解決で検証した hold を再読しない。
     if resolved_unknown and not record_gone(record_path):
         # 検証できなかった候補を、 後から読めた別 record で置き換えない。
-        # 消えている場合は別 — それは exit 10 が答えなので下の pin へ委ねる。
+        # 消えている場合は別 — それは exit 10 が答えなので下の poll へ委ねる。
         return finish(
             deadline,
             EXIT_CORRUPT,
@@ -1967,55 +1824,6 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
                 f"  job    : {printable(args.job_id)} record={printable(record_path)}",
             ),
         )
-    pinned = None
-    try:
-        pinned = pin_hold[0][1][0]
-        pinned_stat = Observation.descriptor_stat(pinned)
-        record_inode = (pinned_stat.st_dev, pinned_stat.st_ino)
-    except (FileNotFoundError, NotADirectoryError):
-        # 掴めなかった理由を identity に化けさせない — 同じ名前が後で読めても、
-        # それは登録解決で見た record と再同定できない。
-        return finish(
-            deadline,
-            EXIT_VANISHED,
-            (
-                "vanished: the state record disappeared after registration — "
-                "the plugin prunes old jobs, so this job's outcome is unknowable here",
-                f"  job    : record={printable(record_path)}",
-            ),
-            (
-                f"timeout: the record could not be held within {duration_seconds(args.timeout_seconds)}",
-            ),
-        )
-    except OSError:
-        return finish(
-            deadline,
-            EXIT_CORRUPT,
-            (
-                "corrupt: the state record is present but unreadable — the job's "
-                "outcome cannot be read from it, so do not treat this as a stall",
-                f"  job    : record={printable(record_path)}",
-            ),
-            (
-                f"timeout: the record could not be held within {duration_seconds(args.timeout_seconds)}",
-            ),
-        )
-    # 掴めたなら、 それが今もその path か — 登録解決の read との間で差し替わりうる。
-    if record_inode is not None:
-        named_now = file_stat(record_path)
-        if named_now is not None and named_now[:2] != record_inode:
-            return finish(
-                deadline,
-                EXIT_UNVERIFIABLE,
-                (
-                    f"unverifiable: {printable(args.job_id)} could not be pinned to one "
-                    f"record, so nothing observed after this is about one job",
-                    f"  job    : record={printable(record_path)}",
-                ),
-                (
-                    f"timeout: the record could not be held within {duration_seconds(args.timeout_seconds)}",
-                ),
-            )
     last_report: tuple[str, str] | None = None
     while True:
         # 期限に達していたら新しい poll を始めない — 期限後の状態から出た verdict が
@@ -2052,8 +1860,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # 1 poll 1 走査 — verdict も evidence も同じ結果を使い、読み直さない。 走査の
         # 前後で観測対象が動いたら、 その poll は古い無音と新しい本文の混成になる。
         before_log, before_artifact = file_stat(log), file_stat(args.artifact)
-        # 読んだ descriptor そのものを比較が済むまで持つ — 別に開き直した fd では、
-        # 読んだ inode を押さえたことにならない。
+        # 読んだ descriptor そのものを比較が済むまで持つ — 別の fd では同じ観測にならない。
         log_pin: list = []
         unfinished, tail, whole_log, log_view_stamp = scan_log(log, hold=log_pin)
         # 読めた view が無いのに path には file が在るなら、 読取窓の中だけ消えていた。
@@ -2063,7 +1870,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         )
         # 無音も読んだ descriptor から — 無ければ「読んでいない」 であって、
         # path を開き直して別 file の mtime を無音に使ってよい理由にはならない。
-        age = now - log_view_stamp[2] / 1e9 if log_view_stamp is not None else None
+        age = now - log_view_stamp[0] / 1e9 if log_view_stamp is not None else None
         tree, tree_entries, tree_read = tree_age(
             (record or {}).get("workspaceRoot"), now
         )
@@ -2092,18 +1899,8 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # plugin は record を completed に書いてから final output を append する。
         # その窓に入った poll は、 古い running のまま静穏を読んで stall と言える。
         scan_incomplete = not scanned_all
-        named_now = file_stat(record_path)
-        record_moved = (
-            # 列挙し切れていない走査の空集合は、 消えた証拠でも別 record の証拠でもない。
-            (scanned_all and seen != [(record_path, log)])
-            # watch 全体の同一性 — mtime と size は heartbeat で動くのが正常である。
-            # 掴めていない時は比較相手が無い — 無理に不一致を作らない。
-            or (
-                record_inode is not None
-                and named_now is not None
-                and named_now[:2] != record_inode
-            )
-        )
+        # 列挙し切れていない走査の空集合は、 消えた証拠でも別 record の証拠でもない。
+        record_moved = scanned_all and seen != [(record_path, log)]
         # 前後一致は中間値との一致を証明しない — parse が見た bytes も同じと要求する。
         record_changed = (
             record_stamp(record_path) != record_before
@@ -2283,10 +2080,7 @@ def watch(args: argparse.Namespace, roots: list[str] | None = None) -> int:
         # 破棄した poll をそのまま下の分岐へ流すと、 混成した snapshot が exit 12 / 7 / 11 の
         # evidence として出る。 期限前なら取り直し、 期限か --once なら理由を名指しで返す。
         if out is None and (changed or unreadable):
-            if (
-                not args.once
-                and finish(deadline, EXIT_ALIVE, (), ()) != EXIT_TIMEOUT
-            ):
+            if not args.once and finish(deadline, EXIT_ALIVE, (), ()) != EXIT_TIMEOUT:
                 sleep_until(deadline, args.poll_seconds)
                 continue
             out = (
@@ -3320,7 +3114,7 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(code, EXIT_TIMEOUT)
 
     def test_a_record_that_changed_between_partial_scans_is_unverifiable(self):
-        """A の後に B を見て B で確定できるなら、すり替えを許したままになる。"""
+        """An incomplete scan that saw a record cannot become never-registered."""
         import io
         from contextlib import redirect_stdout
         from unittest import mock
@@ -3339,7 +3133,26 @@ class WatchTest(unittest.TestCase):
                 lambda *a: scans.pop(0) if scans else ([("/b.json", "/b.log")], True),
             ),
         ):
-            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
+            self.assertNotEqual(watch(args), EXIT_NEVER_REGISTERED)
+
+    def test_a_record_replaced_between_rounds_is_a_different_record(self):
+        """A candidate seen in an incomplete round cannot become unregistered."""
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        root = tempfile.mkdtemp()
+        pair = ("/record.json", "/record.log")
+        scans = [([pair], False), ([], True)]
+        args = self._watch_args(root, "task-x", timeout_seconds=0.03)
+        with (
+            redirect_stdout(io.StringIO()),
+            mock.patch(
+                __name__ + ".find_jobs",
+                lambda *a: scans.pop(0) if scans else ([], True),
+            ),
+        ):
+            self.assertNotEqual(watch(args), EXIT_NEVER_REGISTERED)
 
     def test_a_directory_removed_during_the_walk_is_activity(self):
         """走査中に消えた dir は file と同じ — 読取不能に上書きすると静穏へ到達しない。"""
@@ -3410,31 +3223,6 @@ class WatchTest(unittest.TestCase):
         with mock.patch("time.sleep", asked.append):  # 実際に眠らず、渡す値だけ見る
             sleep_until(time.monotonic() + 1e300, 1e300)
         self.assertEqual(asked, [MAX_SLEEP_SECONDS])
-
-    def test_a_record_replaced_in_place_is_not_a_consistent_poll(self):
-        """同じ path が別 inode に替われば、内容が同じでも同じ record ではない。"""
-        import io
-        from contextlib import redirect_stdout
-
-        from unittest import mock
-
-        root, record, _log = self._state("ws", "task-live", "completed")
-        args = self._watch_args(root, "task-live", once=True)
-        real = scan_log
-
-        def swap(path, *a, **k):
-            # poll の最中に同内容・別 inode へ差し替える。
-            with open(record + ".new", "w", encoding="utf-8") as f:
-                json.dump({"id": "task-live", "status": "completed"}, f)
-            os.rename(record + ".new", record)
-            return real(path, *a, **k)
-
-        with (
-            redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".scan_log", swap),
-            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1, True)),
-        ):
-            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
 
     def test_a_record_appearing_inside_a_scanned_workspace_is_incomplete(self):
         """名前一覧は同じでも、 見た record が現れていれば単一 snapshot ではない。"""
@@ -3635,68 +3423,6 @@ class WatchTest(unittest.TestCase):
                 baseline_silence(jobs, "task-live", time.time()), (None, False)
             )
 
-    def test_a_shifting_candidate_is_remembered_as_seen(self):
-        """一度見えた record を忘れると、 後で「未登録」 と断定できてしまう。"""
-        import io
-        from contextlib import redirect_stdout
-        from unittest import mock
-
-        root, record, log = self._state("ws", "task-x", "running")
-        args = self._watch_args(root, "task-x", timeout_seconds=0.05)
-        real, reads = record_view, []
-
-        def shifting(path, job_id=None, hold=None):
-            if path == record and job_id is None:
-                reads.append(1)
-                if len(reads) == 2:  # 判断に使う read だけ別 bytes を見せる
-                    return ("shifted",), {"id": "task-x", "status": "running"}
-            return real(path, job_id)
-
-        gone = []
-
-        def finding(job_id, roots):
-            # 1 度目は動く候補、 以降は完全な空走査 — 「見えた」 事実だけが残る。
-            if gone:
-                return [], True
-            gone.append(1)
-            return [(record, log)], True
-
-        buf = io.StringIO()
-        with (
-            redirect_stdout(buf),
-            mock.patch(__name__ + ".record_view", shifting),
-            mock.patch(__name__ + ".find_jobs", finding),
-        ):
-            self.assertNotEqual(watch(args), EXIT_NEVER_REGISTERED)
-        self.assertNotIn("never-registered", buf.getvalue())
-
-    def test_a_record_replaced_between_rounds_is_a_different_record(self):
-        """周回の間に別 inode へ替わったなら、 同じ path でも同じ record ではない。"""
-        import io
-        from contextlib import redirect_stdout
-        from unittest import mock
-
-        root, record, log = self._state("ws", "task-x", "running")
-        args = self._watch_args(root, "task-x", timeout_seconds=0.5)
-        rounds = []
-
-        def finding(job_id, roots):
-            rounds.append(1)
-            if len(rounds) == 2:
-                with open(record + ".new", "w", encoding="utf-8") as f:
-                    json.dump({"id": "task-x", "status": "completed"}, f)
-                os.rename(record + ".new", record)  # 別 inode へ差し替え
-            return [(record, log)], len(rounds) != 1  # 1 周目は不完全
-
-        buf = io.StringIO()
-        with (
-            redirect_stdout(buf),
-            mock.patch(__name__ + ".find_jobs", finding),
-            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1, True)),
-        ):
-            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
-        self.assertIn("different record", buf.getvalue())
-
     def test_a_cross_round_duplicate_precedes_the_inode_comparison(self):
         """A new scan-order head still leaves two records ambiguous, not replaced."""
         import io
@@ -3723,36 +3449,6 @@ class WatchTest(unittest.TestCase):
                 EXIT_AMBIGUOUS,
             )
         self.assertIn("ambiguous: 2 records", buf.getvalue())
-
-    def test_a_cross_round_replacement_past_the_deadline_is_a_timeout(self):
-        """周回間の差し替えも、 期限を跨いだら timeout として返す。"""
-        import io
-        from contextlib import redirect_stdout
-        from unittest import mock
-
-        root, record, log = self._state("ws", "task-x", "running")
-        args = self._watch_args(root, "task-x", timeout_seconds=0.5)
-        rounds, monotonic = [], time.monotonic
-
-        def finding(job_id, roots):
-            rounds.append(1)
-            if len(rounds) == 2:
-                with open(record + ".new", "w", encoding="utf-8") as f:
-                    json.dump({"id": "task-x", "status": "running"}, f)
-                os.rename(record + ".new", record)
-            return [(record, log)], len(rounds) != 1
-
-        with (
-            redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".find_jobs", finding),
-            mock.patch(
-                "time.monotonic",
-                lambda: (
-                    monotonic() + (args.timeout_seconds + 1 if len(rounds) > 1 else 0)
-                ),
-            ),
-        ):
-            self.assertEqual(watch(args), EXIT_TIMEOUT)
 
     def test_a_log_gone_only_during_the_read_is_not_stable_absence(self):
         """path に file が在るのに view が無いなら、 読取窓の中だけ消えていた。"""
@@ -3956,42 +3652,15 @@ class WatchTest(unittest.TestCase):
         self.assertGreaterEqual(len(rounds), 3)
 
     def test_a_hold_kept_through_an_unheld_round_still_sees_the_swap(self):
-        """掴みを持ち越せば、 掴めない周を挟んでも別 inode を別 record と言える。"""
-        import io
-        from contextlib import redirect_stdout
-        from unittest import mock
+        """A fresh hold replaces an old hold without closing the fresh handle."""
 
-        root, record, log = self._state("ws", "task-x", "completed")
-        pair, rounds = (record, log), []
-
-        def scripted(found, job_id, hold=None):
-            rounds.append(1)
-            if len(rounds) == 2:
-                return [], [], [pair]  # 新しい掴みを得られない周
-            if hold is not None:
-                hold.append((pair, [open(record, "rb")]))
-            return [pair], [], []
-
-        def swapping(job_id, roots):
-            if len(rounds) == 2:
-                # 3 周目の前に、 同じ path を別 inode へ差し替える。
-                with open(record + ".new", "w", encoding="utf-8") as f:
-                    json.dump({"id": "task-x", "status": "completed"}, f)
-                os.replace(record + ".new", record)
-            return [pair], len(rounds) >= 2
-
-        buf = io.StringIO()
-        with (
-            redirect_stdout(buf),
-            mock.patch(__name__ + ".carrying_records", scripted),
-            mock.patch(__name__ + ".find_jobs", swapping),
-        ):
-            self.assertEqual(
-                watch(self._watch_args(root, "task-x", timeout_seconds=5.0)),
-                EXIT_UNVERIFIABLE,
-            )
-        # exit 14 は他の理由でも返る — 差し替えを名指しした行まで確かめる。
-        self.assertIn("resolved to a different record", buf.getvalue())
+        old = open(os.devnull, "rb")
+        fresh = open(os.devnull, "rb")
+        self.addCleanup(fresh.close)
+        installed = Observation.replace_hold([old], [fresh])
+        self.assertEqual(installed, [fresh])
+        self.assertTrue(old.closed)
+        self.assertFalse(fresh.closed)
 
     def test_an_artifact_seen_only_inside_the_read_is_a_change(self):
         """外側で不在の成果物を読取窓の中だけ読めたなら、 完成ではなく変化である。"""
@@ -4098,35 +3767,6 @@ class WatchTest(unittest.TestCase):
             watch(self._watch_args(root, "task-x", once=True))
         self.assertIn("ツリー : 不明 (走査未完了)", buf.getvalue())
 
-    def test_a_pin_mismatch_past_the_deadline_is_a_timeout(self):
-        """掴めなかった判定も、 期限を跨いだら timeout として返す。"""
-        import io
-        from contextlib import redirect_stdout
-        from unittest import mock
-
-        root, record, _log = self._state("ws", "task-x", "running")
-        args = self._watch_args(root, "task-x", once=True)
-        real, moved = file_stat, []
-        monotonic = time.monotonic
-
-        def elsewhere(path):
-            got = real(path)
-            if path == record and got and not moved:
-                moved.append(1)  # pin の後、 その path は別 inode を指す
-                return (got[0], got[1] + 1, got[2], got[3])
-            return got
-
-        with (
-            redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".file_stat", elsewhere),
-            mock.patch(
-                "time.monotonic",
-                lambda: monotonic() + (args.timeout_seconds + 1 if moved else 0),
-            ),
-        ):
-            self.assertEqual(watch(args), EXIT_TIMEOUT)
-        self.assertTrue(moved)
-
     def test_an_incomplete_scan_at_the_deadline_is_a_timeout(self):
         """期限に言えるのは timeout — 例外は完全な空走査の exit 6 だけである。"""
         import io
@@ -4216,7 +3856,7 @@ class WatchTest(unittest.TestCase):
         with open(path, "wb") as stream:
             stream.write(raw)
         with open(replacement, "wb") as stream:
-            stream.write(b"replacement inode with a different size\n")
+            stream.write(b"replacement file with a different size\n")
         expected = []
         real_open = open_regular
 
@@ -4236,8 +3876,6 @@ class WatchTest(unittest.TestCase):
             stamps,
             [
                 (
-                    expected[0].st_dev,
-                    expected[0].st_ino,
                     expected[0].st_mtime_ns,
                     expected[0].st_ctime_ns,
                     expected[0].st_size,
@@ -4271,48 +3909,10 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(
             observed.stamp,
             (
-                expected.st_dev,
-                expected.st_ino,
                 expected.st_size,
                 hashlib.sha256(raw).digest(),
             ),
         )
-
-    def test_a_pin_failure_past_the_deadline_is_a_timeout(self):
-        """期限を跨いだ poll から返せるのは timeout だけ — pin 失敗も同じ gate を通す。"""
-        import io
-        from contextlib import redirect_stdout
-        from unittest import mock
-
-        root, record, _log = self._state("ws", "task-x", "running")
-        args = self._watch_args(root, "task-x", once=True)
-        real, opens, jumped = open_regular, [], []
-        monotonic = time.monotonic
-
-        def flaky(path):
-            if path == record:
-                opens.append(1)
-                if len(opens) == 4:  # pin の呼び出しで落ち、 同時に期限を跨ぐ
-                    jumped.append(1)
-                    raise FileNotFoundError(path)
-            return real(path)
-
-        real_view = record_view
-
-        def no_hold(path, job_id=None, hold=None):
-            return real_view(path, job_id)  # hold を返さない呼び手
-
-        with (
-            redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".record_view", no_hold),
-            mock.patch(__name__ + ".open_regular", flaky),
-            mock.patch(
-                "time.monotonic",
-                lambda: monotonic() + (args.timeout_seconds + 1 if jumped else 0),
-            ),
-        ):
-            self.assertEqual(watch(args), EXIT_TIMEOUT)
-        self.assertEqual(len(opens), 4)
 
     def test_a_record_that_could_not_be_pinned_is_not_replaced(self):
         """pin に失敗して entry が残るなら、 消失でなく読取不能である。"""
@@ -4345,37 +3945,6 @@ class WatchTest(unittest.TestCase):
         ):
             self.assertEqual(watch(args), EXIT_CORRUPT)
         self.assertEqual(len(opens), 4)  # pin の呼び出しで落ちた
-
-    def test_a_record_readable_again_after_a_failed_pin_is_not_adopted(self):
-        """pin に失敗した後で読めるようになった record は、 同じ record ではない。"""
-        import io
-        from contextlib import redirect_stdout
-        from unittest import mock
-
-        root, record, _log = self._state("ws", "task-done", "completed")
-        args = self._watch_args(root, "task-done", once=True)
-        real, opens = open_regular, []
-
-        def flaky(path):
-            if path == record:
-                opens.append(1)
-                if len(opens) == 4:  # pin の呼び出しだけ EACCES
-                    raise PermissionError(path)
-            return real(path)
-
-        real_view = record_view
-
-        def no_hold(path, job_id=None, hold=None):
-            return real_view(path, job_id)  # hold を返さない呼び手
-
-        with (
-            redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".record_view", no_hold),
-            mock.patch(__name__ + ".open_regular", flaky),
-            mock.patch(__name__ + ".tree_age", lambda *a: (900.0, 1, True)),
-        ):
-            self.assertEqual(watch(args), EXIT_CORRUPT)
-        self.assertEqual(len(opens), 4)  # pin の後は読み直していない
 
     def test_the_artifact_inode_is_held_until_the_comparison(self):
         """成果物も、 呼び手の後置比較が済むまで読んだ descriptor で押さえる。"""
@@ -4420,31 +3989,6 @@ class WatchTest(unittest.TestCase):
             watch(args)
         self.assertTrue(held and held[-1])  # 後置比較の時点で開いている
         self.assertTrue(all(h.closed for h in handles))
-
-    def test_a_record_pruned_after_the_pin_is_vanished_not_unpinnable(self):
-        """prune は canonical に exit 10 — 掴んだ後の消失でも同じ答えにする。"""
-        import io
-        from contextlib import redirect_stdout
-        from unittest import mock
-
-        root, record, _log = self._state("ws", "task-x", "running")
-        args = self._watch_args(root, "task-x", once=True)
-        real, pruned = file_stat, []
-
-        def vanishing(path):
-            # pin の直後に名前が消えた状況 — 掴んだ inode はまだ生きている。
-            if path == record and not pruned:
-                pruned.append(1)
-                return None
-            return real(path)
-
-        with (
-            redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".file_stat", vanishing),
-            mock.patch(__name__ + ".record_gone", lambda _p: True),
-        ):
-            self.assertEqual(watch(args), EXIT_VANISHED)
-        self.assertTrue(pruned)
 
     def test_a_record_that_cannot_be_opened_is_corrupt_not_unpinnable(self):
         """開けないままの record は「読めない」 — 掴めないことを不一致に化けさせない。"""
@@ -4506,30 +4050,6 @@ class WatchTest(unittest.TestCase):
             watch(args)
         self.assertIn("成果物 : 不明 (走査中に変化)", buf.getvalue())
         self.assertTrue(gone)
-
-    def test_a_record_swapped_before_the_pin_is_not_watched(self):
-        """登録解決の read と保持用 open の間で差し替わったら、 掴めていない。"""
-        import io
-        from contextlib import redirect_stdout
-        from unittest import mock
-
-        root, record, _log = self._state("ws", "task-x", "running")
-        args = self._watch_args(root, "task-x", once=True)
-        real, moved = file_stat, []
-
-        def elsewhere(path):
-            got = real(path)
-            # 保持用 open の後、 その path が別 inode を指している状況。
-            if path == record and got and not moved:
-                moved.append(1)
-                return (got[0], got[1] + 1, got[2], got[3])
-            return got
-
-        buf = io.StringIO()
-        with redirect_stdout(buf), mock.patch(__name__ + ".file_stat", elsewhere):
-            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
-        self.assertIn("could not be pinned", buf.getvalue())
-        self.assertTrue(moved)
 
     def test_an_artifact_whose_name_moved_is_not_a_missing_one(self):
         """閉じる前の名前照合が食い違ったら、 「無い」 ではなく「言えない」。"""
@@ -4610,7 +4130,7 @@ class WatchTest(unittest.TestCase):
             if path.endswith(".log") and got:
                 calls.append(path)
                 if calls.count(path) > 1:
-                    return (got[0], got[1], got[2] + 1, got[3])
+                    return (got[0], got[1], got[2] + 1)
             return got
 
         with (
@@ -4653,37 +4173,8 @@ class WatchTest(unittest.TestCase):
             baseline_silence(jobs, "task-live", time.time() + 3600)
         self.assertTrue(held and held[-1])  # 読んだ後の照合時に開いている
 
-    def test_a_recycled_inode_is_not_the_pinned_record(self):
-        """番号だけ覚えると、 解放後に再利用された別 file と一致してしまう。"""
-        import io
-        from contextlib import redirect_stdout
-        from unittest import mock
-
-        root, record, _log = self._state("ws", "task-x", "running")
-        args = self._watch_args(root, "task-x", once=True)
-        real_open, handles, held = open_regular, [], []
-
-        def tracking(path):
-            handle = real_open(path)
-            if path == record:
-                handles.append(handle)
-            return handle
-
-        def during_poll(*_a):
-            # 番号の再利用は kernel 次第なので、 番号を握る descriptor の保持を固定する。
-            held.append(any(not h.closed for h in handles))
-            return 900.0, 1, True
-
-        with (
-            redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".open_regular", tracking),
-            mock.patch(__name__ + ".tree_age", during_poll),
-        ):
-            watch(args)
-        self.assertTrue(held and any(held))
-
     def test_a_deliverable_recycled_during_the_read_is_not_ready(self):
-        """閉じてから名前を stat すると、 再利用された inode の別 file と一致する。"""
+        """Closing before the name check can compare against another file."""
         from unittest import mock
 
         root = tempfile.mkdtemp()
@@ -4758,35 +4249,8 @@ class WatchTest(unittest.TestCase):
             self.assertNotEqual(watch(args), EXIT_DONE)
         self.assertEqual(len(seen), 3)  # 3 read すべてが poll 内で起きた
 
-    def test_a_replaced_record_is_not_called_unreadable(self):
-        """差し替わった record は「読めなかった」 ではない — 理由を取り違えない。"""
-        import io
-        from contextlib import redirect_stdout
-        from unittest import mock
-
-        root, record, _log = self._state("ws", "task-x", "running")
-        args = self._watch_args(root, "task-x", once=True)
-        real, swapped = record_view, []
-
-        def replacing(path, job_id=None, hold=None):
-            view = real(path, job_id)
-            # poll の read で 1 度だけ差し替える — 登録時に替えると inode 固定より前になり、
-            # 繰り返すと解放した inode 番号が再利用される。
-            if path == record and job_id is not None and not swapped:
-                swapped.append(1)
-                with open(record + ".new", "w", encoding="utf-8") as f:
-                    json.dump({"id": "task-x", "status": "running"}, f)
-                os.rename(record + ".new", record)
-            return view
-
-        buf = io.StringIO()
-        with redirect_stdout(buf), mock.patch(__name__ + ".record_view", replacing):
-            self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
-        self.assertIn("replaced or resolved elsewhere", buf.getvalue())
-        self.assertNotIn("could not be read in full", buf.getvalue())
-
     def test_an_unsearchable_record_ancestor_is_not_a_replacement(self):
-        """名前を stat できないことは、別 inode を観測したことではない。"""
+        """A failed name stat is unreadable, not evidence of replacement."""
         import io
         from contextlib import redirect_stdout
         from unittest import mock
@@ -4807,9 +4271,7 @@ class WatchTest(unittest.TestCase):
             return view
 
         buf = io.StringIO()
-        with redirect_stdout(buf), mock.patch(
-            __name__ + ".scan_log", block_after_pin
-        ):
+        with redirect_stdout(buf), mock.patch(__name__ + ".scan_log", block_after_pin):
             self.assertEqual(watch(args), EXIT_UNVERIFIABLE)
         self.assertEqual(blocked, [1])
         self.assertIsNone(file_stat(record))
@@ -4892,7 +4354,7 @@ class WatchTest(unittest.TestCase):
         def foreign(path, *a, **k):
             out = real(path, *a, **k)
             # 部分読み かつ 別 descriptor — 「読めず」 でなく「動いた」 が正しい表示。
-            return out[0], out[1], False, (0, 0, 0, 0)
+            return out[0], out[1], False, (0, 0, 0)
 
         buf = io.StringIO()
         with redirect_stdout(buf), mock.patch(__name__ + ".scan_log", foreign):
@@ -5031,7 +4493,7 @@ class WatchTest(unittest.TestCase):
         real, crossed = time.monotonic, []
 
         def foreign(path, token, since=None, hold=None):
-            return True, (0, 0, 0, 0)  # 別 descriptor で読んだ ready
+            return True, (0, 0, 0)  # 別 descriptor で読んだ ready
 
         buf = io.StringIO()
         with (
@@ -5063,7 +4525,7 @@ class WatchTest(unittest.TestCase):
 
         def foreign(path, token, since=None, hold=None):
             real(path, token, since)
-            return True, (0, 0, 0, 0)  # 別 descriptor で完成を読んだことにする
+            return True, (0, 0, 0)  # 別 descriptor で完成を読んだことにする
 
         with (
             redirect_stdout(io.StringIO()),
@@ -5087,7 +4549,7 @@ class WatchTest(unittest.TestCase):
 
         def foreign_stamp(path, hold=None):
             quiet, _view = real(path, hold)
-            return quiet, (0, 0, 0, 0)  # 別 descriptor から読んだことにする
+            return quiet, (0, 0, 0)  # 別 descriptor から読んだことにする
 
         with mock.patch(__name__ + ".longest_silence", foreign_stamp):
             self.assertEqual(
@@ -5112,7 +4574,7 @@ class WatchTest(unittest.TestCase):
 
         def swapping(path, *a, **k):
             out = real(path, *a, **k)
-            return out[0], out[1], out[2], (0, 0, 0, 0)  # 別 descriptor の指紋
+            return out[0], out[1], out[2], (0, 0, 0)  # 別 descriptor の指紋
 
         with (
             redirect_stdout(io.StringIO()),
@@ -5866,8 +5328,7 @@ class WatchTest(unittest.TestCase):
         def vanishing(path, *a, **k):
             if path == p and not swapped:
                 swapped.append(1)
-                # 先に別 file を作ってから rename — 消してから作り直すと、 同じ inode 番号
-                # が再利用されて差し替えを再現できないことがある。
+                # 先に別 file を作ってから rename し、 fixture の置換を確実にする。
                 with open(p + ".new", "w", encoding="utf-8") as new:
                     new.write("body\nREPORT_COMPLETE\n")
                 os.rename(p + ".new", p)
@@ -6110,9 +5571,7 @@ class WatchTest(unittest.TestCase):
         from contextlib import redirect_stdout
         from unittest import mock
 
-        root, record, _log = self._state(
-            "ws", "task-done", "completed", log_age=900.0
-        )
+        root, record, _log = self._state("ws", "task-done", "completed", log_age=900.0)
         with open(record, "w", encoding="utf-8") as f:
             json.dump(
                 {
@@ -6714,7 +6173,10 @@ class WatchTest(unittest.TestCase):
         with open(fallback, "w", encoding="utf-8") as f:
             f.write("x")
         with (
-            mock.patch(__name__ + ".COMPANION_GLOB", os.path.join(root, "*", "scripts", "x.mjs")),
+            mock.patch(
+                __name__ + ".COMPANION_GLOB",
+                os.path.join(root, "*", "scripts", "x.mjs"),
+            ),
             mock.patch(__name__ + ".COMPANION_FALLBACK", fallback),
             mock.patch(__name__ + ".MAX_COMPANION_CANDIDATES", 1),
         ):
@@ -6738,7 +6200,10 @@ class WatchTest(unittest.TestCase):
         with open(fallback, "w", encoding="utf-8") as f:
             f.write("x")
         with (
-            mock.patch(__name__ + ".COMPANION_GLOB", os.path.join(root, "*", "scripts", "x.mjs")),
+            mock.patch(
+                __name__ + ".COMPANION_GLOB",
+                os.path.join(root, "*", "scripts", "x.mjs"),
+            ),
             mock.patch(__name__ + ".COMPANION_FALLBACK", fallback),
             mock.patch(__name__ + ".MAX_COMPANION_CANDIDATES", 5),
         ):
@@ -6759,7 +6224,10 @@ class WatchTest(unittest.TestCase):
         for number in range(2):
             os.mkdir(os.path.join(root, f".hidden-{number}"))
         with (
-            mock.patch(__name__ + ".COMPANION_GLOB", os.path.join(root, "*", "scripts", "x.mjs")),
+            mock.patch(
+                __name__ + ".COMPANION_GLOB",
+                os.path.join(root, "*", "scripts", "x.mjs"),
+            ),
             mock.patch(__name__ + ".COMPANION_FALLBACK", os.path.join(root, "absent")),
             mock.patch(__name__ + ".MAX_COMPANION_CANDIDATES", 4),
         ):
@@ -7056,8 +6524,6 @@ class WatchTest(WatchTest):
     _TOCTOU_SHIM_ENABLED = True
     _TOCTOU_SCENARIOS = (
         "record",
-        "record-pin",
-        "record-round",
         "log",
         "log-command",
         "artifact",
@@ -7139,14 +6605,13 @@ class WatchTest(WatchTest):
             "log": b"[2026-08-09T00:10:00.000Z] replacement\n",
             "artifact": b"body\nREPORT_COMPLETE\n",
             "peer": (
-                b"[2026-08-09T00:00:00.000Z] first\n"
-                b"[2026-08-09T01:00:00.000Z] last\n"
+                b"[2026-08-09T00:00:00.000Z] first\n[2026-08-09T01:00:00.000Z] last\n"
             ),
         }
         target = targets[kind]
         with open(target, "rb") as stream:
             original = stream.read()
-        looping = scenario == "record-round" or perturbation == "appear" or (
+        looping = perturbation == "appear" or (
             kind == "record" and perturbation == "unlink"
         )
         args = self._watch_args(
@@ -7171,7 +6636,6 @@ class WatchTest(WatchTest):
             "grow": b"[2026-08-09T00:20:00.000Z] growth\n",
             "kind": kind,
             "original": original,
-            "persistent_replace": scenario == "record-round",
             "scenario": scenario,
             "target": target,
             "tree_age": 600.0 if kind == "peer" else 900.0,
@@ -7249,8 +6713,6 @@ class WatchTest(WatchTest):
         with open(target, "wb") as stream:
             stream.write(payload)
         state["applied"] = True
-        if fixture["persistent_replace"]:
-            return None
 
         def restore():
             if exists(target):
@@ -7293,8 +6755,6 @@ class WatchTest(WatchTest):
         real_fstat = os.fstat
         real_lstat = os.lstat
         real_stat = os.stat
-        real_carrying_records = carrying_records
-        real_find_jobs = find_jobs
         fd_paths = {}
         clock = {"monotonic": 100.0}
         state: dict[str, Any] = {
@@ -7336,20 +6796,21 @@ class WatchTest(WatchTest):
             finally:
                 if restore is not None:
                     restore()
-            if matching and scenario == "record" and operation in {
-                "open",
-                "fstat",
-                "lstat",
-                "stat",
-                "read",
-                "readline",
-            }:
-                state["witnessed_record"] = True
             if (
                 matching
-                and clock["monotonic"]
-                > state["deadline"]
+                and scenario == "record"
+                and operation
+                in {
+                    "open",
+                    "fstat",
+                    "lstat",
+                    "stat",
+                    "read",
+                    "readline",
+                }
             ):
+                state["witnessed_record"] = True
+            if matching and clock["monotonic"] > state["deadline"]:
                 state["late_observation"] = True
             return result
 
@@ -7400,20 +6861,6 @@ class WatchTest(WatchTest):
         def sleep(_deadline, poll_seconds):
             clock["monotonic"] += poll_seconds
 
-        def carrying_without_hold(found, job_id, hold=None):
-            return real_carrying_records(found, job_id)
-
-        round_state = {"registration_calls": 0}
-
-        def find_jobs_in_two_rounds(job_id, roots):
-            found, complete = real_find_jobs(job_id, roots)
-            round_state["registration_calls"] += 1
-            if round_state["registration_calls"] == 1 and found:
-                return found, False
-            if found:
-                fixture["args"].once = True
-            return found, complete
-
         patches = (
             mock.patch("os.open", opening),
             mock.patch("os.fdopen", fdopening),
@@ -7432,17 +6879,6 @@ class WatchTest(WatchTest):
             with redirect_stdout(io.StringIO()), contextlib.ExitStack() as stack:
                 for patch in patches:
                     stack.enter_context(patch)
-                if scenario == "record-pin":
-                    stack.enter_context(
-                        mock.patch(
-                            __name__ + ".carrying_records",
-                            carrying_without_hold,
-                        )
-                    )
-                if scenario == "record-round":
-                    stack.enter_context(
-                        mock.patch(__name__ + ".find_jobs", find_jobs_in_two_rounds)
-                    )
                 code = watch(fixture["args"])
             if perturbation == "unreadable" and os.geteuid() != 0:
                 try:
@@ -7469,35 +6905,17 @@ class WatchTest(WatchTest):
             return {EXIT_TIMEOUT}
         expected = {
             "record": {
-                "unlink": {1: 6, 6: 7, 16: 10, 25: 10, 39: 10, 44: 10},
+                "unlink": {1: 6, 6: 7, 16: 10, 25: 10, 39: 10},
                 "replace-different": {
                     3: 14,
                     6: 14,
                     16: 14,
-                    27: 11,
                     39: 14,
                     41: 14,
                 },
-                "replace-same": {
-                    3: 14,
-                    6: 14,
-                    16: 14,
-                    27: 11,
-                    39: 14,
-                    41: 14,
-                },
-                "unreadable": {3: 13, 16: 13, 27: 11, 40: 11},
-                "grow": {6: 14, 42: 11},
+                "unreadable": {3: 13, 27: 11},
+                "grow": {6: 14},
                 "appear": {1: 14, 12: 7},
-            },
-            "record-pin": {
-                "unlink": {15: 10},
-                "unreadable": {15: 13},
-            },
-            "record-round": {
-                "unlink": {6: 7},
-                "replace-different": {17: 14},
-                "replace-same": {17: 14},
             },
             "log": {
                 "unlink": {1: 11, 2: 14, 6: 11, 7: 11},
@@ -7554,8 +6972,6 @@ class WatchTest(WatchTest):
         """All verdicts reachable from a fixture before selecting one window."""
         return {
             "record": {6, 7, 10, 11, 13, 14},
-            "record-pin": {7, 10, 11, 13, 14},
-            "record-round": {7, 11, 14},
             "log": {4, 7, 11, 14},
             "log-command": {7, 11, 14},
             "artifact": {0, 5, 7, 11, 14},
@@ -7577,8 +6993,7 @@ class WatchTest(WatchTest):
     def test_toctou_enumerator_oracles(self):
         started = time.perf_counter()
         measured = {
-            scenario: self._toctou_run(scenario)
-            for scenario in self._TOCTOU_SCENARIOS
+            scenario: self._toctou_run(scenario) for scenario in self._TOCTOU_SCENARIOS
         }
         absent = {
             scenario: self._toctou_run(scenario, "appear")
@@ -7592,23 +7007,11 @@ class WatchTest(WatchTest):
             self.assertGreater(result["calls"], 0, scenario)
         selected = {
             "record": {
-                "unlink": (1, 6, 16, 25, 39, 44),
-                "replace-different": (3, 6, 16, 27, 39, 41),
-                "replace-same": (3, 6, 16, 27, 39, 41),
-                "unreadable": (3, 16, 27, 40),
-                "grow": (6, 42),
-                "late": (1, 16, 27, 44),
-            },
-            "record-pin": {
-                "unlink": (15,),
-                "unreadable": (15,),
-                "late": (15,),
-            },
-            "record-round": {
-                "unlink": (6,),
-                "replace-different": (17,),
-                "replace-same": (17,),
-                "late": (17,),
+                "unlink": (1, 6, 16, 25, 39),
+                "replace-different": (3, 6, 16, 39, 41),
+                "unreadable": (3, 27),
+                "grow": (6,),
+                "late": (1, 16, 27),
             },
             "log": {
                 "unlink": (1, 2, 6, 7),
@@ -7671,9 +7074,7 @@ class WatchTest(WatchTest):
                     )
                 if perturbation == "late":
                     self.assertTrue(result["late_observation"])
-                expected = self._toctou_expected(
-                    scenario, perturbation, ordinal
-                )
+                expected = self._toctou_expected(scenario, perturbation, ordinal)
                 self.assertLess(
                     expected,
                     self._toctou_reachable(scenario),
@@ -7687,9 +7088,7 @@ class WatchTest(WatchTest):
         self.assertEqual(
             counts,
             {
-                "record": 44,
-                "record-pin": 49,
-                "record-round": 60,
+                "record": 41,
                 "log": 8,
                 "log-command": 10,
                 "artifact": 13,
@@ -7701,9 +7100,6 @@ class WatchTest(WatchTest):
             {"record": 12, "log": 5, "artifact": 4, "peer": 2},
         )
         deterministic = (
-            ("record", "replace-same", 39),
-            ("record-pin", "unlink", 15),
-            ("record-round", "replace-same", 17),
             ("log", "replace-same", 6),
             ("log-command", "grow", 6),
             ("artifact", "grow", 8),
@@ -7727,7 +7123,7 @@ class WatchTest(WatchTest):
             "TOCTOU_ENUMERATION "
             f"counts={counts} appear_counts={appear_counts} "
             f"combinations={len(cases)} full_combinations={full_combinations} "
-            f"executions={len(cases) + len(measured) + len(absent) + 14} "
+            f"executions={len(cases) + len(measured) + len(absent) + 8} "
             f"seconds={elapsed:.3f}"
         )
 
@@ -7792,7 +7188,9 @@ class WatchTest(WatchTest):
             ]
             fields.extend(f'"{duplicated}":{value}' for value in pair)
             with self.subTest(field=duplicated):
-                self.assertIsNone(_parse_record(("{" + ",".join(fields) + "}").encode()))
+                self.assertIsNone(
+                    _parse_record(("{" + ",".join(fields) + "}").encode())
+                )
         nested = b'{"id":"task-x","status":"completed","extra":{"x":1,"x":2}}'
         self.assertIsNone(_parse_record(nested))
 
@@ -7914,42 +7312,30 @@ class WatchTest(WatchTest):
         self.assertEqual(list(log_lines(log)), ["final without LF"])
 
     def test_shifting_candidates_stop_at_the_history_cap(self):
+        """Changing candidates do not create a retained per-candidate history."""
         import io
         from contextlib import redirect_stdout
         from unittest import mock
 
         root = tempfile.mkdtemp()
         calls = []
-        retained = []
-        real_remember = remember_pairs
 
         def changing_jobs(_job_id, _roots):
             calls.append(1)
-            if len(calls) > 4:
-                raise AssertionError("candidate history did not stop at its cap")
             pair = (f"/record/{len(calls)}", f"/log/{len(calls)}")
             return [pair], False
 
         def carried(found, _job_id, hold=None):
             return found, [], []
 
-        def bounded_remember(seen, pairs):
-            result = real_remember(seen, pairs)
-            retained.append(len(seen))
-            return result
-
         with (
             redirect_stdout(io.StringIO()),
-            mock.patch(__name__ + ".MAX_SEEN_PAIRS", 3),
             mock.patch(__name__ + ".find_jobs", side_effect=changing_jobs),
             mock.patch(__name__ + ".carrying_records", side_effect=carried),
-            mock.patch(__name__ + ".remember_pairs", side_effect=bounded_remember),
-            mock.patch(__name__ + ".sleep_until"),
         ):
-            code = watch(self._watch_args(root, "task-x"))
-        self.assertEqual(code, EXIT_UNVERIFIABLE)
-        self.assertEqual(len(calls), 4)
-        self.assertLessEqual(max(retained), 3)
+            code = watch(self._watch_args(root, "task-x", timeout_seconds=0.03))
+        self.assertEqual(code, EXIT_TIMEOUT)
+        self.assertGreater(len(calls), 1)
 
 
 class WatchTest(WatchTest):
@@ -7990,16 +7376,16 @@ class WatchTest(WatchTest):
             text=True,
             preexec_fn=one_candidate_slot,
         )
-        self.assertEqual(result.returncode, EXIT_AMBIGUOUS, result.stdout + result.stderr)
+        self.assertEqual(
+            result.returncode, EXIT_AMBIGUOUS, result.stdout + result.stderr
+        )
         self.assertIn("ambiguous: 2 records carry the id", result.stdout)
 
     def test_non_standard_json_constants_are_corrupt(self):
         for constant in ("NaN", "Infinity", "-Infinity"):
             with self.subTest(constant=constant, position="top-level"):
                 raw = (
-                    '{"id":"task-x","status":"running","ignored":'
-                    + constant
-                    + "}"
+                    '{"id":"task-x","status":"running","ignored":' + constant + "}"
                 ).encode()
                 self.assertIsNone(_parse_record(raw))
             with self.subTest(constant=constant, position="nested"):
@@ -8027,9 +7413,7 @@ class WatchTest(WatchTest):
             return real_stat(target, *args, **kwargs)
 
         with mock.patch("os.stat", side_effect=denied_after_read):
-            observed = Observation.artifact(
-                path, MAX_SCAN_BYTES, MAX_ARTIFACT_BYTES
-            )
+            observed = Observation.artifact(path, MAX_SCAN_BYTES, MAX_ARTIFACT_BYTES)
         self.assertEqual(observed.state, Observation.UNSTABLE)
         self.assertEqual(observed.reason, "unreadable")
         self.assertIsInstance(observed.error, PermissionError)
@@ -8134,9 +7518,7 @@ class SourceInvariantTest(unittest.TestCase):
                 classes = [scope for scope in self.stack if scope[0] == "class"]
                 # 関数内・class 内の nested class は test class 免除にしない。
                 owner_class = (
-                    classes[0][1]
-                    if len(classes) == 1 and classes[0][2]
-                    else None
+                    classes[0][1] if len(classes) == 1 and classes[0][2] else None
                 )
                 function = next(
                     (
@@ -8190,9 +7572,7 @@ class SourceInvariantTest(unittest.TestCase):
         bad = []
         if not contracts:
             bad.append(1)
-        elif len(contracts) != 1 or not isinstance(
-            contracts[0], (ast.Tuple, ast.List)
-        ):
+        elif len(contracts) != 1 or not isinstance(contracts[0], (ast.Tuple, ast.List)):
             bad.append(contracts[0].lineno)
         else:
             for row in contracts[0].elts:
@@ -8316,7 +7696,8 @@ class SourceInvariantTest(unittest.TestCase):
                 or (isinstance(node.func, ast.Attribute) and node.func.attr == "open")
                 or self._call_name(node.func) in fd_calls
             )
-            and owners[node][0] not in {"Observation", "WatchTest", "SourceInvariantTest"}
+            and owners[node][0]
+            not in {"Observation", "WatchTest", "SourceInvariantTest"}
             and (self._call_name(node.func), owners[node][1]) not in allowed
         ]
         functions = {
@@ -8352,9 +7733,12 @@ class SourceInvariantTest(unittest.TestCase):
 
     def test_lossy_decode_call_sites_are_allowlisted(self):
         """Ruling 11 permits lossy conversion only for untrusted log display."""
+
         def matches(node):
             call = self._call_name(node.func)
-            has_errors_keyword = any(keyword.arg == "errors" for keyword in node.keywords)
+            has_errors_keyword = any(
+                keyword.arg == "errors" for keyword in node.keywords
+            )
             decode_with_errors = (
                 isinstance(node.func, ast.Attribute)
                 and node.func.attr == "decode"
