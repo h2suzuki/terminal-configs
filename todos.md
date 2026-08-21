@@ -304,6 +304,8 @@ Exit Criteria:
   (R81-2 low・在庫) 裁定 23 の担保名・source method 名に廃止済み pin/inode 語彙が残存 —
   裁定 63-4 の閉包を裁定 63 の担保欄だけに絞った部分実施が原因。処方 = 改称 + 未来形注記の
   閉じ。r81 報告 = `wt-ruling61/drafts/sentinel-r81-report.md`。
+  **決裁 2026-08-22: 縮小再入場** (ユーザー「いまは進みましょう」= 推奨案の採用) — R81 の
+  2 件だけの小 fix → 回帰 filter → 確認巡 1 回で収束を狙う。
   work file: `wt-ruling61/drafts/sentinel-r80-report.md` (codex 側) /
   `wt-ruling61/drafts/sentinel-r80-opus-review.md` (Opus 側・保存済み) /
   `wt-ruling61/drafts/sentinel-structural-order.md` (構造巡発注書) /
@@ -323,6 +325,27 @@ Work file: `docs/sentinel-convergence-log.md` 末尾「ここで停止」節 (�
 (charter 正本)、`docs/sentinel-rulings.md` (裁定 60 まで)、`last-session-handoff.md` の同名 section
 
 ## Medium
+
+### 改造時のバグ作り込みを減らす方策の検討
+
+起票: user 2026-08-22 (「まだ改造による作り込みが多すぎ。改造時にバグ作り込みを避ける方法に
+ついて、もっと考えてほしい。品質ゲートとしては機能できたと認識」)
+
+Goal: 品質ゲート (回帰 filter・全数列挙・lint) で「捕まえる」だけでなく、改造時の注入
+発生率そのものを下げる方策を、本日の実測 corpus から導出して方法論へ正本化する。
+
+Exit Criteria:
+
+- [ ] 本日の注入 corpus (fix round 4/4 注入・filter 捕獲 22 件・r81 の 2 件) を起源 class 別に
+  集計し、「gate で捕まえた」と「そもそも入らなかった」を分離した基礎表を作る
+- [ ] 発生率を下げる候補方策 (例: 変更粒度の縮小・対 site の同時変更を強制する発注書式・
+  実装前の contract 差分宣言・delta 専用の設計 review 等) を候補ごとに期待効果と実測根拠
+  つきで列挙し、ユーザーへ提案する
+- [ ] 採用された方策を方法論 doc / lint / 発注書 template へ正本化し、次の改造案件で
+  発生率を再実測する
+
+Work file: `docs/adversarial-review-methodology.md` §7.3 (現行の注入対策の正本)、
+`wt-ruling61/drafts/` と `wt-gates/drafts/` の回帰レビュー報告書群 (本日の注入 corpus)
 
 ### 方法論の実証: 小規模ツール新規作成で敵対レビューの収束を実測する
 
