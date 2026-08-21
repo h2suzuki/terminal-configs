@@ -13,6 +13,46 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 
 ## High
 
+### 敵対レビュー運用の強制機構 (gate 化)
+
+起票: user 2026-08-21 (「強制が必要な事項 2 つ」の列挙)
+
+Goal: 車輪の再発明・無検問 loop・判断待ちの Task 化漏れを、約束でなく決定的 gate で禁止する。
+
+Exit Criteria:
+
+- [ ] **review 運用の 4 gate を実装・smoke・deploy** — (a) 発注書 lint に「既製手段の棚卸し」節
+  必須化、(b) review 系 task 発注の経路 gate (既製 `adversarial-review` subcommand か棚卸し節
+  つき発注書以外は deny)、(c) **5 巡 circuit-breaker** (対象ごとの round 台帳 + 5 巡到達で
+  発注 deny・解除 = ユーザー承認の出口決定記録)、(d) review 発注書の `scope: diff|artifact`
+  宣言必須化 (artifact には正当化)
+- [ ] **判断待ちの Task 化を強制する hook family** — 最終 message に決裁質問 (org 規約の
+  ❓ marker) があるのに open Task が 0 件なら指摘する stop_checks family。blocking 化は
+  実 corpus での誤検知実測を経てから (測定なしの blocking regex 禁止の既存教訓に従う)。
+  併せて intent-without-task family の roster に提案宣言語 (「実装しますか」「採否」等) を追加
+- [ ] 各 gate の canonical (files/) と deploy 先の diff -q 一致 + 発火の live 観測
+
+Work file: 4 gate の設計は本 block と `last-session-handoff.md` 不要 (本 block で自己完結)。
+5 巡 breaker の思想は Medium「方法論の実証」block の教訓 (1)〜(6) を参照
+
+### 敵対レビュー方法論の改訂 (このセッションの調査の反映)
+
+起票: user 2026-08-21 (「やり方についての改善」の列挙)
+
+Goal: 本セッションで確定した教訓群を `docs/adversarial-review-methodology.md` へ反映し、
+5 巡以内で必ず意思決定に到達する round protocol を正本化する。
+
+Exit Criteria:
+
+- [ ] 教訓 (1)〜(6) (Medium「方法論の実証」block に記録済み: 停止規則 / fix 型制限 /
+  品質推定 / 計数と判定の分業 / 統計の適用領域 / round scope 分離) を doc へ反映
+- [ ] codex 意見書 (`drafts/quality-estimation-opinion-report.md` §5) の 5 巡 protocol と
+  突合し、入場条件・round 別の入力/出力/判定・「巡数を黙って延長しない」規律を正本化
+- [ ] **fix diff の実物精査** — 認定 era の埋め込み ~10 件を commit diff 水準で分析し、
+  「新しく仮定した次元」列挙表 (意見書 §4) の実効性を検証して fix 型制限の設計に反映
+
+Work file: `drafts/quality-estimation-opinion-report.md` (codex 第三者意見書)
+
 ### codex_task_sentinel: 敵対レビューの収束
 
 起票: user 2026-08-12 以前 (fable-5 が 2026-08-21 に r76 実態へ全面書き直し。旧記述は
@@ -34,12 +74,12 @@ Exit Criteria:
   新体制 2 巡で「過剰実装検出 (r76 初の削る fix)」と「人間 escalation (U1)」の両方が設計どおり発動
 - [x] deploy 一致 — 2026-08-21 実測 `diff -q /usr/local/bin/codex_task_sentinel
   files/codex_task_sentinel` IDENTICAL (325 selftests 版)
-- [ ] **ユーザー判断: 出口方式の選択** — (A) (a) 撤去後に r77 を時間箱つき (例: 上限 3 巡)
-  で続行し、箱内でゼロ未達なら (B) へ自動移行 / (B) 停止規則を severity-gate へ再々定義
-  (P0 級 U0 ゼロで認定・残余 U0 は台帳化して非 blocking) / (C) 現状 (r76 着地・deploy 一致)
-  で bounded-risk 凍結。データ: 認定 23 巡でゼロは r60 の 1 回のみ・巡あたり 1〜4 件で
-  横ばい (ゼロへ漸近する形ではない)、charter 後も r75=2・r76=1。「あと 1 巡」は counter の
-  形式値であって予測ではない (2026-08-21 ユーザー指摘で再分析)
+- [ ] **出口の実行 — 改訂方法論を適用して収束させる** (方向は 2026-08-21 ユーザー列挙
+  「sentinel に実際に適用して収束させる」で確定。残る選択 = 確認巡の時間箱設定):
+  改訂方法論 (diff round・verdict routing・severity gate) を適用した確認巡を時間箱つきで
+  実施し、認定または bounded-risk 受入のどちらかへ**必ず**意思決定して凍結する。
+  データ: 認定 23 巡でゼロは r60 の 1 回のみ・巡あたり 1〜4 件で横ばい、charter 後も
+  r75=2・r76=1。「あと 1 巡」は counter の形式値であって予測ではない (2026-08-21 再分析)
 - [ ] **ユーザー判断: U1 決裁「(a) 撤去」の再確認** — 「別 inode 差し替え防御は過剰実装か」に
   2026-08-13 21:21「(a) 撤去 + 裁定 38/39/44/45 改廃」と決裁済みだが、直後の session 途絶で
   未実装・文書未反映 (唯一の一次記録 = transcript 68ddd1bf line 8749。当時の発注側推奨は
