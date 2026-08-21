@@ -105,8 +105,14 @@ Exit Criteria:
   設けるか — 是正 round で判断
 - [ ] **検問実装への挑戦レビュー (発注書方式・2026-08-22 ユーザー承認)** — 発注書
   `wt-gates/drafts/gates-challenge-review-order.md` (lint rc=0)・対象 = 検問 line 全 diff
-  (3 file・+2210/−173)・sol xhigh 走行中。報告書 `wt-gates/drafts/gates-challenge-report.md`
-  の verdict を受けて処置を決める
+  (3 file・+2210/−173)。**verdict 受領 2026-08-22 = needs-attention・U0 8 / U1 2 / U2 0**
+  (報告書 `wt-gates/drafts/gates-challenge-report.md`・検証 190+37 test 全緑を含む)。
+  high 3 件: U0-1 warning が active retry で再配達され続け実質 loop (live の
+  警告なぎ倒し現象と一致) / U0-2 fix round 番号が directory 全体 namespace で独立案件と
+  衝突 / U0-3 shell redirect・`--` 境界の argv 解釈が gate と companion で不一致。
+  U0-5 (companion 名の文字列言及まで deny) と U0-7 (checkpoint の cwd scope) は
+  live finding 1・2 と同根で独立収束。U1 2 件 (route provenance の信頼境界 /
+  checkpoint の対象言語) は人間裁定待ち。**処置の決定はユーザー判断待ち**
 - [ ] **(g) codex の直接起動を禁止する — 強固に** (2026-08-21 ユーザー決裁 + 同日「強固に
   おこなうべき」で強化) — codex_delegation_gate を「注意喚起」から「deny」へ:
   main agent の Bash からの companion 起動 (全 subcommand・`task-worker` 含む) は**一律 deny**。
