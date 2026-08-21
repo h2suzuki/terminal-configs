@@ -119,6 +119,7 @@ Combined Stop hook for org-managed Claude Code:
   implementation-checkpoint (warning-only, exit 0):
     session 内の repo source への Edit / Write / MultiEdit の純増行を概算し、
     50 行超かつ同 session の codex task job が無ければ委譲判定の言語化を促す。
+    transcript 読取は末尾 2MB で打ち切り、超過時の warn に undercount を明記する。
 
   decision-question-task / decision-record (warning-only, exit 0):
     質問終端時の open decision 型 task の欠落と、短文決裁受領時の
@@ -127,6 +128,10 @@ Combined Stop hook for org-managed Claude Code:
   communication-final-line / communication-self-number (warning-only, exit 0):
     最終非空行が絵文字始まりまたは質問終端でない場合と、散文の
     自己採番参照を検知する。code block・inline code・Markdown 引用は除外する。
+
+  上記 4 family は family ごと 1 行・合計 4 行以内にし、stderr と
+  worktree-cleanup と同じ additionalContext / systemMessage の両方へ出す。
+  stop_hook_active と既存 .wt latch で同一 turn の再出力を抑止する。
 
   turn-marker (bonus, exit 0 only):
     enforcement が pass した turn 終了時のみ、 per-turn marker (時刻 / Turn #N / context
@@ -1273,7 +1278,10 @@ def _tool_added_source_lines(block: dict, cwd: str) -> int:
 
 
 def _implementation_checkpoint_warning(
-    entries: list[dict], session_id: str | None, cwd: str | None
+    entries: list[dict],
+    session_id: str | None,
+    cwd: str | None,
+    undercount: bool = False,
 ) -> str | None:
     if not session_id or not cwd:
         return None
@@ -1284,11 +1292,14 @@ def _implementation_checkpoint_warning(
         return None
     if any(record.get("kind") == "task" for record in _codex_job_records(session_id)):
         return None
-    return (
+    warning = (
         f"implementation-checkpoint: 直接実装が {added} 行です。"
         "codex task への委譲有無を判定した根拠を verbalize し、"
         "必要ならここで委譲してください。"
     )
+    if undercount:
+        warning += " 末尾 2MB よりそれ以前の行数は数えていません (undercount)。"
+    return warning
 
 
 def _open_task_records(session_id: str | None, cwd: str | None) -> list[dict] | None:
@@ -1380,6 +1391,8 @@ def _new_warning_families(
     final_text: str,
     payload: dict,
     assistant_text: str | None = None,
+    checkpoint_entries: list[dict] | None = None,
+    checkpoint_undercount: bool = False,
 ) -> list[str]:
     warnings: list[str] = []
     session_id = payload.get("session_id")
@@ -1387,7 +1400,12 @@ def _new_warning_families(
     cwd = payload.get("cwd")
     cwd = cwd if isinstance(cwd, str) else None
     try:
-        warning = _implementation_checkpoint_warning(entries, session_id, cwd)
+        warning = _implementation_checkpoint_warning(
+            entries if checkpoint_entries is None else checkpoint_entries,
+            session_id,
+            cwd,
+            checkpoint_undercount,
+        )
         if warning:
             warnings.append(warning)
     except Exception:
@@ -1407,13 +1425,16 @@ def _new_warning_families(
     except Exception:
         pass
     try:
-        warnings.extend(_communication_lint_warnings(final_text, assistant_text))
+        communication = _communication_lint_warnings(final_text, assistant_text)
+        if communication:
+            warnings.append(" ".join(communication))
     except Exception:
         pass
-    return warnings
+    return [re.sub(r"\s+", " ", warning).strip() for warning in warnings[:4]]
 
 
 _TAIL_BUFSIZE = 128 * 1024  # 実測 2545 turn の mean≈110KB / p75≈119KB を 1 read で覆う
+_SESSION_SCAN_BUDGET = 2 * 1024 * 1024
 
 
 def _is_prompt(obj: dict) -> bool:
@@ -1422,17 +1443,21 @@ def _is_prompt(obj: dict) -> bool:
 
 
 def _load_tail(
-    path: str, turns: int | None = 1, bufsize: int = _TAIL_BUFSIZE
+    path: str,
+    turns: int | None = 1,
+    bufsize: int = _TAIL_BUFSIZE,
+    max_bytes: int | None = None,
 ) -> list[dict]:
-    """末尾から turn boundary を turns 個含むまで返す; None は全件。"""
+    """末尾から turn boundary を turns 個含むまで返す。"""
     try:
         with open(path, "rb") as f:
             pos = f.seek(0, os.SEEK_END)
+            floor = max(0, pos - max_bytes) if max_bytes is not None else 0
             pending = b""  # 行頭が手前ブロックにある途中行 (次の読みで結合される)
             tail: list[dict] = []  # newest-first
             seen = 0
-            while pos > 0:
-                step = min(bufsize, pos)
+            while pos > floor:
+                step = min(bufsize, pos - floor)
                 pos -= step
                 f.seek(pos)
                 parts = (f.read(step) + pending).split(b"\n")
@@ -1451,8 +1476,8 @@ def _load_tail(
                         if turns is not None and seen >= turns:
                             tail.reverse()
                             return tail
-            line = pending.strip()  # BOF: 先頭断片はこの時点で完全な 1 行
-            if line:
+            line = pending.strip()
+            if floor == 0 and line:
                 try:
                     tail.append(json.loads(line))
                 except json.JSONDecodeError:
@@ -1461,6 +1486,16 @@ def _load_tail(
             return tail  # boundary < turns: 集めた全件
     except OSError:
         return []
+
+
+def _load_session_tail(
+    path: str, budget: int = _SESSION_SCAN_BUDGET
+) -> tuple[list[dict], bool]:
+    try:
+        undercount = os.path.getsize(path) > budget
+    except OSError:
+        return [], False
+    return _load_tail(path, turns=None, max_bytes=budget), undercount
 
 
 def _parse_ts(ts) -> float | None:
@@ -1956,13 +1991,14 @@ def _check(
 
 
 def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
-    # Returns (exit_code, prompt_epoch, text, worktree_warnings); main() feeds text/warnings onward.
+    # Returns (exit_code, prompt_epoch, text, surfaced_warnings); main() feeds text/warnings onward.
     if not isinstance(payload, dict):
         return 0, None, "", []
+    first_warning_stop = not payload.get("stop_hook_active") and _stop_latch_claim(
+        payload, ".wt"
+    )
     worktree_warnings = _worktree_cleanup_warnings(payload.get("cwd"))
-    if worktree_warnings and (
-        payload.get("stop_hook_active") or not _stop_latch_claim(payload, ".wt")
-    ):
+    if worktree_warnings and not first_warning_stop:
         worktree_warnings = []
     codex_warnings = []
     if not payload.get("stop_hook_active") and _stop_latch_claim(
@@ -1974,7 +2010,7 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
     if not isinstance(transcript_path, str) or not transcript_path:
         _emit_worktree_warnings(worktree_warnings)
         return 0, None, "", worktree_warnings
-    entries = _load_tail(transcript_path, turns=None)
+    entries = _load_tail(transcript_path)
     if not entries:
         _emit_worktree_warnings(worktree_warnings)
         return 0, None, "", worktree_warnings
@@ -2029,14 +2065,26 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
             payload, text, prompt_epoch
         ),
     )
-    warnings.extend(_new_warning_families(entries, final_text, payload, text))
+    new_warnings: list[str] = []
+    if first_warning_stop:
+        checkpoint_entries, checkpoint_undercount = _load_session_tail(transcript_path)
+        new_warnings = _new_warning_families(
+            entries,
+            final_text,
+            payload,
+            text,
+            checkpoint_entries,
+            checkpoint_undercount,
+        )
+        warnings.extend(new_warnings)
+    surfaced_warnings = worktree_warnings + new_warnings
     # advise-once: a stop_hook_active retry never re-blocks — demote to pass (see docstring turn-marker / Exit).
     if exit_code == 2 and payload.get("stop_hook_active"):
         for line in blocking:
             sys.stderr.write("advise-once (block demoted to pass): " + line + "\n")
         for line in warnings:
             sys.stderr.write(line + "\n")
-        return 0, prompt_epoch, text, worktree_warnings
+        return 0, prompt_epoch, text, surfaced_warnings
     for line in warnings + blocking:
         sys.stderr.write(line + "\n")
     if exit_code != 0:
@@ -2047,7 +2095,7 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
             muted = None
         if muted:
             sys.stderr.write(muted + "\n")
-    return exit_code, prompt_epoch, text, worktree_warnings
+    return exit_code, prompt_epoch, text, surfaced_warnings
 
 
 def _stop_latch_key(payload: dict, suffix: str = ".surf") -> tuple[str, str] | None:
@@ -2316,7 +2364,7 @@ def main() -> int:
         muted = _muted_memory_at_stop(payload, text)
     except Exception:
         muted = None
-    # worktree warnings ride the same additionalContext channel so the model actually sees them.
+    # surfaced warnings ride the same additionalContext channel so the model actually sees them.
     wt_text = "\n\n".join(worktree_warnings)
     combined = "\n\n".join(p for p in (reason, muted, wt_text) if p)
     if combined:
@@ -3295,6 +3343,15 @@ class ImplementationCheckpointWarningTest(unittest.TestCase):
                 _implementation_checkpoint_warning(entries, "sid", "/repo")
             )
 
+    def test_budget_undercount_is_disclosed_in_checkpoint_warning(self):
+        entries = [self._edit("Write", "/repo/a.py", content="x\n" * 51)]
+        warning = _implementation_checkpoint_warning(
+            entries, "sid", "/repo", undercount=True
+        )
+        assert warning is not None
+        self.assertIn("undercount", warning)
+        self.assertIn("それ以前の行数は数えていません", warning)
+
 
 class DecisionQuestionWarningTest(_DecisionStoreFixture, unittest.TestCase):
     def test_question_without_decision_task_warns_and_lists_open_tasks(self):
@@ -3420,6 +3477,140 @@ class CommunicationLintWarningTest(unittest.TestCase):
         )
         self.assertEqual(code, 0)
         self.assertEqual(blocking, [])
+
+    def test_warning_families_are_one_line_each_and_bounded_to_four(self):
+        from unittest import mock
+
+        values = ["implementation\nwarning", "question", "record"]
+        with (
+            mock.patch.object(
+                sys.modules[__name__],
+                "_implementation_checkpoint_warning",
+                return_value=values[0],
+            ),
+            mock.patch.object(
+                sys.modules[__name__],
+                "_decision_question_warning",
+                return_value=values[1],
+            ),
+            mock.patch.object(
+                sys.modules[__name__],
+                "_decision_record_warning",
+                return_value=values[2],
+            ),
+            mock.patch.object(
+                sys.modules[__name__],
+                "_communication_lint_warnings",
+                return_value=["communication-a", "communication-b"],
+            ),
+        ):
+            warnings = _new_warning_families([], "done", {})
+        self.assertEqual(len(warnings), 4)
+        self.assertTrue(all("\n" not in warning for warning in warnings))
+        self.assertIn("communication-a", warnings[-1])
+        self.assertIn("communication-b", warnings[-1])
+
+    def test_run_returns_new_warnings_for_additional_context_once(self):
+        import io
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        transcript = TurnMarkerTest._transcript(
+            [TurnMarkerTest._user(), TurnMarkerTest._asst("✅ done")]
+        )
+        payload = {"transcript_path": transcript, "session_id": "warn-sid"}
+        with (
+            mock.patch.object(
+                sys.modules[__name__],
+                "_new_warning_families",
+                return_value=["MODEL-WARN"],
+            ),
+            redirect_stderr(io.StringIO()),
+        ):
+            first = _run(payload)[3]
+            retry = _run({**payload, "stop_hook_active": True})[3]
+        self.assertIn("MODEL-WARN", first)
+        self.assertNotIn("MODEL-WARN", retry)
+
+
+class TranscriptBudgetTest(unittest.TestCase):
+    def test_session_scan_reads_only_tail_budget_and_marks_undercount(self):
+        import tempfile
+
+        path = os.path.join(tempfile.mkdtemp(), "large.jsonl")
+        old = json.dumps(TurnMarkerTest._user(content="old")) + "\n"
+        recent = json.dumps(TurnMarkerTest._user(content="recent")) + "\n"
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(old)
+            handle.write(" " * 128 + "\n")
+            handle.write(recent)
+        entries, undercount = _load_session_tail(path, 128)
+        self.assertTrue(undercount)
+        self.assertEqual(_latest_user_prompt(entries), "recent")
+        self.assertFalse(
+            any(_latest_user_prompt([entry]) == "old" for entry in entries)
+        )
+
+    def test_run_uses_current_turn_for_three_families_and_budget_tail_for_checkpoint(
+        self,
+    ):
+        import io
+        import tempfile
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        current = [
+            TurnMarkerTest._user(content="current"),
+            TurnMarkerTest._asst("✅ done"),
+        ]
+        session_tail = [TurnMarkerTest._user(content="older")]
+        seen = {}
+
+        def implementation(entries, _sid, _cwd, undercount=False):
+            seen["implementation"] = (entries, undercount)
+
+        def decision(_final, _sid, _cwd):
+            seen["decision"] = True
+
+        def record(prompt, _sid, _cwd):
+            seen["record"] = prompt
+
+        transcript = os.path.join(tempfile.mkdtemp(), "transcript.jsonl")
+        with (
+            mock.patch.object(
+                sys.modules[__name__], "_load_tail", return_value=current
+            ),
+            mock.patch.object(
+                sys.modules[__name__],
+                "_load_session_tail",
+                return_value=(session_tail, True),
+            ),
+            mock.patch.object(
+                sys.modules[__name__],
+                "_implementation_checkpoint_warning",
+                side_effect=implementation,
+            ),
+            mock.patch.object(
+                sys.modules[__name__],
+                "_decision_question_warning",
+                side_effect=decision,
+            ),
+            mock.patch.object(
+                sys.modules[__name__],
+                "_decision_record_warning",
+                side_effect=record,
+            ),
+            mock.patch.object(
+                sys.modules[__name__],
+                "_communication_lint_warnings",
+                return_value=[],
+            ),
+            redirect_stderr(io.StringIO()),
+        ):
+            _run({"transcript_path": transcript})
+        self.assertEqual(seen["implementation"], (session_tail, True))
+        self.assertEqual(seen["record"], "current")
+        self.assertTrue(seen["decision"])
 
 
 class OpenTasksAtWindDownTest(unittest.TestCase):

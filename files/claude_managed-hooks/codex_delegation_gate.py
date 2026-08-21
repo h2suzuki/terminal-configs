@@ -70,7 +70,8 @@ passthrough なので対象外。
 ==============
 main agent の companion 起動を 1 回だけ許可するには、 ユーザーが
 `~/.claude/hooks/state/codex_delegation_gate/user-approval` を作る。 hook は許可の使用前に
-file を削除し、 削除できなければ deny する。 model が設定できる環境変数では解除しない。
+file を削除し、 削除できなければ deny する。 承認は直接 route だけを迂回し invocation lint は維持する。
+model が設定できる環境変数と tool からの承認 file 書込では解除しない。
 
 既存 hook との境界 (重複実装しない)
 ===================================
@@ -188,7 +189,11 @@ SCRIPT_READ_LIMIT = 65536
 CJK = re.compile(r"[぀-ヿ㐀-䶿一-鿿ｦ-ﾟ]")
 MARKDOWN_TOKEN = re.compile(r"[\w./~-]+\.md\b")
 REPORT_HINT = re.compile(r"-report\.md|報告書")
-REVIEW_PROMPT = re.compile(r"敵対レビュー|adversarial|レビュー観点", re.IGNORECASE)
+REVIEW_PROMPT = re.compile(
+    r"敵対レビュー|adversarial|レビュー観点"
+    r"|\b(?:review|audit|inspect)\b|(?:レビュー|監査)(?!済み)",
+    re.IGNORECASE,
+)
 MONITOR_LOOP = re.compile(r"\b(while|until|for)\b")
 # workflow script は shell ではないので、 起動の形をそのまま探す。 file 名の言及だけでは
 # 発火しない (hook 自身をレビューする workflow を誤って止めないため)。
@@ -813,7 +818,7 @@ def _direct_route_denial(payload: dict) -> str | None:
 
 
 def _consume_user_approval() -> bool:
-    path = os.path.join(DIRECT_STATE_DIR, "user-approval")
+    path = _user_approval_path()
     if not os.path.lexists(path):
         return False
     try:
@@ -823,9 +828,76 @@ def _consume_user_approval() -> bool:
     return True
 
 
-def _log_direct_attempt(command: str) -> None:
+def _user_approval_path() -> str:
+    return os.path.join(DIRECT_STATE_DIR, "user-approval")
+
+
+def _path_targets_approval(path: str, cwd: str) -> bool:
+    expanded = os.path.expanduser(path)
+    absolute = expanded if os.path.isabs(expanded) else os.path.join(cwd, expanded)
+    return os.path.realpath(absolute) == os.path.realpath(_user_approval_path())
+
+
+def _bash_writes_approval(command: str, cwd: str) -> bool:
+    for segment in _segments(command):
+        for index, token in enumerate(segment[:-1]):
+            if ">" in token and not token.strip("<>&|"):
+                if _path_targets_approval(segment[index + 1], cwd):
+                    return True
+        executable, _wrappers, _escaped = _strip_prefix(segment)
+        if executable >= len(segment):
+            continue
+        name = os.path.basename(segment[executable])
+        args = segment[executable + 1 :]
+        if name == "tee":
+            targets = [arg for arg in args if arg == "-" or not arg.startswith("-")]
+            if any(_path_targets_approval(arg, cwd) for arg in targets):
+                return True
+        if name not in {"cp", "mv"}:
+            continue
+        for index, arg in enumerate(args[:-1]):
+            if arg in {"-t", "--target-directory"} and _path_targets_approval(
+                args[index + 1], cwd
+            ):
+                return True
+            if arg.startswith("--target-directory=") and _path_targets_approval(
+                arg.partition("=")[2], cwd
+            ):
+                return True
+        operands = [arg for arg in args if arg == "-" or not arg.startswith("-")]
+        if operands and _path_targets_approval(operands[-1], cwd):
+            return True
+    return False
+
+
+def _approval_write_denial(payload: dict) -> str | None:
+    tool = payload.get("tool_name")
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return None
+    cwd = payload.get("cwd")
+    cwd = cwd if isinstance(cwd, str) and cwd else os.getcwd()
+    targets = []
+    if tool in {"Write", "Edit", "MultiEdit"}:
+        targets = [tool_input.get("file_path"), tool_input.get("path")]
+    elif tool in {"Bash", "Monitor"}:
+        command = tool_input.get("command")
+        if isinstance(command, str) and _bash_writes_approval(command, cwd):
+            targets = [_user_approval_path()]
+    if not any(
+        isinstance(path, str) and _path_targets_approval(path, cwd) for path in targets
+    ):
+        return None
+    return (
+        "codex-delegation-gate: 承認 file への書込を deny しました。"
+        f" `{_user_approval_path()}` はユーザーがホスト側で手動作成してください。"
+        " model 自身は Write / Edit / MultiEdit / Bash で作成できません。"
+    )
+
+
+def _log_direct_attempt(command: str, event: str = "direct-launch-attempt") -> None:
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    line = f"{stamp}\t{json.dumps(command, ensure_ascii=True)}"
+    line = f"{stamp}\t{event}\t{json.dumps(command, ensure_ascii=True)}"
     encoded = line.encode("ascii")
     if len(encoded) >= ATTEMPT_LINE_MAX_BYTES:
         marker = b"..."
@@ -965,22 +1037,33 @@ def cmd(payload: object) -> int:
         return 0
     if payload.get("hook_event_name") not in (None, "PreToolUse"):
         return 0
+    approval_write = _approval_write_denial(payload)
+    if approval_write is not None:
+        _emit_deny(approval_write)
+        return 0
     direct = _direct_companion(payload)
+    approval_consumed = False
     if direct is not None:
         direct_surface, command = direct
         route_denial = _direct_route_denial(payload)
         if route_denial is not None:
             if _consume_user_approval():
+                approval_consumed = True
+                _log_direct_attempt(command, "approval-consumed")
+            else:
+                _log_direct_attempt(command)
+                _emit_deny(_direct_deny_text(direct_surface, route_denial))
                 return 0
-            _log_direct_attempt(command)
-            _emit_deny(_direct_deny_text(direct_surface, route_denial))
-            return 0
     found = _surface(payload)
     if found is None:
         return 0
     surface, violations, delegating = found
     skill_missing = False
-    if delegating and _skill_active(payload, time.time()) is False:
+    if (
+        delegating
+        and not approval_consumed
+        and _skill_active(payload, time.time()) is False
+    ):
         skill_missing = True
     if violations or skill_missing:
         if direct is not None:
@@ -1285,6 +1368,75 @@ class GateTest(unittest.TestCase):
             )
         self.assertIn("直接起動を deny", self._reason(parsed))
         self.assertTrue(os.path.lexists(approval))
+
+    def test_user_approval_waives_route_but_not_invocation_lint(self):
+        approval = os.path.join(DIRECT_STATE_DIR, "user-approval")
+        os.makedirs(os.path.dirname(approval), exist_ok=True)
+        with open(approval, "w", encoding="utf-8") as handle:
+            handle.write("ユーザー承認")
+        order = self._order()
+        parsed, _ = self._bash(
+            f"node {self.COMPANION} task --write --effort impossible {order}",
+            agent_id=None,
+        )
+        self.assertIn("[effort]", self._reason(parsed))
+        log = os.path.join(DIRECT_STATE_DIR, "direct-launch-attempts.log")
+        with open(log, encoding="ascii") as handle:
+            self.assertIn("approval-consumed", handle.read())
+
+    def test_approval_path_write_tools_are_denied_for_path_spellings(self):
+        from unittest.mock import patch
+
+        approval = os.path.join(DIRECT_STATE_DIR, "user-approval")
+        os.makedirs(os.path.dirname(approval), exist_ok=True)
+        alias_dir = os.path.join(self.tmp, "alias")
+        os.symlink(os.path.dirname(approval), alias_dir)
+        cases = (
+            ("Write", approval),
+            ("Edit", os.path.relpath(approval, self.tmp)),
+            ("MultiEdit", os.path.join(alias_dir, "user-approval")),
+        )
+        for tool, path in cases:
+            with self.subTest(tool=tool, path=path):
+                parsed, _ = self._run(
+                    {
+                        "tool_name": tool,
+                        "tool_input": {"file_path": path},
+                        "cwd": self.tmp,
+                    }
+                )
+                reason = self._reason(parsed)
+                self.assertIn("ホスト側", reason)
+        host_state = os.path.join(
+            HOME, ".claude", "hooks", "state", "codex_delegation_gate"
+        )
+        with patch.object(sys.modules[__name__], "DIRECT_STATE_DIR", host_state):
+            parsed, _ = self._run(
+                {
+                    "tool_name": "Write",
+                    "tool_input": {
+                        "file_path": "~/.claude/hooks/state/codex_delegation_gate/user-approval"
+                    },
+                    "cwd": self.tmp,
+                }
+            )
+        self.assertIn("ホスト側", self._reason(parsed))
+
+    def test_approval_path_bash_destinations_are_denied_but_unlink_is_not(self):
+        approval = os.path.join(DIRECT_STATE_DIR, "user-approval")
+        commands = (
+            f"printf yes > {approval}",
+            f"printf yes >> {approval}",
+            f"printf yes | tee {approval}",
+            f"cp seed {approval}",
+            f"mv seed {approval}",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                parsed, _ = self._bash(command)
+                self.assertIn("ホスト側", self._reason(parsed))
+        parsed, _ = self._bash(f"rm -- {approval}")
+        self.assertIsNone(parsed)
 
     def test_direct_attempt_log_is_single_line_capped_and_append_failure_is_quiet(self):
         from unittest.mock import patch
@@ -1697,6 +1849,21 @@ class GateTest(unittest.TestCase):
         )
         parsed, _ = self._bash(f"node {self.COMPANION} task {order}")
         self.assertIn("[review-without-lint-pass]", self._reason(parsed))
+
+    def test_review_roster_words_require_review_metadata_but_completed_forms_do_not(
+        self,
+    ):
+        self._seed()
+        order = self._order()
+        self._metadata_lint(order, review_kind="none")
+        for word in ("review", "audit", "inspect", "レビュー", "監査"):
+            with self.subTest(word=word):
+                parsed, _ = self._bash(f'node {self.COMPANION} task "{word} {order}"')
+                self.assertIn("[review-metadata]", self._reason(parsed))
+        for word in ("reviewed", "preaudit", "inspection", "レビュー済み"):
+            with self.subTest(word=word):
+                parsed, _ = self._bash(f'node {self.COMPANION} task "{word} {order}"')
+                self.assertIsNone(parsed)
 
     def test_gate_does_not_open_the_order_document(self):
         from unittest.mock import patch
