@@ -87,5 +87,11 @@ Exit Criteria:
   品質を推定し、「受入 / class 単位の是正 / 構造的やり直し / 仕様縮小」を先に決める。
   per-finding の逐次 fix を既定にしたことが無限非収束の根因。5 巡以内の根拠は cost —
   積み上げ可能な場合、人間の senior engineer のレビューは大抵 5 回以内に指摘が枯れる
+  (4) **分業: 計数は script、LLM は高次元判定** (2026-08-21 ユーザー指摘) — 密度・重なり
+  (capture-recapture)・注入率・分布の集計は決定的 script の仕事。LLM に求めるのは既存ツールに
+  できない判定: 概念的一貫性 (欠けている抽象の名指し)・要件適合/過剰実装の verdict・
+  「この作りでは到達しない、作り直しが早い」の判定・設計 review essay。reviewer の主成果物を
+  「品質 verdict (指摘は根拠 appendix)」に変える — 指摘 list を主成果物にすると LLM は
+  bug 発見器に退化する
 
 Work file: `docs/adversarial-review-methodology.md` (§6 チェックリストを各ケースの入場 gate に使う)
