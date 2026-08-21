@@ -85,8 +85,10 @@ Exit Criteria:
   非 vacuous 性まで確認。**凍結 commit `0a0dc2e`** (`gates: Harden lint checks and warning
   delivery`・3 file・tree clean)。残 = 判定器 round 4 (ユーザー起動) と deploy (最終 step・
   filter 指摘どおり /etc の stop_checks.py は 2026-08-20 版のまま)。
-  **main merge 済み 2026-08-22** (`5bb0448`・否定断定語彙拡張 `b5aea25` を含む)。deploy 後の
-  実測対象: warn family 4 種 + 否定断定の新語彙 warn (誤爆率 → blocking 昇格判断) +
+  **main merge 済み 2026-08-22** (`5bb0448`・否定断定語彙拡張 `b5aea25` を含む)。
+  **deploy 完了 2026-08-22** (ユーザーが base setup 実行・stop_checks.py / codex_order_lint /
+  managed extensions とも `diff -q` IDENTICAL 実測・審判 hook は新規 session から有効)。
+  残る実測対象: warn family 4 種 + 否定断定の新語彙 warn (誤爆率 → blocking 昇格判断) +
   Stop の Sonnet 審判 hook `cc607a0` (発火頻度・誤爆 → rubric の締め/緩め調整)
 - [ ] **(g) codex の直接起動を禁止する — 強固に** (2026-08-21 ユーザー決裁 + 同日「強固に
   おこなうべき」で強化) — codex_delegation_gate を「注意喚起」から「deny」へ:
@@ -224,8 +226,9 @@ Exit Criteria:
   新体制 2 巡で「過剰実装検出 (r76 初の削る fix)」と「人間 escalation (U1)」の両方が設計どおり発動
 - [x] deploy 一致 — 2026-08-21 実測 `diff -q /usr/local/bin/codex_task_sentinel
   files/codex_task_sentinel` IDENTICAL (325 selftests 版)
-- [ ] 収束版の deploy 一致 — main の `files/codex_task_sentinel` (97743bd・selftest 320 版) を
-  base setup 再実行 (host 権限・ユーザー実施) で配備し、`diff -q` IDENTICAL を再実測する
+- [x] 収束版の deploy 一致 — main の `files/codex_task_sentinel` (97743bd・selftest 320 版) を
+  base setup 再実行 (host 権限・ユーザー実施) で配備し、`diff -q` IDENTICAL を再実測する。
+  **達成 2026-08-22**: ユーザーが base setup を実行し、`diff -q` IDENTICAL を実測確認
 - [x] **出口の実行 — 改訂方法論を適用して収束させる** (方向は 2026-08-21 ユーザー列挙
   「sentinel に実際に適用して収束させる」で確定。残る選択 = 確認巡の時間箱設定):
   改訂方法論 (diff round・verdict routing・severity gate) を適用した確認巡を時間箱つきで
@@ -364,8 +367,9 @@ Goal: sentinel 級に小さな要件 (またはそこまでブレイクダウン
 
 Exit Criteria:
 
-- [ ] 前提: sentinel の出口が決着している (認定成立 or 凍結の宣言。build 3 柱は 2026-08-13
-  完了済み — sentinel block の出口 3 案参照)
+- [x] 前提: sentinel の出口が決着している (認定成立 or 凍結の宣言。build 3 柱は 2026-08-13
+  完了済み)。**決着 2026-08-22**: 収束 2/2 成立 (r60 + r82 = ship・U0 ゼロ)・凍結 97743bd・
+  main merge・deploy 一致まで完了 (経過の正本 = `docs/sentinel-convergence-log.md` 末尾)
 - [ ] ケース選定と成功基準をユーザーと合意する — round 上限はユーザー指定済み (2026-08-21):
   **新ツールの敵対レビューは規模にもよるが最大 5 巡以内で収束する方針**が要件。残る合意項目 =
   ケース選定・material 残ゼロの定義・token 量
