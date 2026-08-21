@@ -38,7 +38,14 @@ Exit Criteria:
   **修正方式「機構追加」の 2 巡連続を lint warn** で検知する (アーキテクチャ再審 trigger の
   機械化・方法論 block の段階設計と対、2026-08-21 設計確定)。
   進捗 2026-08-21: (a)〜(f) + stateless 化 + warn は fix round 5 で実装・受け入れ済み
-  (wt-gates branch `bd886d0`・lint selftest 31 / gate 65)。判定器と deploy が残
+  (wt-gates branch `bd886d0`・lint selftest 31 / gate 65)。判定器と deploy が残。
+  **判定器 round 1 (2026-08-21 ユーザー起動・base main)**: no-ship 4 件 — (高) 承認 file が
+  model の Write で偽造可能 + 承認消費が後続 lint も飛ばす (発注書由来の仕様欠陥)、(中)
+  review 語彙が review/audit 単体を拾わない、(中) round 7 の warn 4 種が stderr のみで
+  model に届かない (additionalContext 未接続)、(中) Stop が全 transcript 走査で O(n²)。
+  → fix round 8 で対応: 承認は route 迂回のみに限定 + 承認 path への書込を同 gate が deny +
+  後続 lint 維持 / 語彙拡張 + 矛盾 deny / warn の additionalContext 接続 (bounded) /
+  transcript 走査に hard budget (全読み廃止・不足分は undercount 明示)
 - [ ] **(g) codex の直接起動を禁止する — 強固に** (2026-08-21 ユーザー決裁 + 同日「強固に
   おこなうべき」で強化) — codex_delegation_gate を「注意喚起」から「deny」へ:
   main agent の Bash からの companion 起動 (全 subcommand・`task-worker` 含む) は**一律 deny**。
