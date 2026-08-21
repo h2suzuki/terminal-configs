@@ -21,6 +21,8 @@ codegraph / codex が使える環境での役割分担 (managed CLAUDE.md「ツ�
 - **codegraph のツール選択**: `codegraph_explore` (自然言語 / symbol 群から関連 source)、 `codegraph_search` (symbol の位置)、 `codegraph_callers` / `codegraph_callees` / `codegraph_impact` (呼出元 / 呼出先 / 変更の波及)、 `codegraph_node` / `codegraph_files` (個別 symbol / file)。 intent に合うものを選ぶ。
 - **codex 未認証 / 利用不可時は Claude が直接**: 委譲できないので degrade して Claude が進める。
 - **役割境界を守る**: 実装は codex、 仕様・指示・バグ出し・レビューは Claude。 patch 反映や review 指摘の修正は「レビューの反映」であって Claude の実装ではない。
+- **trivial の数値境界 (2026-08-21 ユーザー決裁)**: Claude が直接編集してよい source 変更は 単一 file・追加 10 行以内・test 追加なし の全条件を満たす時だけ。 1 つでも超えたら委譲するか、 委譲不採用の理由 1 行を記録した上で敵対レビューを必須とする。 境界を主観で広げる (「これぐらい trivial」) のが自作癖の入口。
+- **統治原則 (2026-08-21 ユーザー明示)**: 実装 token は本当に価値ある部分に使う。 既に部品があるならそれを使い、 部品の再構築はよほどの理由がある時にユーザー承認を得てから行う (承認なしの再構築は理由の良し悪しに関わらず禁止)。
 
 ## Output
 
