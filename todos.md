@@ -29,6 +29,17 @@ Exit Criteria:
   上流批評 / **概念診断**) の要求必須化、(f) G6 = fix 発注書の修正方式宣言 + 機構追加の
   failure-mode 列挙表 + **全 fix 所見への掃引節 (欠陥定義 + 機械列挙 + 単一 site 主張にも根拠)**
   — (e) 概念診断と (f) 掃引節は 2026-08-21 transcript 監査の欠落検出をユーザー承認で追加
+- [ ] **(g) codex の直接起動を禁止する** (2026-08-21 ユーザー決裁: 「既製 command 以外の
+  ルートでの codex 実行は本当は禁止にしたい。何度言っても node で companion を直接実行するのが
+  止められず実害が出ている」) — codex_delegation_gate を「注意喚起」から「deny」へ:
+  main agent の Bash からの `node *codex-companion.mjs*` 起動は**一律 deny** し、既製経路
+  (ユーザーが打つ /codex:* command・codex:rescue skill が spawn する rescue subagent 内の
+  実行) だけを許可する。緊急時の override は ユーザー承認を条件とする env 1 個に限定
+- [ ] **(h) codex-delegation skill と関連 memory entry を plugin-route 前提に改訂する** —
+  現 skill は companion 直接起動の command 形を規定しており (launcher 不採用裁定 2026-08-13 の
+  「直接起動へ一本化」)、これが直接起動 pattern を制度化していた。発注書規律・worktree 隔離・
+  監視規律は rescue 経由でも維持する形で書き直す。(g) と同時に land しないと skill が gate 違反を
+  指示し続ける
 - [ ] **判断待ちの Task 化を強制する hook family** — 型付き命名規約 (判断待ち Task は名前に
   `採否待ち|判断待ち|決裁待ち` を含める) を前提に、最終行が質問 (`?`/`？` 終端・絵文字非依存)
   の turn は「open な decision 型 Task が 1 件以上 + 直近 K turn 内の作成/更新」を要求する
