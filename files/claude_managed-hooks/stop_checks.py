@@ -76,6 +76,7 @@ Combined Stop hook for org-managed Claude Code:
   claim-without-evidence (warning-only, exit 0):
     「不明」「該当なし」「未確認」 系は、 同 turn 内に EVIDENCE_TOOLS が無ければ warn
     (verify-before-claim の negative side)。
+    存在しない・未導入・不可能・無理・対象操作のできない系も同じ pairing で warn。
 
   provide-user-instructions (warning-only, exit 0):
     manual-execution 文脈がありつつ host コマンド (sudo cp, git push, gh pr, curl+URL,
@@ -104,9 +105,9 @@ Combined Stop hook for org-managed Claude Code:
   worktree-cleanup (warning-only, exit 0):
     payload の cwd に属する linked worktree が clean かつ本線の祖先なら、削除候補と
     実行可能な git worktree remove コマンドを知らせる。判定不能時は fail-open。
-    stderr に加え、 memory-surface と同じ additionalContext 経由で model にも届ける
-    (単独 stderr は exit 0 では model 非可視のため)。 memory-surface reason と同 turn なら
-    1 payload に結合 (reason が先)。 stop_hook_active gate + .wt latch で turn 内 1 回。
+    block 時は blocking reason、pass / retry 時は additionalContext 経由で model に届ける。
+    memory-surface reason と同 turn なら 1 payload に結合 (reason が先)。
+    .wt latch は初回を通して turn 内の 2 回目以降を抑えるが stop_hook_active retry は再配達する。
     射程: 本線は refs/heads/main / master のみ (他 trunk の repo では無音)、
     入れ子 worktree の子は候補外。 いずれも鳴らない側の限界。
 
@@ -115,6 +116,23 @@ Combined Stop hook for org-managed Claude Code:
     state / JSON / git の異常は fail-open、job id 単位の latch で重複通知を抑える。
     job record の field 名 (write / workspaceRoot / sessionId) と status 語彙
     (queued / running を停止可能とみなす) に依存し、変われば静かに劣化する。
+
+  implementation-checkpoint (warning-only, exit 0):
+    session 内の repo source への Edit / Write / MultiEdit の純増行を概算し、
+    50 行超かつ同 session の codex task job が無ければ委譲判定の言語化を促す。
+    transcript 読取は末尾 2MB で打ち切り、超過時は観測できた行数と
+    undercount を分けて明記する。観測行が 0 なら warn しない。
+
+  decision-question-task / decision-record (warning-only, exit 0):
+    質問終端時の open decision 型 task の欠落と、短文決裁受領時の
+    open decision 型 task を照合し、状態記録の自己確認を促す。
+
+  communication-final-line / communication-self-number (warning-only, exit 0):
+    最終非空行が絵文字始まりまたは質問終端でない場合と、散文の
+    自己採番参照を検知する。code block・inline code・Markdown 引用は除外する。
+
+  上記 4 family は family ごと 1 行・合計 4 行以内にし、block 時は reason
+  本文、pass 時は additionalContext / systemMessage へ出す。stop_hook_active retry でも再生成する。
 
   turn-marker (bonus, exit 0 only):
     enforcement が pass した turn 終了時のみ、 per-turn marker (時刻 / Turn #N / context
@@ -519,11 +537,6 @@ def _codex_shared_write_warnings(payload: dict) -> list[str]:
         return []
 
 
-def _emit_worktree_warnings(warnings: list[str]) -> None:
-    for line in warnings:
-        sys.stderr.write(line + "\n")
-
-
 def _court_contaminated(text: str) -> bool:
     return bool(COURT_RE_STRAY.search(text) or COURT_RE_INVOKE_LEAK.search(text))
 
@@ -888,12 +901,16 @@ EUPHEMISM_RE = re.compile(
 )
 
 # --- Pattern: claim-without-evidence (warning, no block) ---
-# 「無い」系だけでなく「できない / 書かれていない」系も対象 (実測 2026-08-08: 探索範囲を確かめずに
-# 「どのスキルにも書かれていません」、 正規ルート未試行で「権限では実施できません」と誤断定した)。
+# 不在・未導入・不可能・無理・対象操作のできない系を、同 turn の evidence tool が無ければ警告する。
 CLAIM_PATTERNS: list[str] = [
-    r"不明|該当なし|存在しません|未確認|わかりません|分かりません",
+    r"不明|該当なし|存在し(ません|ない)|未確認|わかりません|分かりません",
+    r"未(インストール|install|導入|配備)",
+    r"(インストール|install|導入|配備|用意|準備)されて(いません|いない)",
+    r"入って(いません|いない)|に(は)?(あり|有り)ません",
+    r"(?<!「)不可能(?!ではな|とは限|化)",
+    r"(は|には|が)無理|無理(です|でした|だと|そうです)",
     r"(書かれて|記載されて|定義されて)(いません|いない)",
-    r"(実施|実行|編集|取得|参照|アクセス|変更|確認|対応)(でき|出来)(ません|ない)",
+    r"(実施|実行|編集|取得|参照|アクセス|変更|確認|対応|インストール|起動|接続|到達|再現|利用|使用|検証|実測|導入)(でき|出来)(ません|ない)",
     r"見つかりません|見当たりません|ヒットしません",
 ]
 CLAIM_RE = re.compile("|".join(CLAIM_PATTERNS))
@@ -1027,6 +1044,76 @@ MYTASK_MCP_TOOLS = {"mcp__mytask__TaskCreate", "mcp__mytask__TaskUpdate"}
 # work-without-task が「実質的な作業 turn」とみなす Edit/Write 回数の下限
 WORK_WITHOUT_TASK_MIN_EDITS = 3
 NATIVE_TASKS_DIR = os.path.expanduser(os.path.join("~", ".claude", "tasks"))
+OPEN_TASK_STATUSES = frozenset({"pending", "in_progress", "blocked"})
+DECISION_TASK_RE = re.compile(
+    r"(?:採否待ち|判断待ち|決裁待ち|ご判断待ち|ご回答待ち|ご指示待ち)"
+    r"(?!(?:ではな|でなく))"
+)
+SHORT_DECISION_RE = re.compile(
+    r"(?:\(?[a-z0-9]\)?|(?:やって|進めて)(?:ください|下さい)|"
+    r"お願いします|承認(?:します|です)?|よい|良い|いい|はい|"
+    r"ok|オーケー|それで|その案で|採用|却下)",
+    re.IGNORECASE,
+)
+
+
+def _session_task_store(
+    session_id: str | None, cwd: str | None
+) -> tuple[list[dict], bool]:
+    """Normalized native + mytask records and whether every present store parsed."""
+    if not session_id:
+        return [], False
+    records: list[dict] = []
+    native_dir = os.path.join(NATIVE_TASKS_DIR, session_id)
+    try:
+        native_entries = list(os.scandir(native_dir))
+    except FileNotFoundError:
+        native_entries = []
+    except OSError:
+        return [], False
+    for entry in sorted(native_entries, key=lambda item: item.name):
+        try:
+            is_task_file = entry.is_file() and entry.name.endswith(".json")
+        except OSError:
+            return [], False
+        if not is_task_file:
+            continue
+        try:
+            with open(entry.path, encoding="utf-8") as stream:
+                task = json.load(stream)
+        except (OSError, ValueError):
+            return [], False
+        if not isinstance(task, dict):
+            return [], False
+        records.append(
+            {
+                "id": task.get("id", "?"),
+                "name": task.get("subject", ""),
+                "status": task.get("status"),
+            }
+        )
+
+    mytask_path = os.path.join(cwd or ".", "drafts", "tasks", f"{session_id}.json")
+    try:
+        with open(mytask_path, encoding="utf-8") as stream:
+            raw = json.load(stream)
+    except FileNotFoundError:
+        raw = []
+    except (OSError, ValueError):
+        return [], False
+    if not isinstance(raw, list):
+        return [], False
+    for task in raw:
+        if not isinstance(task, dict):
+            return [], False
+        records.append(
+            {
+                "id": task.get("id", "?"),
+                "name": task.get("content", ""),
+                "status": task.get("status"),
+            }
+        )
+    return records, True
 
 
 def _session_has_task_records(session_id: str | None, cwd: str | None) -> bool:
@@ -1034,17 +1121,10 @@ def _session_has_task_records(session_id: str | None, cwd: str | None) -> bool:
     if not session_id:
         return True
     try:
-        if os.listdir(os.path.join(NATIVE_TASKS_DIR, session_id)):
-            return True
-    except OSError:
-        pass
-    path = os.path.join(cwd or ".", "drafts", "tasks", f"{session_id}.json")
-    try:
-        with open(path, encoding="utf-8") as f:
-            raw = json.load(f)
-    except (OSError, ValueError):
-        return False
-    return isinstance(raw, list) and bool(raw)
+        records, reliable = _session_task_store(session_id, cwd)
+    except Exception:
+        return True
+    return bool(records) if reliable else True
 
 
 # Tools whose file_path / notebook_path inputs are recorded for path matching.
@@ -1081,7 +1161,285 @@ def strip_fences(text: str) -> str:
     return re.sub(r"`[^`\n]*`", " ", text)
 
 
+IMPLEMENTATION_CHECKPOINT_LINES = 50
+SOURCE_SUFFIXES = frozenset({".py", ".sh"})
+SELF_NUMBER_RE = re.compile(r"(?:候補|案|選択肢|パターン)\s?[0-9]")
+EMOJI_START_RE = re.compile(r"[☀-➿\U0001f1e6-\U0001f1ff\U0001f300-\U0001faff]")
+
+
+def _strip_code_and_quotes(text: str) -> str:
+    prose = strip_fences(text)
+    return "\n".join(
+        "" if re.match(r"^\s*>", line) else line for line in prose.splitlines()
+    )
+
+
+def _last_prose_line(text: str) -> str:
+    return next(
+        (
+            line.strip()
+            for line in reversed(_strip_code_and_quotes(text).splitlines())
+            if line.strip()
+        ),
+        "",
+    )
+
+
+def _latest_user_prompt(entries: list[dict]) -> str:
+    for obj in reversed(entries):
+        if obj.get("type") != "user":
+            continue
+        message = obj.get("message")
+        if isinstance(message, dict) and isinstance(message.get("content"), str):
+            return message["content"]
+    return ""
+
+
+def _tool_use_blocks(entries: list[dict]):
+    for obj in entries:
+        if obj.get("type") != "assistant":
+            continue
+        message = obj.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                yield block
+
+
+def _repo_relative_source(path: str, cwd: str, texts: list[str]) -> bool:
+    absolute = os.path.abspath(path if os.path.isabs(path) else os.path.join(cwd, path))
+    repo = os.path.abspath(cwd)
+    try:
+        relative = os.path.relpath(absolute, repo)
+    except ValueError:
+        return False
+    if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+        return False
+    normalized = relative.replace(os.sep, "/")
+    if (
+        normalized == "todos.md"
+        or normalized.startswith(("drafts/", "docs/"))
+        or normalized.lower().endswith(".md")
+    ):
+        return False
+    suffix = os.path.splitext(normalized)[1].lower()
+    if suffix in SOURCE_SUFFIXES:
+        return True
+    if suffix:
+        return False
+    if any(text.startswith("#!") for text in texts):
+        return True
+    try:
+        with open(absolute, encoding="utf-8") as stream:
+            return stream.readline().startswith("#!")
+    except OSError:
+        return False
+
+
+def _line_count(text) -> int:
+    return len(text.splitlines()) if isinstance(text, str) else 0
+
+
+def _tool_added_source_lines(block: dict, cwd: str) -> int:
+    name = block.get("name")
+    inputs = block.get("input")
+    if name not in {"Edit", "Write", "MultiEdit"} or not isinstance(inputs, dict):
+        return 0
+    path = inputs.get("file_path")
+    if not isinstance(path, str) or not path:
+        return 0
+    changes = inputs.get("edits") if name == "MultiEdit" else [inputs]
+    if not isinstance(changes, list) or not all(
+        isinstance(item, dict) for item in changes
+    ):
+        return 0
+    texts = [
+        value
+        for item in changes
+        for value in (
+            item.get("content"),
+            item.get("old_string"),
+            item.get("new_string"),
+        )
+        if isinstance(value, str)
+    ]
+    if not _repo_relative_source(path, cwd, texts):
+        return 0
+    if name == "Write":
+        return _line_count(inputs.get("content"))
+    return sum(
+        max(
+            0, _line_count(item.get("new_string")) - _line_count(item.get("old_string"))
+        )
+        for item in changes
+    )
+
+
+def _implementation_checkpoint_warning(
+    entries: list[dict],
+    session_id: str | None,
+    cwd: str | None,
+    undercount: bool = False,
+) -> str | None:
+    if not session_id or not cwd:
+        return None
+    added = sum(
+        _tool_added_source_lines(block, cwd) for block in _tool_use_blocks(entries)
+    )
+    if added == 0 or (added <= IMPLEMENTATION_CHECKPOINT_LINES and not undercount):
+        return None
+    if any(record.get("kind") == "task" for record in _codex_job_records(session_id)):
+        return None
+    if undercount:
+        count = (
+            f"観測できた範囲で {added} 行の直接実装があります。"
+            " 末尾 2MB よりそれ以前は数えていません (undercount)。"
+        )
+    else:
+        count = f"直接実装が {added} 行です。"
+    return (
+        "implementation-checkpoint: "
+        + count
+        + "codex task への委譲有無を判定した根拠を verbalize し、"
+        "必要ならここで委譲してください。"
+    )
+
+
+def _open_task_records(session_id: str | None, cwd: str | None) -> list[dict] | None:
+    records, reliable = _session_task_store(session_id, cwd)
+    if not reliable:
+        return None
+    return [record for record in records if record.get("status") in OPEN_TASK_STATUSES]
+
+
+def _decision_task(record: dict) -> bool:
+    name = record.get("name")
+    return isinstance(name, str) and bool(DECISION_TASK_RE.search(name))
+
+
+def _task_listing(records: list[dict]) -> str:
+    if not records:
+        return "(なし)"
+    labels = [
+        f"#{record.get('id', '?')} {record.get('name', '')}".strip()
+        for record in records
+    ]
+    listing = ", ".join(labels[:10])
+    return listing + (f", 他 {len(labels) - 10} 件" if len(labels) > 10 else "")
+
+
+def _decision_question_warning(
+    final_text: str, session_id: str | None, cwd: str | None
+) -> str | None:
+    final_line = _last_prose_line(final_text)
+    if not final_line.endswith(("?", "？")):
+        return None
+    open_tasks = _open_task_records(session_id, cwd)
+    if open_tasks is None or any(_decision_task(record) for record in open_tasks):
+        return None
+    return (
+        "decision-question-task: 最終行が質問ですが open な decision 型 task "
+        f"がありません。open task: {_task_listing(open_tasks)}。"
+        "質問と task の対応を自己照合してください。"
+    )
+
+
+def _decision_record_warning(
+    user_prompt: str, session_id: str | None, cwd: str | None
+) -> str | None:
+    prompt = user_prompt.strip()
+    if len(prompt) > 20 or SHORT_DECISION_RE.fullmatch(prompt) is None:
+        return None
+    open_tasks = _open_task_records(session_id, cwd)
+    if open_tasks is None:
+        return None
+    decisions = [record for record in open_tasks if _decision_task(record)]
+    if not decisions:
+        return None
+    return (
+        f"decision-record: 短文決裁「{prompt}」と open decision 型 task "
+        f"({_task_listing(decisions)}) を検出しました。"
+        "決裁内容を台帳 / todos へ記録し、task 状態を更新したか確認してください。"
+    )
+
+
+def _communication_lint_warnings(
+    final_text: str, assistant_text: str | None = None
+) -> list[str]:
+    prose = _strip_code_and_quotes(
+        final_text if assistant_text is None else assistant_text
+    )
+    final_line = _last_prose_line(final_text)
+    warnings: list[str] = []
+    if (
+        final_line
+        and not final_line.endswith(("?", "？"))
+        and not EMOJI_START_RE.match(final_line)
+    ):
+        warnings.append(
+            "communication-final-line: 最終非空行が絵文字始まりでも "
+            "`?` / `？` 終端でもありません。org 規約の最終行形式に直してください。"
+        )
+    match = SELF_NUMBER_RE.search(prose)
+    if match:
+        warnings.append(
+            f"communication-self-number: 自己採番参照「{match.group(0)}」を検出しました。"
+            "番号ではなく選択内容を言い換えてください。"
+        )
+    return warnings
+
+
+def _new_warning_families(
+    entries: list[dict],
+    final_text: str,
+    payload: dict,
+    assistant_text: str | None = None,
+    checkpoint_entries: list[dict] | None = None,
+    checkpoint_undercount: bool = False,
+) -> list[str]:
+    warnings: list[str] = []
+    session_id = payload.get("session_id")
+    session_id = session_id if isinstance(session_id, str) else None
+    cwd = payload.get("cwd")
+    cwd = cwd if isinstance(cwd, str) else None
+    try:
+        warning = _implementation_checkpoint_warning(
+            entries if checkpoint_entries is None else checkpoint_entries,
+            session_id,
+            cwd,
+            checkpoint_undercount,
+        )
+        if warning:
+            warnings.append(warning)
+    except Exception:
+        pass
+    try:
+        warning = _decision_question_warning(final_text, session_id, cwd)
+        if warning:
+            warnings.append(warning)
+    except Exception:
+        pass
+    try:
+        warning = _decision_record_warning(
+            _latest_user_prompt(entries), session_id, cwd
+        )
+        if warning:
+            warnings.append(warning)
+    except Exception:
+        pass
+    try:
+        communication = _communication_lint_warnings(final_text, assistant_text)
+        if communication:
+            warnings.append(" ".join(communication))
+    except Exception:
+        pass
+    return [re.sub(r"\s+", " ", warning).strip() for warning in warnings[:4]]
+
+
 _TAIL_BUFSIZE = 128 * 1024  # 実測 2545 turn の mean≈110KB / p75≈119KB を 1 read で覆う
+_SESSION_SCAN_BUDGET = 2 * 1024 * 1024
 
 
 def _is_prompt(obj: dict) -> bool:
@@ -1089,16 +1447,22 @@ def _is_prompt(obj: dict) -> bool:
     return obj.get("type") == "user" and isinstance(msg.get("content"), str)
 
 
-def _load_tail(path: str, turns: int = 1, bufsize: int = _TAIL_BUFSIZE) -> list[dict]:
-    """末尾から turn boundary を turns 個含むまで後方読みで返す; boundary が turns 未満なら全件。"""
+def _load_tail(
+    path: str,
+    turns: int | None = 1,
+    bufsize: int = _TAIL_BUFSIZE,
+    max_bytes: int | None = None,
+) -> list[dict]:
+    """末尾から turn boundary を turns 個含むまで返す。"""
     try:
         with open(path, "rb") as f:
             pos = f.seek(0, os.SEEK_END)
+            floor = max(0, pos - max_bytes) if max_bytes is not None else 0
             pending = b""  # 行頭が手前ブロックにある途中行 (次の読みで結合される)
             tail: list[dict] = []  # newest-first
             seen = 0
-            while pos > 0:
-                step = min(bufsize, pos)
+            while pos > floor:
+                step = min(bufsize, pos - floor)
                 pos -= step
                 f.seek(pos)
                 parts = (f.read(step) + pending).split(b"\n")
@@ -1114,11 +1478,11 @@ def _load_tail(path: str, turns: int = 1, bufsize: int = _TAIL_BUFSIZE) -> list[
                     tail.append(obj)
                     if _is_prompt(obj):
                         seen += 1
-                        if seen >= turns:
+                        if turns is not None and seen >= turns:
                             tail.reverse()
                             return tail
-            line = pending.strip()  # BOF: 先頭断片はこの時点で完全な 1 行
-            if line:
+            line = pending.strip()
+            if floor == 0 and line:
                 try:
                     tail.append(json.loads(line))
                 except json.JSONDecodeError:
@@ -1127,6 +1491,16 @@ def _load_tail(path: str, turns: int = 1, bufsize: int = _TAIL_BUFSIZE) -> list[
             return tail  # boundary < turns: 集めた全件
     except OSError:
         return []
+
+
+def _load_session_tail(
+    path: str, budget: int = _SESSION_SCAN_BUDGET
+) -> tuple[list[dict], bool]:
+    try:
+        undercount = os.path.getsize(path) > budget
+    except OSError:
+        return [], False
+    return _load_tail(path, turns=None, max_bytes=budget), undercount
 
 
 def _parse_ts(ts) -> float | None:
@@ -1545,14 +1919,16 @@ def _check(
             )
 
     # claim-without-evidence (warning-only)
-    m = CLAIM_RE.search(text)
+    m = CLAIM_RE.search(stripped)
     if m:
         evidence_used = bool(tool_names & EVIDENCE_TOOLS)
         if not evidence_used:
             warnings.append(
                 f"claim-without-evidence: 「{m.group(0)}」 と発話したが当ターンで "
                 f"Read / Grep / Glob / WebSearch / WebFetch のいずれも使われていません "
-                f"(System §報告・応答)。 verify-before-claim skill 参照。"
+                f"(System §報告・応答)。 verify-before-claim skill 参照。 "
+                f"否定断定の前に対象 subsystem の README / 正本文書を Read で確認したか。"
+                f"空 dir や単発 probe の空結果だけを根拠に断定しない。"
             )
 
     # provide-user-instructions (warning-only): manual-exec 文脈 + 未 fence host cmd
@@ -1622,27 +1998,23 @@ def _check(
 
 
 def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
-    # Returns (exit_code, prompt_epoch, text, worktree_warnings); main() feeds text/warnings onward.
+    # Returns (exit_code, prompt_epoch, text, surfaced_warnings); main() feeds text/warnings onward.
     if not isinstance(payload, dict):
         return 0, None, "", []
+    stop_hook_active = bool(payload.get("stop_hook_active"))
+    warning_stop_allowed = stop_hook_active or _stop_latch_claim(payload, ".wt")
     worktree_warnings = _worktree_cleanup_warnings(payload.get("cwd"))
-    if worktree_warnings and (
-        payload.get("stop_hook_active") or not _stop_latch_claim(payload, ".wt")
-    ):
+    if worktree_warnings and not warning_stop_allowed:
         worktree_warnings = []
     codex_warnings = []
-    if not payload.get("stop_hook_active") and _stop_latch_claim(
-        payload, _CODEX_LATCH_SUFFIX
-    ):
+    if stop_hook_active or _stop_latch_claim(payload, _CODEX_LATCH_SUFFIX):
         codex_warnings = _codex_shared_write_warnings(payload)
     worktree_warnings += codex_warnings
     transcript_path = payload.get("transcript_path")
     if not isinstance(transcript_path, str) or not transcript_path:
-        _emit_worktree_warnings(worktree_warnings)
         return 0, None, "", worktree_warnings
-    entries = _load_tail(transcript_path, turns=2)
+    entries = _load_tail(transcript_path)
     if not entries:
-        _emit_worktree_warnings(worktree_warnings)
         return 0, None, "", worktree_warnings
     (
         text,
@@ -1664,7 +2036,6 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
         text = (text + "\n" + last_msg) if text else last_msg
         final_text = last_msg
     if not text:
-        _emit_worktree_warnings(worktree_warnings)
         return 0, prompt_epoch, "", worktree_warnings
     declare_active = _declare_proceed_active(entries, time.time())
     # wind-down 判定は prompt を受け取れる UserPromptSubmit hook が記録済 (transcript は見ない)。
@@ -1695,15 +2066,23 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
             payload, text, prompt_epoch
         ),
     )
-    # advise-once: a stop_hook_active retry never re-blocks — demote to pass (see docstring turn-marker / Exit).
-    if exit_code == 2 and payload.get("stop_hook_active"):
-        for line in blocking:
-            sys.stderr.write("advise-once (block demoted to pass): " + line + "\n")
-        for line in warnings:
-            sys.stderr.write(line + "\n")
-        return 0, prompt_epoch, text, worktree_warnings
-    for line in warnings + blocking:
-        sys.stderr.write(line + "\n")
+    new_warnings: list[str] = []
+    if warning_stop_allowed:
+        checkpoint_entries, checkpoint_undercount = _load_session_tail(transcript_path)
+        new_warnings = _new_warning_families(
+            entries,
+            final_text,
+            payload,
+            text,
+            checkpoint_entries,
+            checkpoint_undercount,
+        )
+        warnings.extend(new_warnings)
+    surfaced_warnings = worktree_warnings + new_warnings
+    if exit_code == 2 and stop_hook_active:
+        _deliver_stop_feedback(warnings, blocking, surfaced_warnings, demoted=True)
+        return 0, prompt_epoch, text, surfaced_warnings
+    _deliver_stop_feedback(warnings, blocking, surfaced_warnings)
     if exit_code != 0:
         # block した turn は main() の bonus 経路に届かず継続 Stop も gate される — 出すならここだけ。
         try:
@@ -1712,7 +2091,26 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
             muted = None
         if muted:
             sys.stderr.write(muted + "\n")
-    return exit_code, prompt_epoch, text, worktree_warnings
+    return exit_code, prompt_epoch, text, surfaced_warnings
+
+
+def _deliver_stop_feedback(
+    warnings: list[str],
+    blocking: list[str],
+    surfaced_warnings: list[str],
+    demoted: bool = False,
+) -> None:
+    surfaced = set(surfaced_warnings)
+    feedback = [
+        ("advise-once (block demoted to pass): " if demoted else "") + line
+        for line in blocking
+    ]
+    if blocking and not demoted:
+        feedback.extend(warnings)
+    else:
+        feedback.extend(line for line in warnings if line not in surfaced)
+    if feedback:
+        sys.stderr.write("\n".join(feedback) + "\n")
 
 
 def _stop_latch_key(payload: dict, suffix: str = ".surf") -> tuple[str, str] | None:
@@ -1733,7 +2131,7 @@ def _stop_latch_key(payload: dict, suffix: str = ".surf") -> tuple[str, str] | N
 
 
 def _stop_latch_claim(payload: dict, suffix: str = ".surf") -> bool:
-    """True if this Stop is the turn's first for `suffix`; one locked read-modify-write so two Stops cannot both claim it. 掴めない環境では発火側に倒し stop_hook_active gate に委ねる。"""
+    """suffix ごとに同一 turn の最初の Stop だけを排他的に取得し、取得不能時は True へ fail-open する。"""
     k = _stop_latch_key(payload, suffix)
     if k is None:
         return True
@@ -1981,7 +2379,7 @@ def main() -> int:
         muted = _muted_memory_at_stop(payload, text)
     except Exception:
         muted = None
-    # worktree warnings ride the same additionalContext channel so the model actually sees them.
+    # surfaced warnings ride the same additionalContext channel so the model actually sees them.
     wt_text = "\n\n".join(worktree_warnings)
     combined = "\n\n".join(p for p in (reason, muted, wt_text) if p)
     if combined:
@@ -2866,6 +3264,482 @@ class WorkWithoutTaskTest(unittest.TestCase):
             )  # 帰属不能は fail-open
 
 
+class _DecisionStoreFixture:
+    SID = "sid-warn-family"
+
+    def setUp(self):
+        import tempfile
+        from unittest import mock
+
+        assert isinstance(self, unittest.TestCase)
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.cwd = temp.name
+        self.native = os.path.join(temp.name, "native-tasks")
+        patcher = mock.patch.object(
+            sys.modules[__name__], "NATIVE_TASKS_DIR", self.native
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _native(self, tid, status, subject):
+        directory = os.path.join(self.native, self.SID)
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, f"{tid}.json"), "w", encoding="utf-8") as f:
+            json.dump({"id": tid, "subject": subject, "status": status}, f)
+
+    def _mytask(self, items):
+        directory = os.path.join(self.cwd, "drafts", "tasks")
+        os.makedirs(directory, exist_ok=True)
+        with open(
+            os.path.join(directory, f"{self.SID}.json"), "w", encoding="utf-8"
+        ) as f:
+            json.dump(items, f)
+
+
+class ImplementationCheckpointWarningTest(unittest.TestCase):
+    @staticmethod
+    def _edit(name, path, **inputs):
+        return {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": name,
+                        "input": {"file_path": path, **inputs},
+                    }
+                ]
+            },
+        }
+
+    def test_warns_over_fifty_pure_added_source_lines(self):
+        entries = [
+            self._edit(
+                "Edit",
+                "/repo/app.py",
+                old_string="\n".join(["old"] * 10),
+                new_string="\n".join(["new"] * 61),
+            )
+        ]
+        warning = _implementation_checkpoint_warning(entries, "sid", "/repo")
+        assert warning is not None
+        self.assertIn("51 行", warning)
+
+    def test_excludes_non_source_and_counts_shebang_multiedit(self):
+        entries = [
+            self._edit("Write", "/repo/docs/a.py", content="x\n" * 80),
+            self._edit("Write", "/repo/drafts/a.sh", content="x\n" * 80),
+            self._edit("Write", "/repo/a.md", content="x\n" * 80),
+            self._edit(
+                "MultiEdit",
+                "/repo/bin/tool",
+                edits=[
+                    {
+                        "old_string": "#!/bin/sh",
+                        "new_string": "#!/bin/sh\n" + "x\n" * 51,
+                    }
+                ],
+            ),
+        ]
+        warning = _implementation_checkpoint_warning(entries, "sid", "/repo")
+        assert warning is not None
+        self.assertIn("51 行", warning)
+
+    def test_task_job_in_another_workspace_suppresses_warning(self):
+        from unittest import mock
+
+        entries = [self._edit("Write", "/repo/a.py", content="x\n" * 51)]
+        jobs = [{"sessionId": "sid", "kind": "task", "workspaceRoot": "/other"}]
+        with mock.patch.object(
+            sys.modules[__name__], "_codex_job_records", return_value=jobs
+        ):
+            self.assertIsNone(
+                _implementation_checkpoint_warning(entries, "sid", "/repo")
+            )
+
+    def test_budget_undercount_is_disclosed_in_checkpoint_warning(self):
+        entries = [self._edit("Write", "/repo/a.py", content="x\n" * 51)]
+        warning = _implementation_checkpoint_warning(
+            entries, "sid", "/repo", undercount=True
+        )
+        assert warning is not None
+        self.assertIn("undercount", warning)
+        self.assertIn("観測できた範囲で 51 行", warning)
+        self.assertIn("それ以前は数えていません", warning)
+
+    def test_budget_undercount_requires_observed_implementation_lines(self):
+        entries = [self._edit("Write", "/repo/a.py", content="x\n")]
+        warning = _implementation_checkpoint_warning(
+            entries, "sid", "/repo", undercount=True
+        )
+        assert warning is not None
+        self.assertIn("観測できた範囲で 1 行", warning)
+        self.assertIn("undercount", warning)
+        self.assertIsNone(
+            _implementation_checkpoint_warning([], "sid", "/repo", undercount=True)
+        )
+
+
+class DecisionQuestionWarningTest(_DecisionStoreFixture, unittest.TestCase):
+    def test_question_without_decision_task_warns_and_lists_open_tasks(self):
+        self._native("1", "pending", "API 調査")
+        warning = _decision_question_warning("どちらにしますか？", self.SID, self.cwd)
+        assert warning is not None
+        self.assertIn("#1 API 調査", warning)
+
+    def test_open_decision_task_in_either_store_suppresses_warning(self):
+        for store in ("native", "mytask"):
+            with self.subTest(store=store):
+                if store == "native":
+                    self._native("1", "pending", "判断待ち: API")
+                else:
+                    self._mytask(
+                        [
+                            {
+                                "id": "1",
+                                "content": "ご回答待ち: API",
+                                "status": "blocked",
+                            }
+                        ]
+                    )
+                self.assertIsNone(
+                    _decision_question_warning("どちらにしますか?", self.SID, self.cwd)
+                )
+                if store == "native":
+                    os.unlink(os.path.join(self.native, self.SID, "1.json"))
+
+    def test_negated_decision_name_does_not_count(self):
+        self._native("1", "pending", "判断待ちではなく実装中")
+        self.assertIsNotNone(
+            _decision_question_warning("実行しますか?", self.SID, self.cwd)
+        )
+
+    def test_code_block_question_and_numbering_are_ignored(self):
+        text = "```\n候補 1 ですか?\n```"
+        self.assertIsNone(_decision_question_warning(text, self.SID, self.cwd))
+        self.assertEqual(_communication_lint_warnings(text), [])
+
+    def test_malformed_store_skips_only_store_dependent_family(self):
+        from unittest import mock
+
+        directory = os.path.join(self.cwd, "drafts", "tasks")
+        os.makedirs(directory, exist_ok=True)
+        with open(
+            os.path.join(directory, f"{self.SID}.json"), "w", encoding="utf-8"
+        ) as f:
+            f.write("not json")
+        entries = [
+            {"type": "user", "message": {"content": "q"}},
+            TurnMarkerTest._asst("通常行"),
+        ]
+        warnings = _new_warning_families(
+            entries,
+            "質問ですか?\n通常行",
+            {"session_id": self.SID, "cwd": self.cwd},
+        )
+        self.assertFalse(any("decision-question-task" in item for item in warnings))
+        self.assertTrue(any("communication-final-line" in item for item in warnings))
+        with mock.patch.object(
+            sys.modules[__name__],
+            "_decision_question_warning",
+            side_effect=RuntimeError,
+        ):
+            warnings = _new_warning_families(entries, "通常行", {})
+        self.assertTrue(any("communication-final-line" in item for item in warnings))
+
+
+class DecisionRecordWarningTest(_DecisionStoreFixture, unittest.TestCase):
+    def test_short_decision_with_open_decision_task_warns(self):
+        self._mytask(
+            [{"id": "1", "content": "決裁待ち: deploy", "status": "in_progress"}]
+        )
+        warning = _decision_record_warning("承認", self.SID, self.cwd)
+        assert warning is not None
+        self.assertIn("台帳 / todos", warning)
+
+    def test_non_decision_or_long_turn_does_not_warn(self):
+        self._native("1", "pending", "ご指示待ち: deploy")
+        self.assertIsNone(_decision_record_warning("検討中です", self.SID, self.cwd))
+        self.assertIsNone(
+            _decision_record_warning(
+                "やってください。ただし先に調査してください", self.SID, self.cwd
+            )
+        )
+
+
+class CommunicationLintWarningTest(unittest.TestCase):
+    def test_final_line_requires_emoji_or_question(self):
+        warnings = _communication_lint_warnings("作業は完了しました。")
+        self.assertTrue(any("communication-final-line" in item for item in warnings))
+        for text in ("完了です\n✅ 完了", "どうしますか？"):
+            with self.subTest(text=text):
+                self.assertFalse(
+                    any(
+                        "communication-final-line" in item
+                        for item in _communication_lint_warnings(text)
+                    )
+                )
+
+    def test_self_numbering_ignores_code_and_quotes(self):
+        text = "```\n候補 1\n```\n> 案 2\n✅ 終了"
+        self.assertFalse(
+            any(
+                "communication-self-number" in item
+                for item in _communication_lint_warnings(text)
+            )
+        )
+        self.assertTrue(
+            any(
+                "communication-self-number" in item
+                for item in _communication_lint_warnings("選択肢 3 を採用\n✅ 完了")
+            )
+        )
+
+    def test_all_new_families_are_warning_only(self):
+        entries = [TurnMarkerTest._asst("通常行")]
+        warnings = _new_warning_families(entries, "案 1 で完了", {})
+        self.assertTrue(warnings)
+        code, _old_warnings, blocking = _check(
+            "done", "done", set(), [], [], [], False, False
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(blocking, [])
+
+    def test_warning_families_are_one_line_each_and_bounded_to_four(self):
+        from unittest import mock
+
+        values = ["implementation\nwarning", "question", "record"]
+        with (
+            mock.patch.object(
+                sys.modules[__name__],
+                "_implementation_checkpoint_warning",
+                return_value=values[0],
+            ),
+            mock.patch.object(
+                sys.modules[__name__],
+                "_decision_question_warning",
+                return_value=values[1],
+            ),
+            mock.patch.object(
+                sys.modules[__name__],
+                "_decision_record_warning",
+                return_value=values[2],
+            ),
+            mock.patch.object(
+                sys.modules[__name__],
+                "_communication_lint_warnings",
+                return_value=["communication-a", "communication-b"],
+            ),
+        ):
+            warnings = _new_warning_families([], "done", {})
+        self.assertEqual(len(warnings), 4)
+        self.assertTrue(all("\n" not in warning for warning in warnings))
+        self.assertIn("communication-a", warnings[-1])
+        self.assertIn("communication-b", warnings[-1])
+
+    def test_run_returns_new_warnings_for_active_retry_delivery(self):
+        import io
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        transcript = TurnMarkerTest._transcript(
+            [TurnMarkerTest._user(), TurnMarkerTest._asst("✅ done")]
+        )
+        payload = {"transcript_path": transcript, "session_id": "warn-sid"}
+        with (
+            mock.patch.object(
+                sys.modules[__name__],
+                "_new_warning_families",
+                return_value=["MODEL-WARN"],
+            ),
+            redirect_stderr(io.StringIO()),
+        ):
+            first = _run(payload)[3]
+            retry = _run({**payload, "stop_hook_active": True})[3]
+        self.assertIn("MODEL-WARN", first)
+        self.assertIn("MODEL-WARN", retry)
+
+    def test_each_warning_family_crosses_pass_block_and_active_paths(self):
+        import io
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        module = sys.modules[__name__]
+        for family in (
+            "implementation",
+            "question",
+            "record",
+            "communication",
+            "worktree",
+            "codex-shared-write",
+        ):
+            marker = f"{family.upper()}-WARN"
+            for mode in ("pass", "block", "active"):
+                with self.subTest(family=family, mode=mode):
+                    active = mode == "active"
+                    blocked = mode in {"block", "active"}
+                    transcript = TurnMarkerTest._transcript(
+                        [
+                            TurnMarkerTest._user(),
+                            TurnMarkerTest._asst(
+                                "省略しません" if blocked else "✅ done"
+                            ),
+                        ]
+                    )
+                    with (
+                        mock.patch.object(
+                            module, "_stop_latch_claim", return_value=True
+                        ),
+                        mock.patch.object(
+                            module,
+                            "_worktree_cleanup_warnings",
+                            return_value=[marker] if family == "worktree" else [],
+                        ),
+                        mock.patch.object(
+                            module,
+                            "_codex_shared_write_warnings",
+                            return_value=[marker]
+                            if family == "codex-shared-write"
+                            else [],
+                        ),
+                        mock.patch.object(
+                            module,
+                            "_load_session_tail",
+                            return_value=([TurnMarkerTest._user()], False),
+                        ),
+                        mock.patch.object(
+                            module,
+                            "_implementation_checkpoint_warning",
+                            return_value=marker if family == "implementation" else None,
+                        ),
+                        mock.patch.object(
+                            module,
+                            "_decision_question_warning",
+                            return_value=marker if family == "question" else None,
+                        ),
+                        mock.patch.object(
+                            module,
+                            "_decision_record_warning",
+                            return_value=marker if family == "record" else None,
+                        ),
+                        mock.patch.object(
+                            module,
+                            "_communication_lint_warnings",
+                            return_value=[marker] if family == "communication" else [],
+                        ),
+                    ):
+                        err = io.StringIO()
+                        with redirect_stderr(err):
+                            code, _epoch, _text, surfaced = _run(
+                                {
+                                    "transcript_path": transcript,
+                                    "stop_hook_active": active,
+                                }
+                            )
+                    output = err.getvalue()
+                    if mode == "pass":
+                        self.assertEqual(code, 0)
+                        self.assertNotIn(marker, output)
+                        self.assertIn(marker, surfaced)
+                    elif mode == "block":
+                        self.assertEqual(code, 2)
+                        self.assertIn(marker, output)
+                        self.assertIn("meta-announce-silence:", output)
+                        self.assertLess(
+                            output.index("meta-announce-silence:"), output.index(marker)
+                        )
+                    else:
+                        self.assertEqual(code, 0)
+                        self.assertNotIn(marker, output)
+                        self.assertIn(marker, surfaced)
+                        self.assertIn(
+                            "advise-once (block demoted to pass): "
+                            "meta-announce-silence:",
+                            output,
+                        )
+
+
+class TranscriptBudgetTest(unittest.TestCase):
+    def test_session_scan_reads_only_tail_budget_and_marks_undercount(self):
+        import tempfile
+
+        path = os.path.join(tempfile.mkdtemp(), "large.jsonl")
+        old = json.dumps(TurnMarkerTest._user(content="old")) + "\n"
+        recent = json.dumps(TurnMarkerTest._user(content="recent")) + "\n"
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(old)
+            handle.write(" " * 128 + "\n")
+            handle.write(recent)
+        entries, undercount = _load_session_tail(path, 128)
+        self.assertTrue(undercount)
+        self.assertEqual(_latest_user_prompt(entries), "recent")
+        self.assertFalse(
+            any(_latest_user_prompt([entry]) == "old" for entry in entries)
+        )
+
+    def test_run_uses_current_turn_for_three_families_and_budget_tail_for_checkpoint(
+        self,
+    ):
+        import io
+        import tempfile
+        from contextlib import redirect_stderr
+        from unittest import mock
+
+        current = [
+            TurnMarkerTest._user(content="current"),
+            TurnMarkerTest._asst("✅ done"),
+        ]
+        session_tail = [TurnMarkerTest._user(content="older")]
+        seen = {}
+
+        def implementation(entries, _sid, _cwd, undercount=False):
+            seen["implementation"] = (entries, undercount)
+
+        def decision(_final, _sid, _cwd):
+            seen["decision"] = True
+
+        def record(prompt, _sid, _cwd):
+            seen["record"] = prompt
+
+        transcript = os.path.join(tempfile.mkdtemp(), "transcript.jsonl")
+        with (
+            mock.patch.object(
+                sys.modules[__name__], "_load_tail", return_value=current
+            ),
+            mock.patch.object(
+                sys.modules[__name__],
+                "_load_session_tail",
+                return_value=(session_tail, True),
+            ),
+            mock.patch.object(
+                sys.modules[__name__],
+                "_implementation_checkpoint_warning",
+                side_effect=implementation,
+            ),
+            mock.patch.object(
+                sys.modules[__name__],
+                "_decision_question_warning",
+                side_effect=decision,
+            ),
+            mock.patch.object(
+                sys.modules[__name__],
+                "_decision_record_warning",
+                side_effect=record,
+            ),
+            mock.patch.object(
+                sys.modules[__name__],
+                "_communication_lint_warnings",
+                return_value=[],
+            ),
+            redirect_stderr(io.StringIO()),
+        ):
+            _run({"transcript_path": transcript})
+        self.assertEqual(seen["implementation"], (session_tail, True))
+        self.assertEqual(seen["record"], "current")
+        self.assertTrue(seen["decision"])
+
+
 class OpenTasksAtWindDownTest(unittest.TestCase):
     """open-tasks-at-wind-down: wind-down prompt で open Task 残があれば block。"""
 
@@ -3073,6 +3947,79 @@ class ClaimRegexTest(unittest.TestCase):
         for text in self.MATCHING:
             with self.subTest(text=text):
                 self.assertTrue(CLAIM_RE.search(text))
+
+    def test_expanded_negative_claims_match(self):
+        matching = (
+            "対象は存在しない",
+            "tool は未インストールです",
+            "package は未installです",
+            "機能は未導入です",
+            "artifact は未配備です",
+            "tool はインストールされていない",
+            "package は installされていません",
+            "機能は導入されていない",
+            "artifact は配備されていません",
+            "環境は用意されていない",
+            "接続先は準備されていません",
+            "host には入っていません",
+            "host にはありません",
+            "その手段は不可能です",
+            "無理です",
+            "復旧には無理がある",
+            "インストールできない",
+            "起動できない",
+            "接続できない",
+            "到達できない",
+            "再現できない",
+            "利用できない",
+            "使用できない",
+            "検証できない",
+            "実測できない",
+            "導入できない",
+        )
+        for text in matching:
+            with self.subTest(text=text):
+                self.assertTrue(CLAIM_RE.search(text))
+
+    def test_excluded_negative_forms_do_not_match(self):
+        excluded = (
+            "不可能ではない",
+            "不可能化を防ぐ",
+            "「不可能」",
+            "無理のない計画です",
+            "無理せず進めます",
+            "問題ありません",
+            "失敗ではないので続行します",
+        )
+        for text in excluded:
+            with self.subTest(text=text):
+                self.assertIsNone(CLAIM_RE.search(text))
+
+    def test_fenced_claim_does_not_warn(self):
+        text = "例です。\n```text\n対象は存在しない\n```\n`未インストール`"
+        code, warnings, blocking = _check(text, text, set(), [], [], [], False, False)
+        self.assertEqual(code, 0)
+        self.assertEqual(blocking, [])
+        self.assertFalse(any("claim-without-evidence" in item for item in warnings))
+
+    def test_unfenced_claim_still_warns(self):
+        text = "```text\n対象は存在しない\n```\nhost にはありません"
+        code, warnings, blocking = _check(text, text, set(), [], [], [], False, False)
+        self.assertEqual(code, 0)
+        self.assertEqual(blocking, [])
+        claim_warnings = [item for item in warnings if "claim-without-evidence" in item]
+        self.assertEqual(len(claim_warnings), 1)
+        self.assertIn("README / 正本文書を Read で確認したか", claim_warnings[0])
+        self.assertIn("単発 probe の空結果だけを根拠に断定しない", claim_warnings[0])
+
+    def test_evidence_tool_suppresses_warning(self):
+        text = "対象は存在しない"
+        code, warnings, blocking = _check(
+            text, text, {"Read"}, [], [], [], False, False
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(blocking, [])
+        self.assertFalse(any("claim-without-evidence" in item for item in warnings))
 
     def test_neutral_sentences_do_not_match(self):
         for text in ("実装を追加しました", "テストは 3 件とも通っています"):
@@ -3770,7 +4717,7 @@ class WorktreeCleanupTest(WorktreeFixtureMixin, unittest.TestCase):
         self.assertEqual(len(warnings), 1)
         self.assertIn(str(linked), warnings[0])
 
-    def test_run_emits_warning_on_stderr_and_keeps_exit_zero(self):
+    def test_run_returns_warning_for_additional_context_and_keeps_exit_zero(self):
         import io
         from contextlib import redirect_stderr
         from pathlib import Path
@@ -3802,10 +4749,10 @@ class WorktreeCleanupTest(WorktreeFixtureMixin, unittest.TestCase):
             )
 
         self.assertEqual(code, 0)
-        self.assertIn(str(linked), stderr.getvalue())
+        self.assertNotIn(str(linked), stderr.getvalue())
         self.assertIn(str(linked), warnings[0])
 
-    def test_run_warns_without_transcript_text(self):
+    def test_run_routes_warning_without_transcript_text(self):
         import io
         from contextlib import redirect_stderr
 
@@ -3816,7 +4763,7 @@ class WorktreeCleanupTest(WorktreeFixtureMixin, unittest.TestCase):
             code, _prompt_epoch, _text, warnings = _run({"cwd": str(repo)})
 
         self.assertEqual(code, 0)
-        self.assertIn(str(linked), stderr.getvalue())
+        self.assertNotIn(str(linked), stderr.getvalue())
         self.assertIn(str(linked), warnings[0])
 
     def test_dirty_linked_worktree_is_silent(self):
@@ -3943,14 +4890,12 @@ class WorktreeCleanupTest(WorktreeFixtureMixin, unittest.TestCase):
 
         self.assertEqual(first_code, 0)
         self.assertEqual(second_code, 0)
-        self.assertIn(str(linked), first_stderr.getvalue())
-        self.assertEqual(second_stderr.getvalue(), "")
+        self.assertNotIn(str(linked), first_stderr.getvalue())
+        self.assertNotIn(str(linked), second_stderr.getvalue())
         self.assertIn(str(linked), first_wt[0])
         self.assertEqual(second_wt, [])  # same-turn latch suppresses the repeat
 
-    def test_stop_hook_active_retry_suppresses_before_turns_file_exists(self):
-        # Fresh session: no .turns file yet, so the .wt latch alone is inert;
-        # stop_hook_active must suppress the retry regardless (mirrors memory-surface).
+    def test_stop_hook_active_retry_redelivers_before_turns_file_exists(self):
         import io
         from contextlib import redirect_stderr
 
@@ -3969,7 +4914,7 @@ class WorktreeCleanupTest(WorktreeFixtureMixin, unittest.TestCase):
         self.assertEqual(first_code, 0)
         self.assertIn(str(linked), first_wt[0])
         self.assertEqual(second_code, 0)
-        self.assertEqual(second_wt, [])
+        self.assertIn(str(linked), second_wt[0])
 
     def test_prunable_worktree_is_silent_but_other_candidates_continue(self):
         import io
@@ -4272,7 +5217,7 @@ class CodexSharedWriteTest(WorktreeFixtureMixin, unittest.TestCase):
         self.assertIn("wt2", third[0])
         self.assertIn("job-2", third[1])
 
-    def test_stop_hook_active_suppresses_both_checks(self):
+    def test_stop_hook_active_delivers_both_checks(self):
         import io
         from contextlib import redirect_stderr
         from unittest import mock
@@ -4289,8 +5234,8 @@ class CodexSharedWriteTest(WorktreeFixtureMixin, unittest.TestCase):
             redirect_stderr(io.StringIO()),
         ):
             _code, _epoch, _text, warnings = _run(payload)
-        self.assertEqual(warnings, [])
-        codex_check.assert_not_called()
+        self.assertEqual(warnings, ["wt", "codex"])
+        codex_check.assert_called_once()
 
 
 if __name__ == "__main__":

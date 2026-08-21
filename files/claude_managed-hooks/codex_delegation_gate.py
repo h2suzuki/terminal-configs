@@ -21,7 +21,7 @@ PreToolUse (matcher 無し)。 tool_name で dispatch する。
 
   Agent / Task   subagent_type に codex を含む spawn、 または prompt が codex 起動を含む
   Skill          codex: 名前空間の skill (SAFE_CODEX_SKILLS 以外)
-  Bash / Monitor codex-companion.mjs の task / review 系、 および素の codex CLI
+  Bash / Monitor main agent の codex-companion.mjs 全起動、 および素の codex CLI
   Workflow       script 本文に codex の生成 step を含むもの
   SendMessage    宛先に codex を含むもの
   mcp__*codex*   codex を名乗る MCP tool
@@ -34,14 +34,14 @@ skill-active state
 `skill_reminder_gate.py` の record-skill が書く
 `~/.claude/hooks/state/skill_reminder/active/<session_id>/<agent_key>.json` を再利用する。
 
-  main agent (agent_id 無し) : main bucket の prompt_id 一致を要求する
+  main agent (agent_id 無し) : companion の直接起動を一律 deny する
   subagent   (agent_id あり) : main bucket に記録が 1 件でもあれば通す
 
 codex-rescue subagent は `tools: Bash` のみで skill を invoke できず、 Bash 失敗時は
 「何も返さない」 と指示されているため、 subagent を deny すると回復手段も deny 文面も
 無い沈黙失敗になる。 checkpoint は委譲元 main agent の spawn 時点で取り、 subagent 側は
 「session 内で一度も invoke されていない」 場合だけ止める。 main bucket が空のときは
-記録経路の故障と区別できないので通す。 自分の bucket は見ない (自己承認の防止)。
+記録経路の故障と区別できないので通す。 自分の bucket は見ない (自己解除の防止)。
 
 軸 B の違反 id
 ==============
@@ -53,6 +53,8 @@ codex-rescue subagent は `tools: Bash` のみで skill を invoke できず、 
   review-swallowed-flag review 系が受理しない flag。 focus text へ流れ job record に届かない
   order-file            発注書 file を渡していない write 委譲
   order-lint            発注書が codex_order_lint に不合格
+  review-without-lint-pass task 経由の review が発注書 lint を通過していない
+  review-metadata        review 発注書の metadata が破損または曖昧
   report-without-write  報告書を成果物とする発注を --write 無しで起動
   cjk-inline            起動 command 行への長い日本語直書き
   kill-by-port          委譲と同じ command 内の fuser -k / pkill
@@ -62,13 +64,7 @@ codex-rescue subagent は `tools: Bash` のみで skill を invoke できず、 
 
 `unknown-task-flag` / `review-swallowed-flag` の受理集合は companion の
 parseCommandInput が subcommand ごとに宣言する集合をそのまま写している。 `--` 以降は
-passthrough なので対象外。
-
-escape hatch
-============
-起動 segment 先頭の `CODEX_DELEGATION_OK=1` は軸 A と `bare-codex-cli` を免除する。
-record-skill が死んだときの回復と、 companion 障害の切り分け (`codex exec --cd`) の
-ためで、 それ以外の決定的な違反は免除しない。
+flag 解釈の対象外だが、 companion が prompt に連結するため内容検査の対象に含める。
 
 既存 hook との境界 (重複実装しない)
 ===================================
@@ -92,8 +88,7 @@ residual (閉じない・既知)
 - Workflow / SendMessage の被覆は harness が tool_input を payload に載せることに依存する
 - `cjk-inline` の閾値は SKILL.md に数値が無いため本 hook が定める契約値
 - kill-by-port は codex 起動を含む command に限って見る。 単独の pkill は射程外
-- `order-lint` は発注書らしき file (`--prompt-file` 指定、 または規約の節見出しを持つ
-  file) だけに掛ける。 参照しただけの既存 doc と fix round の追記 file は対象外
+- `order-lint` の parse と発注書本文の読取は codex_order_lint に一本化する
 - resume で write 権限を引き継げるかは plugin state を読まないと分からない。
   `--write` × `--resume` は stderr warning に留める
 
@@ -113,15 +108,19 @@ import sys
 import tempfile
 import time
 import unittest
+from typing import Any
 
 HOME = os.path.expanduser("~")
 STATE_DIR = os.path.join(HOME, ".claude", "hooks", "state", "skill_reminder")
+DIRECT_STATE_DIR = os.path.join(
+    HOME, ".claude", "hooks", "state", "codex_delegation_gate"
+)
 REQUIRED_SKILL = "codex-delegation"
 FALLBACK_WINDOW_SECONDS = 1800
 ORDER_LINT = "/usr/local/bin/codex_order_lint"
 ORDER_LINT_TIMEOUT = 10
 CJK_INLINE_MAX = 200
-ORDER_READ_LIMIT = 65536
+ATTEMPT_LINE_MAX_BYTES = 4096
 
 COMPANION_SCRIPT = "codex-companion.mjs"
 CODEX_CLI = "codex"
@@ -160,14 +159,10 @@ REVIEW_OPTIONS = frozenset(
 )
 TASK_VALUE_OPTIONS = frozenset({"--model", "-m", "--effort", "--cwd", "--prompt-file"})
 REVIEW_VALUE_OPTIONS = frozenset({"--base", "--scope", "--model", "-m", "--cwd"})
-VALUE_OPTIONS = TASK_VALUE_OPTIONS | REVIEW_VALUE_OPTIONS
+WORKTREE_VALUE_OPTIONS = frozenset({"--cwd", "-C", "--model", "--log"})
+VALUE_OPTIONS = TASK_VALUE_OPTIONS | REVIEW_VALUE_OPTIONS | WORKTREE_VALUE_OPTIONS
 # 実際に flag として解釈されうる形だけを対象にする (先頭が `--` の prompt 本文を除く)。
 FLAG_SHAPE = re.compile(r"^--?[A-Za-z][\w-]*(=.*)?$")
-ORDER_SECTION = re.compile(
-    r"^##\s*(スコープ|成果物|作業量上限|実行してよい command|適用される既存裁定"
-    r"|出力言語規約|所要見積もり)",
-    re.MULTILINE,
-)
 
 SEGMENT_OPERATORS = frozenset({"&&", "||", ";", "|", "&", "(", ")", ";;"})
 ASSIGNMENT = re.compile(r"^\w+=")
@@ -188,6 +183,11 @@ SCRIPT_READ_LIMIT = 65536
 CJK = re.compile(r"[぀-ヿ㐀-䶿一-鿿ｦ-ﾟ]")
 MARKDOWN_TOKEN = re.compile(r"[\w./~-]+\.md\b")
 REPORT_HINT = re.compile(r"-report\.md|報告書")
+REVIEW_PROMPT = re.compile(
+    r"敵対レビュー|adversarial|レビュー観点"
+    r"|\b(?:review|audit|inspect)\b|(?:レビュー|監査)(?!済み)",
+    re.IGNORECASE,
+)
 MONITOR_LOOP = re.compile(r"\b(while|until|for)\b")
 # workflow script は shell ではないので、 起動の形をそのまま探す。 file 名の言及だけでは
 # 発火しない (hook 自身をレビューする workflow を誤って止めないため)。
@@ -379,10 +379,14 @@ def _subcommand(args: list[str]) -> str | None:
 
 
 def _positional(args: list[str]) -> list[str]:
+    """subcommand 後の prompt 部。 `--` 以降は flag 解釈せず prompt に含める。"""
     result: list[str] = []
     index = 0
     while index < len(args):
         token = args[index]
+        if token == "--":
+            result.extend(args[index + 1 :])
+            break
         if token in VALUE_OPTIONS:
             index += 2
             continue
@@ -391,7 +395,7 @@ def _positional(args: list[str]) -> list[str]:
             continue
         result.append(token)
         index += 1
-    return result[1:]  # subcommand を除いた prompt 部
+    return result[1:]
 
 
 def _unknown_flags(args: list[str], accepted: frozenset[str]) -> list[str]:
@@ -431,7 +435,7 @@ def _indirect_sources(segment: list[str], start: int, cwd: str) -> list[str]:
             continue
         path = token if os.path.isabs(token) else os.path.join(cwd or os.curdir, token)
         if os.path.isfile(path):
-            sources.append(_read_head(path, SCRIPT_READ_LIMIT))
+            sources.append(_read_regular_head(path, SCRIPT_READ_LIMIT))
         break
     return sources
 
@@ -507,7 +511,9 @@ def _order_path(launch: Launch, cwd: str) -> str | None:
     return path if os.path.isfile(path) else None
 
 
-def _read_head(path: str, limit: int) -> str:
+def _read_regular_head(path: str, limit: int) -> str:
+    if not os.path.isfile(path):
+        return ""
     try:
         with open(path, encoding="utf-8", errors="replace") as handle:
             return handle.read(limit)
@@ -515,35 +521,59 @@ def _read_head(path: str, limit: int) -> str:
         return ""
 
 
-def _order_text(path: str) -> str:
-    return _read_head(path, ORDER_READ_LIMIT)
-
-
-def _is_order_document(launch: Launch, path: str) -> bool:
-    """発注書らしき file だけを lint 対象にする。 参照した既存 doc や fix round の
-    追記 file を 「7 節が無い」 で deny しないため。"""
-    if _option_value(launch.args, "--prompt-file"):
-        return True
-    return bool(ORDER_SECTION.search(_order_text(path)))
-
-
-def _lint_order(path: str) -> str | None:
+def _lint_order(path: str) -> tuple[dict[str, Any] | None, str | None]:
     if not os.path.isfile(ORDER_LINT):
-        return None
+        return None, f"lint script {ORDER_LINT} が存在しません。"
     try:
         done = subprocess.run(
-            [ORDER_LINT, path],
+            [ORDER_LINT, "--metadata", path],
             capture_output=True,
             text=True,
             timeout=ORDER_LINT_TIMEOUT,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError) as error:
-        sys.stderr.write(f"codex-delegation-gate: order lint skipped ({error}).\n")
-        return None
-    if done.returncode != 1:
-        return None
-    return done.stdout.strip() or done.stderr.strip()
+    except (OSError, UnicodeDecodeError, subprocess.SubprocessError) as error:
+        return None, f"発注書 lint を実行できません ({error})。"
+    if done.stderr:
+        sys.stderr.write(done.stderr)
+    try:
+        metadata = json.loads(done.stdout)
+    except (TypeError, ValueError) as error:
+        detail = done.stdout.strip() or "出力なし"
+        return (
+            None,
+            f"発注書 lint metadata が不正です ({error}; rc={done.returncode}; {detail})。",
+        )
+    if done.returncode not in {0, 1}:
+        return None, f"発注書 lint が rc={done.returncode} でした。"
+    if not isinstance(metadata, dict):
+        return None, "発注書 lint metadata が object ではありません。"
+    findings = metadata.get("findings")
+    if not isinstance(findings, list) or not all(
+        isinstance(finding, str) for finding in findings
+    ):
+        return None, "発注書 lint metadata の findings が不正です。"
+    if not isinstance(metadata.get("order_document"), bool):
+        return None, "発注書 lint metadata の order_document が不正です。"
+    review_kind = metadata.get("review_kind")
+    if review_kind not in {None, "none", "adversarial", "acceptance"}:
+        return None, "発注書 lint metadata の review_kind が不正です。"
+    if metadata.get("scope") not in {None, "diff", "artifact"}:
+        return None, "発注書 lint metadata の scope が不正です。"
+    round_number = metadata.get("round")
+    if round_number is not None and (type(round_number) is not int or round_number < 1):
+        return None, "発注書 lint metadata の round が不正です。"
+    if not isinstance(metadata.get("methods"), list):
+        return None, "発注書 lint metadata の methods が不正です。"
+    if not isinstance(metadata.get("has_previous_verdict"), bool):
+        return None, "発注書 lint metadata の has_previous_verdict が不正です。"
+    if metadata.get("report_path") is not None and not isinstance(
+        metadata["report_path"], str
+    ):
+        return None, "発注書 lint metadata の report_path が不正です。"
+    if metadata.get("path") != os.path.abspath(path):
+        return None, "発注書 lint metadata の path が入力と一致しません。"
+    return metadata, None
 
 
 def _bash_violations(command: str, cwd: str) -> tuple[list[str], bool]:
@@ -553,8 +583,7 @@ def _bash_violations(command: str, cwd: str) -> tuple[list[str], bool]:
     for launch in _launches(command, cwd):
         if not launch.delegating:
             continue
-        # escape hatch は軸 A だけを免除する。 決定的な誤 invocation は素通ししない。
-        delegating = delegating or not launch.escaped
+        delegating = delegating or launch.kind == "companion" or not launch.escaped
         if launch.kind == "cli" and not launch.escaped:
             violations.append(
                 "[bare-codex-cli] 素の codex CLI で委譲しています。 正規経路は"
@@ -606,6 +635,14 @@ def _bash_violations(command: str, cwd: str) -> tuple[list[str], bool]:
         prompt = " ".join(_positional(launch.args))
         resume = _has_flag(launch.args, RESUME_FLAGS)
         order = _order_path(launch, cwd)
+        metadata, metadata_error = (
+            _lint_order(order) if order is not None else (None, None)
+        )
+        review_kind = metadata.get("review_kind") if metadata else None
+        review_requested = bool(REVIEW_PROMPT.search(prompt)) or review_kind in {
+            "adversarial",
+            "acceptance",
+        }
         # 発注書を要求するのは write 権限のある起動だけ。 read-only の調査 rescue に
         # 7 節の発注書を強いると、 委譲 cost が作業 cost を上回って委譲自体が消える。
         writable = _has_flag(launch.args, frozenset({"--write"})) or resume
@@ -621,15 +658,46 @@ def _bash_violations(command: str, cwd: str) -> tuple[list[str], bool]:
                 " 依頼は chat 文でなく発注書 file に固定し、"
                 " その path (または --prompt-file) を起動に含めてください。"
             )
-        if order is not None:
-            findings = _lint_order(order) if _is_order_document(launch, order) else None
-            if findings:
+        elif writable and not resume and order is None:
+            violations.append(
+                "[order-file] 発注書 path が一意な regular file ではありません。"
+            )
+        if review_requested:
+            if order is None or metadata_error or metadata is None:
+                detail = metadata_error or "regular file の発注書 path がありません。"
                 violations.append(
-                    f"[order-lint] 発注書 {order} が規約違反です:\n{findings}"
+                    "[review-without-lint-pass] task 経由の review は"
+                    f" codex_order_lint 通過が必須です。 {detail}"
                 )
-            if not _has_flag(
-                launch.args, frozenset({"--write"})
-            ) and REPORT_HINT.search(_order_text(order) + prompt):
+            elif REVIEW_PROMPT.search(prompt) and review_kind == "none":
+                violations.append(
+                    "[review-metadata] prompt roster と review-kind: none が矛盾しています。"
+                )
+            elif review_kind not in {"adversarial", "acceptance"}:
+                violations.append(
+                    "[review-metadata] review-kind が一意な adversarial / acceptance"
+                    " ではありません。"
+                )
+            elif metadata["findings"]:
+                violations.append(
+                    "[review-without-lint-pass] task 経由の review 発注書が規約違反です:\n"
+                    + "\n".join(str(finding) for finding in metadata["findings"])
+                )
+        elif metadata is not None and (
+            metadata["order_document"] or _option_value(launch.args, "--prompt-file")
+        ):
+            if metadata["findings"]:
+                violations.append(
+                    f"[order-lint] 発注書 {order} が規約違反です:\n"
+                    + "\n".join(str(finding) for finding in metadata["findings"])
+                )
+        elif metadata_error:
+            violations.append(f"[order-lint] {metadata_error}")
+        if order is not None:
+            report_path = metadata.get("report_path") if metadata else None
+            if not _has_flag(launch.args, frozenset({"--write"})) and (
+                report_path or REPORT_HINT.search(prompt)
+            ):
                 violations.append(
                     "[report-without-write] 報告書を成果物とする発注を"
                     " --write 無しで起動しています。"
@@ -682,8 +750,13 @@ def _active_path(session_id: str, agent_key: str) -> str:
 
 
 def _load_active(session_id: str, agent_key: str) -> dict | None:
+    path = _active_path(session_id, agent_key)
+    if not os.path.lexists(path):
+        return {}
+    if not os.path.isfile(path):
+        return None
     try:
-        with open(_active_path(session_id, agent_key), encoding="utf-8") as handle:
+        with open(path, encoding="utf-8") as handle:
             state = json.load(handle)
     except FileNotFoundError:
         return {}
@@ -713,6 +786,70 @@ def _skill_active(payload: dict, now: float) -> bool | None:
     return record.get("prompt_id") == prompt_id
 
 
+def _direct_companion(payload: dict) -> tuple[str, str] | None:
+    tool = payload.get("tool_name")
+    tool_input = payload.get("tool_input")
+    if tool not in {"Bash", "Monitor"} or not isinstance(tool_input, dict):
+        return None
+    command = tool_input.get("command")
+    if not isinstance(command, str) or not command:
+        return None
+    cwd_value = payload.get("cwd")
+    cwd = cwd_value if isinstance(cwd_value, str) else ""
+    parsed = any(launch.kind == "companion" for launch in _launches(command, cwd))
+    if COMPANION_SCRIPT not in command and not parsed:
+        return None
+    return tool, command
+
+
+def _direct_route_denial(payload: dict) -> str | None:
+    if not payload.get("agent_id"):
+        return "main agent の Bash / Monitor からの companion 起動は禁止です。"
+    fields = ("agent_type", "subagent_type", "agentType", "subagentType")
+    known = [str(payload.get(field) or "").strip().lower() for field in fields]
+    known = [value for value in known if value]
+    if known and not any("codex-rescue" in value for value in known):
+        return "種別を判別できる subagent は codex-rescue 系だけが companion を起動できます。"
+    if _skill_active(payload, time.time()) is False:
+        return f"main bucket に `{REQUIRED_SKILL}` checkpoint がありません。"
+    return None
+
+
+def _log_direct_attempt(command: str, event: str = "direct-launch-attempt") -> None:
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    line = f"{stamp}\t{event}\t{json.dumps(command, ensure_ascii=True)}"
+    encoded = line.encode("ascii")
+    if len(encoded) >= ATTEMPT_LINE_MAX_BYTES:
+        marker = b"..."
+        encoded = encoded[: ATTEMPT_LINE_MAX_BYTES - len(marker) - 1] + marker
+    try:
+        os.makedirs(DIRECT_STATE_DIR, mode=0o700, exist_ok=True)
+        path = os.path.join(DIRECT_STATE_DIR, "direct-launch-attempts.log")
+        with open(path, "ab") as handle:
+            handle.write(encoded + b"\n")
+    except OSError:
+        pass
+
+
+def _direct_deny_text(surface: str, detail: str) -> str:
+    route = (
+        f"codex-delegation-gate: {surface} の companion 直接起動を deny しました。 {detail} "
+        "正規ルートは codex:rescue skill 経由です。 cancel / status はユーザーが起動します。"
+    )
+    harm = (
+        "直接起動 habit の実害:\n"
+        "- 監視の誤判定・空待ちの事故 7 件\n"
+        "- 品質保証に 76 巡・145 commits\n"
+        "- launcher 試作の全損廃棄\n"
+        "- 版固定による古い companion の誤用"
+    )
+    rebuttal = (
+        "今回だけ・thin だから・status を見るだけだからは例外になりません。 "
+        "例外は上記の実害を再生産した経路そのものです。"
+    )
+    return "\n\n".join((route, harm, rebuttal))
+
+
 def _deny_text(surface: str, violations: list[str], skill_missing: bool) -> str:
     parts = [f"codex-delegation-gate: {surface} で codex への委譲を検出しました。"]
     if violations:
@@ -723,8 +860,6 @@ def _deny_text(surface: str, violations: list[str], skill_missing: bool) -> str:
         parts.append(
             f"`{REQUIRED_SKILL}` skill を当 turn 内で invoke してから、"
             f" 同じ command を実行し直してください。 {REBUTTAL}"
-            f" skill を invoke しても記録が残らない (record-skill hook が死んでいる) 場合だけ、"
-            f" 起動 segment の先頭に {ESCAPE_HATCH} を置いて通してください。"
         )
     parts.append("この hook 自身は file を変更しません。")
     return " ".join(parts) if len(parts) == 2 else "\n\n".join(parts)
@@ -788,7 +923,11 @@ def _surface(payload: dict) -> tuple[str, list[str], bool] | None:
         script = tool_input.get("script")
         if not isinstance(script, str):
             path = tool_input.get("scriptPath")
-            script = _order_text(path) if isinstance(path, str) and path else ""
+            script = (
+                _read_regular_head(path, SCRIPT_READ_LIMIT)
+                if isinstance(path, str) and path
+                else ""
+            )
         if not WORKFLOW_CODEX.search(script or ""):
             return None
         return (
@@ -815,6 +954,14 @@ def cmd(payload: object) -> int:
         return 0
     if payload.get("hook_event_name") not in (None, "PreToolUse"):
         return 0
+    direct = _direct_companion(payload)
+    if direct is not None:
+        direct_surface, command = direct
+        route_denial = _direct_route_denial(payload)
+        if route_denial is not None:
+            _log_direct_attempt(command)
+            _emit_deny(_direct_deny_text(direct_surface, route_denial))
+            return 0
     found = _surface(payload)
     if found is None:
         return 0
@@ -823,7 +970,14 @@ def cmd(payload: object) -> int:
     if delegating and _skill_active(payload, time.time()) is False:
         skill_missing = True
     if violations or skill_missing:
-        _emit_deny(_deny_text(surface, violations, skill_missing))
+        if direct is not None:
+            _log_direct_attempt(direct[1])
+            detail = "次の規約違反があります:\n" + "\n".join(
+                f"- {violation}" for violation in violations
+            )
+            _emit_deny(_direct_deny_text(surface, detail))
+        else:
+            _emit_deny(_deny_text(surface, violations, skill_missing))
     return 0
 
 
@@ -847,14 +1001,17 @@ class GateTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.old_state = globals()["STATE_DIR"]
+        self.old_direct_state = globals()["DIRECT_STATE_DIR"]
         self.old_lint = globals()["ORDER_LINT"]
-        globals()["STATE_DIR"] = self.tmp
+        globals()["STATE_DIR"] = os.path.join(self.tmp, "skill")
+        globals()["DIRECT_STATE_DIR"] = os.path.join(self.tmp, "direct")
         globals()["ORDER_LINT"] = os.path.join(
             self.tmp, "absent-lint"
         )  # host 依存を断つ
 
     def tearDown(self):
         globals()["STATE_DIR"] = self.old_state
+        globals()["DIRECT_STATE_DIR"] = self.old_direct_state
         globals()["ORDER_LINT"] = self.old_lint
         shutil.rmtree(self.tmp, ignore_errors=True)
 
@@ -894,6 +1051,8 @@ class GateTest(unittest.TestCase):
             "prompt_id": "p1",
             "cwd": self.tmp,
         }
+        extra.setdefault("agent_id", "agent-1")
+        extra.setdefault("agent_type", "codex-rescue")
         payload.update(extra)
         return self._run(payload)
 
@@ -908,6 +1067,38 @@ class GateTest(unittest.TestCase):
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(body)
         return path
+
+    def _metadata_lint(
+        self,
+        order,
+        *,
+        review_kind="none",
+        findings=None,
+        order_document=True,
+        report_path=None,
+        returncode=0,
+    ):
+        metadata = {
+            "path": os.path.abspath(order),
+            "order_document": order_document,
+            "review_kind": review_kind,
+            "round": None,
+            "scope": None,
+            "methods": [],
+            "has_previous_verdict": False,
+            "report_path": report_path,
+            "findings": findings or [],
+        }
+        script = os.path.join(self.tmp, "metadata-lint")
+        with open(script, "w", encoding="utf-8") as handle:
+            handle.write(
+                "#!/bin/sh\nprintf '%s\\n' '"
+                + json.dumps(metadata, ensure_ascii=False)
+                + f"'\nexit {returncode}\n"
+            )
+        os.chmod(script, 0o755)
+        globals()["ORDER_LINT"] = script
+        return script
 
     # --- 経路検出 ---
 
@@ -1017,17 +1208,82 @@ class GateTest(unittest.TestCase):
 
     def test_bash_companion_task_without_skill_denies(self):
         order = self._order()
-        parsed, _ = self._bash(f"node {self.COMPANION} task --write {order}")
-        self.assertIn(REQUIRED_SKILL, self._reason(parsed))
+        parsed, _ = self._bash(
+            f"node {self.COMPANION} task --write {order}", agent_id=None
+        )
+        self.assertIn("main agent", self._reason(parsed))
 
-    def test_bash_companion_read_only_subcommands_pass(self):
-        for sub in ("status", "cancel", "result", "setup"):
-            parsed, _ = self._bash(f"node {self.COMPANION} {sub} --json")
-            self.assertIsNone(parsed, sub)
+    def test_bash_companion_all_main_subcommands_deny(self):
+        for sub in (
+            "status",
+            "cancel",
+            "result",
+            "setup",
+            "task-resume-candidate",
+            "task-worker",
+        ):
+            parsed, _ = self._bash(f"node {self.COMPANION} {sub} --json", agent_id=None)
+            self.assertIn("直接起動を deny", self._reason(parsed), sub)
 
     def test_bash_companion_review_is_delegation(self):
-        parsed, _ = self._bash(f"node {self.COMPANION} adversarial-review --wait")
-        self.assertIn(REQUIRED_SKILL, self._reason(parsed))
+        parsed, _ = self._bash(
+            f"node {self.COMPANION} adversarial-review --wait", agent_id=None
+        )
+        self.assertIn("main agent", self._reason(parsed))
+
+    def test_direct_deny_message_has_three_parts_without_telemetry_disclosure(self):
+        parsed, _ = self._bash(f"node {self.COMPANION} status --json", agent_id=None)
+        reason = self._reason(parsed)
+        self.assertEqual(len(reason.split("\n\n")), 3)
+        for fact in (
+            "監視の誤判定・空待ちの事故 7 件",
+            "品質保証に 76 巡・145 commits",
+            "launcher 試作の全損廃棄",
+            "版固定による古い companion の誤用",
+            "今回だけ・thin だから・status を見るだけだから",
+        ):
+            self.assertIn(fact, reason)
+        self.assertNotIn("telemetry", reason)
+        self.assertNotIn("direct-launch-attempts.log", reason)
+
+    def test_direct_attempt_log_is_single_line_capped_and_append_failure_is_quiet(self):
+        from unittest.mock import patch
+
+        command = f"node {self.COMPANION} status --json"
+        parsed, err = self._bash(command, agent_id=None)
+        self.assertIn("直接起動を deny", self._reason(parsed))
+        self.assertEqual(err, "")
+        log = os.path.join(DIRECT_STATE_DIR, "direct-launch-attempts.log")
+        with open(log, "rb") as handle:
+            lines = handle.readlines()
+        self.assertEqual(len(lines), 1)
+        self.assertRegex(lines[0].decode("ascii"), r"^\d{4}-\d\d-\d\dT.*Z\t")
+        self.assertIn(json.dumps(command).encode("ascii"), lines[0])
+        long_command = f"node {self.COMPANION} status {'あ' * 5000}"
+        parsed, _ = self._bash(long_command, agent_id=None)
+        self.assertIn("直接起動を deny", self._reason(parsed))
+        with open(log, "rb") as handle:
+            lines = handle.readlines()
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(all(len(line) <= ATTEMPT_LINE_MAX_BYTES for line in lines))
+        with patch("builtins.open", side_effect=PermissionError):
+            parsed, err = self._bash(long_command, agent_id=None)
+        self.assertIn("直接起動を deny", self._reason(parsed))
+        self.assertEqual(err, "")
+
+    def test_known_non_rescue_subagent_denies_but_unknown_type_keeps_checkpoint(self):
+        self._seed()
+        command = f"node {self.COMPANION} status --json"
+        parsed, _ = self._bash(command, agent_type="general-purpose")
+        self.assertIn("codex-rescue", self._reason(parsed))
+        parsed, _ = self._bash(command, agent_type=None)
+        self.assertIsNone(parsed)
+
+    def test_quote_split_companion_name_is_still_direct_launch(self):
+        command = "node /plugins/codex-'companion.mjs' status --json"
+        self.assertNotIn(COMPANION_SCRIPT, command)
+        parsed, _ = self._bash(command, agent_id=None)
+        self.assertIn("直接起動を deny", self._reason(parsed))
 
     def test_bash_bare_codex_cli_denies_with_route_reason(self):
         self._seed()
@@ -1081,8 +1337,10 @@ class GateTest(unittest.TestCase):
 
     # --- 軸 A: skill-active ---
 
-    def test_state_missing_denies_and_corrupt_allows(self):
+    def test_subagent_other_skill_denies_and_corrupt_state_allows(self):
         order = self._order()
+        self._metadata_lint(order)
+        self._seed(skill="writing-code")
         parsed, _ = self._bash(f"node {self.COMPANION} task --write {order}")
         self.assertIn(REQUIRED_SKILL, self._reason(parsed))
         path = _active_path("s1", "main")
@@ -1092,14 +1350,17 @@ class GateTest(unittest.TestCase):
         parsed, _ = self._bash(f"node {self.COMPANION} task --write {order}")
         self.assertIsNone(parsed)
 
-    def test_other_turn_record_denies(self):
+    def test_main_direct_deny_ignores_current_checkpoint(self):
         order = self._order()
-        self._seed(prompt_id="older-turn")
-        parsed, _ = self._bash(f"node {self.COMPANION} task --write {order}")
-        self.assertIn(REQUIRED_SKILL, self._reason(parsed))
+        self._seed()
+        parsed, _ = self._bash(
+            f"node {self.COMPANION} task --write {order}", agent_id=None
+        )
+        self.assertIn("main agent", self._reason(parsed))
 
     def test_subagent_passes_on_any_main_record_regardless_of_turn(self):
         order = self._order()
+        self._metadata_lint(order)
         self._seed(prompt_id="parent-turn", ts=time.time() - 6 * 3600)
         parsed, _ = self._bash(
             f"node {self.COMPANION} task --write {order}", agent_id="agent-1"
@@ -1116,6 +1377,7 @@ class GateTest(unittest.TestCase):
 
     def test_subagent_allowed_when_main_bucket_absent(self):
         order = self._order()
+        self._metadata_lint(order)
         parsed, _ = self._bash(
             f"node {self.COMPANION} task --write {order}", agent_id="agent-1"
         )
@@ -1136,7 +1398,7 @@ class GateTest(unittest.TestCase):
                 "cwd": self.tmp,
             }
         )
-        self.assertIn("[monitor-launch]", self._reason(parsed))
+        self.assertIn("companion 直接起動を deny", self._reason(parsed))
 
     def test_monitor_running_sentinel_passes(self):
         parsed, _ = self._run(
@@ -1152,6 +1414,7 @@ class GateTest(unittest.TestCase):
 
     def test_shell_indirection_one_level(self):
         order = self._order()
+        self._seed(skill="writing-code")
         inner = f"node {self.COMPANION} task --write {order}"
         parsed, _ = self._bash(f"bash -c '{inner}'")
         self.assertIn(REQUIRED_SKILL, self._reason(parsed))
@@ -1163,6 +1426,7 @@ class GateTest(unittest.TestCase):
 
     def test_option_taking_wrappers_do_not_hide_the_launch(self):
         order = self._order()
+        self._seed(skill="writing-code")
         for prefix in ("timeout -k 5 600", "stdbuf -oL", "setsid", "nice -n 10"):
             parsed, _ = self._bash(
                 f"{prefix} node {self.COMPANION} task --write {order}"
@@ -1171,6 +1435,7 @@ class GateTest(unittest.TestCase):
 
     def test_substitution_and_subshell_forms_are_detected(self):
         order = self._order()
+        self._seed(skill="writing-code")
         for form in (
             f"X=$(node {self.COMPANION} task --write {order})",
             f"(node {self.COMPANION} task --write {order})",
@@ -1178,18 +1443,15 @@ class GateTest(unittest.TestCase):
             parsed, _ = self._bash(form)
             self.assertIn(REQUIRED_SKILL, self._reason(parsed), form)
 
-    def test_escape_hatch_waives_skill_but_not_violations(self):
+    def test_escape_hatch_cannot_waive_companion_checkpoint(self):
         order = self._order()
+        self._seed(skill="writing-code")
         parsed, _ = self._bash(
             f"{ESCAPE_HATCH} node {self.COMPANION} task --write {order}"
         )
-        self.assertIsNone(parsed)
-        parsed, _ = self._bash(
-            f"{ESCAPE_HATCH} node {self.COMPANION} task --write --effort max {order}"
-        )
         reason = self._reason(parsed)
-        self.assertIn("[effort]", reason)
-        self.assertNotIn("context に載っている", reason)
+        self.assertIn(REQUIRED_SKILL, reason)
+        self.assertNotIn(ESCAPE_HATCH, reason)
 
     def test_agent_prompt_ordering_codex_launch_is_delegation(self):
         parsed, _ = self._run(
@@ -1237,7 +1499,7 @@ class GateTest(unittest.TestCase):
         )
         self.assertIsNone(parsed)
 
-    def test_subagent_own_bucket_does_not_self_approve(self):
+    def test_subagent_own_bucket_does_not_self_authorize(self):
         order = self._order()
         self._seed(skill="writing-code")  # main は別 skill だけ invoke
         self._seed(agent_key="agent-1")  # subagent 自身は codex-delegation を持つ
@@ -1246,7 +1508,7 @@ class GateTest(unittest.TestCase):
         )
         self.assertIn(REQUIRED_SKILL, self._reason(parsed))
 
-    def test_missing_session_id_allows(self):
+    def test_missing_session_id_does_not_open_main_direct_route(self):
         order = self._order()
         parsed, _ = self._run(
             {
@@ -1257,19 +1519,29 @@ class GateTest(unittest.TestCase):
                 "cwd": self.tmp,
             }
         )
-        self.assertIsNone(parsed)
+        self.assertIn("main agent", self._reason(parsed))
 
     # --- 軸 B: invocation lint ---
+
+    def test_companion_dispatch_and_worktree_value_options_are_pinned(self):
+        launch = Launch("companion", ["--cwd", self.tmp, "task"], frozenset())
+        self.assertEqual(launch.subcommand, "--cwd")
+        self.assertEqual(
+            WORKTREE_VALUE_OPTIONS, frozenset({"--cwd", "-C", "--model", "--log"})
+        )
+        self.assertLessEqual(WORKTREE_VALUE_OPTIONS, VALUE_OPTIONS)
 
     def test_effort_and_model_are_option_position_only(self):
         self._seed()
         order = self._order()
+        self._metadata_lint(order)
         parsed, _ = self._bash(
             f"node {self.COMPANION} task --write --effort max --model sol {order}"
         )
         reason = self._reason(parsed)
         self.assertIn("[effort]", reason)
         self.assertIn("[model-nickname]", reason)
+        self.assertEqual(len(reason.split("\n\n")), 3)
         parsed, _ = self._bash(
             f"node {self.COMPANION} task --write {order} "
             "'--effort max と --model sol は使うな'"
@@ -1279,6 +1551,7 @@ class GateTest(unittest.TestCase):
     def test_valid_effort_and_official_model_pass(self):
         self._seed()
         order = self._order()
+        self._metadata_lint(order)
         parsed, _ = self._bash(
             f"node {self.COMPANION} task --write --effort xhigh --model gpt-5.6-sol {order}"
         )
@@ -1293,6 +1566,7 @@ class GateTest(unittest.TestCase):
     def test_transparent_wrapper_passes(self):
         self._seed()
         order = self._order()
+        self._metadata_lint(order)
         parsed, _ = self._bash(
             f"CODEX_ROUTE_OK=1 timeout 60 node {self.COMPANION} task --write {order}"
         )
@@ -1310,6 +1584,7 @@ class GateTest(unittest.TestCase):
     def test_order_path_inside_quoted_prompt_counts(self):
         self._seed()
         order = self._order()
+        self._metadata_lint(order)
         parsed, _ = self._bash(
             f'node {self.COMPANION} task --write "Read {order} and follow it"'
         )
@@ -1320,6 +1595,7 @@ class GateTest(unittest.TestCase):
     def test_report_artifact_requires_write(self):
         self._seed()
         order = self._order(body="## 成果物\n\ndrafts/x-report.md を書く\n")
+        self._metadata_lint(order, report_path="drafts/x-report.md")
         parsed, _ = self._bash(f"node {self.COMPANION} task {order}")
         self.assertIn("[report-without-write]", self._reason(parsed))
         parsed, _ = self._bash(f"node {self.COMPANION} task --write {order}")
@@ -1335,6 +1611,7 @@ class GateTest(unittest.TestCase):
     def test_kill_by_port_only_in_executable_position(self):
         self._seed()
         order = self._order()
+        self._metadata_lint(order)
         parsed, _ = self._bash(
             f"node {self.COMPANION} task --write {order} && fuser -k 5273/tcp"
         )
@@ -1347,28 +1624,138 @@ class GateTest(unittest.TestCase):
     def test_order_lint_failure_denies(self):
         self._seed()
         order = self._order(body="## スコープ\n\n節が 1 つしかない発注書\n")
-        script = os.path.join(self.tmp, "fake_lint")
+        self._metadata_lint(
+            order, findings=["必須の節がない: ## スコープ"], returncode=1
+        )
+        parsed, _ = self._bash(f"node {self.COMPANION} task --write {order}")
+        self.assertIn("[order-lint]", self._reason(parsed))
+
+    def test_missing_lint_denies_all_mode_and_order_route_cells(self):
+        self._seed()
+        order = self._order()
+        for writable in (False, True):
+            for prompt_file in (False, True):
+                route = f"--prompt-file {order}" if prompt_file else order
+                write = "--write " if writable else ""
+                with self.subTest(writable=writable, prompt_file=prompt_file):
+                    parsed, _ = self._bash(f"node {self.COMPANION} task {write}{route}")
+                    self.assertIn("[order-lint]", self._reason(parsed))
+
+    def test_corrupt_lint_denies_both_writable_order_routes(self):
+        self._seed()
+        order = self._order()
+        script = os.path.join(self.tmp, "corrupt-lint")
         with open(script, "w", encoding="utf-8") as handle:
-            handle.write("#!/bin/sh\necho '必須の節がない: ## スコープ'\nexit 1\n")
+            handle.write("#!/bin/sh\nprintf 'not-json\\n'\n")
         os.chmod(script, 0o755)
-        old = globals()["ORDER_LINT"]
         globals()["ORDER_LINT"] = script
-        try:
-            parsed, _ = self._bash(f"node {self.COMPANION} task --write {order}")
-            self.assertIn("[order-lint]", self._reason(parsed))
-        finally:
-            globals()["ORDER_LINT"] = old
+        for route in (order, f"--prompt-file {order}"):
+            with self.subTest(route=route):
+                parsed, _ = self._bash(f"node {self.COMPANION} task --write {route}")
+                self.assertIn("[order-lint]", self._reason(parsed))
+
+    def test_lint_timeout_denies_both_writable_order_routes(self):
+        from unittest import mock
+
+        self._seed()
+        order = self._order()
+        self._metadata_lint(order)
+        for route in (order, f"--prompt-file {order}"):
+            with (
+                self.subTest(route=route),
+                mock.patch.object(
+                    subprocess,
+                    "run",
+                    side_effect=subprocess.TimeoutExpired("lint", ORDER_LINT_TIMEOUT),
+                ),
+            ):
+                parsed, _ = self._bash(f"node {self.COMPANION} task --write {route}")
+                self.assertIn("[order-lint]", self._reason(parsed))
 
     def test_referenced_doc_that_is_not_an_order_is_not_linted(self):
         self._seed()
         doc = self._order(name="methodology.md", body="# 手順書\n\n本文\n")
-        script = os.path.join(self.tmp, "fail_lint")
-        with open(script, "w", encoding="utf-8") as handle:
-            handle.write("#!/bin/sh\necho '必須の節がない'\nexit 1\n")
-        os.chmod(script, 0o755)
-        globals()["ORDER_LINT"] = script
+        self._metadata_lint(
+            doc,
+            findings=["必須の節がない"],
+            order_document=False,
+            returncode=1,
+        )
         parsed, _ = self._bash(f'node {self.COMPANION} task --write "{doc} の手順で"')
         self.assertIsNone(parsed)
+
+    def test_task_review_requires_lint_metadata_and_uses_it_statelessly(self):
+        self._seed()
+        parsed, _ = self._bash(f'node {self.COMPANION} task "敵対レビューを実施"')
+        self.assertIn("[review-without-lint-pass]", self._reason(parsed))
+        order = self._order(body="review-kind: adversarial\ntarget: auth-fix\n")
+        self._metadata_lint(order, review_kind="adversarial")
+        parsed, _ = self._bash(
+            f'node {self.COMPANION} task "敵対レビューを実施 {order}"'
+        )
+        self.assertIsNone(parsed)
+        self.assertEqual(
+            set(os.listdir(self.tmp)),
+            {"direct", "metadata-lint", "skill", "x-order.md"},
+        )
+
+    def test_review_prompt_and_lint_metadata_must_agree(self):
+        self._seed()
+        order = self._order()
+        self._metadata_lint(order, review_kind="none")
+        parsed, _ = self._bash(
+            f'node {self.COMPANION} task "敵対レビューを実施 {order}"'
+        )
+        self.assertIn("[review-metadata]", self._reason(parsed))
+        self._metadata_lint(
+            order,
+            review_kind="adversarial",
+            findings=["review contract が不正"],
+            returncode=1,
+        )
+        parsed, _ = self._bash(f"node {self.COMPANION} task {order}")
+        self.assertIn("[review-without-lint-pass]", self._reason(parsed))
+
+    def test_review_roster_words_require_review_metadata_but_completed_forms_do_not(
+        self,
+    ):
+        self._seed()
+        order = self._order()
+        self._metadata_lint(order, review_kind="none")
+        for word in ("review", "audit", "inspect", "レビュー", "監査"):
+            with self.subTest(word=word):
+                parsed, _ = self._bash(f'node {self.COMPANION} task "{word} {order}"')
+                self.assertIn("[review-metadata]", self._reason(parsed))
+        for word in ("reviewed", "preaudit", "inspection", "レビュー済み"):
+            with self.subTest(word=word):
+                parsed, _ = self._bash(f'node {self.COMPANION} task "{word} {order}"')
+                self.assertIsNone(parsed)
+
+    def test_gate_does_not_open_the_order_document(self):
+        from unittest.mock import patch
+
+        self._seed()
+        order = self._order()
+        self._metadata_lint(order)
+        real_open = open
+
+        def reject_order(path, *args, **kwargs):
+            if os.fspath(path) == order:
+                raise AssertionError("gate opened order")
+            return real_open(path, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=reject_order):
+            parsed, _ = self._bash(f"node {self.COMPANION} task --write {order}")
+        self.assertIsNone(parsed)
+
+    def test_special_order_file_is_denied_without_opening_it(self):
+        self._seed()
+        pipe = os.path.join(self.tmp, "pipe.md")
+        link = os.path.join(self.tmp, "link.md")
+        os.mkfifo(pipe)
+        os.symlink(pipe, link)
+        parsed, _ = self._bash(f"node {self.COMPANION} task --write {link}")
+        self.assertIn("regular file", self._reason(parsed))
 
     def test_review_swallows_unsupported_flags(self):
         self._seed()
@@ -1394,10 +1781,43 @@ class GateTest(unittest.TestCase):
     def test_passthrough_and_prompt_text_are_not_flags(self):
         self._seed()
         order = self._order()
+        self._metadata_lint(order)
         parsed, _ = self._bash(
-            f"node {self.COMPANION} task --write {order} -- --effort max"
+            f"node {self.COMPANION} task --write {order} -- --review-focus x"
         )
-        self.assertIsNone(parsed)
+        reason = self._reason(parsed)
+        self.assertIn("[review-metadata]", reason)
+        self.assertNotIn("[unknown-task-flag]", reason)
+
+    def test_prompt_content_checks_cover_both_sides_of_passthrough(self):
+        self._seed()
+        order = self._order()
+        self._metadata_lint(order)
+        cases = (
+            ("review", "--write", "adversarial review", "[review-metadata]"),
+            ("report", "", "報告書 を書く", "[report-without-write]"),
+            (
+                "cjk",
+                "--write",
+                "あ" * (CJK_INLINE_MAX + 1),
+                "[cjk-inline]",
+            ),
+            ("harmless", "--write", "implement safely", None),
+        )
+        # args.mjs:12-20 と codex-companion.mjs:648 の prompt 連結仕様。
+        for side in ("before", "after"):
+            for family, write, content, expected in cases:
+                separator = "-- " if side == "after" else ""
+                command = (
+                    f"node {self.COMPANION} task {write} {order} "
+                    f"{separator}{shlex.quote(content)}"
+                )
+                with self.subTest(side=side, family=family):
+                    parsed, _ = self._bash(command)
+                    if expected is None:
+                        self.assertIsNone(parsed)
+                    else:
+                        self.assertIn(expected, self._reason(parsed))
 
     def test_bare_cli_bisection_allowed_with_escape_hatch(self):
         self._seed()
@@ -1428,14 +1848,14 @@ class GateTest(unittest.TestCase):
         )
         self.assertIsNone(parsed)
 
-    def test_order_lint_absent_binary_is_skipped(self):
+    def test_order_lint_absent_binary_is_denied(self):
         self._seed()
         order = self._order()
         old = globals()["ORDER_LINT"]
         globals()["ORDER_LINT"] = os.path.join(self.tmp, "no-such-lint")
         try:
             parsed, _ = self._bash(f"node {self.COMPANION} task --write {order}")
-            self.assertIsNone(parsed)
+            self.assertIn("[order-lint]", self._reason(parsed))
         finally:
             globals()["ORDER_LINT"] = old
 
