@@ -21,11 +21,14 @@ Goal: 車輪の再発明・無検問 loop・判断待ちの Task 化漏れを、
 
 Exit Criteria:
 
-- [ ] **review 運用の 4 gate を実装・smoke・deploy** — (a) 発注書 lint に「既製手段の棚卸し」節
+- [ ] **review 運用の gate 群を実装・smoke・deploy** — (a) 発注書 lint に「既製手段の棚卸し」節
   必須化、(b) review 系 task 発注の経路 gate (既製 `adversarial-review` subcommand か棚卸し節
-  つき発注書以外は deny)、(c) **5 巡 circuit-breaker** (対象ごとの round 台帳 + 5 巡到達で
-  発注 deny・解除 = ユーザー承認の出口決定記録)、(d) review 発注書の `scope: diff|artifact`
-  宣言必須化 (artifact には正当化)
+  つき発注書以外は deny)、(c) **round ごとの verdict 台帳** (前 round の verdict 記録が無いと
+  次 round 発注 deny・5 巡到達 = 敗北検出で敗因分析 + ユーザー承認を要求)、(d) `scope:
+  diff|artifact` 宣言必須化、(e) G5 = verdict 6 項目 (振り分け / 受入 / 構造 / 由来帰属 /
+  上流批評 / **概念診断**) の要求必須化、(f) G6 = fix 発注書の修正方式宣言 + 機構追加の
+  failure-mode 列挙表 + **全 fix 所見への掃引節 (欠陥定義 + 機械列挙 + 単一 site 主張にも根拠)**
+  — (e) 概念診断と (f) 掃引節は 2026-08-21 transcript 監査の欠落検出をユーザー承認で追加
 - [ ] **判断待ちの Task 化を強制する hook family** — 型付き命名規約 (判断待ち Task は名前に
   `採否待ち|判断待ち|決裁待ち` を含める) を前提に、最終行が質問 (`?`/`？` 終端・絵文字非依存)
   の turn は「open な decision 型 Task が 1 件以上 + 直近 K turn 内の作成/更新」を要求する
@@ -33,6 +36,10 @@ Exit Criteria:
   「open Task 0 件」だけの検査は別件 Task 残存時に素通しするため不採用 (2026-08-21 ユーザー
   指摘)。warn tier で導入 → 実 session で誤検知/見逃しを観測 → K 調整 → blocking 化判断。
   併せて intent-without-task family の roster に提案宣言語 (「実装しますか」「採否」等) を追加
+- [ ] **決裁受領の記録強制を上記 family に併合** (2026-08-21 transcript 監査で検出・ユーザー
+  承認) — decision 型 Task が open の時に短文決裁 (「(a)」「やってください」等) を受けた turn
+  は、台帳 / todos への決裁記録を要求する reminder (warn tier)。U1 決裁が transcript にのみ
+  残り 8 日消えた class の再発防止
 - [ ] 各 gate の canonical (files/) と deploy 先の diff -q 一致 + 発火の live 観測
 
 Work file: 4 gate の設計は本 block と `last-session-handoff.md` 不要 (本 block で自己完結)。
