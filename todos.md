@@ -41,10 +41,14 @@ Exit Criteria:
   codex 実装 (red 27 → green 190) → gates 5/5 全緑 → Opus filter pass (差分実測・既存
   5 family 影響ゼロ) → 凍結 `b5aea25` → main merge `5bb0448` + push。live 発火は
   base setup 再実行 (deploy) 後
-- [ ] 依頼 2: prompt 型 hook 仕様を確認し、採否と設計を決定 — 実装または不採用理由の記録
-  (進捗 2026-08-22: 実在確認済み・公式 doc 詳細を調査 agent で収集中・審判 model = Sonnet 訂正反映済み)
-- [ ] 両依頼の結果 (採否含む) を依頼元セッションへ報告した (進捗 2026-08-22: 依頼 1 の
-  採用・実装完了と依頼 2 の検討中 status を SendMessage で報告済み。依頼 2 の採否報告が残)
+- [x] 依頼 2: prompt 型 hook 仕様を確認し、採否と設計を決定 — 実装または不採用理由の記録。
+  **採用・実装済み 2026-08-22** (`cc607a0`): Stop へ prompt 型審判 hook (claude-sonnet-5・
+  timeout 30s・保守的 rubric 3 点 = 証跡なし否定断定 / 手続き skip / 根拠なき完了宣言・
+  疑わしきは ok・修正済み応答は ok で loop 防止) を `files/claude_managed-extensions.json` へ
+  追加。Stop 入力に tool 履歴が無いため審判は応答文の根拠明示を判定する設計 (公式 doc 確認済み)。
+  live 発火の実測は deploy 後
+- [x] 両依頼の結果 (採否含む) を依頼元セッションへ報告した — 2026-08-22 SendMessage 2 通
+  (依頼 1 = 採用・merge 済み / 依頼 2 = 採用・実装済み・deploy 待ち)
 
 Work file: `wt-gates/drafts/negation-claim-order.md` (依頼 1 発注書) /
 `wt-gates/drafts/negation-claim-report.md` (納品報告) /
