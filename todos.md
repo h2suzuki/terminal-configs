@@ -63,11 +63,16 @@ Exit Criteria:
   監視規律は rescue 経由でも維持する形で書き直す。(g) と同時に land しないと skill が gate 違反を
   指示し続ける
 - [ ] **判断待ちの Task 化を強制する hook family** — 型付き命名規約 (判断待ち Task は名前に
-  `採否待ち|判断待ち|決裁待ち` を含める) を前提に、最終行が質問 (`?`/`？` 終端・絵文字非依存)
-  の turn は「open な decision 型 Task が 1 件以上 + 直近 K turn 内の作成/更新」を要求する
-  stop_checks family。指摘時は open decision Task 一覧を提示して質問との対応を自己照合させる。
+  `採否待ち|判断待ち|決裁待ち` を含める) を前提とする stop_checks family。
   「open Task 0 件」だけの検査は別件 Task 残存時に素通しするため不採用 (2026-08-21 ユーザー
-  指摘)。warn tier で導入 → 実 session で誤検知/見逃しを観測 → K 調整 → blocking 化判断。
+  指摘)。**corpus 実測済み 2026-08-21** (`drafts/decision-task-corpus-study.md`・5 session
+  123 turn): 質問 turn 14 件中 genuine 決裁依頼 12 件に対し、当初案の「直近 K turn 内の
+  keyword task 作成/更新」は recall 0/12 (K=3,5)〜1/12 (K=10) で**不成立**。否定形
+  (「判断待ちではなく」を含む task 名) への誤 match も実証。**設計改訂**: 窓でなく停止時点の
+  状態検査 —「最終行が `?`/`？` 終端の turn は、型付き命名の open decision Task が 1 件以上
+  存在すること」(否定形 guard つき・命名規約は 2026-08-21 採用済みで以後の task に適用中)。
+  検出語彙に corpus 実測の言い回し (ご判断待ち / ご回答待ち / ご指示待ち) を追加。
+  warn tier で導入 → 実 session で誤検知/見逃しを観測 → blocking 化判断。
   併せて intent-without-task family の roster に提案宣言語 (「実装しますか」「採否」等) を追加
 - [ ] **決裁受領の記録強制を上記 family に併合** (2026-08-21 transcript 監査で検出・ユーザー
   承認) — decision 型 Task が open の時に短文決裁 (「(a)」「やってください」等) を受けた turn
