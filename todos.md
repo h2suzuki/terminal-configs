@@ -235,9 +235,15 @@ Exit Criteria:
   方法論 §7.2 へ「受領時の 2 方向分析 + 防止機構の同 round 実装」を正本化 commit 済み)。
   構造巡の発注書 draft は lint rc=0 で作成済み — 裁定 63 案 4 点 (--once は 1 評価周期以内 /
   記憶単位は事実 / exit 10 は名乗り確認済み限定 / 裁定 23 の廃止閉包) を裁定節に起草。
+  **決裁 2026-08-21〜22**: (1) 構造巡の発注をユーザー承認 (「実行しましょう」) — 裁定 63 を
+  台帳記録 (branch commit) して発注済み・sentinel 監視下で走行中。次の確認巡 r81 が 5 巡目 =
+  最終判定巡 (ゼロなら r60 と合わせ 2/2 で収束)。(2) fix 受け入れへ **Opus 回帰専任 filter** を
+  採用 (ユーザー発案・「役割固定 = filter は品質推定と enumerator を代替しない」を明示承認) —
+  方法論 §7.3 へ正本化 commit 済み。受け入れ手順 = 決定的 gates → Opus 回帰 filter (diff scope・
+  観点 1 つ + 下位観点表 + 注入事例) → r81 発注。
   work file: `wt-ruling61/drafts/sentinel-r80-report.md` (codex 側) /
   `wt-ruling61/drafts/sentinel-r80-opus-review.md` (Opus 側・保存済み) /
-  `wt-ruling61/drafts/sentinel-structural-order.md` (構造巡発注書 draft・裁定待ち)
+  `wt-ruling61/drafts/sentinel-structural-order.md` (構造巡発注書・発注済み)
 - [ ] **ユーザー裁定 (r77 の U1)**: (1) 裁定 61 の廃止列挙の補完 — **2026-08-21 承認済み**
   (「承知しました」)。裁定表へ反映 commit 済み (61 の列挙拡張 + 35/55 への廃止注記、
   meta-test 13 件緑)。(2) 裁定 42/43 と裁定 61 の衝突 — 同 inode の truncate + 再書込
