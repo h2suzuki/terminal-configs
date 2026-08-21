@@ -263,7 +263,12 @@ Exit Criteria:
   棚卸しつき発注書で発注済み (新 lint も rc=0 — fix round 9 納品物の初実戦)。防止機構
   「削減所見は裁定担保と照合」を方法論 §7.3 へ正本化 commit 済み。
   **fix round 6 納品** (selftest 319・回帰 12 red → green・決定的 gates 発注側再実行で全緑・
-  累積 diff +604/-355) → filter round 2 (前回 7 指摘の解消確認 + delta の回帰審査) 実行中。
+  累積 diff +604/-355) → **filter round 2 = 前回 7 指摘は全件解消 (A/B 再実測)・新規 1 件**
+  (期限跨ぎで exit 7 なのに alive:/ambiguous: の headline — 分類→output が code と別鎖の
+  二重決定。直積表に expired 次元なし)。同段不通過 2 回目 → 構造再審を発注書に明記し、
+  output 選択を code 起点へ一本化する fix round 7 を発注済み
+  (`wt-ruling61/drafts/sentinel-structural-fixes2.md`・filter round 2 報告 =
+  `wt-ruling61/drafts/sentinel-structural-regression-review-2.md`)。
   work file: `wt-ruling61/drafts/sentinel-r80-report.md` (codex 側) /
   `wt-ruling61/drafts/sentinel-r80-opus-review.md` (Opus 側・保存済み) /
   `wt-ruling61/drafts/sentinel-structural-order.md` (構造巡発注書) /
