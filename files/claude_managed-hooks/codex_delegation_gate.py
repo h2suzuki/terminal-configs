@@ -21,7 +21,7 @@ PreToolUse (matcher 無し)。 tool_name で dispatch する。
 
   Agent / Task   subagent_type に codex を含む spawn、 または prompt が codex 起動を含む
   Skill          codex: 名前空間の skill (SAFE_CODEX_SKILLS 以外)
-  Bash / Monitor codex-companion.mjs の task / review 系、 および素の codex CLI
+  Bash / Monitor main agent の codex-companion.mjs 全起動、 および素の codex CLI
   Workflow       script 本文に codex の生成 step を含むもの
   SendMessage    宛先に codex を含むもの
   mcp__*codex*   codex を名乗る MCP tool
@@ -34,7 +34,7 @@ skill-active state
 `skill_reminder_gate.py` の record-skill が書く
 `~/.claude/hooks/state/skill_reminder/active/<session_id>/<agent_key>.json` を再利用する。
 
-  main agent (agent_id 無し) : main bucket の prompt_id 一致を要求する
+  main agent (agent_id 無し) : companion の直接起動を一律 deny する
   subagent   (agent_id あり) : main bucket に記録が 1 件でもあれば通す
 
 codex-rescue subagent は `tools: Bash` のみで skill を invoke できず、 Bash 失敗時は
@@ -66,11 +66,11 @@ codex-rescue subagent は `tools: Bash` のみで skill を invoke できず、 
 parseCommandInput が subcommand ごとに宣言する集合をそのまま写している。 `--` 以降は
 passthrough なので対象外。
 
-escape hatch
-============
-起動 segment 先頭の `CODEX_DELEGATION_OK=1` は軸 A と `bare-codex-cli` を免除する。
-record-skill が死んだときの回復と、 companion 障害の切り分け (`codex exec --cd`) の
-ためで、 それ以外の決定的な違反は免除しない。
+直接起動の解除
+==============
+main agent の companion 起動を 1 回だけ許可するには、 ユーザーが
+`~/.claude/hooks/state/codex_delegation_gate/user-approval` を作る。 hook は許可の使用前に
+file を削除し、 削除できなければ deny する。 model が設定できる環境変数では解除しない。
 
 既存 hook との境界 (重複実装しない)
 ===================================
@@ -118,11 +118,15 @@ from typing import Any
 
 HOME = os.path.expanduser("~")
 STATE_DIR = os.path.join(HOME, ".claude", "hooks", "state", "skill_reminder")
+DIRECT_STATE_DIR = os.path.join(
+    HOME, ".claude", "hooks", "state", "codex_delegation_gate"
+)
 REQUIRED_SKILL = "codex-delegation"
 FALLBACK_WINDOW_SECONDS = 1800
 ORDER_LINT = "/usr/local/bin/codex_order_lint"
 ORDER_LINT_TIMEOUT = 10
 CJK_INLINE_MAX = 200
+ATTEMPT_LINE_MAX_BYTES = 4096
 
 COMPANION_SCRIPT = "codex-companion.mjs"
 CODEX_CLI = "codex"
@@ -576,8 +580,7 @@ def _bash_violations(command: str, cwd: str) -> tuple[list[str], bool]:
     for launch in _launches(command, cwd):
         if not launch.delegating:
             continue
-        # escape hatch は軸 A だけを免除する。 決定的な誤 invocation は素通ししない。
-        delegating = delegating or not launch.escaped
+        delegating = delegating or launch.kind == "companion" or not launch.escaped
         if launch.kind == "cli" and not launch.escaped:
             violations.append(
                 "[bare-codex-cli] 素の codex CLI で委譲しています。 正規経路は"
@@ -780,6 +783,84 @@ def _skill_active(payload: dict, now: float) -> bool | None:
     return record.get("prompt_id") == prompt_id
 
 
+def _direct_companion(payload: dict) -> tuple[str, str] | None:
+    tool = payload.get("tool_name")
+    tool_input = payload.get("tool_input")
+    if tool not in {"Bash", "Monitor"} or not isinstance(tool_input, dict):
+        return None
+    command = tool_input.get("command")
+    if not isinstance(command, str) or not command:
+        return None
+    cwd_value = payload.get("cwd")
+    cwd = cwd_value if isinstance(cwd_value, str) else ""
+    parsed = any(launch.kind == "companion" for launch in _launches(command, cwd))
+    if COMPANION_SCRIPT not in command and not parsed:
+        return None
+    return tool, command
+
+
+def _direct_route_denial(payload: dict) -> str | None:
+    if not payload.get("agent_id"):
+        return "main agent の Bash / Monitor からの companion 起動は禁止です。"
+    fields = ("agent_type", "subagent_type", "agentType", "subagentType")
+    known = [str(payload.get(field) or "").strip().lower() for field in fields]
+    known = [value for value in known if value]
+    if known and not any("codex-rescue" in value for value in known):
+        return "種別を判別できる subagent は codex-rescue 系だけが companion を起動できます。"
+    if _skill_active(payload, time.time()) is False:
+        return f"main bucket に `{REQUIRED_SKILL}` checkpoint がありません。"
+    return None
+
+
+def _consume_user_approval() -> bool:
+    path = os.path.join(DIRECT_STATE_DIR, "user-approval")
+    if not os.path.lexists(path):
+        return False
+    try:
+        os.unlink(path)
+    except OSError:
+        return False
+    return True
+
+
+def _log_direct_attempt(command: str) -> None:
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    line = f"{stamp}\t{json.dumps(command, ensure_ascii=True)}"
+    encoded = line.encode("ascii")
+    if len(encoded) >= ATTEMPT_LINE_MAX_BYTES:
+        marker = b"..."
+        encoded = encoded[: ATTEMPT_LINE_MAX_BYTES - len(marker) - 1] + marker
+    try:
+        os.makedirs(DIRECT_STATE_DIR, mode=0o700, exist_ok=True)
+        path = os.path.join(DIRECT_STATE_DIR, "direct-launch-attempts.log")
+        with open(path, "ab") as handle:
+            handle.write(encoded + b"\n")
+    except OSError:
+        pass
+
+
+def _direct_deny_text(surface: str, detail: str) -> str:
+    approval = os.path.join(DIRECT_STATE_DIR, "user-approval")
+    route = (
+        f"codex-delegation-gate: {surface} の companion 直接起動を deny しました。 {detail} "
+        "正規ルートは codex:rescue skill 経由です。 cancel / status はユーザーが起動します。 "
+        f"ユーザーが例外を認める場合だけ `{approval}` を手で作成してください。 "
+        "存在により次の 1 回を許可し、 hook が使用前に削除します。"
+    )
+    harm = (
+        "直接起動 habit の実害:\n"
+        "- 監視の誤判定・空待ちの事故 7 件\n"
+        "- 品質保証に 76 巡・145 commits\n"
+        "- launcher 試作の全損廃棄\n"
+        "- 版固定による古い companion の誤用"
+    )
+    rebuttal = (
+        "今回だけ・thin だから・status を見るだけだからは例外になりません。 "
+        "例外は上記の実害を再生産した経路そのものです。"
+    )
+    return "\n\n".join((route, harm, rebuttal))
+
+
 def _deny_text(surface: str, violations: list[str], skill_missing: bool) -> str:
     parts = [f"codex-delegation-gate: {surface} で codex への委譲を検出しました。"]
     if violations:
@@ -790,8 +871,6 @@ def _deny_text(surface: str, violations: list[str], skill_missing: bool) -> str:
         parts.append(
             f"`{REQUIRED_SKILL}` skill を当 turn 内で invoke してから、"
             f" 同じ command を実行し直してください。 {REBUTTAL}"
-            f" skill を invoke しても記録が残らない (record-skill hook が死んでいる) 場合だけ、"
-            f" 起動 segment の先頭に {ESCAPE_HATCH} を置いて通してください。"
         )
     parts.append("この hook 自身は file を変更しません。")
     return " ".join(parts) if len(parts) == 2 else "\n\n".join(parts)
@@ -886,6 +965,16 @@ def cmd(payload: object) -> int:
         return 0
     if payload.get("hook_event_name") not in (None, "PreToolUse"):
         return 0
+    direct = _direct_companion(payload)
+    if direct is not None:
+        direct_surface, command = direct
+        route_denial = _direct_route_denial(payload)
+        if route_denial is not None:
+            if _consume_user_approval():
+                return 0
+            _log_direct_attempt(command)
+            _emit_deny(_direct_deny_text(direct_surface, route_denial))
+            return 0
     found = _surface(payload)
     if found is None:
         return 0
@@ -894,7 +983,14 @@ def cmd(payload: object) -> int:
     if delegating and _skill_active(payload, time.time()) is False:
         skill_missing = True
     if violations or skill_missing:
-        _emit_deny(_deny_text(surface, violations, skill_missing))
+        if direct is not None:
+            _log_direct_attempt(direct[1])
+            detail = "次の規約違反があります:\n" + "\n".join(
+                f"- {violation}" for violation in violations
+            )
+            _emit_deny(_direct_deny_text(surface, detail))
+        else:
+            _emit_deny(_deny_text(surface, violations, skill_missing))
     return 0
 
 
@@ -918,14 +1014,17 @@ class GateTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.old_state = globals()["STATE_DIR"]
+        self.old_direct_state = globals()["DIRECT_STATE_DIR"]
         self.old_lint = globals()["ORDER_LINT"]
-        globals()["STATE_DIR"] = self.tmp
+        globals()["STATE_DIR"] = os.path.join(self.tmp, "skill")
+        globals()["DIRECT_STATE_DIR"] = os.path.join(self.tmp, "direct")
         globals()["ORDER_LINT"] = os.path.join(
             self.tmp, "absent-lint"
         )  # host 依存を断つ
 
     def tearDown(self):
         globals()["STATE_DIR"] = self.old_state
+        globals()["DIRECT_STATE_DIR"] = self.old_direct_state
         globals()["ORDER_LINT"] = self.old_lint
         shutil.rmtree(self.tmp, ignore_errors=True)
 
@@ -965,6 +1064,8 @@ class GateTest(unittest.TestCase):
             "prompt_id": "p1",
             "cwd": self.tmp,
         }
+        extra.setdefault("agent_id", "agent-1")
+        extra.setdefault("agent_type", "codex-rescue")
         payload.update(extra)
         return self._run(payload)
 
@@ -1120,17 +1221,109 @@ class GateTest(unittest.TestCase):
 
     def test_bash_companion_task_without_skill_denies(self):
         order = self._order()
-        parsed, _ = self._bash(f"node {self.COMPANION} task --write {order}")
-        self.assertIn(REQUIRED_SKILL, self._reason(parsed))
+        parsed, _ = self._bash(
+            f"node {self.COMPANION} task --write {order}", agent_id=None
+        )
+        self.assertIn("main agent", self._reason(parsed))
 
-    def test_bash_companion_read_only_subcommands_pass(self):
-        for sub in ("status", "cancel", "result", "setup"):
-            parsed, _ = self._bash(f"node {self.COMPANION} {sub} --json")
-            self.assertIsNone(parsed, sub)
+    def test_bash_companion_all_main_subcommands_deny(self):
+        for sub in (
+            "status",
+            "cancel",
+            "result",
+            "setup",
+            "task-resume-candidate",
+            "task-worker",
+        ):
+            parsed, _ = self._bash(f"node {self.COMPANION} {sub} --json", agent_id=None)
+            self.assertIn("直接起動を deny", self._reason(parsed), sub)
 
     def test_bash_companion_review_is_delegation(self):
-        parsed, _ = self._bash(f"node {self.COMPANION} adversarial-review --wait")
-        self.assertIn(REQUIRED_SKILL, self._reason(parsed))
+        parsed, _ = self._bash(
+            f"node {self.COMPANION} adversarial-review --wait", agent_id=None
+        )
+        self.assertIn("main agent", self._reason(parsed))
+
+    def test_direct_deny_message_has_three_parts_without_telemetry_disclosure(self):
+        parsed, _ = self._bash(f"node {self.COMPANION} status --json", agent_id=None)
+        reason = self._reason(parsed)
+        self.assertEqual(len(reason.split("\n\n")), 3)
+        for fact in (
+            "監視の誤判定・空待ちの事故 7 件",
+            "品質保証に 76 巡・145 commits",
+            "launcher 試作の全損廃棄",
+            "版固定による古い companion の誤用",
+            "今回だけ・thin だから・status を見るだけだから",
+            "user-approval",
+        ):
+            self.assertIn(fact, reason)
+        self.assertNotIn("telemetry", reason)
+        self.assertNotIn("direct-launch-attempts.log", reason)
+
+    def test_user_approval_is_consumed_before_one_main_launch(self):
+        approval = os.path.join(DIRECT_STATE_DIR, "user-approval")
+        os.makedirs(os.path.dirname(approval), exist_ok=True)
+        with open(approval, "w", encoding="utf-8") as handle:
+            handle.write("ユーザー承認")
+        command = f"node {self.COMPANION} status --json"
+        parsed, _ = self._bash(command, agent_id=None)
+        self.assertIsNone(parsed)
+        self.assertFalse(os.path.lexists(approval))
+        parsed, _ = self._bash(command, agent_id=None)
+        self.assertIn("直接起動を deny", self._reason(parsed))
+
+    def test_user_approval_consumption_failure_denies(self):
+        from unittest.mock import patch
+
+        approval = os.path.join(DIRECT_STATE_DIR, "user-approval")
+        os.makedirs(os.path.dirname(approval), exist_ok=True)
+        with open(approval, "w", encoding="utf-8") as handle:
+            handle.write("ユーザー承認")
+        with patch(__name__ + ".os.unlink", side_effect=PermissionError):
+            parsed, _ = self._bash(
+                f"node {self.COMPANION} status --json", agent_id=None
+            )
+        self.assertIn("直接起動を deny", self._reason(parsed))
+        self.assertTrue(os.path.lexists(approval))
+
+    def test_direct_attempt_log_is_single_line_capped_and_append_failure_is_quiet(self):
+        from unittest.mock import patch
+
+        command = f"node {self.COMPANION} status --json"
+        parsed, err = self._bash(command, agent_id=None)
+        self.assertIn("直接起動を deny", self._reason(parsed))
+        self.assertEqual(err, "")
+        log = os.path.join(DIRECT_STATE_DIR, "direct-launch-attempts.log")
+        with open(log, "rb") as handle:
+            lines = handle.readlines()
+        self.assertEqual(len(lines), 1)
+        self.assertRegex(lines[0].decode("ascii"), r"^\d{4}-\d\d-\d\dT.*Z\t")
+        self.assertIn(json.dumps(command).encode("ascii"), lines[0])
+        long_command = f"node {self.COMPANION} status {'あ' * 5000}"
+        parsed, _ = self._bash(long_command, agent_id=None)
+        self.assertIn("直接起動を deny", self._reason(parsed))
+        with open(log, "rb") as handle:
+            lines = handle.readlines()
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(all(len(line) <= ATTEMPT_LINE_MAX_BYTES for line in lines))
+        with patch("builtins.open", side_effect=PermissionError):
+            parsed, err = self._bash(long_command, agent_id=None)
+        self.assertIn("直接起動を deny", self._reason(parsed))
+        self.assertEqual(err, "")
+
+    def test_known_non_rescue_subagent_denies_but_unknown_type_keeps_checkpoint(self):
+        self._seed()
+        command = f"node {self.COMPANION} status --json"
+        parsed, _ = self._bash(command, agent_type="general-purpose")
+        self.assertIn("codex-rescue", self._reason(parsed))
+        parsed, _ = self._bash(command, agent_type=None)
+        self.assertIsNone(parsed)
+
+    def test_quote_split_companion_name_is_still_direct_launch(self):
+        command = "node /plugins/codex-'companion.mjs' status --json"
+        self.assertNotIn(COMPANION_SCRIPT, command)
+        parsed, _ = self._bash(command, agent_id=None)
+        self.assertIn("直接起動を deny", self._reason(parsed))
 
     def test_bash_bare_codex_cli_denies_with_route_reason(self):
         self._seed()
@@ -1184,8 +1377,9 @@ class GateTest(unittest.TestCase):
 
     # --- 軸 A: skill-active ---
 
-    def test_state_missing_denies_and_corrupt_allows(self):
+    def test_subagent_other_skill_denies_and_corrupt_state_allows(self):
         order = self._order()
+        self._seed(skill="writing-code")
         parsed, _ = self._bash(f"node {self.COMPANION} task --write {order}")
         self.assertIn(REQUIRED_SKILL, self._reason(parsed))
         path = _active_path("s1", "main")
@@ -1195,11 +1389,13 @@ class GateTest(unittest.TestCase):
         parsed, _ = self._bash(f"node {self.COMPANION} task --write {order}")
         self.assertIsNone(parsed)
 
-    def test_other_turn_record_denies(self):
+    def test_main_direct_deny_ignores_current_checkpoint(self):
         order = self._order()
-        self._seed(prompt_id="older-turn")
-        parsed, _ = self._bash(f"node {self.COMPANION} task --write {order}")
-        self.assertIn(REQUIRED_SKILL, self._reason(parsed))
+        self._seed()
+        parsed, _ = self._bash(
+            f"node {self.COMPANION} task --write {order}", agent_id=None
+        )
+        self.assertIn("main agent", self._reason(parsed))
 
     def test_subagent_passes_on_any_main_record_regardless_of_turn(self):
         order = self._order()
@@ -1239,7 +1435,7 @@ class GateTest(unittest.TestCase):
                 "cwd": self.tmp,
             }
         )
-        self.assertIn("[monitor-launch]", self._reason(parsed))
+        self.assertIn("companion 直接起動を deny", self._reason(parsed))
 
     def test_monitor_running_sentinel_passes(self):
         parsed, _ = self._run(
@@ -1255,6 +1451,7 @@ class GateTest(unittest.TestCase):
 
     def test_shell_indirection_one_level(self):
         order = self._order()
+        self._seed(skill="writing-code")
         inner = f"node {self.COMPANION} task --write {order}"
         parsed, _ = self._bash(f"bash -c '{inner}'")
         self.assertIn(REQUIRED_SKILL, self._reason(parsed))
@@ -1266,6 +1463,7 @@ class GateTest(unittest.TestCase):
 
     def test_option_taking_wrappers_do_not_hide_the_launch(self):
         order = self._order()
+        self._seed(skill="writing-code")
         for prefix in ("timeout -k 5 600", "stdbuf -oL", "setsid", "nice -n 10"):
             parsed, _ = self._bash(
                 f"{prefix} node {self.COMPANION} task --write {order}"
@@ -1274,6 +1472,7 @@ class GateTest(unittest.TestCase):
 
     def test_substitution_and_subshell_forms_are_detected(self):
         order = self._order()
+        self._seed(skill="writing-code")
         for form in (
             f"X=$(node {self.COMPANION} task --write {order})",
             f"(node {self.COMPANION} task --write {order})",
@@ -1281,18 +1480,15 @@ class GateTest(unittest.TestCase):
             parsed, _ = self._bash(form)
             self.assertIn(REQUIRED_SKILL, self._reason(parsed), form)
 
-    def test_escape_hatch_waives_skill_but_not_violations(self):
+    def test_escape_hatch_cannot_waive_companion_checkpoint(self):
         order = self._order()
+        self._seed(skill="writing-code")
         parsed, _ = self._bash(
             f"{ESCAPE_HATCH} node {self.COMPANION} task --write {order}"
         )
-        self.assertIsNone(parsed)
-        parsed, _ = self._bash(
-            f"{ESCAPE_HATCH} node {self.COMPANION} task --write --effort max {order}"
-        )
         reason = self._reason(parsed)
-        self.assertIn("[effort]", reason)
-        self.assertNotIn("context に載っている", reason)
+        self.assertIn(REQUIRED_SKILL, reason)
+        self.assertNotIn(ESCAPE_HATCH, reason)
 
     def test_agent_prompt_ordering_codex_launch_is_delegation(self):
         parsed, _ = self._run(
@@ -1349,7 +1545,7 @@ class GateTest(unittest.TestCase):
         )
         self.assertIn(REQUIRED_SKILL, self._reason(parsed))
 
-    def test_missing_session_id_allows(self):
+    def test_missing_session_id_does_not_open_main_direct_route(self):
         order = self._order()
         parsed, _ = self._run(
             {
@@ -1360,7 +1556,7 @@ class GateTest(unittest.TestCase):
                 "cwd": self.tmp,
             }
         )
-        self.assertIsNone(parsed)
+        self.assertIn("main agent", self._reason(parsed))
 
     # --- 軸 B: invocation lint ---
 
@@ -1373,6 +1569,7 @@ class GateTest(unittest.TestCase):
         reason = self._reason(parsed)
         self.assertIn("[effort]", reason)
         self.assertIn("[model-nickname]", reason)
+        self.assertEqual(len(reason.split("\n\n")), 3)
         parsed, _ = self._bash(
             f"node {self.COMPANION} task --write {order} "
             "'--effort max と --model sol は使うな'"
@@ -1480,7 +1677,8 @@ class GateTest(unittest.TestCase):
         )
         self.assertIsNone(parsed)
         self.assertEqual(
-            set(os.listdir(self.tmp)), {"active", "metadata-lint", "x-order.md"}
+            set(os.listdir(self.tmp)),
+            {"direct", "metadata-lint", "skill", "x-order.md"},
         )
 
     def test_review_prompt_and_lint_metadata_must_agree(self):
