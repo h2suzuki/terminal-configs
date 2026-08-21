@@ -124,8 +124,11 @@ Exit Criteria:
 - [x] codex 意見書 (`drafts/quality-estimation-opinion-report.md` §5) の 5 巡 protocol と
   突合し、入場条件・round 別の入力/出力/判定・「巡数を黙って延長しない」規律を正本化 —
   `78a2a80` §7.4 に inline 化 (drafts への参照は doc 本文に残さない)
-- [ ] **fix diff の実物精査** — 認定 era の埋め込み ~10 件を commit diff 水準で分析し、
-  「新しく仮定した次元」列挙表 (意見書 §4) の実効性を検証して fix 型制限の設計に反映
+- [x] **fix diff の実物精査** — 認定 era の埋め込み ~10 件を commit diff 水準で分析し、
+  「新しく仮定した次元」列挙表 (意見書 §4) の実効性を検証して fix 型制限の設計に反映 —
+  2026-08-21 実施: 注入 12 件を commit hunk まで遡及 (`drafts/fix-injection-diff-audit.md`
+  374 行・AUDIT_COMPLETE)。機構追加型 92% (11/12)。列挙義務は新設系 4 件に有効・
+  境界条件の未掃引 4 件は class 掃引・転写ミス 1 件は裁定照合の担当と確定し doc §7.3 へ追記
 
 Work file: `drafts/quality-estimation-opinion-report.md` (codex 第三者意見書)
 
