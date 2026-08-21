@@ -21,12 +21,26 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 Goal: 隣セッションから届く依頼を受領し、内容を本 block に記録した上で処理する
 (codex 委譲になる見込み — その場合は codex-delegation の lifecycle で実施する)。
 
+受領記録 (2026-08-22・claude-design-fe-starter session より・いずれも H.S. 承認済み):
+
+1. 依頼 1 (優先): stop_checks.py の claim-without-evidence 検査を否定断定語
+   (無い / 存在しない / 未 install / できない / 不可能 / 無理 系) へ拡張する検討。
+   turn 内に証跡 tool (Read/Grep/Glob/WebFetch 等) が無ければ捕捉。採用条件 =
+   過剰 block にならないこと (語彙絞り込み・段階導入・効果測定・不採用判断も委任)。
+   契機の実例と教訓は org entry feedback_env_blocker_empirical_test.md (対処 7) に記録済み
+2. 依頼 2 (補完・後順): prompt 型 Stop hook による LLM 審判「ツッコミ役」の実装検討 —
+   否定断定・手続き skip・根拠なき完了宣言を Stop 点で審査。審判 model は Sonnet
+   (H.S. 裁定 2026-08-22 の訂正 message で上位 model 案を上書き)。advisory 開始 →
+   blocking 昇格の段階設計。依頼 1 の決定的 gate と 2 層構え。採否・優先度判断も委任
+
 Exit Criteria:
 
-- [ ] 依頼内容を受領し、本 block へ要旨と Exit Criteria の具体化を記録した
-- [ ] 依頼の処理が完了し、成果を依頼元へ報告した
+- [x] 依頼内容を受領し、本 block へ要旨と Exit Criteria の具体化を記録した (2026-08-22 本 commit)
+- [ ] 依頼 1: 設計を確定し、wt-gates line で実装 → 受け入れ鎖 (決定的 gates → 回帰 filter) 通過 → 凍結 commit
+- [ ] 依頼 2: prompt 型 hook 仕様を確認し、採否と設計を決定 — 実装または不採用理由の記録
+- [ ] 両依頼の結果 (採否含む) を依頼元セッションへ報告した
 
-Work file: 依頼受領後に記載
+Work file: 依頼 1 の発注書作成後に記載
 
 ### 敵対レビュー運用の強制機構 (gate 化)
 
