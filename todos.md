@@ -276,6 +276,14 @@ Exit Criteria:
   output 選択を code 起点へ一本化する fix round 7 を発注済み
   (`wt-ruling61/drafts/sentinel-structural-fixes2.md`・filter round 2 報告 =
   `wt-ruling61/drafts/sentinel-structural-regression-review-2.md`)。
+  **fix round 7 納品 → filter round 3 = VERDICT: pass (2026-08-22)** — 指摘 A 解消 (A/B
+  2 scenario とも exit 7 + timeout headline)・output 選択の code 起点一本化を AST 不変条件
+  test まで確認・28×2 直積の headline↔契約 slug 不一致 0・新規指摘ゼロ。**回帰 filter 通過 =
+  確認巡の入場条件成立** (filter 推移 7 → 1 → 0)。凍結 commit `ddfabb4` + 裁定 63 担保列を
+  実 test 名へ同期 `a0acca1` (外部 suite 13 OK)。**確認巡 r81 (5 巡目・最終判定) を発注済み**
+  (`wt-ruling61/drafts/sentinel-r81-review-order.md`・両 lint rc=0。U0 ゼロなら r60 と合わせ
+  収束 2/2 成立、非ゼロなら延長せずユーザー判断)。filter round 3 報告 =
+  `wt-ruling61/drafts/sentinel-structural-regression-review-3.md`。
   work file: `wt-ruling61/drafts/sentinel-r80-report.md` (codex 側) /
   `wt-ruling61/drafts/sentinel-r80-opus-review.md` (Opus 側・保存済み) /
   `wt-ruling61/drafts/sentinel-structural-order.md` (構造巡発注書) /
