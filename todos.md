@@ -97,10 +97,11 @@ Goal: 本セッションで確定した教訓群を `docs/adversarial-review-met
 
 Exit Criteria:
 
-- [ ] 教訓 (1)〜(6) (Medium「方法論の実証」block に記録済み: 停止規則 / fix 型制限 /
-  品質推定 / 計数と判定の分業 / 統計の適用領域 / round scope 分離) を doc へ反映
-- [ ] **アーキテクチャレビューの段階設計** (2026-08-21 ユーザー指示 → 同日設計確定・doc 反映
-  待ち): **巡 0 (実装前)** = 構造のみを 1 巡審査。審査対象は実装 code でなく**詳細を捨てた
+- [x] 教訓 (1)〜(6) (Medium「方法論の実証」block に記録済み: 停止規則 / fix 型制限 /
+  品質推定 / 計数と判定の分業 / 統計の適用領域 / round scope 分離) を doc へ反映 —
+  `78a2a80` (§7.1〜7.4 + L4/L7。反映先は commit message の対応表)
+- [x] **アーキテクチャレビューの段階設計** (2026-08-21 ユーザー指示 → 同日設計確定 →
+  同日 doc 反映 `78a2a80`: G0 新設 + §7.2 常設構造判定 + checklist 13〜16): **巡 0 (実装前)** = 構造のみを 1 巡審査。審査対象は実装 code でなく**詳細を捨てた
   構造記述** — 部品表 (部品・保持状態・読者/書者・既存部品での代替可否)。chart と部品表は
   LLM には等価 (2026-08-21 ユーザー確認: 等価なら入口 2 つで可)。code を対象にしないのは
   詳細が構造の問いを溺れさせるため (実測: code への 3 巡 18 指摘は全て code 水準・構造指摘 0)。
@@ -113,14 +114,16 @@ Exit Criteria:
   (gates block (c)) は集計側 backstop に位置づけ。構造帰属となった指摘は fix round でなく
   構造巡へ回す。根拠 case = gates 3 巡 18 指摘が「台帳って要るの?」の一問で無効化
   (entry feedback_architecture_before_review が doc 反映までの防衛線)
-- [ ] transcript 監査 (2026-08-21) で確定した doc 行き要素を per-member 対応表つきで反映:
+- [x] transcript 監査 (2026-08-21) で確定した doc 行き要素を per-member 対応表つきで反映
+  (`78a2a80` — 対応表 8 要素は commit message 本文、G1/G2/§7.2/§7.4/L4 へ分配):
   round 0 の裁定 catalog 先渡し / finding round は read-only (直さず推定表へ) /
   self P0 の rollback 規律 / 終盤 round で機構追加が必要なら 5 巡収束は失敗と判定
   (黙って延長しない) / 裁定→fixture の粒度 pin / strangler 型 (全面 rewrite 不採用) /
   capture-recapture の適用限定 (独立性成立時のみ) / 台帳集計 (分布 summary) の script 化。
   定義済み列挙を doc へ転写する際は要素単位の対応表を必須とする (lossy 転写の禁止)
-- [ ] codex 意見書 (`drafts/quality-estimation-opinion-report.md` §5) の 5 巡 protocol と
-  突合し、入場条件・round 別の入力/出力/判定・「巡数を黙って延長しない」規律を正本化
+- [x] codex 意見書 (`drafts/quality-estimation-opinion-report.md` §5) の 5 巡 protocol と
+  突合し、入場条件・round 別の入力/出力/判定・「巡数を黙って延長しない」規律を正本化 —
+  `78a2a80` §7.4 に inline 化 (drafts への参照は doc 本文に残さない)
 - [ ] **fix diff の実物精査** — 認定 era の埋め込み ~10 件を commit diff 水準で分析し、
   「新しく仮定した次元」列挙表 (意見書 §4) の実効性を検証して fix 型制限の設計に反映
 
