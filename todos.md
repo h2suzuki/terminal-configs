@@ -33,11 +33,17 @@ branch `wt-mention` に `129bbaa` で凍結。
 
 Exit Criteria:
 
-- [ ] 回帰 filter を通した (発注側の直接修正なので、次 session の最初に掛ける)
+- [ ] 回帰 filter を通した — 2026-08-23 に round 3 を実行 (指示書
+  `wt-mention/drafts/mention-guard/fix-3-filter-prompt.md`・出力 `fix-3-regression-review.md`)。
+  verdict 受領で flip
 - [ ] 本線へ merge + push した
 - [ ] 配備し、検索コマンドが通り起動が弾かれることを実地で確認した
+- [ ] 同型欠陥を class で掃引した — 実測 2026-08-23: `skill_reminder_gate` の handoff doc 分岐が
+  同じ「言及と実行を区別しない」形で、`cat` による読み取りと deny message が案内する declare
+  CLI 自身を deny する (`mentions_handoff_doc` が command 全文の token 一致・書込経路不問)。
+  本 branch の「前置きを剥がした先頭の語で判定」が適用できるかを判定し、できなければ別設計を起票する
 
-Work file: `wt-mention/drafts/mention-guard/` (発注書 2 通と回帰レビュー 2 通)
+Work file: `wt-mention/drafts/mention-guard/` (発注書 2 通と回帰レビュー 2 通 + 本巡の指示書)
 
 ### 記憶から書かせない仕組み — 雛形 + 経由の強制 + 空欄設計
 
@@ -283,7 +289,8 @@ Exit Criteria:
   かで判定する形へ狭める
 - [ ] 各 gate の canonical (files/) と deploy 先の diff -q 一致 + 発火の live 観測 —
   **全 35 対の照合 2026-08-22**: IDENTICAL 28 / 実差分 1 (`stop_checks.py`・revert 後で
-  配備待ち) / 残り 6 は非該当 (root 専用の読取不可 1・sandbox が空 overlay で覆う 1・
+  配備待ち) / 残り 6 は非該当 (2026-08-23 追加: `skill_reminder_gate.py` も `906ab58` で
+  実差分となり配備待ちは 2 file) (root 専用の読取不可 1・sandbox が空 overlay で覆う 1・
   root の home が配備先 1・source 側の局所生成物 `.ruff_cache` `__pycache__` `.claude`
   `.gitkeep` と配備側 runtime の `state/` と非配備の test file 3)。live 発火の観測は
   本 session で 5 family (continuation-claim / decision-question-task /
