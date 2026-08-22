@@ -34,8 +34,9 @@ branch `wt-mention` に `129bbaa` で凍結。
 Exit Criteria:
 
 - [ ] 回帰 filter を通した — 2026-08-23 に round 3 を実行 (指示書
-  `wt-mention/drafts/mention-guard/fix-3-filter-prompt.md`・出力 `fix-3-regression-review.md`)。
-  verdict 受領で flip
+  `wt-mention/drafts/mention-guard/fix-3-filter-prompt.md`・出力 `fix-3-regression-review.md`・
+  background job `33814501`)。job は session を越えて残るので `claude logs 33814501` で追える。
+  出力 file が出たら verdict を読んで flip
 - [ ] 本線へ merge + push した
 - [ ] 配備し、検索コマンドが通り起動が弾かれることを実地で確認した
 - [ ] 同型欠陥を class で掃引した — 実測 2026-08-23: `skill_reminder_gate` の handoff doc 分岐が
@@ -44,6 +45,30 @@ Exit Criteria:
   本 branch の「前置きを剥がした先頭の語で判定」が適用できるかを判定し、できなければ別設計を起票する
 
 Work file: `wt-mention/drafts/mention-guard/` (発注書 2 通と回帰レビュー 2 通 + 本巡の指示書)
+
+### handoff の lifecycle 同期を hook で担保する (要相談)
+
+起票: user 2026-08-23 (「handoff protocol / hook の強化が必要?」への回答として提案)
+
+Goal: todos.md の parent block が消えた handoff section が残り続ける class を、規約の文言でなく
+機械検査で止める。
+
+**根拠 (実測 2026-08-23)**: 規約は既にある (handoff skill §7 と Rules「task block 削除と
+handoff section 削除を同 commit に揃える」)。それでも 2 回破られた — `c2f083a` (2026-08-07) は
+todos 側の pointer だけ外し、`e905965` (2026-08-12) は対象 doc と task を消して section を残した。
+結果 `last-session-handoff.md` は 11 日間、削除済み doc の review 待ちを指したままだった。
+現行 hook 3 種 (open Task 残 / marker 未出力 / skill 未起動) に**突合検査は無い** (grep で確認)。
+文言は既に明確なので、文言強化では同じ結果になる。
+
+Exit Criteria:
+
+- [ ] 検査を作るかをユーザーが決めた (要相談 — 提案は「handoff doc の `## <section>` と todos.md の
+  `### <task>` を突き合わせ、対応の無い section を warn」。現 stale file で実発火するので空振りしない)
+- [ ] 採用時: warn tier で実装・test・配備し、実 session で誤検知と見逃しを観測した
+- [ ] 現存する stale file の処置を決めた — `last-session-handoff.md` は追跡対象 doc が
+  `e905965` で削除済みのため中身が死んでいる。git 管理外なので削除は不可逆
+
+Work file: なし (本 block で自己完結)
 
 ### 記憶から書かせない仕組み — 雛形 + 経由の強制 + 空欄設計
 
