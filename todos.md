@@ -214,6 +214,11 @@ Exit Criteria:
   **誤爆実測 2 (2026-08-23)**: continuation-claim が「残り続けます」の部分文字列
   「続けます」に発火。gate の欠陥を説明した文で、遂行宣言ではない。誤爆実測 1 と同型
   (部分文字列一致で語の境界と用法を見ない) であり、mention guard の欠陥とも同じ class。
+  **矛盾実測 1 (2026-08-23)**: 終了示唆のある turn を質問で終える時、
+  open-tasks-at-wind-down (全 open Task を close せよ) と decision-question-task
+  (質問には open な decision Task が要る) が**同時に満たせない要求**を出す。実測 = Task を
+  close → 後者が発火、再 open → 前者が発火の往復。どちらかに優先順位を持たせるか、
+  wind-down 側の close 要求から decision 型を除外する必要がある。
   **裁定 2026-08-22: 否定断定の語彙拡張は revert 済み** (`e8e07fa`)。判定は別途検討中の
   agent ジャッジへ移すため、この regex は拡張前の範囲に戻し、**最終的には完全削除を目指す**。
   Stop の Sonnet 審判 hook は本人未合意の実装だったため **撤去済み 2026-08-22** — repo は
