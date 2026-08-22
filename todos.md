@@ -141,6 +141,10 @@ Exit Criteria:
   **deploy 完了 2026-08-22** (ユーザーが base setup 実行・stop_checks.py / codex_order_lint /
   managed extensions とも `diff -q` IDENTICAL 実測)。
   残る実測対象: warn family 4 種 + 否定断定の新語彙 warn (誤爆率 → blocking 昇格判断)。
+  **誤爆実測 1 (2026-08-22)**: claim-without-evidence が、code の挙動を説明した文中の
+  引用語「不明」(「『不明』ではなく確定に化ける」= 語そのものへの言及) に発火。語の
+  mention と use を区別しないための誤爆で、直前 turn で Read / Grep を実行していても
+  「当 turn で未使用」判定が turn 境界に依存する点も併発。#25 の存廃判断の材料。
   Stop の Sonnet 審判 hook は本人未合意の実装だったため **撤去済み 2026-08-22** — repo は
   ユーザー指示で当該 commit ごと履歴から drop、配備側もユーザーが巻き戻し実施
   (`diff -q` IDENTICAL 再実測済み)。再実装は本人合意が成立した場合のみ。
