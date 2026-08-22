@@ -110,10 +110,14 @@ Exit Criteria:
   **live finding 2 (2026-08-22 実測)**: 検査 (g) の deny が plugin 既製
   adversarial-review command の起動 flow (main agent の Bash) と衝突 — command は model の
   Bash 実行を規定するため、gate 配備後は model からこの command を実行できない。ユーザー
-  **裁定 2026-08-22**: gate は変えない。同じことが rescue でできる限り **rescue へ一本化**
-  し、ユーザーから指示があった時は `/codex:adversarial-review` を含むコマンドを提示して
-  ユーザー自身の起動を助ける。根拠 = plugin の command 定義 (`adversarial-review.md:50,57-62`)
-  が model の Bash 実行で companion を起動する形を規定しており、この形が gate の対象
+  **訂正 2026-08-22**: 「gate 配備後は model からこの command を実行できない」という当初の
+  理由づけは誤り。障壁は 2 層で、第 1 層は plugin 側の `disable-model-invocation: true`
+  (gate 導入前から model の自発起動は不可)、第 2 層が本 gate (ユーザー起動後に model が
+  走らせる companion 起動を deny — 2026-08-21T18:54:10Z に実 deny を transcript で確認)。
+  **裁定 2026-08-22**: 同じことが rescue でできる限り rescue へ一本化し、指示があれば
+  ユーザー自身の起動を助ける。ただし第 2 層があるため、ユーザー起動でも現状は完走しない。
+  例外を設けるか一本化のままかは判断待ち。例外を作る場合、判定は plugin の起動形でなく
+  「そのターンにユーザーの slash 起動があるか」で書く (上流の実装形に縛らない)
 - [ ] **検問実装への挑戦レビュー (発注書方式・2026-08-22 ユーザー承認)** — 発注書
   `wt-gates/drafts/gates-challenge-review-order.md` (lint rc=0)・対象 = 検問 line 全 diff
   (3 file・+2210/−173)。**verdict 受領 2026-08-22 = needs-attention・U0 8 / U1 2 / U2 0**
