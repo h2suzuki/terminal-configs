@@ -96,6 +96,8 @@ Exit Criteria:
 
 Work file: 由来調査の結論は本 block 冒頭に inline 済み (別 file を作らない)
 
+### 検問 gate 群の実装・受け入れ・配備
+
 起票: user 2026-08-21 (「強制が必要な事項 2 つ」の列挙)
 
 Goal: 車輪の再発明・無検問 loop・判断待ちの Task 化漏れを、約束でなく決定的 gate で禁止する。
