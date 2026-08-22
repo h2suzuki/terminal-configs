@@ -299,50 +299,6 @@ Exit Criteria:
 Work file: 4 gate の設計は本 block と `last-session-handoff.md` 不要 (本 block で自己完結)。
 5 巡 breaker の思想は Medium「方法論の実証」block の教訓 (1)〜(6) を参照
 
-### 敵対レビュー方法論の改訂 (このセッションの調査の反映)
-
-起票: user 2026-08-21 (「やり方についての改善」の列挙)
-
-Goal: 本セッションで確定した教訓群を `docs/adversarial-review-methodology.md` へ反映し、
-5 巡以内で必ず意思決定に到達する round protocol を正本化する。
-
-Exit Criteria:
-
-- [x] 教訓 (1)〜(6) (Medium「方法論の実証」block に記録済み: 停止規則 / fix 型制限 /
-  品質推定 / 計数と判定の分業 / 統計の適用領域 / round scope 分離) を doc へ反映 —
-  `78a2a80` (§7.1〜7.4 + L4/L7。反映先は commit message の対応表)
-- [x] **アーキテクチャレビューの段階設計** (2026-08-21 ユーザー指示 → 同日設計確定 →
-  同日 doc 反映 `78a2a80`: G0 新設 + §7.2 常設構造判定 + checklist 13〜16): **巡 0 (実装前)** = 構造のみを 1 巡審査。審査対象は実装 code でなく**詳細を捨てた
-  構造記述** — 部品表 (部品・保持状態・読者/書者・既存部品での代替可否)。chart と部品表は
-  LLM には等価 (2026-08-21 ユーザー確認: 等価なら入口 2 つで可)。code を対象にしないのは
-  詳細が構造の問いを溺れさせるため (実測: code への 3 巡 18 指摘は全て code 水準・構造指摘 0)。
-  問いは「この部品は要るか / 既存部品・記録で代替できないか / 持つ状態を減らせるか」の
-  3 つ、成果物は構造承認 or 作り直し案の判定のみ。判定器は既製 /codex:adversarial-review。
-  5 巡以内の収束保証は巡 0 を通過した構造にのみ適用する。**巡中の常設判定** (2026-08-21
-  ユーザー修正: 特定 signal の発火型でなく全指摘対象) = 毎巡の verdict で**全指摘**に
-  「アーキテクチャの問題か / 構造の改善 (削除・代替・状態削減) で発生源ごと消せないか」の
-  帰属判定を必須とする — G5 構造判定の per-finding 化。機構追加 2 巡連続の lint warn
-  (gates block (c)) は集計側 backstop に位置づけ。構造帰属となった指摘は fix round でなく
-  構造巡へ回す。根拠 case = gates 3 巡 18 指摘が「台帳って要るの?」の一問で無効化
-  (entry feedback_architecture_before_review が doc 反映までの防衛線)
-- [x] transcript 監査 (2026-08-21) で確定した doc 行き要素を per-member 対応表つきで反映
-  (`78a2a80` — 対応表 8 要素は commit message 本文、G1/G2/§7.2/§7.4/L4 へ分配):
-  round 0 の裁定 catalog 先渡し / finding round は read-only (直さず推定表へ) /
-  self P0 の rollback 規律 / 終盤 round で機構追加が必要なら 5 巡収束は失敗と判定
-  (黙って延長しない) / 裁定→fixture の粒度 pin / strangler 型 (全面 rewrite 不採用) /
-  capture-recapture の適用限定 (独立性成立時のみ) / 台帳集計 (分布 summary) の script 化。
-  定義済み列挙を doc へ転写する際は要素単位の対応表を必須とする (lossy 転写の禁止)
-- [x] codex 意見書 (`drafts/quality-estimation-opinion-report.md` §5) の 5 巡 protocol と
-  突合し、入場条件・round 別の入力/出力/判定・「巡数を黙って延長しない」規律を正本化 —
-  `78a2a80` §7.4 に inline 化 (drafts への参照は doc 本文に残さない)
-- [x] **fix diff の実物精査** — 認定 era の埋め込み ~10 件を commit diff 水準で分析し、
-  「新しく仮定した次元」列挙表 (意見書 §4) の実効性を検証して fix 型制限の設計に反映 —
-  2026-08-21 実施: 注入 12 件を commit hunk まで遡及 (`drafts/fix-injection-diff-audit.md`
-  374 行・AUDIT_COMPLETE)。機構追加型 92% (11/12)。列挙義務は新設系 4 件に有効・
-  境界条件の未掃引 4 件は class 掃引・転写ミス 1 件は裁定照合の担当と確定し doc §7.3 へ追記
-
-Work file: `drafts/quality-estimation-opinion-report.md` (codex 第三者意見書)
-
 ## Medium
 
 ### 改造時のバグ作り込みを減らす方策の検討
