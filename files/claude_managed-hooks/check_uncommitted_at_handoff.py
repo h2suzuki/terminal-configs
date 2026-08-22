@@ -38,8 +38,12 @@ from unittest import mock
 
 # Case-insensitive for `Handoff` / `Sign Off` etc.
 # `本日はこれで` requires これで to avoid matching neutral `本日は…` (e.g. 本日は晴天なり).
+# `handoff` は依頼形か単独発話のみ。 裸で拾うと doc 名や話題語での言及に発火する。
 HANDOFF_RE = re.compile(
-    r"handoff|セッション(終了|リセット|を?閉じ)|お疲れさま(でし)?(た)?|終わります|またね"
+    r"(?:^|[\s。、「『(])handoff(?:\s*doc)?\s*(?:を)?\s*"
+    r"(?:お願い|おねがい|よろしく|して|しといて|しよう|しましょう|します|する)"
+    r"|^\s*handoff\s*[!！。.]*\s*$"
+    r"|セッション(終了|リセット|を?閉じ)|お疲れさま(でし)?(た)?|終わります|またね"
     r"|sign\s?off|本日はこれで",
     re.IGNORECASE,
 )
@@ -540,6 +544,9 @@ class HandoffPhraseTest(unittest.TestCase):
             "お疲れさまでした",
             "これで終わります",
             "handoff お願いします",
+            "handoff をお願いします",
+            "handoff して",
+            "handoff",
         ):
             with self.subTest(text=text):
                 self.assertTrue(HANDOFF_RE.search(text))
@@ -549,6 +556,11 @@ class HandoffPhraseTest(unittest.TestCase):
             "この項目を閉じます",
             "issue を閉じました",
             "次の実装をお願いします",
+            # 2026-08-23 実機: doc 名と話題語での言及が終了示唆として拾われた。
+            "last-session-handoff.md を削除してよいか",
+            "handoff protocol / hook の強化が必要?",
+            "handoff doc が stale だね",
+            "handoff.md を消して",
         ):
             with self.subTest(text=text):
                 self.assertIsNone(HANDOFF_RE.search(text))
