@@ -29,14 +29,13 @@ Exit Criteria:
   つきでユーザーへ提示した。**裁定受領 2026-08-22** (隣 session 経由の verbatim
   「Fable の回答は正解。…ハーネスを整備したいです」— 実装着手の承認・機構選択と設計は
   当方裁量・配備の最終確認は本人と直接)
-- [ ] 採用された機構 (A 協調作法 skill + B SendMessage 承認語 gate) を実装し、受け入れを
-  経て配備した — 進捗 2026-08-22: A = `files/claude_managed-skills/cross-session-collab/`
-  作成・commit 済み (`7f8b2a4`)。B = codex 納品 → 決定的 gates 7/7 全緑 (発注側再実行) →
-  Opus 回帰 filter = **VERDICT: pass** (乖離ゼロ・新規欠陥なし。非 fail 所見 4 件 =
-  mutation 3 種が 9 tests 全緑のまま生存する test 識別力の穴 + 無作用の `re.DOTALL`) →
-  凍結 commit `e2f1b52` → main merge `fa81d5f` + push 済み。**残 = 配備** (base setup
-  再実行はユーザー操作・`diff -q` 一致まで確認する)
-- [ ] 結果を依頼元 session へ報告した
+- [x] 採用された機構 (A 協調作法 skill + B SendMessage 承認語 gate) を実装し、受け入れを
+  経て配備した — A = `7f8b2a4`。B = codex 納品 → 決定的 gates 7/7 全緑 → Opus 回帰 filter
+  = pass → 凍結 `e2f1b52` → main merge `fa81d5f`。**配備実測 2026-08-22**: hook 2 本と
+  managed extensions が source と `diff -q` IDENTICAL・gate の実行 bit 755・PreToolUse
+  entry 1 件。非 fail 所見 4 件 (mutation 3 種が 9 tests 全緑のまま生存する test 識別力の
+  穴 + 無作用の `re.DOTALL`) は未処置で残す
+- [x] 結果を依頼元 session へ報告した (2026-08-22・配備後の gate を通した 1 通)
 
 Work file: org entry `feedback_cross_session_approval_claim.md` /
 `feedback_cross_session_comm_model.md` / `feedback_owner_session_identity.md`
