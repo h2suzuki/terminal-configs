@@ -42,31 +42,6 @@ Work file: org entry `feedback_cross_session_approval_claim.md` /
 `feedback_cross_session_comm_model.md` / `feedback_owner_session_identity.md`
 (作法の正本 3 entry — skill と gate はこれらの機械化層)
 
-### Bun の投入先の決定 (隣依頼 4 の後継)
-
-起票: user 2026-08-22 (host install は同日中止。verbatim「bun installer は、タスクを中止する
-ことにしました。理由は、ホストで使う頻度（一般性）です」「fe-starter にも installer がある
-ので、そこに投入した方が良い気がしてきました」「議論した上で、terminal config で行う方が
-適切という結論になったら、また教えてください」)
-
-Goal: bun をどの installer が面倒を見るか (host base setup / fe-starter / repo-local 現状
-維持) を、当該 repo の owner session との議論で決着させる。
-
-Exit Criteria:
-
-- [x] host base setup への組込みは**中止** (理由 = host での使用頻度・一般性が低い)
-- [x] fe-starter の owner session と投入先の妥当性を議論し、結論を得た (2026-08-22) —
-  **fe-starter へは入れない**。相手の installer は host にも toolchain にも触れない
-  「repo 資産の合成器」(git 追跡 file の add-only copy + marker 追記のみ・network 非使用・
-  冪等) で、複数 seed 共存の契約が「installer は host を変更しない」に依存しているため、
-  host installer の同居は契約破壊になる。version 固定要求も無し (gate は bun を呼ばず、
-  依存再現性は lock file が担保)。相手の方針は現状維持 + 取得レシピの doc 化
-- [x] 結論を報告した — host 側が適切という結論ではないため差し戻しは不要 (ユーザーの中止
-  決定がそのまま維持される)。fe-starter も採用しないため draft の引き渡しも発生しない
-
-Work file: `files/bun_clean_installer` (写経済み draft・未 commit)。中止決定により配線は
-行わない。fe-starter が採用する場合の引き渡し素材として保持する
-
 ### 敵対レビュー運用の強制機構 (gate 化)
 
 起票: user 2026-08-21 (「強制が必要な事項 2 つ」の列挙)
