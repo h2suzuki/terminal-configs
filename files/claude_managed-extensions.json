@@ -38,6 +38,10 @@
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/declare_and_proceed_gate.py" } ]
       },
       {
+        "matcher": "^SendMessage$",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/cross_session_send_gate.py" } ]
+      },
+      {
         "matcher": "^(Grep|Read)$",
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/codegraph_first_gate.py" } ]
       },
