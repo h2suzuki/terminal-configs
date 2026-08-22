@@ -42,28 +42,27 @@ Work file: org entry `feedback_cross_session_approval_claim.md` /
 `feedback_cross_session_comm_model.md` / `feedback_owner_session_identity.md`
 (作法の正本 3 entry — skill と gate はこれらの機械化層)
 
-### Bun の host install (隣依頼 4)
+### Bun の投入先の決定 (隣依頼 4 の後継)
 
-起票: user 2026-08-22 (隣 session 経由の verbatim「bun install は、ホストマシンのセット
-アップなので、terminal config の仕事ではと思います」— routing の承認。手段は当方裁量・
-実施時期はユーザー判断)
+起票: user 2026-08-22 (host install は同日中止。verbatim「bun installer は、タスクを中止する
+ことにしました。理由は、ホストで使う頻度（一般性）です」「fe-starter にも installer がある
+ので、そこに投入した方が良い気がしてきました」「議論した上で、terminal config で行う方が
+適切という結論になったら、また教えてください」)
 
-Goal: host で `bun` が PATH 解決可能になる状態を、base setup の再現可能な手順として作る
-(単発 install でなく canonical 化)。
+Goal: bun をどの installer が面倒を見るか (host base setup / fe-starter / repo-local 現状
+維持) を、当該 repo の owner session との議論で決着させる。
 
 Exit Criteria:
 
-- [ ] 実施時期のユーザー承認 (時期未定)。**2026-08-22 更新**: 依頼元 session の事実共有で
-  待ち状態は解消 — 当初前提の「network 遮断で bun を入れられない」は誤りで、実体は npm
-  cache dir が read-only による EROFS。依頼元は自 repo の gitignore 下へ展開した bun 1.4.0
-  で工程を完了済み。よって本 task は他 session の blocker ではなく、host で `bun` を PATH に
-  置くかどうかの端末環境の設計判断として、純粋に優先度で決めてよい
-- [ ] bun installer を base setup へ組込み、commit + push した (nodejs installer と同型)
-- [ ] host で `bun --version` が解決することを実測し、依頼元 session へ完了を一報した
+- [x] host base setup への組込みは**中止** (理由 = host での使用頻度・一般性が低い)
+- [ ] fe-starter の owner session と投入先の妥当性を議論し、結論を得た — 2026-08-22 に
+  相談を送信済み (相手の installer の役割 / version 固定要求 / repo-local 現状維持との差の
+  3 点を照会)。返答待ち
+- [ ] 結論が「host 側が適切」だった場合はユーザーへ差し戻した (ユーザー指示の再開条件)。
+  結論が fe-starter 側なら、draft を引き渡して本 block を閉じる
 
-Work file: `files/bun_clean_installer` (写経済み draft・未 commit・shellcheck 抑制 2 件は
-既存 idiom parity)。配線予定 site = ubuntu2404-wsl.sh / debian12.sh の nodejs 3 site と
-`files/setup_user_environment` の run 行
+Work file: `files/bun_clean_installer` (写経済み draft・未 commit)。中止決定により配線は
+行わない。fe-starter が採用する場合の引き渡し素材として保持する
 
 ### 敵対レビュー運用の強制機構 (gate 化)
 
