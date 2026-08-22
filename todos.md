@@ -88,11 +88,13 @@ Exit Criteria:
   **main merge 済み 2026-08-22** (`5bb0448`・否定断定語彙拡張 `b5aea25` を含む)。
   **deploy 完了 2026-08-22** (ユーザーが base setup 実行・stop_checks.py / codex_order_lint /
   managed extensions とも `diff -q` IDENTICAL 実測)。
-  残る実測対象: warn family 4 種 + 否定断定の新語彙 warn (誤爆率 → blocking 昇格判断)。
+  残る実測対象: warn family 8 種の発火と誤爆。**裁定 2026-08-22**: 計測の出口は blocking
+  昇格だけでなく、**agent によるジャッジへの集約**を検討する (計測データは集約後の
+  設計材料として残してよい)。
   **誤爆実測 1 (2026-08-22)**: claim-without-evidence が、code の挙動を説明した文中の
-  引用語「不明」(「『不明』ではなく確定に化ける」= 語そのものへの言及) に発火。語の
-  mention と use を区別しないための誤爆で、直前 turn で Read / Grep を実行していても
-  「当 turn で未使用」判定が turn 境界に依存する点も併発。#25 の存廃判断の材料。
+  引用語「不明」(= 語そのものへの言及) に発火。語の mention と use を区別しないための誤爆。
+  **裁定 2026-08-22: 否定断定の語彙拡張は revert 済み** (`e8e07fa`)。判定は別途検討中の
+  agent ジャッジへ移すため、この regex は拡張前の範囲に戻し、**最終的には完全削除を目指す**。
   Stop の Sonnet 審判 hook は本人未合意の実装だったため **撤去済み 2026-08-22** — repo は
   ユーザー指示で当該 commit ごと履歴から drop、配備側もユーザーが巻き戻し実施
   (`diff -q` IDENTICAL 再実測済み)。再実装は本人合意が成立した場合のみ。
@@ -108,9 +110,10 @@ Exit Criteria:
   **live finding 2 (2026-08-22 実測)**: 検査 (g) の deny が plugin 既製
   adversarial-review command の起動 flow (main agent の Bash) と衝突 — command は model の
   Bash 実行を規定するため、gate 配備後は model からこの command を実行できない。ユーザー
-  裁定 = 挑戦レビューは発注書方式 (rescue 経由) へ切替えて実施 (走行中)。処方候補 =
-  運用を発注書方式へ一本化するか、gate に plugin command 由来の実行だけ識別可能な許可を
-  設けるか — 是正 round で判断
+  **裁定 2026-08-22**: gate は変えない。同じことが rescue でできる限り **rescue へ一本化**
+  し、ユーザーから指示があった時は `/codex:adversarial-review` を含むコマンドを提示して
+  ユーザー自身の起動を助ける。根拠 = plugin の command 定義 (`adversarial-review.md:50,57-62`)
+  が model の Bash 実行で companion を起動する形を規定しており、この形が gate の対象
 - [ ] **検問実装への挑戦レビュー (発注書方式・2026-08-22 ユーザー承認)** — 発注書
   `wt-gates/drafts/gates-challenge-review-order.md` (lint rc=0)・対象 = 検問 line 全 diff
   (3 file・+2210/−173)。**verdict 受領 2026-08-22 = needs-attention・U0 8 / U1 2 / U2 0**
@@ -173,9 +176,12 @@ Exit Criteria:
   残り 8 日消えた class の再発防止。進捗 2026-08-21: round 7 で実装・受け入れ済み
   (`5323179` decision-record family)。実測・deploy が残
 - [ ] **「無駄」keyword の memory 記録 reminder** (2026-08-21 ユーザー発案: 「無駄という
-  キーワードに反応して memory する hook があってもよいぐらい」) — ユーザーの prompt に
+  キーワードに反応して memory する hook があってもよいぐらい」) — ユーザーの発話に
   無駄 / 浪費 / もったいない が含まれる turn に、memory-routing での記録検討を促す
-  UserPromptSubmit reminder (warn tier)。無駄の実例が entry 化されずに流れる class の防止
+  warn。無駄の実例が entry 化されずに流れる class の防止。**2026-08-22 ユーザー指示で着手**
+  — 実装先は UserPromptSubmit でなく Stop family とし (同 turn の memory Write との
+  pairing を既存機構で行うため)、発注書 `wt-gates/drafts/warn-family-order.md`
+  (両 lint rc=0) で codex へ発注済み。次の 1 件と同一 round
 - [ ] **コミュニケーション規則の hook 強化 — CLAUDE.md は削らない** (2026-08-21 ユーザー決裁:
   「stop が効いている実感がまだ無い。hook 強化に倒して本当に守られるようになってから考える。
   効いていない状態で消すと正本が無くなり、ルールの所在が分散して埋もれるだけ」) —
@@ -188,8 +194,15 @@ Exit Criteria:
   (1) 質問文に過去参照語 (「前ターンの」「上記のとおり」「先ほどの」等) が混ざったら warn
   する自己完結性検査、(2) 判断依頼を検知した warn の文面に書式 template (決めてほしいこと
   N 件・問題/やること/承認と却下の帰結・略語封印) を埋め込み、書く瞬間に想起させる。
-  次の実装 round で本 family へ追加
-- [ ] 各 gate の canonical (files/) と deploy 先の diff -q 一致 + 発火の live 観測
+  **2026-08-22 ユーザー指示で着手** — (1)(2) を 1 つの family に統合し、上の reminder と
+  同じ発注書で codex へ発注済み
+- [ ] 各 gate の canonical (files/) と deploy 先の diff -q 一致 + 発火の live 観測 —
+  **全 35 対の照合 2026-08-22**: IDENTICAL 28 / 実差分 1 (`stop_checks.py`・revert 後で
+  配備待ち) / 残り 6 は非該当 (root 専用の読取不可 1・sandbox が空 overlay で覆う 1・
+  root の home が配備先 1・source 側の局所生成物 `.ruff_cache` `__pycache__` `.claude`
+  `.gitkeep` と配備側 runtime の `state/` と非配備の test file 3)。live 発火の観測は
+  本 session で 5 family (continuation-claim / decision-question-task /
+  claim-without-evidence / declare-and-proceed / work-without-task) を記録済み
 
 Work file: 4 gate の設計は本 block と `last-session-handoff.md` 不要 (本 block で自己完結)。
 5 巡 breaker の思想は Medium「方法論の実証」block の教訓 (1)〜(6) を参照
