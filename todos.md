@@ -145,10 +145,14 @@ Exit Criteria:
   ユーザー指示で当該 commit ごと履歴から drop、配備側もユーザーが巻き戻し実施
   (`diff -q` IDENTICAL 再実測済み)。再実装は本人合意が成立した場合のみ。
   否定断定 warn 拡張 (依頼 1) の扱いはユーザー確認中。
-  **live finding 1 (2026-08-22 実測)**: work-without-task が mytask 8 件登録済み session で
-  誤 block — mytask store は repo top の `drafts/tasks/<sid>.json` に実在するが、payload cwd
-  (repo 深部の subdir) 相対で探して 0 件と判定。処方候補 = store 解決を git root 起点へ
-  (是正 round で対応)。
+  **live finding 1 (2026-08-22 実測 → 同日修正 `29f1891`)**: work-without-task と
+  decision-question-task が mytask 登録済み session で誤発火 — 根因は**書き手と読み手で
+  anchor が違う**こと。書き手 (mytask MCP) は `CLAUDE_PROJECT_DIR` 起点、読み手
+  (stop_checks) は payload cwd 起点で `drafts/tasks/<sid>.json` を探すため、subdir で
+  作業する session は必ず 0 件になる。実測 = 同一 sid で cwd を repo top にすると records
+  31 件・警告 None、subdir だと 0 件・警告発火。修正 = project dir と cwd の全祖先を探索
+  (回帰 test 2 件で両 anchor を pin・192 tests 全緑・旧解決に差し替えると 2 件とも fail)。
+  **deploy 待ち** (base setup 再実行で反映)。
   **live finding 2 (2026-08-22 実測)**: 検査 (g) の deny が plugin 既製
   adversarial-review command の起動 flow (main agent の Bash) と衝突 — command は model の
   Bash 実行を規定するため、gate 配備後は model からこの command を実行できない。ユーザー
