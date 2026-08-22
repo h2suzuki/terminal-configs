@@ -53,8 +53,11 @@ Goal: host で `bun` が PATH 解決可能になる状態を、base setup の再
 
 Exit Criteria:
 
-- [ ] 実施時期のユーザー承認 (登録時点では時期未定 — 依頼元は工程再開条件として完了通知を
-  待っている旨のみ申告あり)
+- [ ] 実施時期のユーザー承認 (時期未定)。**2026-08-22 更新**: 依頼元 session の事実共有で
+  待ち状態は解消 — 当初前提の「network 遮断で bun を入れられない」は誤りで、実体は npm
+  cache dir が read-only による EROFS。依頼元は自 repo の gitignore 下へ展開した bun 1.4.0
+  で工程を完了済み。よって本 task は他 session の blocker ではなく、host で `bun` を PATH に
+  置くかどうかの端末環境の設計判断として、純粋に優先度で決めてよい
 - [ ] bun installer を base setup へ組込み、commit + push した (nodejs installer と同型)
 - [ ] host で `bun --version` が解決することを実測し、依頼元 session へ完了を一報した
 
