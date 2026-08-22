@@ -13,34 +13,6 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 
 ## High
 
-### session 間協調作法の恒常化 (隣依頼 3)
-
-起票: user 2026-08-22 (隣 session 経由の verbatim 引用「そういう共同作業、オブジェクト
-指向的な動きができてもらわないと困る」「ぱっと、その動きができないと、コミュニケーション
-フリクション」— 承認 scope = 検討の着手のみ。機構の選択・設計・配備は本人合意待ち)
-
-Goal: session 間依頼の作法 (発注文 form = 要件 + verbatim 引用 + 承認 scope + 未承認事項 /
-受信側の scope どおりの読み / 移管後は owner が本人と直接進行) を、各 session が機構的に
-「ぱっと」実行できる形で恒常化する。
-
-Exit Criteria:
-
-- [x] 機構案 (協調作法 skill / SendMessage 発信 gate / 両方 / 別案 / 不採用) を期待効果
-  つきでユーザーへ提示した。**裁定受領 2026-08-22** (隣 session 経由の verbatim
-  「Fable の回答は正解。…ハーネスを整備したいです」— 実装着手の承認・機構選択と設計は
-  当方裁量・配備の最終確認は本人と直接)
-- [x] 採用された機構 (A 協調作法 skill + B SendMessage 承認語 gate) を実装し、受け入れを
-  経て配備した — A = `7f8b2a4`。B = codex 納品 → 決定的 gates 7/7 全緑 → Opus 回帰 filter
-  = pass → 凍結 `e2f1b52` → main merge `fa81d5f`。**配備実測 2026-08-22**: hook 2 本と
-  managed extensions が source と `diff -q` IDENTICAL・gate の実行 bit 755・PreToolUse
-  entry 1 件。非 fail 所見 4 件 (mutation 3 種が 9 tests 全緑のまま生存する test 識別力の
-  穴 + 無作用の `re.DOTALL`) は未処置で残す
-- [x] 結果を依頼元 session へ報告した (2026-08-22・配備後の gate を通した 1 通)
-
-Work file: org entry `feedback_cross_session_approval_claim.md` /
-`feedback_cross_session_comm_model.md` / `feedback_owner_session_identity.md`
-(作法の正本 3 entry — skill と gate はこれらの機械化層)
-
 ### 敵対レビュー運用の強制機構 (gate 化)
 
 起票: user 2026-08-21 (「強制が必要な事項 2 つ」の列挙)
