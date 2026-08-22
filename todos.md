@@ -33,10 +33,18 @@ branch `wt-mention` に `129bbaa` で凍結。
 
 Exit Criteria:
 
-- [ ] 回帰 filter を通した — 2026-08-23 に round 3 を実行 (指示書
-  `wt-mention/drafts/mention-guard/fix-3-filter-prompt.md`・出力 `fix-3-regression-review.md`・
-  background job `33814501`)。job は session を越えて残るので `claude logs 33814501` で追える。
-  出力 file が出たら verdict を読んで flip
+- [ ] 回帰 filter を通した — **round 3 = fail (2026-08-23)**。報告書
+  `wt-mention/drafts/mention-guard/fix-3-regression-review.md`。誤検出の揺り戻しは pass
+  (読み取り 60 形で r2 allow → cur DENY が 0 形) だが、取りこぼしで fail。
+  **発注側で独立に再現済み** (`_direct_companion` を HEAD 版と直接比較): HEAD が deny する
+  8 形を `129bbaa` が allow する — 制御語が**条件の位置**にある形 (`while` / `until` / `if`)、
+  関数定義 (`run() { … }`)、wrapper 前置 (`watch` / `yarn node`)、pipe、括弧 200 重。
+  本体位置の制御語 (`while true; do …`) と読み取り grep は意図どおり (前者 deny・後者 allow)。
+  test は 69 → 81 だが round 3 の追加は 0 件で、設計の核を壊す mutation が survive する。
+  **穴が「本体の位置」から「条件の位置」へ移っただけ = 3 巡連続の不通過**
+- [ ] 構造再審の要否をユーザーが決めた — 方法論 §7.2 の「同段不通過 2 回で構造再審」に
+  3 巡目も該当。3 巡とも失敗の型が同じ (先頭の語で判定する限り、穴は位置を変えて残る) ため、
+  述語の手直しでなく解析の作り (全 command 位置を見る / 既存 shell parser の採用) を問う
 - [ ] 本線へ merge + push した
 - [ ] 配備し、検索コマンドが通り起動が弾かれることを実地で確認した
 - [ ] 同型欠陥を class で掃引した — 実測 2026-08-23: `skill_reminder_gate` の handoff doc 分岐が
