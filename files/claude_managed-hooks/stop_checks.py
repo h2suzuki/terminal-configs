@@ -76,7 +76,6 @@ Combined Stop hook for org-managed Claude Code:
   claim-without-evidence (warning-only, exit 0):
     「不明」「該当なし」「未確認」 系は、 同 turn 内に EVIDENCE_TOOLS が無ければ warn
     (verify-before-claim の negative side)。
-    存在しない・未導入・不可能・無理・対象操作のできない系も同じ pairing で warn。
 
   provide-user-instructions (warning-only, exit 0):
     manual-execution 文脈がありつつ host コマンド (sudo cp, git push, gh pr, curl+URL,
@@ -901,16 +900,12 @@ EUPHEMISM_RE = re.compile(
 )
 
 # --- Pattern: claim-without-evidence (warning, no block) ---
-# 不在・未導入・不可能・無理・対象操作のできない系を、同 turn の evidence tool が無ければ警告する。
+# 「無い」系だけでなく「できない / 書かれていない」系も対象 (実測 2026-08-08: 探索範囲を確かめずに
+# 「どのスキルにも書かれていません」、 正規ルート未試行で「権限では実施できません」と誤断定した)。
 CLAIM_PATTERNS: list[str] = [
-    r"不明|該当なし|存在し(ません|ない)|未確認|わかりません|分かりません",
-    r"未(インストール|install|導入|配備)",
-    r"(インストール|install|導入|配備|用意|準備)されて(いません|いない)",
-    r"入って(いません|いない)|に(は)?(あり|有り)ません",
-    r"(?<!「)不可能(?!ではな|とは限|化)",
-    r"(は|には|が)無理|無理(です|でした|だと|そうです)",
+    r"不明|該当なし|存在しません|未確認|わかりません|分かりません",
     r"(書かれて|記載されて|定義されて)(いません|いない)",
-    r"(実施|実行|編集|取得|参照|アクセス|変更|確認|対応|インストール|起動|接続|到達|再現|利用|使用|検証|実測|導入)(でき|出来)(ません|ない)",
+    r"(実施|実行|編集|取得|参照|アクセス|変更|確認|対応)(でき|出来)(ません|ない)",
     r"見つかりません|見当たりません|ヒットしません",
 ]
 CLAIM_RE = re.compile("|".join(CLAIM_PATTERNS))
@@ -1942,16 +1937,14 @@ def _check(
             )
 
     # claim-without-evidence (warning-only)
-    m = CLAIM_RE.search(stripped)
+    m = CLAIM_RE.search(text)
     if m:
         evidence_used = bool(tool_names & EVIDENCE_TOOLS)
         if not evidence_used:
             warnings.append(
                 f"claim-without-evidence: 「{m.group(0)}」 と発話したが当ターンで "
                 f"Read / Grep / Glob / WebSearch / WebFetch のいずれも使われていません "
-                f"(System §報告・応答)。 verify-before-claim skill 参照。 "
-                f"否定断定の前に対象 subsystem の README / 正本文書を Read で確認したか。"
-                f"空 dir や単発 probe の空結果だけを根拠に断定しない。"
+                f"(System §報告・応答)。 verify-before-claim skill 参照。"
             )
 
     # provide-user-instructions (warning-only): manual-exec 文脈 + 未 fence host cmd
@@ -3989,79 +3982,6 @@ class ClaimRegexTest(unittest.TestCase):
         for text in self.MATCHING:
             with self.subTest(text=text):
                 self.assertTrue(CLAIM_RE.search(text))
-
-    def test_expanded_negative_claims_match(self):
-        matching = (
-            "対象は存在しない",
-            "tool は未インストールです",
-            "package は未installです",
-            "機能は未導入です",
-            "artifact は未配備です",
-            "tool はインストールされていない",
-            "package は installされていません",
-            "機能は導入されていない",
-            "artifact は配備されていません",
-            "環境は用意されていない",
-            "接続先は準備されていません",
-            "host には入っていません",
-            "host にはありません",
-            "その手段は不可能です",
-            "無理です",
-            "復旧には無理がある",
-            "インストールできない",
-            "起動できない",
-            "接続できない",
-            "到達できない",
-            "再現できない",
-            "利用できない",
-            "使用できない",
-            "検証できない",
-            "実測できない",
-            "導入できない",
-        )
-        for text in matching:
-            with self.subTest(text=text):
-                self.assertTrue(CLAIM_RE.search(text))
-
-    def test_excluded_negative_forms_do_not_match(self):
-        excluded = (
-            "不可能ではない",
-            "不可能化を防ぐ",
-            "「不可能」",
-            "無理のない計画です",
-            "無理せず進めます",
-            "問題ありません",
-            "失敗ではないので続行します",
-        )
-        for text in excluded:
-            with self.subTest(text=text):
-                self.assertIsNone(CLAIM_RE.search(text))
-
-    def test_fenced_claim_does_not_warn(self):
-        text = "例です。\n```text\n対象は存在しない\n```\n`未インストール`"
-        code, warnings, blocking = _check(text, text, set(), [], [], [], False, False)
-        self.assertEqual(code, 0)
-        self.assertEqual(blocking, [])
-        self.assertFalse(any("claim-without-evidence" in item for item in warnings))
-
-    def test_unfenced_claim_still_warns(self):
-        text = "```text\n対象は存在しない\n```\nhost にはありません"
-        code, warnings, blocking = _check(text, text, set(), [], [], [], False, False)
-        self.assertEqual(code, 0)
-        self.assertEqual(blocking, [])
-        claim_warnings = [item for item in warnings if "claim-without-evidence" in item]
-        self.assertEqual(len(claim_warnings), 1)
-        self.assertIn("README / 正本文書を Read で確認したか", claim_warnings[0])
-        self.assertIn("単発 probe の空結果だけを根拠に断定しない", claim_warnings[0])
-
-    def test_evidence_tool_suppresses_warning(self):
-        text = "対象は存在しない"
-        code, warnings, blocking = _check(
-            text, text, {"Read"}, [], [], [], False, False
-        )
-        self.assertEqual(code, 0)
-        self.assertEqual(blocking, [])
-        self.assertFalse(any("claim-without-evidence" in item for item in warnings))
 
     def test_neutral_sentences_do_not_match(self):
         for text in ("実装を追加しました", "テストは 3 件とも通っています"):
