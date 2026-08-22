@@ -122,6 +122,8 @@ import unittest
 
 HOME = os.path.expanduser("~")
 STATE_DIR = os.path.join(HOME, ".claude", "hooks", "state", "skill_reminder")
+# declare は model の Bash が走らせる CLI ゆえ、 sandbox が書込を許す root へ分離する。
+DECL_DIR = os.path.join(HOME, ".claude", "plugins", "data", "skill_reminder_decl")
 DECL_STALE_SECONDS = 7 * 24 * 3600  # 放置宣言 session dir の自己掃除閾値
 SKILL_WINDOW_SECONDS = 300  # skill-active 窓 = 現 turn かつ直近 5 分以内
 GATE_TOOLS = ("Edit", "Write", "MultiEdit")
@@ -376,7 +378,7 @@ def _shebang_kind_text(text) -> str | None:
 
 
 def _session_dir(sid: str) -> str:
-    return os.path.join(STATE_DIR, sid)
+    return os.path.join(DECL_DIR, sid)
 
 
 def _decl_path(sid: str, path: str) -> str:
@@ -399,11 +401,11 @@ def _declared_kinds(sid: str, path: str) -> list[str] | None:
 def _prune_old_sessions() -> None:
     cutoff = time.time() - DECL_STALE_SECONDS
     try:
-        names = os.listdir(STATE_DIR)
+        names = os.listdir(DECL_DIR)
     except OSError:
         return
     for name in names:
-        d = os.path.join(STATE_DIR, name)
+        d = os.path.join(DECL_DIR, name)
         try:
             if os.path.getmtime(d) < cutoff:
                 for f in os.listdir(d):
@@ -555,7 +557,8 @@ def _deny_missing(missing: set[str]) -> None:
         f"ください (正規ルート = skill 発動 → 同 turn で編集)。 skill を skip "
         f"して編集に入る detour を gate しています。 該当 skill を invoke 後、 "
         f"そのまま編集が通ります (hook 自身は file を変更しません)。 skill が "
-        f"不要な file なら `declare <絶対path> else` で宣言してください。"
+        f"不要な file は、 拡張子が無ければ `declare <絶対path> else` で宣言できます "
+        f"(拡張子ありは自動判定が優先されるため declare では外せません)。"
     )
 
 
@@ -1090,8 +1093,15 @@ class GateTest(unittest.TestCase):
             sys.modules[__name__], "STATE_DIR", self._state_temp.name
         )
         self._state_patch.start()
+        self._decl_temp = tempfile.TemporaryDirectory()
+        self._decl_patch = mock.patch.object(
+            sys.modules[__name__], "DECL_DIR", self._decl_temp.name
+        )
+        self._decl_patch.start()
 
     def tearDown(self):
+        self._decl_patch.stop()
+        self._decl_temp.cleanup()
         self._state_patch.stop()
         self._state_temp.cleanup()
 
@@ -1523,6 +1533,16 @@ class GateTest(unittest.TestCase):
             mock.patch.dict(os.environ, {}, clear=True),
         ):
             self.assertEqual(self._declare_quiet([abs_path, "python"]), 2)  # no sid
+
+    def test_decl_store_stays_out_of_gate_owned_state(self):
+        """declare を書くのは sandbox 下の model の Bash。 STATE_DIR 配下だと EROFS で必ず失敗。"""
+        self.assertFalse(_decl_path("s1", "/x/y").startswith(STATE_DIR))
+        self._decl_patch.stop()
+        try:
+            writable = os.path.join(HOME, ".claude", "plugins", "data")
+            self.assertTrue(DECL_DIR.startswith(writable))
+        finally:
+            self._decl_patch.start()
 
     # --- C7/C6: cmd_gate emit-vs-comply ---
     def test_gate_denies_code_file_without_skill(self):
