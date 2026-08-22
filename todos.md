@@ -46,7 +46,7 @@ Exit Criteria:
 
 Work file: `wt-mention/drafts/mention-guard/` (発注書 2 通と回帰レビュー 2 通 + 本巡の指示書)
 
-### handoff の lifecycle 同期を hook で担保する (要相談)
+### handoff の lifecycle 同期を hook で担保する
 
 起票: user 2026-08-23 (「handoff protocol / hook の強化が必要?」への回答として提案)
 
@@ -62,11 +62,13 @@ todos 側の pointer だけ外し、`e905965` (2026-08-12) は対象 doc と tas
 
 Exit Criteria:
 
-- [ ] 検査を作るかをユーザーが決めた (要相談 — 提案は「handoff doc の `## <section>` と todos.md の
-  `### <task>` を突き合わせ、対応の無い section を warn」。現 stale file で実発火するので空振りしない)
-- [ ] 採用時: warn tier で実装・test・配備し、実 session で誤検知と見逃しを観測した
-- [ ] 現存する stale file の処置を決めた — `last-session-handoff.md` は追跡対象 doc が
-  `e905965` で削除済みのため中身が死んでいる。git 管理外なので削除は不可逆
+- [x] 検査を作るかをユーザーが決めた — **2026-08-23 採用決定**。仕様 = handoff doc の
+  `## <section>` と todos.md の `### <task>` を突き合わせ、対応の無い section を warn する
+- [ ] warn tier で実装・test・配備し、実 session で誤検知と見逃しを観測した
+- [x] 現存する stale file を処置した — `last-session-handoff.md` を 2026-08-23 に削除
+  (ユーザー承認)。salvage は除外ゼロの grep で走査し、`SKILL-HOOK-CONTRACT` と
+  「確定済みファクト」とも working tree の参照 0 件、本体 657 行と todos block 38 行は
+  `e905965` で削除済み = git 履歴から復元可能と確認した
 
 Work file: なし (本 block で自己完結)
 
@@ -315,9 +317,10 @@ Exit Criteria:
   「何も無い状況」)、検査器が文書を歪めている。語の出現でなく、状態を持つ設計を宣言している
   かで判定する形へ狭める
 - [ ] 各 gate の canonical (files/) と deploy 先の diff -q 一致 + 発火の live 観測 —
-  **全 35 対の照合 2026-08-22**: IDENTICAL 28 / 実差分 1 (`stop_checks.py`・revert 後で
-  配備待ち) / 残り 6 は非該当 (2026-08-23 追加: `skill_reminder_gate.py` も `906ab58` で
-  実差分となり配備待ちは 2 file) (root 専用の読取不可 1・sandbox が空 overlay で覆う 1・
+  **全 35 対の照合 2026-08-22**: IDENTICAL 28 / 実差分 1 (`stop_checks.py`) / 残り 6 は
+  非該当 (**2026-08-23 配備完了**: ユーザーが base setup を実行し、`stop_checks.py` と
+  `906ab58` の `skill_reminder_gate.py` とも `diff -q` IDENTICAL を実測。配備差分は 0)
+  (root 専用の読取不可 1・sandbox が空 overlay で覆う 1・
   root の home が配備先 1・source 側の局所生成物 `.ruff_cache` `__pycache__` `.claude`
   `.gitkeep` と配備側 runtime の `state/` と非配備の test file 3)。live 発火の観測は
   本 session で 5 family (continuation-claim / decision-question-task /
