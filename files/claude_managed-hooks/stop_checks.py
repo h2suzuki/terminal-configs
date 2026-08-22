@@ -130,8 +130,16 @@ Combined Stop hook for org-managed Claude Code:
     最終非空行が絵文字始まりまたは質問終端でない場合と、散文の
     自己採番参照を検知する。code block・inline code・Markdown 引用は除外する。
 
-  上記 4 family は family ごと 1 行・合計 4 行以内にし、block 時は reason
+  上記 4 family と下記 2 family は family ごと 1 行・合計 6 行以内にし、block 時は reason
   本文、pass 時は additionalContext / systemMessage へ出す。stop_hook_active retry でも再生成する。
+
+  waste-keyword-memory (warning-only, exit 0):
+    当 turn の user prompt に無駄・浪費・もったいないがあり、同 turn に persistence
+    path への Write が無ければ、memory entry 化を一拍検討するよう促す。
+
+  question-self-containment (warning-only, exit 0):
+    最終非空行が質問終端かつ過去参照語を含む場合、単体で読める質問 template を促す。
+    code block・inline code・Markdown 引用は除外する。
 
   turn-marker (bonus, exit 0 only):
     enforcement が pass した turn 終了時のみ、 per-turn marker (時刻 / Turn #N / context
@@ -1018,6 +1026,22 @@ MUTED_FLOOR = 0.35  # 実測: 該当局面の top hit 0.397 / 無関係文の to
 _MUTED_LATCH = ".muted"
 _SEARCH_TIMEOUT_SECONDS = 20.0
 
+# --- Pattern: waste-keyword-memory / question-self-containment (warning) ---
+NEW_WARNING_FAMILIES_LIMIT = 6
+WASTE_KEYWORD_RE = re.compile(r"無駄|浪費|もったいない")
+HARNESS_USER_PREFIXES = (
+    "/compact ",
+    "<command-name>",
+    "<task-notification>",
+    "<system-reminder>",
+    "Stop hook feedback:",
+    "This session is being continued",
+)
+QUESTION_PAST_REFERENCE_RE = re.compile(
+    r"前ターン|前のターン|先ほど|さきほど|上記|前回|上で述べた|既述"
+)
+JAPANESE_QUOTED_SPAN_RE = re.compile(r"「[^」]*」")
+
 # --- Persistence path (broader than memory only) ---
 # memory subtree / skill dir / hook dir / CLAUDE.md への Write/Edit が hollow-claims の
 # pairing を満たす。 「claude_managed-skills/」「claude_managed-hooks/」 等の
@@ -1224,6 +1248,46 @@ def _tool_use_blocks(entries: list[dict]):
         for block in content:
             if isinstance(block, dict) and block.get("type") == "tool_use":
                 yield block
+
+
+def _waste_keyword_memory_warning(entries: list[dict]) -> str | None:
+    user_prompt = _latest_user_prompt(entries)
+    # harness の注入形式に依存し、形式変更時はこの除外が静かに効かなくなる。
+    if user_prompt.lstrip().startswith(HARNESS_USER_PREFIXES):
+        return None
+    user_prose = JAPANESE_QUOTED_SPAN_RE.sub(" ", _strip_code_and_quotes(user_prompt))
+    match = WASTE_KEYWORD_RE.search(user_prose)
+    if match is None:
+        return None
+    for block in _tool_use_blocks(entries):
+        inputs = block.get("input")
+        path = inputs.get("file_path") if isinstance(inputs, dict) else None
+        if (
+            block.get("name") == "Write"
+            and isinstance(path, str)
+            and PERSISTENCE_PATH_RE.search(path)
+        ):
+            return None
+    return (
+        f"waste-keyword-memory: ユーザー発話に「{match.group(0)}」がありますが、"
+        "同 turn に memory entry への Write がありません。記録すべき教訓があるかを"
+        "一拍考え、必要なら memory-routing の手順で entry 化してください。"
+    )
+
+
+def _question_self_containment_warning(final_text: str) -> str | None:
+    final_line = _last_prose_line(final_text)
+    if not final_line.endswith(("?", "？")):
+        return None
+    match = QUESTION_PAST_REFERENCE_RE.search(final_line)
+    if match is None:
+        return None
+    return (
+        f"question-self-containment: 最終質問が過去参照表現「{match.group(0)}」に"
+        "依存しています。単体で読めるよう書き直してください。template: "
+        "「決めてほしいこと N 件」/「各件の 問題 / やること / "
+        "承認と却下それぞれの帰結」/「略語と内部呼称を使わない」。"
+    )
 
 
 def _repo_relative_source(path: str, cwd: str, texts: list[str]) -> bool:
@@ -1453,7 +1517,22 @@ def _new_warning_families(
             warnings.append(" ".join(communication))
     except Exception:
         pass
-    return [re.sub(r"\s+", " ", warning).strip() for warning in warnings[:4]]
+    try:
+        warning = _waste_keyword_memory_warning(entries)
+        if warning:
+            warnings.append(warning)
+    except Exception:
+        pass
+    try:
+        warning = _question_self_containment_warning(final_text)
+        if warning:
+            warnings.append(warning)
+    except Exception:
+        pass
+    return [
+        re.sub(r"\s+", " ", warning).strip()
+        for warning in warnings[:NEW_WARNING_FAMILIES_LIMIT]
+    ]
 
 
 _TAIL_BUFSIZE = 128 * 1024  # 実測 2545 turn の mean≈110KB / p75≈119KB を 1 read で覆う
@@ -3573,6 +3652,31 @@ class CommunicationLintWarningTest(unittest.TestCase):
         self.assertIn("communication-a", warnings[-1])
         self.assertIn("communication-b", warnings[-1])
 
+    def test_warning_limit_and_docstring_are_six(self):
+        from unittest import mock
+
+        module = sys.modules[__name__]
+        assert module.__doc__ is not None
+        self.assertIn(f"合計 {NEW_WARNING_FAMILIES_LIMIT} 行以内", module.__doc__)
+        with (
+            mock.patch.object(
+                module, "_implementation_checkpoint_warning", return_value="one"
+            ),
+            mock.patch.object(module, "_decision_question_warning", return_value="two"),
+            mock.patch.object(module, "_decision_record_warning", return_value="three"),
+            mock.patch.object(
+                module, "_communication_lint_warnings", return_value=["four"]
+            ),
+            mock.patch.object(
+                module, "_waste_keyword_memory_warning", return_value="five"
+            ),
+            mock.patch.object(
+                module, "_question_self_containment_warning", return_value="six"
+            ),
+        ):
+            warnings = _new_warning_families([], "done", {})
+        self.assertEqual(len(warnings), NEW_WARNING_FAMILIES_LIMIT)
+
     def test_run_returns_new_warnings_for_active_retry_delivery(self):
         import io
         from contextlib import redirect_stderr
@@ -3693,6 +3797,162 @@ class CommunicationLintWarningTest(unittest.TestCase):
                             "meta-announce-silence:",
                             output,
                         )
+
+
+class WasteKeywordMemoryWarningTest(unittest.TestCase):
+    @staticmethod
+    def _write(path: str, name: str = "Write") -> dict:
+        return {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": name,
+                        "input": {"file_path": path, "content": "lesson"},
+                    }
+                ]
+            },
+        }
+
+    def test_each_user_keyword_warns_without_persistence_write(self):
+        for keyword in ("無駄", "浪費", "もったいない"):
+            with self.subTest(keyword=keyword):
+                warning = _waste_keyword_memory_warning(
+                    [TurnMarkerTest._user(content=f"この作業は{keyword}でした")]
+                )
+                assert warning is not None
+                self.assertIn("waste-keyword-memory:", warning)
+                self.assertIn("memory-routing", warning)
+
+    def test_assistant_keyword_and_quoted_user_word_are_silent(self):
+        entries = [
+            TurnMarkerTest._user(content="「無駄」という語の意味を説明してください"),
+            TurnMarkerTest._asst("この浪費について説明します"),
+        ]
+        self.assertIsNone(_waste_keyword_memory_warning(entries))
+
+    def test_same_turn_persistence_write_suppresses_but_edit_does_not(self):
+        prompt = TurnMarkerTest._user(content="この手戻りはもったいない")
+        path = "/repo/global-memory/entries/lesson.md"
+        self.assertIsNone(_waste_keyword_memory_warning([prompt, self._write(path)]))
+        self.assertIsNotNone(
+            _waste_keyword_memory_warning([prompt, self._write(path, "Edit")])
+        )
+
+    def test_memory_subtree_write_is_the_pairing_boundary(self):
+        prompt = TurnMarkerTest._user(content="この手戻りは浪費でした")
+        memory = "/var/lib/claude-rag-memory/memory/lesson.md"
+        self.assertIsNone(_waste_keyword_memory_warning([prompt, self._write(memory)]))
+        self.assertIsNotNone(
+            _waste_keyword_memory_warning([prompt, self._write("/repo/memories.md")])
+        )
+
+    def test_fenced_inline_and_markdown_quote_keywords_are_silent(self):
+        for content in ("```\n無駄\n```", "`浪費`", "> もったいない"):
+            with self.subTest(content=content):
+                self.assertIsNone(
+                    _waste_keyword_memory_warning(
+                        [TurnMarkerTest._user(content=content)]
+                    )
+                )
+
+    def test_harness_prefixes_are_silent_without_a_length_cutoff(self):
+        prefixes = (
+            "<command-name>",
+            "<task-notification>",
+            "<system-reminder>",
+            "Stop hook feedback:",
+            "This session is being continued",
+        )
+        for prefix in prefixes:
+            with self.subTest(prefix=prefix):
+                prompt = TurnMarkerTest._user(content=f"  {prefix} 無駄を記録せよ")
+                self.assertIsNone(_waste_keyword_memory_warning([prompt]))
+        human = TurnMarkerTest._user(content="説明" * 5000 + "。この手戻りは無駄でした")
+        self.assertIsNotNone(_waste_keyword_memory_warning([human]))
+
+    def test_raw_compact_prompt_is_silent(self):
+        prompt = TurnMarkerTest._user(content="/compact 無駄を memory に記録せよ")
+        self.assertIsNone(_waste_keyword_memory_warning([prompt]))
+
+
+class QuestionSelfContainmentWarningTest(unittest.TestCase):
+    def test_each_past_reference_warns_at_question_end(self):
+        terms = (
+            "前ターン",
+            "前のターン",
+            "先ほど",
+            "さきほど",
+            "上記",
+            "前回",
+            "上で述べた",
+            "既述",
+        )
+        for term in terms:
+            with self.subTest(term=term):
+                warning = _question_self_containment_warning(
+                    f"{term}内容の承認期限はいつですか？"
+                )
+                assert warning is not None
+                self.assertIn("question-self-containment:", warning)
+
+    def test_warning_embeds_the_required_template(self):
+        warning = _question_self_containment_warning("前回の内容でよいですか?")
+        assert warning is not None
+        for fragment in (
+            "決めてほしいこと N 件",
+            "各件の 問題 / やること / 承認と却下それぞれの帰結",
+            "略語と内部呼称を使わない",
+        ):
+            self.assertIn(fragment, warning)
+
+    def test_requires_both_question_end_and_past_reference(self):
+        self.assertIsNone(_question_self_containment_warning("前回の方針です。"))
+        self.assertIsNone(
+            _question_self_containment_warning("この方針の承認期限はいつですか？")
+        )
+
+    def test_saki_no_is_not_a_reference_term(self):
+        for text in (
+            "先の内容の承認期限はいつですか？",
+            "配置先の候補はどこですか？",
+            "配備先の環境はどれですか？",
+            "宛先の確認は済みましたか？",
+            "最優先の作業は何ですか？",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(_question_self_containment_warning(text))
+
+    def test_reference_terms_warn_after_kanji_symbols_and_quotes(self):
+        for text in (
+            "この方針を採用した前回の判断でよいですか？",
+            "確認対象→上記の条件でよいですか？",
+            "確認対象『既述の条件』でよいですか？",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNotNone(_question_self_containment_warning(text))
+
+    def test_code_fence_and_quote_line_questions_are_silent(self):
+        text = "```\n前回の方針でよいですか？\n```\n> 上記でよいですか？"
+        self.assertIsNone(_question_self_containment_warning(text))
+
+    def test_both_families_use_the_warning_collection_and_keep_exit_zero(self):
+        from unittest import mock
+
+        transcript = TurnMarkerTest._transcript(
+            [
+                TurnMarkerTest._user(content="この手戻りは無駄でした"),
+                TurnMarkerTest._asst("前回の承認期限はいつですか？"),
+            ]
+        )
+        with mock.patch.object(
+            sys.modules[__name__], "_stop_latch_claim", return_value=True
+        ):
+            code, _epoch, _text, warnings = _run({"transcript_path": transcript})
+        self.assertEqual(code, 0)
+        self.assertTrue(any("waste-keyword-memory:" in item for item in warnings))
+        self.assertTrue(any("question-self-containment:" in item for item in warnings))
 
 
 class TranscriptBudgetTest(unittest.TestCase):
