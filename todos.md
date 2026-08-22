@@ -55,11 +55,14 @@ Goal: bun をどの installer が面倒を見るか (host base setup / fe-starte
 Exit Criteria:
 
 - [x] host base setup への組込みは**中止** (理由 = host での使用頻度・一般性が低い)
-- [ ] fe-starter の owner session と投入先の妥当性を議論し、結論を得た — 2026-08-22 に
-  相談を送信済み (相手の installer の役割 / version 固定要求 / repo-local 現状維持との差の
-  3 点を照会)。返答待ち
-- [ ] 結論が「host 側が適切」だった場合はユーザーへ差し戻した (ユーザー指示の再開条件)。
-  結論が fe-starter 側なら、draft を引き渡して本 block を閉じる
+- [x] fe-starter の owner session と投入先の妥当性を議論し、結論を得た (2026-08-22) —
+  **fe-starter へは入れない**。相手の installer は host にも toolchain にも触れない
+  「repo 資産の合成器」(git 追跡 file の add-only copy + marker 追記のみ・network 非使用・
+  冪等) で、複数 seed 共存の契約が「installer は host を変更しない」に依存しているため、
+  host installer の同居は契約破壊になる。version 固定要求も無し (gate は bun を呼ばず、
+  依存再現性は lock file が担保)。相手の方針は現状維持 + 取得レシピの doc 化
+- [x] 結論を報告した — host 側が適切という結論ではないため差し戻しは不要 (ユーザーの中止
+  決定がそのまま維持される)。fe-starter も採用しないため draft の引き渡しも発生しない
 
 Work file: `files/bun_clean_installer` (写経済み draft・未 commit)。中止決定により配線は
 行わない。fe-starter が採用する場合の引き渡し素材として保持する
