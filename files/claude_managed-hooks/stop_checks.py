@@ -1057,6 +1057,27 @@ SHORT_DECISION_RE = re.compile(
 )
 
 
+def _mytask_store_path(session_id: str, cwd: str | None) -> str | None:
+    """Writer anchors on the project dir, so search it and every cwd ancestor."""
+    relative = os.path.join("drafts", "tasks", f"{session_id}.json")
+    roots = [os.environ.get("CLAUDE_PROJECT_DIR")]
+    current = os.path.abspath(cwd or ".")
+    while True:
+        roots.append(current)
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return next(
+        (
+            os.path.join(root, relative)
+            for root in roots
+            if root and os.path.isfile(os.path.join(root, relative))
+        ),
+        None,
+    )
+
+
 def _session_task_store(
     session_id: str | None, cwd: str | None
 ) -> tuple[list[dict], bool]:
@@ -1093,14 +1114,16 @@ def _session_task_store(
             }
         )
 
-    mytask_path = os.path.join(cwd or ".", "drafts", "tasks", f"{session_id}.json")
-    try:
-        with open(mytask_path, encoding="utf-8") as stream:
-            raw = json.load(stream)
-    except FileNotFoundError:
-        raw = []
-    except (OSError, ValueError):
-        return [], False
+    mytask_path = _mytask_store_path(session_id, cwd)
+    raw = []
+    if mytask_path:
+        try:
+            with open(mytask_path, encoding="utf-8") as stream:
+                raw = json.load(stream)
+        except FileNotFoundError:
+            raw = []
+        except (OSError, ValueError):
+            return [], False
     if not isinstance(raw, list):
         return [], False
     for task in raw:
@@ -3408,6 +3431,25 @@ class DecisionQuestionWarningTest(_DecisionStoreFixture, unittest.TestCase):
                 )
                 if store == "native":
                     os.unlink(os.path.join(self.native, self.SID, "1.json"))
+
+    def test_mytask_store_found_from_subdirectory_cwd(self):
+        self._mytask([{"id": "1", "content": "判断待ち: deploy", "status": "pending"}])
+        nested = os.path.join(self.cwd, "files", "hooks")
+        os.makedirs(nested, exist_ok=True)
+        self.assertIsNone(
+            _decision_question_warning("どちらにしますか?", self.SID, nested)
+        )
+
+    def test_mytask_store_found_via_project_dir_env(self):
+        from unittest import mock
+
+        self._mytask([{"id": "1", "content": "判断待ち: deploy", "status": "pending"}])
+        with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": self.cwd}):
+            self.assertIsNone(
+                _decision_question_warning(
+                    "どちらにしますか?", self.SID, os.path.join(self.cwd, "absent")
+                )
+            )
 
     def test_negated_decision_name_does_not_count(self):
         self._native("1", "pending", "判断待ちではなく実装中")
