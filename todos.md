@@ -104,6 +104,24 @@ Goal: session 終了後も生き残り、削除済み worktree を掴んだま�
   worktree を撤去すれば broker も reap 対象へ落ちる (別途判断)
 - **sandbox からは 7 本すべてが見えなかった** (`ps` で 0 本・全件 stale 判定)。
   プロセス表が要る判定は host で測る、という制約が実データで裏付けられた
+
+**回収実施と、そこで判明した設計欠陥 (2026-08-23)**: `--apply` で reap 5 本 (5 本とも
+停止要求だけで停止・SIGTERM 不要) と stale 114 件を処理し、記録は 121 → 2 件になった。
+**その後 `/tmp` に「どの記録も指していない稼働中の broker」が 3 本見つかった** —
+`wt-gran1` / `wt-msgfix` / `wt-gran2a` (daily-stock-analyzer・いずれも実体も git 登録も無し・
+計 33 MB)。
+
+- **記録を起点にしか探さない回収は、生きたプロセスを永久に取り残す**。依頼元が警告していた
+  「取りこぼした子は state file を持たない孤児になり以後どの機構でも拾えない」が実在した
+- **前回の `--apply` 自身が孤児を作った可能性がある**: 残骸削除は session dir の `rmdir` に
+  失敗しても記録の削除まで進む順序だった (`rmdir` は空でなければ失敗する)。記録が先に消えると
+  以後その置き場は辿れない
+- 対策として `codex-broker-reap.py` に**孤児走査**を追加した (`cxc-*` の置き場を直接 glob し、
+  記録が指していないものを列挙。prefix は `createBrokerSessionDir` の既定を実装で確認)。
+  併せて走査先の既定を `$TMPDIR` のみ → **`/tmp` と `$TMPDIR` の両方**に修正
+  (`$TMPDIR` だけ見ていたため sandbox では孤児 0 件と誤報していた)
+- **root 側は対象なし**を確定 (ユーザーが sudo 実行 → `置き場が無い`)。この端末に `scorer`
+  ユーザーは存在せず、codex の記録置き場は `/home/h2suzuki/...` の 1 箇所だけ (除外ゼロで走査)
 一方 **残骸は 121 件** (`~/.claude/plugins/data` 配下の `broker.json` の全数)。teardown が
 ここでも長期間完走していないことを示す。
 
@@ -219,7 +237,9 @@ Exit Criteria:
 - [ ] **対策 D (upstream 報告)**: (i) `handleSessionEnd` は cwd 1 点でなく state root 配下を走査して
   回収すべき、(ii) broker に idle timeout か親死亡監視を持たせるべき、(iii) 鍵不一致時に exit 0 で
   黙るのをやめ警告を出すべき、(iv) **環境変数による代替経路は `pid` を持たないので停止要求しか
-  送れない — 到達しても回収は完了しない** (上記の補正 B・本端末で確認)。
+  送れない — 到達しても回収は完了しない** (上記の補正 B・本端末で確認)、(v) **`teardownBrokerSession`
+  は session dir の削除に失敗しても記録の削除まで進むため、失敗すると二度と辿れない孤児が残る**
+  — 記録は最後に、かつ置き場の削除が成功した時だけ消すべき (本端末で稼働中の孤児 3 本を実測)。
   **報告時は社内の path と codename を伏せ、機能名で書く**
 
 Work file: `drafts/codex-broker-reap.py` (2026-08-23 に本 repo で実装。依頼元の
