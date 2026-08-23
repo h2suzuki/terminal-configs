@@ -42,9 +42,20 @@ Exit Criteria:
   本体位置の制御語 (`while true; do …`) と読み取り grep は意図どおり (前者 deny・後者 allow)。
   test は 69 → 81 だが round 3 の追加は 0 件で、設計の核を壊す mutation が survive する。
   **穴が「本体の位置」から「条件の位置」へ移っただけ = 3 巡連続の不通過**
-- [ ] 構造再審の要否をユーザーが決めた — 方法論 §7.2 の「同段不通過 2 回で構造再審」に
-  3 巡目も該当。3 巡とも失敗の型が同じ (先頭の語で判定する限り、穴は位置を変えて残る) ため、
-  述語の手直しでなく解析の作り (全 command 位置を見る / 既存 shell parser の採用) を問う
+- [ ] **残る 1 class (D2) の扱いをユーザーが決めた** — 2026-08-23 に脅威モデル
+  (`feedback_threat_model_in_review_order` = うっかり防止) で 27 形を選別し、語彙 2 箇所
+  (`SHELL_KEYWORDS` へ条件側 5 語・`OPTION_WRAPPERS` へ `watch`) を `fd6ff4b` で追加。
+  監視 loop 系 5 形は閉じた。**未解決は D2 = 一部の行だけ token 化に失敗すると素通し**の
+  5 形で、heredoc で発注書を書きながら同じ command で起動する形・日本語のアポストロフィで
+  引用が壊れる形を含み**うっかりで踏める = 対象内**。fail-closed (token 化失敗なら deny) に
+  すると、companion に言及する発注書の heredoc が誤 deny に戻るため、単純な締め方は使えない。
+  非対象と裁定できるのは backtick 置換 / `make -f /dev/stdin` / 別 runtime (`bun` /
+  `python3 -c`) / 括弧 200 重 / 関数定義 / `yarn` 経由。`script -q -c` は wrapper 表の
+  operand 剥がし漏れで、D2 とは別口の小穴。
+  **fix round 4 目に当たるため、方法論 §7.4 の敗因分析とユーザー承認が要る**
+- [ ] 解析そのものの作り直しは **却下済み (2026-08-23)** — parser library 3 種が未導入で
+  取得経路も無く、bash の parser 借用は入力を script に埋め込むため任意コード実行の穴
+  (実測)、かつ変数展開・間接実行を含めると原理的に決定不能。この criterion は記録のため残す
 - [ ] 本線へ merge + push した
 - [ ] 配備し、検索コマンドが通り起動が弾かれることを実地で確認した
 - [ ] 同型欠陥を class で掃引した — 実測 2026-08-23: `skill_reminder_gate` の handoff doc 分岐が
