@@ -130,10 +130,35 @@ Goal: session 終了後も生き残り、削除済み worktree を掴んだま�
   **`pid` と `sessionDir` を持たない**ため、仮に発火しても `teardownBrokerSession` は
   プロセスを kill できず、停止要求の送信しかできない。**upstream 報告に足すべき項目**
 
-**経路別内訳 (生存 38 本・依頼元の実測でこの端末では未検証)**: P1 = 呼び出し元 PWD と broker の
-`--cwd` が不一致 20 本 (再現済み)、
-P2 = 両者一致だが teardown が完走していない 18 本 (`broker.json` が全件残存。未完走の理由は
-未確定で、hook 不発 / 途中失敗 / 第三の cwd のいずれも否定できていない)。
+**原因は単一 = 鍵ずれ (依頼元が 2026-08-23 に自己訂正)**: 当初は 2 経路 (鍵ずれ 20 本 /
+「鍵は一致したが teardown 不発」18 本) としていたが、**後者の分類根拠が誤りだった**。
+「一致」と見ていた PWD は**発注の瞬間に `cd` した先のスナップショット**であり、SessionEnd で
+効くのは**session 終了時点**の cwd である。依頼元の反証:
+
+- 18 本は 4 session に集中し、1 session が抱えていた worktree は 10 / 5 / 2 / 1 本。
+  10 本に発注した session が回収できるのは最後の 1 本だけで、残り 9 本は鍵ずれで漏れる
+- `a83cafe8` は transcript の置き場が `-root-scorer-Manufacturing-debian-scripts`、broker の対象が
+  `/root/wt/issue-440` で**最初から別**。`6c6591ea` も同様 (`-home-scorer-terminal-configs`)
+- `broker.json` が無い state dir は repo root 2 件だけ = 回収に成功したのは root 鍵のみ
+
+→ **「SessionEnd 不発」という別経路を立てる必要はない**。これは対策 A (発注前に worktree へ `cd`)
+の評価を上げる訂正である。ただし「1 session = 1 worktree」を守らないと 10 本中 9 本が漏れる形は
+そのまま再現する。
+
+**本端末データでの裏取り (2026-08-23)**: state dir 129 件のうち残骸あり 121 / 無し 8。
+
+- **残骸 121 件は 1 件残らず「短命な作業ディレクトリ」を鍵にしている** — `wt-*` 形が 112 件、
+  残り 9 件も `agent-*` 4 / `codex-gate-*` / `phase2-work-*` / `phase3-work-*` / `tmp-*` / `wf_*` で、
+  いずれも session が居続ける場所ではない。**長命な repo root を鍵にした残骸はゼロ**
+- 残骸の無い 8 件は repo root 4 件 (`terminal-configs` / `daily-stock-analyzer` / `iac-web` /
+  `claude-design-fe-starter`) と、私が実際にセッションを走らせる worktree 4 件
+  (`wt-gates` / `wt-bootsweep` / `wt-legend` / `wt-rebuild`)
+- `teardownBrokerSession` は pid file・log・socket・session dir を削除し `broker.json` も消すため、
+  **回収成功後の姿は「`jobs` と `state.json` だけ残る」** で、上の 8 件はまさにその姿。
+  ただし「broker を一度も起こしていない」場合も同じ姿になるため、file だけでは両者を区別できない
+- **依頼元の「回収できたのは root 鍵のみ」は本端末では言い過ぎ**: セッションを終える場所である
+  worktree 4 件は綺麗になっている。**鍵が repo root かどうかではなく、session がそこで終わったか
+  どうか**が分かれ目、と読むほうが両デバイスのデータに合う (＝訂正後の結論と同じ)
 
 **確認済みの非該当**: 版は無関係 (生存 38 本すべて 1.0.5 の path から起動・1.0.4 は不在)。
 1.0.6 へ上げても直らない (`session-lifecycle-hook.mjs` の diff が 0)。既製の回収機構は無い
@@ -146,7 +171,9 @@ Exit Criteria:
 - [ ] **対策 A (鍵ずれ)**: 発注する session の cwd を worktree に合わせる。hook が受け取る cwd は
   `cd` に追従することは依頼元で実測済み。**効くのは session 終了時点の cwd**であり発注時ではない
   ため、1 session が複数 worktree に発注すると最後の 1 本しか回収されない。複数発注するなら
-  worktree ごとに session を分けるか対策 B を併用する。P1 の 20 本を塞ぐが P2 の 18 本には効かない
+  worktree ごとに session を分けるか対策 B を併用する。**原因が単一と分かった (上記) ため、
+  この対策が本命**。ただし守れなければ「10 本中 9 本が漏れる」形は残るので、対策 B・C は
+  取りこぼしの受け皿として引き続き要る
 - [ ] **対策 B (取りこぼし)**: worktree 削除の**直前**に broker を回収する。順序と粒度が要点 —
   (i) 削除後は path が消えて `fuser` が引けないので削除前に実行、(ii) 記録から endpoint を読み
   `broker/shutdown` RPC を先に送る (いきなり SIGKILL すると socket と state file が残る)、
@@ -154,7 +181,9 @@ Exit Criteria:
   依頼元実測で issue-42 は 64 プロセス中 44・issue-440 は 25 中 18 しか掴んでいない。取りこぼした子は
   broker 死亡後に state file を持たない孤児になり以後どの機構でも拾えない)。`fuser` は最後の
   掃き残しチェックとして使う
-- [ ] **対策 C (定期回収)**: 状態駆動の reaper を入れる。判定 3 分岐 = keep (`--cwd` が今も存在) /
+- [ ] **対策 C (定期回収)**: 対策 A を守れなかった分の受け皿として、状態駆動の reaper を入れる
+  (当初は「teardown 不発 18 本のため」としていたが、その経路は上記のとおり消えた)。
+  判定 3 分岐 = keep (`--cwd` が今も存在) /
   reap (pid 生存だが対象ディレクトリ消滅 → session に SIGTERM → 残れば SIGKILL → state と
   session dir を削除) / stale (pid 既に死亡 → 残骸のみ削除)。依頼元の dry-run 実測で
   28 session / 約 3.9 GB を回収対象と判定し、対象が存命の 10 本は正しく keep した。
