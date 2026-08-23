@@ -94,9 +94,16 @@ Goal: session 終了後も生き残り、削除済み worktree を掴んだま�
 
 **本端末の実測 (2026-08-23)**: 生存 broker はこの sandbox の `ps` からは 0 本 (2 回測定)。
 ただし sandbox のプロセス可視性の制約があるため host 全体の断定はしない。
-一方 **残骸は 121 件** — `~/.claude/plugins/data` 配下の `broker.json` を全数走査したところ
-**121 件すべてが「対象ディレクトリが既に消滅」** で、存命は 0 件。teardown がここでも
-長期間完走していないことを示す。
+一方 **残骸は 121 件** (`~/.claude/plugins/data` 配下の `broker.json` の全数)。teardown が
+ここでも長期間完走していないことを示す。
+
+**訂正 2026-08-23**: 当初「121 件すべてが対象ディレクトリ消滅・存命 0 件」と書いたが**誤り**。
+`broker.json` の項目は `endpoint` / `pidFile` / `logFile` / `sessionDir` / `pid` の 5 つで、
+**`cwd` フィールドは存在しない** (全 121 件の key を集計して確認)。存否判定に使った式が
+無い field を読んでいたため、全件が自動的に「消滅」側へ落ちていた。**あの内訳は測定ではなく
+式の不備**。正しい判定は (i) `pid` が生存し (ii) その `/proc/<pid>/cmdline` が broker で
+(iii) その `--cwd` が実在するか、で行う必要があり、**プロセス表が要るので host で測る**。
+keep / reap / stale の実数は host 実行の結果が出るまで未確定。
 
 **原因 (依頼元の解析)**:
 
@@ -192,7 +199,9 @@ Exit Criteria:
   reap (pid 生存だが対象ディレクトリ消滅 → session に SIGTERM → 残れば SIGKILL → state と
   session dir を削除) / stale (pid 既に死亡 → 残骸のみ削除)。依頼元の dry-run 実測で
   28 session / 約 3.9 GB を回収対象と判定し、対象が存命の 10 本は正しく keep した。
-  **本端末では残骸 121 件が stale 判定に該当する見込み**
+  **本端末の 121 件の内訳は host 実行待ち** (上記の訂正のとおり、sandbox からは
+  プロセス表が正しく見えないため keep / reap / stale を分けられない)。
+  判定に使えるのは broker 自身の argv の `--cwd` で、`broker.json` には入っていない
 - [ ] **対策 D (upstream 報告)**: (i) `handleSessionEnd` は cwd 1 点でなく state root 配下を走査して
   回収すべき、(ii) broker に idle timeout か親死亡監視を持たせるべき、(iii) 鍵不一致時に exit 0 で
   黙るのをやめ警告を出すべき、(iv) **環境変数による代替経路は `pid` を持たないので停止要求しか
