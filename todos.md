@@ -106,7 +106,32 @@ Goal: session 終了後も生き残り、削除済み worktree を掴んだま�
    deny し「worktree を作ってその path を `--cwd` に渡せ」と要求するため、session の cwd =
    共有 checkout / 登録鍵 = worktree となり**必ず不一致**。read-only task なら一致し leak しない
 
-**経路別内訳 (生存 38 本)**: P1 = 呼び出し元 PWD と broker の `--cwd` が不一致 20 本 (再現済み)、
+**手元ソースでの再現確認 (2026-08-23・`~/.claude/plugins/cache/openai-codex/codex/1.0.6`)**:
+依頼元がコピペで落とした code block を実物から復元し、解析を照合した。1.0.5 は本端末に無いが、
+依頼元が 1.0.6 と `session-lifecycle-hook.mjs` の diff 0 を確認済みなので代替になる。
+
+- **確認 (原因 1)**: `spawnBrokerProcess` は `detached: true` + `child.unref()` で起動し、
+  引数に `serve --endpoint <ep> --cwd <dir> --pid-file <pf>` を渡す (`broker-lifecycle.mjs`)。
+  **broker 自身が `--cwd` を argv に持つ**ので、対策 C の keep/reap 判定はこの argv から引ける
+- **確認 (原因 2)**: `handleSessionEnd` は `loadBrokerSession(cwd)` の **1 点照会**で、
+  state root 配下の走査をしない (`session-lifecycle-hook.mjs`)
+- **補正 A — 鍵は「cwd」でなく「git リポジトリの root」**: `resolveStateDir(cwd)` は
+  `resolveWorkspaceRoot(cwd)` → `ensureGitRepository(cwd)` を通し、その realpath の
+  sha256 先頭 16 桁で dir 名を作る (`state.mjs` / `workspace.mjs`)。**帰結が 2 つ**:
+  (i) session の cwd が worktree の**子ディレクトリ**でも root が同じなら鍵は一致し leak しない
+  (報告の「PWD 不一致」という言い方より条件は狭い)、(ii) 一方 linked worktree はそれ自体が
+  別 root なので、共有 checkout との組では**必ず**不一致になる → write 委譲で必ず leak、
+  という結論そのものは正しい
+- **補正 B — 逃げ道の分岐が存在するが実質死んでいる (報告に無い)**:
+  `handleSessionEnd` は鍵照会が空振りした時に環境変数
+  `CODEX_COMPANION_APP_SERVER_ENDPOINT` を見る分岐を持つ。しかし grep の結果、この変数を
+  **hook のために書き出す経路が無い** (`appendEnvVar` が伝えるのは session id / transcript path /
+  plugin data の 3 つだけで、当該変数は読み手 3 箇所のみ)。さらにこの分岐が作るオブジェクトは
+  **`pid` と `sessionDir` を持たない**ため、仮に発火しても `teardownBrokerSession` は
+  プロセスを kill できず、停止要求の送信しかできない。**upstream 報告に足すべき項目**
+
+**経路別内訳 (生存 38 本・依頼元の実測でこの端末では未検証)**: P1 = 呼び出し元 PWD と broker の
+`--cwd` が不一致 20 本 (再現済み)、
 P2 = 両者一致だが teardown が完走していない 18 本 (`broker.json` が全件残存。未完走の理由は
 未確定で、hook 不発 / 途中失敗 / 第三の cwd のいずれも否定できていない)。
 
@@ -136,7 +161,9 @@ Exit Criteria:
   **本端末では残骸 121 件が stale 判定に該当する見込み**
 - [ ] **対策 D (upstream 報告)**: (i) `handleSessionEnd` は cwd 1 点でなく state root 配下を走査して
   回収すべき、(ii) broker に idle timeout か親死亡監視を持たせるべき、(iii) 鍵不一致時に exit 0 で
-  黙るのをやめ警告を出すべき。**報告時は社内の path と codename を伏せ、機能名で書く**
+  黙るのをやめ警告を出すべき、(iv) **環境変数による代替経路は `pid` を持たないので停止要求しか
+  送れない — 到達しても回収は完了しない** (上記の補正 B・本端末で確認)。
+  **報告時は社内の path と codename を伏せ、機能名で書く**
 
 Work file: 依頼元に実装例 `drafts/codex-broker-reap.sh` (dry-run 既定・`--apply` で実行) があるが
 **本 repo には存在しない** (2026-08-23 確認)。着手時に取り寄せるか再実装するかを決める。
