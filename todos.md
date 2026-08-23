@@ -36,7 +36,7 @@ Exit Criteria:
 - [x] 回帰 filter を通した — **round 3 = fail、指摘を脅威モデルで選別して決着 (2026-08-23)**。
   filter の 27 形のうち、うっかりで踏める形だけを対象に語彙 2 箇所を足して閉じた (`fd6ff4b`)。
   残す形と落とす形の判定は下の criterion に記録。以下は round 3 時点の記録。報告書
-  `wt-mention/drafts/mention-guard/fix-3-regression-review.md`。誤検出の揺り戻しは pass
+  `drafts/mention-guard/fix-3-regression-review.md`。誤検出の揺り戻しは pass
   (読み取り 60 形で r2 allow → cur DENY が 0 形) だが、取りこぼしで fail。
   **発注側で独立に再現済み** (`_direct_companion` を HEAD 版と直接比較): HEAD が deny する
   8 形を `129bbaa` が allow する — 制御語が**条件の位置**にある形 (`while` / `until` / `if`)、
@@ -92,7 +92,7 @@ Exit Criteria:
   同じ「語の出現と実行を区別しない」形。ただし `cd` という名の関数を定義する実用場面は考えにくく、
   実害は小さい。上の修正と同じ「先頭の語で判定」が使えるかを見て、費用対効果で判断する
 
-Work file: `wt-mention/drafts/mention-guard/` (発注書 2 通と回帰レビュー 2 通 + 本巡の指示書)
+Work file: `drafts/mention-guard/` (発注書 2 通と回帰レビュー 2 通 + 本巡の指示書)
 
 ### codex plugin の broker がセッション終了後も生き残る (別デバイスからの依頼)
 
@@ -739,7 +739,8 @@ Exit Criteria:
   発生率を再実測する
 
 Work file: `docs/adversarial-review-methodology.md` §7.3 (現行の注入対策の正本)、
-`wt-ruling61/drafts/` と `wt-gates/drafts/` の回帰レビュー報告書群 (本日の注入 corpus)
+`drafts/ruling61/` と `wt-gates/drafts/` の回帰レビュー報告書群 (注入 corpus。
+`drafts/ruling61/` は worktree 撤去 2026-08-24 の際に救出したもの)
 
 ### 方法論の実証: 小規模ツール新規作成で敵対レビューの収束を実測する
 
