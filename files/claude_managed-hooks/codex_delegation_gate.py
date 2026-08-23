@@ -172,16 +172,43 @@ TRANSPARENT_WRAPPERS = frozenset(
 )
 # option や数値 operand を取る wrapper。 剥がし損ねると実行語が flag や duration にずれる。
 OPTION_WRAPPERS = frozenset(
-    {"stdbuf", "ionice", "chrt", "nice", "setsid", "unbuffer", "script", "timeout"}
+    {
+        "stdbuf",
+        "ionice",
+        "chrt",
+        "nice",
+        "setsid",
+        "unbuffer",
+        "script",
+        "timeout",
+        "watch",
+    }
 )
 OPERAND_WRAPPERS = frozenset({"flock"})
 NUMERIC_OPERAND = re.compile(r"^[\d.]+[smhd]?$")
 # 照合前に剥がされず sandbox へ落ちる wrapper。 sandbox_exclusion_guard は warn 止まり。
 SANDBOX_BREAKING_WRAPPERS = frozenset({"env", "npx", "bunx", "uvx"})
 SHELL_NAMES = frozenset({"bash", "sh", "zsh", "ksh", "dash"})
-# 制御語は実行語ではない。 剥がさないと `do node x` の実行語が `do` に見える。
+# 制御語は実行語ではない。 剥がさないと `do node x` / `while node x` の実行語が制御語に見える。
 SHELL_KEYWORDS = frozenset(
-    {"do", "then", "else", "elif", "fi", "done", "esac", "in", "!", "{", "}"}
+    {
+        "do",
+        "then",
+        "else",
+        "elif",
+        "fi",
+        "done",
+        "esac",
+        "in",
+        "!",
+        "{",
+        "}",
+        "while",
+        "until",
+        "if",
+        "for",
+        "case",
+    }
 )
 SCRIPT_READ_LIMIT = 65536
 CJK = re.compile(r"[぀-ヿ㐀-䶿一-鿿ｦ-ﾟ]")
@@ -1343,6 +1370,25 @@ class GateTest(unittest.TestCase):
     def test_single_line_if_companion_launch_is_denied(self):
         parsed, _ = self._bash(
             "if true; then node /path/codex-companion.mjs task; fi", agent_id=None
+        )
+        self.assertIn("直接起動を deny", self._reason(parsed))
+
+    def test_companion_in_loop_condition_is_denied(self):
+        """本 gate が止めたい実害は監視 loop。 条件位置は本体位置と同じく起動である。"""
+        for command in (
+            "while node /path/codex-companion.mjs status; do sleep 5; done",
+            "until node /path/codex-companion.mjs status; do sleep 5; done",
+            "if node /path/codex-companion.mjs task; then echo ok; fi",
+            "until node /path/codex-companion.mjs status | grep -q done; do sleep 10; done",
+        ):
+            with self.subTest(command=command):
+                parsed, _ = self._bash(command, agent_id=None)
+                self.assertIn("直接起動を deny", self._reason(parsed))
+
+    def test_watch_wrapped_companion_is_denied(self):
+        """watch は option を取る wrapper。 剥がさないと実行語が `-n5` にずれる。"""
+        parsed, _ = self._bash(
+            "watch -n5 node /path/codex-companion.mjs status", agent_id=None
         )
         self.assertIn("直接起動を deny", self._reason(parsed))
 
