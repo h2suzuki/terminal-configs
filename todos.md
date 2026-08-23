@@ -255,7 +255,16 @@ Exit Criteria:
   記録の無条件削除 (`rmdirSync` の失敗を握り潰す `broker-lifecycle.mjs:201-207` の後に
   `session-lifecycle-hook.mjs:113` が無条件 `clearBrokerSession`)。
   伏せ字は機械掃引で確認 (内部 path / repo 名 / ユーザー名 / worktree 名とも 0 hit)。
-  **残るのは提出先の決定と提出そのもの** (外部公開にあたるためユーザー承認が要る)
+  **再現手順を実機で確立 2026-08-24**: `drafts/broker-leak-repro.sh` (shellcheck 緑)。
+  実セッションも実 broker も要らず、記録の `pid` を null にして SessionEnd hook を直接叩くだけで
+  全経路が再現する。実測 = 共有 checkout と自身の linked worktree は**別の鍵**
+  (`main-7e72ebf7…` / `side-d4945553…`)、worktree の子ディレクトリは**同じ鍵**。
+  鍵が外れた場合 `exit=0`・出力なし・**記録は残存**、合った場合 `exit=0`・出力なし・記録は削除で
+  **両者が exit と出力で区別できない**。置き場に file を 1 つ残すだけで `rmdirSync` が失敗し、
+  **記録だけ消えて置き場が残る** = 孤児の成立も実プロセスなしで再現できた。
+  走行前後で state dir 129 → 129・残骸ゼロを確認 (実験用の置き場は自動削除)。
+  **提出先 = `openai/codex-plugin-cc`** (issue 受付あり)。**先に重複調査を実施中** —
+  broker leak 系の open issue が既に多数ある (#543 / #605 / #636 / #487 等)
 
 Work file: `files/codex_broker_reap` (2026-08-23 に本 repo で実装。依頼元の
 `codex-broker-reap.sh` は取り寄せず、判定条件を本文から起こして書き直した)。
