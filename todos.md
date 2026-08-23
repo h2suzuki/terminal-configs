@@ -245,7 +245,17 @@ Exit Criteria:
   送れない — 到達しても回収は完了しない** (上記の補正 B・本端末で確認)、(v) **`teardownBrokerSession`
   は session dir の削除に失敗しても記録の削除まで進むため、失敗すると二度と辿れない孤児が残る**
   — 記録は最後に、かつ置き場の削除が成功した時だけ消すべき (本端末で稼働中の孤児 3 本を実測)。
-  **報告時は社内の path と codename を伏せ、機能名で書く**
+  **報告時は社内の path と codename を伏せ、機能名で書く**。
+  **起草完了 2026-08-24**: `drafts/codex-broker-leak-upstream-report.md` (英文 152 行)。
+  5 項目すべて 1.0.6 の現物で file:line つきに再確認済み — 1 点照会
+  (`session-lifecycle-hook.mjs:86`)、自決手段なし (`app-server-broker.mjs` 252 行に
+  idle/ppid/parent/watchdog/heartbeat が 0 hit・終了経路は `:160` `:236` `:241` のみ)、
+  空振り時の無言 exit 0、環境変数経路が `pid`/`sessionDir` を持たない
+  (`:87-93` × `broker-lifecycle.mjs:174` の `Number.isFinite` guard)、
+  記録の無条件削除 (`rmdirSync` の失敗を握り潰す `broker-lifecycle.mjs:201-207` の後に
+  `session-lifecycle-hook.mjs:113` が無条件 `clearBrokerSession`)。
+  伏せ字は機械掃引で確認 (内部 path / repo 名 / ユーザー名 / worktree 名とも 0 hit)。
+  **残るのは提出先の決定と提出そのもの** (外部公開にあたるためユーザー承認が要る)
 
 Work file: `files/codex_broker_reap` (2026-08-23 に本 repo で実装。依頼元の
 `codex-broker-reap.sh` は取り寄せず、判定条件を本文から起こして書き直した)。
