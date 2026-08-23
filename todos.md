@@ -77,7 +77,20 @@ Exit Criteria:
 - [ ] 同型欠陥を class で掃引した — 実測 2026-08-23: `skill_reminder_gate` の handoff doc 分岐が
   同じ「言及と実行を区別しない」形で、`cat` による読み取りと deny message が案内する declare
   CLI 自身を deny する (`mentions_handoff_doc` が command 全文の token 一致・書込経路不問)。
-  本 branch の「前置きを剥がした先頭の語で判定」が適用できるかを判定し、できなければ別設計を起票する
+  本 branch の「前置きを剥がした先頭の語で判定」が適用できるかを判定し、できなければ別設計を起票する。
+  **修正済み 2026-08-24 (`7967982`)**: 隣の検問の設計がそのまま適用できた。判定を
+  `mentions_handoff_doc` から新設の `writes_handoff_doc` へ差し替え、**書込語だけを列挙して
+  未知の command は読取へ倒す**形にした (読取語は列挙しない — 列挙漏れが誤 deny になる側を避ける)。
+  書込と見なすのは redirect の宛先・書込語 (`cp` `mv` `tee` `install` `sed -i` 等)・
+  中身を読めない実行系 (`python3 -c` 等)・heredoc の 4 つ。TDD で red (22 error) → green。
+  319 tests / ruff / format / ty 緑。`mentions_handoff_doc` は transcript 走査
+  (`session_resume_context`) が使い続けるので残す。**配備待ち**。
+  **本日の実測 3 件が根拠**: `ls -la <doc> drafts/` (一覧表示)、`cat <doc>`、そして
+  **この修正のための計測コマンド自身**が deny された。読取全般に及ぶことが確認できた
+- [ ] **同型欠陥がもう 1 件ある — `cd` 検問** (2026-08-24 実測): 複合コマンドの先頭 `cd` を
+  禁じる検問が、`cd() { return 1; }` という**関数定義**を「ディレクトリ移動」と読んで deny した。
+  同じ「語の出現と実行を区別しない」形。ただし `cd` という名の関数を定義する実用場面は考えにくく、
+  実害は小さい。上の修正と同じ「先頭の語で判定」が使えるかを見て、費用対効果で判断する
 
 Work file: `wt-mention/drafts/mention-guard/` (発注書 2 通と回帰レビュー 2 通 + 本巡の指示書)
 
