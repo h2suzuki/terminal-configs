@@ -72,15 +72,10 @@ FIX_METHOD_RE = re.compile(
 FINDING_LINE_RE = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+.*所見", re.IGNORECASE)
 FINDING_NUMBER_RE = re.compile(r"所見\s*([1-9][0-9]*)", re.IGNORECASE)
 STRUCTURAL_WARNING = "機構追加が 2 巡連続しています。構造再審を行ってください。"
-STATE_MACHINE_RE = re.compile(
-    rf"(?>状態機械|状態|遷移|\bstate(?:\s+machine|\s+file)?\b|\blatch\b|\bpending\b)"
-    rf"(?!{NEGATED_DECLARATION_PATTERN})",
-    re.IGNORECASE,
-)
-RETIREMENT_RE = re.compile(
-    rf"(?>廃止|撤去|\bdeprecat(?:e|ed|ion)\b|\bretir(?:e|ed|ement)\b)"
-    rf"(?!{NEGATED_DECLARATION_PATTERN})",
-    re.IGNORECASE,
+# 適用有無は書き手が節で宣言する。 語の出現で引くと普通の日本語に発火する (2026-08-23 実測)。
+INVENTORY_SECTIONS = (
+    ("全数列挙", "状態を持たないなら「該当なし」と書く"),
+    ("依存閉包棚卸し", "廃止・撤去を伴わないなら「該当なし」と書く"),
 )
 
 
@@ -460,15 +455,11 @@ def check_fix_contract(lines: list[str], path: str) -> list[str]:
                 )
             if not has_nonempty_section(lines, "既存保証の監査"):
                 findings.append("機構追加には必須の節がない: ## 既存保証の監査")
-    live_text = "\n".join(lines[index] for index in outside_fences(lines))
-    if STATE_MACHINE_RE.search(live_text) and not has_nonempty_section(
-        lines, "全数列挙"
-    ):
-        findings.append("状態機械への言及には必須の節がない: ## 全数列挙")
-    if RETIREMENT_RE.search(live_text) and not has_nonempty_section(
-        lines, "依存閉包棚卸し"
-    ):
-        findings.append("廃止・撤去には必須の節がない: ## 依存閉包棚卸し")
+    findings.extend(
+        f"fix 発注書に必須の節がない: ## {section} ({hint})"
+        for section, hint in INVENTORY_SECTIONS
+        if not has_nonempty_section(lines, section)
+    )
     sweep = level_two_body(lines, "掃引")
     if sweep is None or not any(line.strip() for line in sweep):
         findings.append(
@@ -582,6 +573,8 @@ class LintTest(unittest.TestCase):
             "## 目的",
             f"{prefix}## 2 方向分析\n\n起源と防止を対にして確認する。\n\n"
             f"## 修正方式\n\n- 所見 1: {method}{detail}\n\n{audit}"
+            "## 全数列挙\n\n全状態と遷移を列挙する。\n\n"
+            "## 依存閉包棚卸し\n\n依存語句と担保名を掃引する。\n\n"
             "## 掃引\n\n欠陥定義と grep command による全 site を列挙する。\n\n"
             "## 目的",
         )
@@ -754,6 +747,7 @@ class LintTest(unittest.TestCase):
             "- 所見 1: 機構追加。観測・分岐・資源と各 failure mode + 対応 test を列挙。"
             "\n\n## 2 方向分析\n\n起源と防止を対にして確認する。"
             "\n\n## 既存保証の監査\n\n既存構造では表現できない理由を確認する。"
+            "\n\n## 全数列挙\n\n該当なし。\n\n## 依存閉包棚卸し\n\n該当なし。"
             "\n\n## 掃引\n\n欠陥定義を置き、grep command で全 site を列挙した結果を記録する。",
         )
         self.assertEqual(lint(complete, "x.md"), [])
@@ -761,6 +755,7 @@ class LintTest(unittest.TestCase):
             "## 目的",
             "## 修正方式\n\n- 所見 1: 既存集約 (機構追加なし)"
             "\n\n## 2 方向分析\n\n起源と防止を対にして確認する。"
+            "\n\n## 全数列挙\n\n該当なし。\n\n## 依存閉包棚卸し\n\n該当なし。"
             "\n\n## 掃引\n\n欠陥定義を置き、grep command で全 site を列挙した結果を記録する。"
             "\n\n## 目的",
         )
@@ -807,33 +802,37 @@ class LintTest(unittest.TestCase):
         )
         self.assertFalse(any("既存保証の監査" in item for item in lint(outside_method)))
 
-    def test_state_machine_terms_require_full_enumeration(self):
-        for term in ("状態", "遷移", "state machine", "state file", "latch", "pending"):
-            with self.subTest(term=term):
-                triggered = self._fix_order(1).replace(
-                    "例である。", f"{term} を変更する。"
+    INVENTORY_SECTIONS = ("全数列挙", "依存閉包棚卸し")
+
+    def test_inventory_sections_are_required_unconditionally(self):
+        """語の出現でなく節の有無で要求する — 節を落とせば語に関わらず違反。"""
+        for section in self.INVENTORY_SECTIONS:
+            with self.subTest(section=section):
+                dropped = self._fix_order(1).replace(f"## {section}", "## 無関係")
+                self.assertTrue(
+                    any(f"## {section}" in item for item in lint(dropped, "x.md"))
                 )
-                self.assertTrue(any("## 全数列挙" in item for item in lint(triggered)))
-                complete = triggered.replace(
-                    "## 掃引",
-                    "## 全数列挙 (states and transitions)\n\n全状態と遷移を列挙する。\n\n## 掃引",
-                )
-                self.assertFalse(any("## 全数列挙" in item for item in lint(complete)))
-                empty = complete.replace("全状態と遷移を列挙する。", "")
-                self.assertTrue(any("## 全数列挙" in item for item in lint(empty)))
-        for word in ("stateless", "pendingly"):
-            with self.subTest(word=word):
-                text = self._fix_order(1).replace("例である。", f"{word} design")
-                self.assertFalse(any("## 全数列挙" in item for item in lint(text)))
+
+    def test_inventory_sections_accept_not_applicable(self):
+        """適用有無の判断は書き手が宣言する — 「該当なし」で埋めれば通る。"""
+        text = self._fix_order(1)
+        for section in self.INVENTORY_SECTIONS:
+            text = re.sub(
+                rf"(## {section}[^\n]*\n\n)[^\n]+", r"\1該当なし。", text, count=1
+            )
+        self.assertEqual(lint(text, "x.md"), [])
+
+    def test_ordinary_japanese_changes_no_findings(self):
+        """普通の日本語が節を要求しない (2026-08-23 実測: 5 通中 4 通が踏んだ誤爆)。"""
+        baseline = self._fix_order(1)
+        for phrase in ("空状態のまま", "という状態になっている", "廃止済みの経緯", "latch"):
+            with self.subTest(phrase=phrase):
+                text = baseline.replace("例である。", f"{phrase}を説明する。")
+                self.assertEqual(lint(text, "x.md"), lint(baseline, "x.md"))
 
     def test_all_declaration_patterns_share_negation_exclusions(self):
-        patterns = (
-            MECHANISM_DECLARED_RE,
-            FIX_METHOD_RE,
-            STATE_MACHINE_RE,
-            RETIREMENT_RE,
-        )
-        stems = ("機構追加", "機構追加", "状態", "廃止")
+        patterns = (MECHANISM_DECLARED_RE, FIX_METHOD_RE)
+        stems = ("機構追加", "機構追加")
         suffixes = (
             "なし",
             "ゼロ",
@@ -853,45 +852,13 @@ class LintTest(unittest.TestCase):
                 with self.subTest(pattern=pattern.pattern, suffix=suffix):
                     self.assertIsNone(pattern.search(stem + suffix))
 
-    def test_negated_inventory_terms_do_not_require_sections(self):
-        cases = (
-            ("新規 state は作らない。", "## 全数列挙"),
-            ("状態は持たない。", "## 全数列挙"),
-            ("承認機構の廃止はしない。", "## 依存閉包棚卸し"),
-            ("機構追加は本発注に含まれない。", "## 既存保証の監査"),
-            ("機構追加ゼロ。", "## 既存保証の監査"),
-        )
-        for sentence, section in cases:
+    def test_negated_mechanism_declarations_do_not_require_audit(self):
+        for sentence in ("機構追加は本発注に含まれない。", "機構追加ゼロ。"):
             with self.subTest(sentence=sentence):
                 text = self._fix_order(1).replace("例である。", sentence)
-                self.assertFalse(any(section in item for item in lint(text, "x.md")))
-        state = self._fix_order(1).replace("例である。", "状態機械を追加する。")
-        retired = self._fix_order(1).replace("例である。", "承認機構を廃止する。")
-        self.assertTrue(any("## 全数列挙" in item for item in lint(state, "x.md")))
-        self.assertTrue(
-            any("## 依存閉包棚卸し" in item for item in lint(retired, "x.md"))
-        )
-
-    def test_retirement_terms_require_dependency_closure_inventory(self):
-        for term in ("廃止", "撤去", "deprecate", "deprecated", "retirement"):
-            with self.subTest(term=term):
-                triggered = self._fix_order(1).replace("例である。", f"{term} を行う。")
-                self.assertTrue(
-                    any("## 依存閉包棚卸し" in item for item in lint(triggered))
-                )
-                complete = triggered.replace(
-                    "## 掃引",
-                    "## 依存閉包棚卸し (all references)\n\n依存語句と担保名を掃引する。\n\n## 掃引",
-                )
                 self.assertFalse(
-                    any("## 依存閉包棚卸し" in item for item in lint(complete))
+                    any("## 既存保証の監査" in item for item in lint(text, "x.md"))
                 )
-                empty = complete.replace("依存語句と担保名を掃引する。", "")
-                self.assertTrue(
-                    any("## 依存閉包棚卸し" in item for item in lint(empty))
-                )
-        text = self._fix_order(1).replace("例である。", "retiringly handled")
-        self.assertFalse(any("## 依存閉包棚卸し" in item for item in lint(text)))
 
     def test_fix_requires_a_nonempty_sweep_section(self):
         method = CONFORMING.replace("# 発注書: 例", "# fix round 1: 例").replace(
@@ -904,6 +871,7 @@ class LintTest(unittest.TestCase):
         complete = method.replace(
             "## 目的",
             "## 2 方向分析\n\n起源と防止を対にして確認する。\n\n"
+            "## 全数列挙\n\n該当なし。\n\n## 依存閉包棚卸し\n\n該当なし。\n\n"
             "## 掃引\n\n欠陥定義と grep command による全 site の結果を記録する。\n\n## 目的",
         )
         self.assertEqual(lint(complete, "x.md"), [])
