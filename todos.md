@@ -239,7 +239,9 @@ Exit Criteria:
   broker が detached 起動のグループ長であることを使い**グループ単位**で送る (長でなければ
   巻き添え回避のため単体)。削除は停止を確認できた時だけ行う。host 実測 = reap 5 / keep 2 /
   stale 114
-- [ ] **対策 D (upstream 報告)**: (i) `handleSessionEnd` は cwd 1 点でなく state root 配下を走査して
+- [x] **対策 D (upstream 報告)** — **完了 2026-08-24** (5 項目とも #380 のコメントで伝達。既報の
+  ものは新規主張として立てず既存 issue へ cross-reference する形にした)。以下は起票時の内容:
+  (i) `handleSessionEnd` は cwd 1 点でなく state root 配下を走査して
   回収すべき、(ii) broker に idle timeout か親死亡監視を持たせるべき、(iii) 鍵不一致時に exit 0 で
   黙るのをやめ警告を出すべき、(iv) **環境変数による代替経路は `pid` を持たないので停止要求しか
   送れない — 到達しても回収は完了しない** (上記の補正 B・本端末で確認)、(v) **`teardownBrokerSession`
@@ -278,10 +280,11 @@ Exit Criteria:
   **因果の飛躍**だった。teardown は pid file・log・socket を rmdir の**前に**消すので通常は空になる。
   正しくは「kill だけが `Number.isFinite(pid)` で条件付きで、記録の削除は無条件」。孤児 3 本の
   由来は未確定なので、観測された終状態として書き、因果は主張しない形に直した
-- [ ] **投稿そのもの** — auto mode の分類器が `gh issue comment` を deny した (2026-08-24)。
-  サブエージェントへの付け替えは制限の意図の迂回にあたるため行わない。ユーザーが host で
-  `gh issue comment 380 --repo openai/codex-plugin-cc --body-file drafts/issue-380-comment.md`
-  を実行するか、Bash permission rule の追加を決める
+- [x] **投稿した 2026-08-24** — 初回は auto mode の分類器が deny (サブエージェントや `gh api` への
+  付け替えは、止められているのが公開という行為そのものである以上、意図の迂回にあたるため行わず
+  許可を仰いだ)。ユーザー許可を得て再実行し着弾 =
+  `https://github.com/openai/codex-plugin-cc/issues/380#issuecomment-5388760433` (4881 字)。
+  読み戻して本文の先頭から表・行番号参照まで正しく載っていることを確認済み
 
 Work file: `files/codex_broker_reap` (2026-08-23 に本 repo で実装。依頼元の
 `codex-broker-reap.sh` は取り寄せず、判定条件を本文から起こして書き直した)。
