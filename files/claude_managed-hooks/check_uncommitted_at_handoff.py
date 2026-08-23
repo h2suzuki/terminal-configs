@@ -154,11 +154,26 @@ def mentions_handoff_doc(text: str) -> bool:
 # 書込語だけを列挙する。 読取語は列挙しない — 未知の command は読取へ倒すのが誤 deny を生まない側。
 WRITE_COMMANDS = frozenset(
     {
-        "cp", "dd", "ed", "emacs", "install", "ln", "mv", "nano", "nvim",
-        "patch", "rsync", "shred", "sponge", "tee", "touch", "truncate",
-        "vi", "vim",
+        "cp",
+        "dd",
+        "ed",
+        "emacs",
+        "install",
+        "ln",
+        "mv",
+        "nano",
+        "nvim",
+        "patch",
+        "rsync",
+        "shred",
+        "sponge",
+        "tee",
+        "touch",
+        "truncate",
+        "vi",
+        "vim",
     }
-)  # fmt: skip
+)
 # 中身を読めない実行系。 argv の先にある書込を見られないので書込側へ倒す。
 OPAQUE_RUNNERS = frozenset(
     {"bash", "node", "perl", "python", "python3", "ruby", "sh", "zsh"}
@@ -174,6 +189,7 @@ def writes_handoff_doc(text: str) -> bool:
         return False
     if "<<" in text:  # heredoc の中身は読めない
         return True
+    # punctuation_chars=True は `<` `>` を切り出す (codex_worktree_gate の roster は redirect 非対象)。
     lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     try:
