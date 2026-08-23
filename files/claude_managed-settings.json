@@ -39,6 +39,7 @@
       "docker *",
       "codex *",
       "node *codex-companion.mjs*",
+      "codex_broker_reap*",
       "agent-browser *",
       "claude --bg *",
       "claude agents *"

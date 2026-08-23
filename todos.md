@@ -247,9 +247,16 @@ Exit Criteria:
   — 記録は最後に、かつ置き場の削除が成功した時だけ消すべき (本端末で稼働中の孤児 3 本を実測)。
   **報告時は社内の path と codename を伏せ、機能名で書く**
 
-Work file: `drafts/codex-broker-reap.py` (2026-08-23 に本 repo で実装。依頼元の
-`codex-broker-reap.sh` は取り寄せず、判定条件を本文から起こして書き直した)。`drafts/` は
-gitignore 対象なので、恒久化するなら `files/` へ移して deploy 対象に載せる判断が要る。
+Work file: `files/codex_broker_reap` (2026-08-23 に本 repo で実装。依頼元の
+`codex-broker-reap.sh` は取り寄せず、判定条件を本文から起こして書き直した)。
+**汎用化・恒久化まで完了 (2026-08-23・ユーザー指示)**: `drafts/` の複製は削除し `files/` を正本に、
+両 setup script の `copy` 行で `/usr/local/bin/codex_broker_reap` へ配備、
+managed settings の `excludedCommands` に `codex_broker_reap*` を追加 (model 自身が host の
+プロセスを見て点検できる)。置き場の探索も 3 系統に汎用化した — `$CLAUDE_PLUGIN_DATA/state` /
+`~/.claude/plugins/data/*/state` / 未設定時の退避先 `$TMPDIR/codex-companion` (実装で確認)。
+`--all-users` で全ユーザー走査。マニュアルは `--help` に内蔵 (host 実行の必要性・停止順序の
+理由・置き場 3 系統を明記)。再発時の想起は memory entry
+`feedback_codex_broker_outlives_session` (org) が担う。**配備待ち**。
 
 ### handoff の lifecycle 同期を hook で担保する
 

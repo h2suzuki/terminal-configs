@@ -1,0 +1,360 @@
+#!/usr/bin/env python3
+"""codex plugin の app-server broker の取り残しを棚卸しし、回収する (既定は dry-run)。
+
+broker は session 終了時に片付く建前だが、 後始末は「session が終わった時点の cwd」を鍵に
+1 点照会するだけなので、 worktree へ発注した session は鍵がずれて回収されない。 結果、
+削除済みディレクトリを掴んだ broker が居座り続ける。 本ツールはそれを実プロセスから判定して
+回収する。
+
+判定 (記録でなく実プロセスを見る — 対象 dir は broker 自身の argv にしか無い):
+
+  keep  : broker 稼働中で --cwd も実在   -> 触らない
+  reap  : broker 稼働中だが --cwd 消滅   -> 停止要求 -> SIGTERM -> SIGKILL -> 残骸削除
+  stale : 記録の pid がもう broker でない -> 残骸のみ削除
+
+記録を失った session dir (孤児) も直接走査する。 記録経由でしか辿らないと、 後始末が記録だけ
+消して session dir を残した分を二度と拾えないため (実際に稼働中の孤児が見つかっている)。
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import errno
+import glob
+import json
+import os
+import signal
+import socket
+import sys
+import tempfile
+import time
+
+HELP_EPILOG = """\
+使い方の目安:
+
+  codex_broker_reap                  棚卸しのみ (何も変更しない)
+  codex_broker_reap --apply          回収を実行する
+  codex_broker_reap --all-users      全ユーザーの置き場を走査 (root で実行)
+  codex_broker_reap --state DIR      置き場を明示指定 (繰り返し可)
+
+必ず host で実行すること。 sandbox 内ではプロセス表が見えず、 稼働中の broker まで
+stale と誤判定する (実測: host で 7 本稼働中の状態が sandbox からは 0 本に見えた)。
+
+回収の順序には理由がある。 停止要求 (plugin 自身と同一の RPC) を先に送り、 応じなければ
+SIGTERM、 それでも残れば SIGKILL。 いきなり強制終了すると socket と記録が残り、
+次から辿れない孤児を増やす。 実績では回収した broker はすべて停止要求だけで停止した。
+
+置き場は 3 通りありうる: $CLAUDE_PLUGIN_DATA/state、 ~/.claude/plugins/data/*/state、
+未設定時の退避先 $TMPDIR/codex-companion。 既定ではすべて走査する。
+"""
+
+PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA"
+DEFAULT_PLUGIN_DATA = "~/.claude/plugins/data/codex-openai-codex"
+# broker-lifecycle.mjs の createBrokerSessionDir 既定 prefix。
+SESSION_DIR_GLOB = "cxc-*"
+# state.mjs の FALLBACK_STATE_ROOT_DIR (CLAUDE_PLUGIN_DATA 未設定時の退避先)。
+FALLBACK_STATE_LEAF = "codex-companion"
+# plugin 自身が送る停止要求と同一形式 (改行区切り JSON・id 必須)。
+SHUTDOWN_LINE = json.dumps({"id": 1, "method": "broker/shutdown", "params": {}}) + "\n"
+SHUTDOWN_WAIT = 3.0
+SIGTERM_WAIT = 5.0
+
+
+def tmpdirs() -> list[str]:
+    return list(dict.fromkeys(["/tmp", tempfile.gettempdir()]))
+
+
+def state_roots(all_users: bool) -> list[str]:
+    """走査対象の置き場。 環境変数・既定・退避先の 3 系統を集めて実在するものだけ返す。"""
+    roots = []
+    if os.environ.get(PLUGIN_DATA_ENV):
+        roots.append(os.path.join(os.environ[PLUGIN_DATA_ENV], "state"))
+    homes = ["~"]
+    if all_users:
+        homes = sorted(glob.glob("/home/*")) + ["/root"]
+    for home in homes:
+        pattern = os.path.expanduser(
+            os.path.join(home, ".claude", "plugins", "data", "*", "state")
+        )
+        roots += sorted(glob.glob(pattern))
+    roots += [os.path.join(tmp, FALLBACK_STATE_LEAF) for tmp in tmpdirs()]
+    return [r for r in dict.fromkeys(roots) if os.path.isdir(r)]
+
+
+def argv_of(pid: int) -> list[bytes] | None:
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            return fh.read().split(b"\0")
+    except OSError:
+        return None
+
+
+def is_broker(argv: list[bytes] | None) -> bool:
+    return bool(argv) and any(b"app-server-broker" in part for part in argv)
+
+
+def flag_value(argv: list[bytes], name: str) -> str | None:
+    encoded = name.encode()
+    for index, part in enumerate(argv):
+        if part == encoded and index + 1 < len(argv):
+            return argv[index + 1].decode("utf-8", "replace")
+    return None
+
+
+def rss_kb(pid: int) -> int:
+    with contextlib.suppress(OSError):
+        for line in open(f"/proc/{pid}/status"):
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1])
+    return 0
+
+
+def alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError as exc:
+        return exc.errno == errno.EPERM
+    return True
+
+
+def socket_path(endpoint: str | None) -> str | None:
+    if endpoint and endpoint.startswith("unix:"):
+        return endpoint[len("unix:") :]
+    return None
+
+
+def new_entry(name: str, record: str | None, data: dict) -> dict:
+    return {
+        "name": name,
+        "record": record,
+        "data": data,
+        "kind": "stale",
+        "why": "",
+        "pid": None,
+        "cwd": None,
+        "rss_kb": 0,
+    }
+
+
+def decide(entry: dict) -> dict:
+    """entry["data"] の pid を実プロセスと突き合わせて keep / reap / stale を決める。"""
+    raw_pid = entry["data"].get("pid")
+    pid = raw_pid if isinstance(raw_pid, int) else None
+    entry["pid"] = pid
+    argv = argv_of(pid) if pid else None
+    if argv is None or not is_broker(argv):
+        entry["why"] = f"pid {raw_pid} は broker として存在しない"
+        return entry
+
+    cwd = flag_value(argv, "--cwd")
+    entry["cwd"] = cwd
+    entry["rss_kb"] = rss_kb(pid) if pid else 0
+    if cwd and os.path.isdir(cwd):
+        entry["kind"] = "keep"
+        entry["why"] = f"稼働中・対象も実在 ({cwd})"
+    else:
+        entry["kind"] = "reap"
+        entry["why"] = f"稼働中だが対象が消滅 ({cwd})"
+    return entry
+
+
+def from_record(record_path: str) -> dict:
+    name = os.path.basename(os.path.dirname(record_path))
+    try:
+        with open(record_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        entry = new_entry(name, record_path, {})
+        entry["why"] = f"記録が読めない ({exc.__class__.__name__})"
+        return entry
+    return decide(new_entry(name, record_path, data))
+
+
+def read_pid(path: str) -> int | None:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return int(fh.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def from_orphan(session_dir: str) -> dict:
+    data = {
+        "endpoint": f"unix:{os.path.join(session_dir, 'broker.sock')}",
+        "pidFile": os.path.join(session_dir, "broker.pid"),
+        "logFile": os.path.join(session_dir, "broker.log"),
+        "sessionDir": session_dir,
+        "pid": read_pid(os.path.join(session_dir, "broker.pid")),
+    }
+    entry = decide(new_entry(f"(孤児) {os.path.basename(session_dir)}", None, data))
+    entry["why"] += " / 記録なし"
+    return entry
+
+
+def orphans(owned: set[str], dirs: list[str]) -> list[dict]:
+    found = []
+    for tmpdir in dict.fromkeys(dirs):
+        found += [
+            from_orphan(path)
+            for path in sorted(glob.glob(os.path.join(tmpdir, SESSION_DIR_GLOB)))
+            if os.path.isdir(path) and path not in owned
+        ]
+    return found
+
+
+def records_under(root: str) -> list[str]:
+    return sorted(glob.glob(os.path.join(root, "*", "broker.json")))
+
+
+def request_shutdown(endpoint: str | None) -> str:
+    path = socket_path(endpoint)
+    if not path or not os.path.exists(path):
+        return "socket 不在"
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(SHUTDOWN_WAIT)
+            sock.connect(path)
+            sock.sendall(SHUTDOWN_LINE.encode())
+    except OSError as exc:
+        return f"停止要求 失敗 ({exc.__class__.__name__})"
+    return "停止要求 送信"
+
+
+def wait_gone(pid: int, seconds: float) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if not alive(pid):
+            return True
+        time.sleep(0.2)
+    return not alive(pid)
+
+
+def signal_group(pid: int, sig: int) -> str:
+    """broker は detached 起動でグループ長ゆえ、 子ごと落とすため group へ送る。"""
+    try:
+        pgid = os.getpgid(pid)
+    except OSError:
+        return "プロセスグループ取得 不可"
+    if pgid != pid:
+        # 長でないなら別グループを巻き添えにするので単体に留める。
+        with contextlib.suppress(OSError):
+            os.kill(pid, sig)
+        return f"{signal.Signals(sig).name} を pid 単体へ"
+    with contextlib.suppress(OSError):
+        os.killpg(pgid, sig)
+    return f"{signal.Signals(sig).name} を group {pgid} へ"
+
+
+def remove_artifacts(entry: dict) -> list[str]:
+    """残骸を消す。 記録は最後 — 先に消すと辿れない孤児になる (plugin 側の実害経路)。"""
+    data = entry["data"]
+    done: list[str] = []
+    for key in ("pidFile", "logFile"):
+        target = data.get(key)
+        if target and os.path.exists(target):
+            with contextlib.suppress(OSError):
+                os.unlink(target)
+                done.append(f"{key} 削除")
+    sock = socket_path(data.get("endpoint"))
+    if sock and os.path.exists(sock):
+        with contextlib.suppress(OSError):
+            os.unlink(sock)
+            done.append("socket 削除")
+    session_dir = data.get("sessionDir")
+    if session_dir and os.path.isdir(session_dir):
+        with contextlib.suppress(OSError):
+            os.rmdir(session_dir)
+            done.append("session dir 削除")
+    if entry["record"] and not (session_dir and os.path.isdir(session_dir)):
+        with contextlib.suppress(OSError):
+            os.unlink(entry["record"])
+            done.append("記録 削除")
+    return done
+
+
+def reap(entry: dict) -> list[str]:
+    steps = [request_shutdown(entry["data"].get("endpoint"))]
+    pid = entry["pid"]
+    if pid and not wait_gone(pid, SHUTDOWN_WAIT):
+        steps.append(signal_group(pid, signal.SIGTERM))
+        if not wait_gone(pid, SIGTERM_WAIT):
+            steps.append(signal_group(pid, signal.SIGKILL))
+            wait_gone(pid, 2.0)
+    steps.append("停止確認" if not pid or not alive(pid) else "まだ生存 (要確認)")
+    if not pid or not alive(pid):
+        steps.extend(remove_artifacts(entry))
+    return steps
+
+
+def report(entries: list[dict], limit: int) -> None:
+    for kind in ("reap", "keep", "stale"):
+        hit = [e for e in entries if e["kind"] == kind]
+        print(f"\n=== {kind} : {len(hit)} 件 ===")
+        for entry in hit[:limit]:
+            session_dir = entry["data"].get("sessionDir", "")
+            mark = "あり" if session_dir and os.path.isdir(session_dir) else "なし"
+            print(f"  {entry['name']}")
+            print(f"      {entry['why']}")
+            print(f"      session dir: {session_dir or '(記録なし)'} ({mark})")
+        if len(hit) > limit:
+            print(f"  ... 他 {len(hit) - limit} 件")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog=HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--state", action="append", help="置き場を明示指定 (繰り返し可)"
+    )
+    parser.add_argument(
+        "--tmpdir", action="append", help="孤児の走査先 (既定 /tmp と $TMPDIR)"
+    )
+    parser.add_argument("--all-users", action="store_true", help="全ユーザーを走査")
+    parser.add_argument("--apply", action="store_true", help="実際に回収する")
+    parser.add_argument("--limit", type=int, default=40, help="一覧の表示件数")
+    args = parser.parse_args()
+
+    roots = args.state or state_roots(args.all_users)
+    roots = [r for r in roots if os.path.isdir(r)]
+    if not roots:
+        hint = os.path.expanduser(DEFAULT_PLUGIN_DATA)
+        print(f"置き場が見つからない (既定の候補: {hint}/state)", file=sys.stderr)
+        return 1
+
+    entries = [from_record(p) for root in roots for p in records_under(root)]
+    owned = {e["data"].get("sessionDir") for e in entries}
+    sweep = args.tmpdir or tmpdirs()
+    entries += orphans(owned, sweep)
+    report(entries, args.limit)
+
+    counts = {
+        k: sum(1 for e in entries if e["kind"] == k) for k in ("keep", "reap", "stale")
+    }
+    freed = sum(e["rss_kb"] for e in entries if e["kind"] == "reap") // 1024
+    held = sum(e["rss_kb"] for e in entries if e["kind"] == "keep") // 1024
+    print(f"\n--- 走査した置き場 ({len(roots)}) ---")
+    for root in roots:
+        print(f"  {root}")
+    print(f"--- 孤児の走査先: {', '.join(dict.fromkeys(sweep))} ---")
+    print(f"keep={counts['keep']}  reap={counts['reap']}  stale={counts['stale']}")
+    print(f"回収で解放= {freed} MB / 残す稼働分= {held} MB")
+
+    if not args.apply:
+        print("\ndry-run です。実行するには --apply を付けてください。")
+        return 0
+
+    for entry in entries:
+        if entry["kind"] == "reap":
+            print(f"\n[reap] {entry['name']}: " + " -> ".join(reap(entry)))
+        elif entry["kind"] == "stale":
+            done = remove_artifacts(entry)
+            print(f"[stale] {entry['name']}: " + (" / ".join(done) or "削除対象なし"))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

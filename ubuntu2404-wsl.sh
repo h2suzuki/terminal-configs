@@ -367,6 +367,7 @@ copy claude_mytask_mcp              /usr/local/bin/claude_mytask_mcp
 copy claude_lang_lint               /usr/local/bin/claude_lang_lint
 copy codex_task_sentinel            /usr/local/bin/codex_task_sentinel
 copy codex_order_lint               /usr/local/bin/codex_order_lint
+copy codex_broker_reap              /usr/local/bin/codex_broker_reap
 
 # Remove the pre-rename command so an upgraded host keeps one implementation
 run rm -f /usr/local/bin/claude_codex_watch
