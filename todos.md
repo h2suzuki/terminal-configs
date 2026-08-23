@@ -143,7 +143,9 @@ test ごと削除した。死んだ helper (`_repo_relative_source` / `_line_cou
 
 Exit Criteria:
 
-- [ ] 廃止を配備した — base setup 再実行で `/etc` 側へ反映し、checkpoint が鳴らないことを確認
+- [x] 廃止を配備した — 2026-08-23 にユーザーが base setup を実行。`files/` と `/etc` の
+  `stop_checks.py` は `diff -q` IDENTICAL、配備先の checkpoint 参照は grep で 0 件、
+  family 上限も 5 に追随済み。code が存在しないため発火し得ない
 - [ ] 随伴エージェント (別プロジェクトで検討中) が利用可能になり、後継の設計を再開できる状態に
   なった — それまで後継の作業は凍結
 
@@ -375,9 +377,14 @@ Exit Criteria:
   `906ab58` の `skill_reminder_gate.py` とも `diff -q` IDENTICAL を実測。配備差分は 0)
   (root 専用の読取不可 1・sandbox が空 overlay で覆う 1・
   root の home が配備先 1・source 側の局所生成物 `.ruff_cache` `__pycache__` `.claude`
-  `.gitkeep` と配備側 runtime の `state/` と非配備の test file 3)。live 発火の観測は
-  本 session で 5 family (continuation-claim / decision-question-task /
-  claim-without-evidence / declare-and-proceed / work-without-task) を記録済み
+  `.gitkeep` と配備側 runtime の `state/` と非配備の test file 3)。
+  **再照合 2026-08-23 (checkpoint 廃止の配備後)**: hooks は **34 対すべて IDENTICAL**、
+  managed CLAUDE.md / settings.json も IDENTICAL、skills の差は source 側の局所生成物
+  (`.claude` / `.ruff_cache`) のみ。**配備差分ゼロ**。
+  live 発火の観測は 8 family (continuation-claim / decision-question-task /
+  claim-without-evidence / declare-and-proceed / work-without-task / hollow-claims /
+  open-tasks-at-wind-down / implementation-checkpoint = 廃止済み) を記録済み。
+  **未観測は 2 family** (waste-keyword-memory / question-self-containment) で、これが残
 
 Work file: 4 gate の設計は本 block と `last-session-handoff.md` 不要 (本 block で自己完結)。
 5 巡 breaker の思想は Medium「方法論の実証」block の教訓 (1)〜(6) を参照
