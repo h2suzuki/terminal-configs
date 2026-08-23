@@ -267,7 +267,12 @@ managed settings の `excludedCommands` に `codex_broker_reap*` を追加 (mode
 空文字は未設定扱い・末尾 `/` を落とす。優先順位は node で実測して確定) + **絶対 path 以外を
 走査先に通さない**。回帰は `--selftest` (5 件・`codex_order_lint` と同じ発火形) に固定。
 
-**配備待ち**。
+**配備完了 2026-08-23**: 本体・managed settings とも `diff -q` IDENTICAL、hooks 34 対も差分 0。
+配備先で `--selftest` 5 件緑。**sandbox 除外の実効性を before / after で実測** — 同一端末・同一
+ツールで、配備前 (sandbox 内・path 付き実行) は `keep=0 / stale=2` と**稼働中の 2 本を stale に
+誤判定**していたのに対し、配備後の裸名・単独呼び出しでは `keep=2 / stale=0` と正しく判定した。
+**model 自身が host のプロセスを見て点検できる状態になった** (従来はユーザーの手を借りるしか
+数字が得られなかった)。
 
 ### handoff の lifecycle 同期を hook で担保する
 
