@@ -915,8 +915,9 @@ def cmd_commit_gate(payload: dict) -> None:
     command = inp.get("command") or ""
     if not isinstance(command, str):
         return
-    # handoff doc への言及は書込経路不問 (heredoc / redirect / python 等) で handoff skill を要求。
-    if _handoff_mod is not None and _handoff_mod.mentions_handoff_doc(command):
+    # handoff doc への書込は経路不問 (heredoc / redirect / python 等) で handoff skill を要求。
+    # 読取は要求しない — 言及で判定していた頃は `ls` / `cat` まで deny していた (2026-08-24 実測)。
+    if _handoff_mod is not None and _handoff_mod.writes_handoff_doc(command):
         session_id = payload.get("session_id")
         if session_id:
             active = _active_skills_from_state(
@@ -1914,12 +1915,24 @@ class GateTest(unittest.TestCase):
         result = self._commit_gate(command, entries=[self._skill("writing-code")])
         self.assertIn("handoff", self._reason(result))
 
-    def test_commit_gate_allows_bash_handoff_doc_mention_with_skill(self):
+    def test_commit_gate_allows_bash_handoff_doc_write_with_skill(self):
         self.assertIsNone(
             self._commit_gate(
-                "cat last-session-handoff.md", entries=[self._skill("handoff")]
+                "echo x > last-session-handoff.md", entries=[self._skill("handoff")]
             )
         )
+
+    def test_commit_gate_allows_reading_a_handoff_doc_without_skill(self):
+        """出所 2026-08-24 実機: 一覧表示と読取が deny され、状況確認が止まった。"""
+        for command in (
+            "cat last-session-handoff.md",
+            "ls -la last-session-handoff.md drafts/",
+            "grep -n Status drafts/rebuild-handoff.md",
+        ):
+            with self.subTest(command=command):
+                self.assertIsNone(
+                    self._commit_gate(command, entries=[self._skill("writing-code")])
+                )
 
     def test_commit_gate_denies_handoff_skill_outside_window(self):
         result = self._commit_gate(

@@ -11,8 +11,9 @@ The blocking backstop is stop_checks.py (open-tasks-at-wind-down family),
 which imports HANDOFF_RE / open_tasks from this module.
 
 本 module は handoff 観測の単一 source を兼ねる: doc path 判定 (is_handoff_doc /
-handoff_docs / mentions_handoff_doc) と完了 marker 判定 (has_handoff_marker) を
-stop_checks / session_resume_context / skill_reminder_gate が import する。
+handoff_docs / mentions_handoff_doc / writes_handoff_doc) と完了 marker 判定
+(has_handoff_marker) を stop_checks / session_resume_context / skill_reminder_gate が
+import する。 言及の観測は mentions_、 書込の判定は writes_ と分ける。
 
 Stdin: UserPromptSubmit payload JSON (`prompt`, `cwd`, `session_id`, `transcript_path`).
 Stdout: hookSpecificOutput additionalContext only when a wind-down phrase AND
@@ -29,6 +30,7 @@ import glob
 import json
 import os
 import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -147,6 +149,54 @@ def mentions_handoff_doc(text: str) -> bool:
     return any(
         is_handoff_doc(m.group()) for m in HANDOFF_DOC_TOKEN_RE.finditer(text or "")
     )
+
+
+# 書込語だけを列挙する。 読取語は列挙しない — 未知の command は読取へ倒すのが誤 deny を生まない側。
+WRITE_COMMANDS = frozenset(
+    {
+        "cp", "dd", "ed", "emacs", "install", "ln", "mv", "nano", "nvim",
+        "patch", "rsync", "shred", "sponge", "tee", "touch", "truncate",
+        "vi", "vim",
+    }
+)  # fmt: skip
+# 中身を読めない実行系。 argv の先にある書込を見られないので書込側へ倒す。
+OPAQUE_RUNNERS = frozenset(
+    {"bash", "node", "perl", "python", "python3", "ruby", "sh", "zsh"}
+)
+SEGMENT_BREAKS = frozenset({";", "&&", "||", "|", "&", "(", ")", "{", "}"})
+ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def writes_handoff_doc(text: str) -> bool:
+    """command が handoff doc へ書くか。 言及しただけの読取と区別する。
+    出所 2026-08-24: mention 判定が `ls` / `cat` を deny していた。"""
+    if not mentions_handoff_doc(text):
+        return False
+    if "<<" in text:  # heredoc の中身は読めない
+        return True
+    lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:  # 引用が壊れた塊は読めない
+        return True
+    leading = ""
+    previous = ""
+    for token in tokens:
+        if token in SEGMENT_BREAKS:
+            leading, previous = "", token
+            continue
+        if not leading and not token.startswith("-") and not ASSIGNMENT_RE.match(token):
+            leading = os.path.basename(token)
+        if mentions_handoff_doc(token) and (
+            previous.startswith(">")
+            or leading in WRITE_COMMANDS
+            or leading in OPAQUE_RUNNERS
+            or (leading == "sed" and any(t.startswith("-i") for t in tokens))
+        ):
+            return True
+        previous = token
+    return False
 
 
 def has_handoff_marker(text: str, sid: str) -> bool:
@@ -530,6 +580,56 @@ class HandoffObservablesTest(unittest.TestCase):
     def test_no_marker_or_empty_sid(self):
         self.assertFalse(has_handoff_marker("ただの会話", self.SID))
         self.assertFalse(has_handoff_marker(f"~~~~ Handoff ({self.SID}) ~~~~", ""))
+
+
+class HandoffWriteIntentTest(unittest.TestCase):
+    """writes_handoff_doc: 読むだけの command を書込と取り違えない。
+    出所: 2026-08-24 実機 — `ls -la last-session-handoff.md drafts/` が deny され、
+    状況確認の一覧表示が止まった。mention だけでは読取と書込を分けられない。"""
+
+    READS = (
+        "ls -la last-session-handoff.md drafts/",
+        "cat last-session-handoff.md",
+        "grep -n Status drafts/rebuild-handoff.md",
+        "head -20 handoff.md",
+        "wc -l last-session-handoff.md",
+        "diff a-handoff.md b-handoff.md",
+        "sed -n '1,10p' last-session-handoff.md",
+        "git log --oneline -- last-session-handoff.md",
+        "echo a && cat drafts/rebuild-handoff.md",
+    )
+
+    WRITES = (
+        "echo x > last-session-handoff.md",
+        "echo x >> last-session-handoff.md",
+        "echo x>last-session-handoff.md",
+        "echo x | tee last-session-handoff.md",
+        "cp draft.md last-session-handoff.md",
+        "mv draft.md last-session-handoff.md",
+        "install -m 644 a.md drafts/rebuild-handoff.md",
+        "sed -i 's/a/b/' last-session-handoff.md",
+        "vim last-session-handoff.md",
+        "python3 -c \"open('handoff.md','w')\"",
+        "python3 - <<'EOF'\nopen('drafts/rebuild-handoff.md','w')\nEOF",
+    )
+
+    def test_read_only_commands_are_not_writes(self):
+        for command in self.READS:
+            with self.subTest(command=command):
+                self.assertFalse(writes_handoff_doc(command))
+
+    def test_write_commands_are_writes(self):
+        for command in self.WRITES:
+            with self.subTest(command=command):
+                self.assertTrue(writes_handoff_doc(command))
+
+    def test_commands_without_a_doc_are_not_writes(self):
+        self.assertFalse(writes_handoff_doc("ls drafts/"))
+        self.assertFalse(writes_handoff_doc("echo x > handoff-notes.md"))
+        self.assertFalse(writes_handoff_doc(""))
+
+    def test_unparsable_command_counts_as_write(self):
+        self.assertTrue(writes_handoff_doc("echo 'x last-session-handoff.md"))
 
 
 class HandoffPhraseTest(unittest.TestCase):
