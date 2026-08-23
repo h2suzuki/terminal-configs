@@ -263,8 +263,25 @@ Exit Criteria:
   **両者が exit と出力で区別できない**。置き場に file を 1 つ残すだけで `rmdirSync` が失敗し、
   **記録だけ消えて置き場が残る** = 孤児の成立も実プロセスなしで再現できた。
   走行前後で state dir 129 → 129・残骸ゼロを確認 (実験用の置き場は自動削除)。
-  **提出先 = `openai/codex-plugin-cc`** (issue 受付あり)。**先に重複調査を実施中** —
-  broker leak 系の open issue が既に多数ある (#543 / #605 / #636 / #487 等)
+  **提出先 = `openai/codex-plugin-cc`** (issue 受付あり)。
+  **重複調査の結果 2026-08-24 = 新規 issue を立てない**。6 主張のうち **5 つが既報**で、
+  とくに根本原因の枠組み (#380 `SessionEnd cleanup fails when review cwd ≠ session cwd`) は
+  本文がほぼ同義。自決手段なしは #108 / #543 (idle timer は PR #490 が未 merge)、無言 exit 0 と
+  環境変数経路の死蔵は #636、記録消失の類例は PR #566。maintainer は "Duplicate of #N" で
+  14 件以上を即 close しており、新規は読まれずに閉じられる見込み。
+  → **#380 へのコメントとして起草した** (`drafts/issue-380-comment.md`・61 行)。
+  新規性があるのは (a) 鍵が cwd でなく **git repo root** である実測 (worktree の子は同じ鍵に
+  なるので「cwd が違う」だけでは漏れを予測できない)、(b) 環境変数経路が `pid`/`sessionDir` を
+  持たない、(c) 死んだかに関係なく記録を消す、(d) 本端末の分布 (残骸 121 件が 121 件とも
+  短命ディレクトリ鍵・長命な repo root 鍵はゼロ) の 4 点。
+  **自分の誤りを 1 件訂正**: 「稼働中の broker が置き場を空にさせないので rmdir が失敗する」は
+  **因果の飛躍**だった。teardown は pid file・log・socket を rmdir の**前に**消すので通常は空になる。
+  正しくは「kill だけが `Number.isFinite(pid)` で条件付きで、記録の削除は無条件」。孤児 3 本の
+  由来は未確定なので、観測された終状態として書き、因果は主張しない形に直した
+- [ ] **投稿そのもの** — auto mode の分類器が `gh issue comment` を deny した (2026-08-24)。
+  サブエージェントへの付け替えは制限の意図の迂回にあたるため行わない。ユーザーが host で
+  `gh issue comment 380 --repo openai/codex-plugin-cc --body-file drafts/issue-380-comment.md`
+  を実行するか、Bash permission rule の追加を決める
 
 Work file: `files/codex_broker_reap` (2026-08-23 に本 repo で実装。依頼元の
 `codex-broker-reap.sh` は取り寄せず、判定条件を本文から起こして書き直した)。
