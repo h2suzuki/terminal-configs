@@ -27,8 +27,8 @@ import os
 import signal
 import socket
 import sys
-import tempfile
 import time
+import unittest
 
 HELP_EPILOG = """\
 使い方の目安:
@@ -61,8 +61,24 @@ SHUTDOWN_WAIT = 3.0
 SIGTERM_WAIT = 5.0
 
 
-def tmpdirs() -> list[str]:
-    return list(dict.fromkeys(["/tmp", tempfile.gettempdir()]))
+# Node の os.tmpdir() と同じ規則 (実測): 空文字は未設定として飛ばし、末尾の / を落とす。
+TMPDIR_ENV_ORDER = ("TMPDIR", "TMP", "TEMP")
+
+
+def node_tmpdir(env: dict[str, str] | None = None) -> str:
+    """broker が session dir を置く先。 python の gettempdir は使えない — 下記 selftest 参照。"""
+    source = os.environ if env is None else env
+    for name in TMPDIR_ENV_ORDER:
+        value = source.get(name)
+        if value:
+            return value.rstrip("/") or "/"
+    return "/tmp"
+
+
+def tmpdirs(env: dict[str, str] | None = None) -> list[str]:
+    """走査先。 絶対 path だけを通す — 相対が混ざると cwd 配下を消しにいく。"""
+    found = [d for d in ("/tmp", node_tmpdir(env)) if os.path.isabs(d)]
+    return list(dict.fromkeys(found))
 
 
 def state_roots(all_users: bool) -> list[str]:
@@ -301,11 +317,44 @@ def report(entries: list[dict], limit: int) -> None:
             print(f"  ... 他 {len(hit) - limit} 件")
 
 
+class TmpdirTest(unittest.TestCase):
+    """走査先の決定。 Run: codex_broker_reap --selftest"""
+
+    def test_empty_tmpdir_does_not_become_cwd(self):
+        """出所 2026-08-23: TMPDIR='' で python の gettempdir は cwd を返し、 走査先に repo が
+        並んだ。 broker を置く node 側は同条件で /tmp なので、 読む側が化けると回収が repo を
+        向く。"""
+        self.assertEqual(node_tmpdir({"TMPDIR": ""}), "/tmp")
+        self.assertNotIn(os.getcwd(), tmpdirs({"TMPDIR": ""}))
+
+    def test_precedence_matches_node(self):
+        """実測した node の順序: TMPDIR -> TMP -> TEMP -> /tmp (空は未設定扱い)。"""
+        self.assertEqual(node_tmpdir({"TMPDIR": "/a", "TMP": "/b", "TEMP": "/c"}), "/a")
+        self.assertEqual(node_tmpdir({"TMPDIR": "", "TMP": "/b", "TEMP": "/c"}), "/b")
+        self.assertEqual(node_tmpdir({"TMP": "", "TEMP": "/c"}), "/c")
+        self.assertEqual(node_tmpdir({}), "/tmp")
+
+    def test_trailing_slash_is_dropped(self):
+        self.assertEqual(node_tmpdir({"TMPDIR": "/var/tmp/"}), "/var/tmp")
+        self.assertEqual(node_tmpdir({"TMPDIR": "/"}), "/")
+
+    def test_relative_tmpdir_is_refused(self):
+        """相対が通ると rmdir / unlink が cwd 配下へ向く。"""
+        self.assertEqual(tmpdirs({"TMPDIR": "relative/dir"}), ["/tmp"])
+
+    def test_tmp_is_always_swept_once(self):
+        self.assertEqual(tmpdirs({"TMPDIR": "/tmp"}), ["/tmp"])
+        self.assertEqual(tmpdirs({"TMPDIR": "/var/tmp"}), ["/tmp", "/var/tmp"])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
         epilog=HELP_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--selftest", action="store_true", help="組み込みテストを実行する"
     )
     parser.add_argument(
         "--state", action="append", help="置き場を明示指定 (繰り返し可)"
@@ -318,8 +367,12 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=40, help="一覧の表示件数")
     args = parser.parse_args()
 
+    if args.selftest:
+        loaded = unittest.defaultTestLoader.loadTestsFromTestCase(TmpdirTest)
+        return 0 if unittest.TextTestRunner().run(loaded).wasSuccessful() else 1
+
     roots = args.state or state_roots(args.all_users)
-    roots = [r for r in roots if os.path.isdir(r)]
+    roots = [os.path.abspath(r) for r in roots if os.path.isdir(r)]
     if not roots:
         hint = os.path.expanduser(DEFAULT_PLUGIN_DATA)
         print(f"置き場が見つからない (既定の候補: {hint}/state)", file=sys.stderr)
@@ -327,7 +380,7 @@ def main() -> int:
 
     entries = [from_record(p) for root in roots for p in records_under(root)]
     owned = {e["data"].get("sessionDir") for e in entries}
-    sweep = args.tmpdir or tmpdirs()
+    sweep = [os.path.abspath(d) for d in args.tmpdir] if args.tmpdir else tmpdirs()
     entries += orphans(owned, sweep)
     report(entries, args.limit)
 

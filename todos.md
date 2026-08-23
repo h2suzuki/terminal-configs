@@ -256,7 +256,18 @@ managed settings の `excludedCommands` に `codex_broker_reap*` を追加 (mode
 `~/.claude/plugins/data/*/state` / 未設定時の退避先 `$TMPDIR/codex-companion` (実装で確認)。
 `--all-users` で全ユーザー走査。マニュアルは `--help` に内蔵 (host 実行の必要性・停止順序の
 理由・置き場 3 系統を明記)。再発時の想起は memory entry
-`feedback_codex_broker_outlives_session` (org) が担う。**配備待ち**。
+`feedback_codex_broker_outlives_session` (org) が担う。
+
+**欠陥 1 件をユーザー指摘で修正 (2026-08-23・「TMPDIR が空の場合が多いので心配」)**:
+`TMPDIR=""` のとき **python の `tempfile.gettempdir()` は cwd を返す** (実測 =
+`/home/h2suzuki/terminal-configs`)。一方 broker を置く **node の `os.tmpdir()` は同条件で
+`/tmp`** を返す。書く側と読む側がこの場合だけ食い違い、走査先に repo 自身が並んでいた。
+`--apply` まで進むと `os.rmdir` / `os.unlink` が repo 配下へ向く経路だった。
+修正 = `tempfile` を使わず **node の規則を写す** (`TMPDIR → TMP → TEMP → /tmp`・
+空文字は未設定扱い・末尾 `/` を落とす。優先順位は node で実測して確定) + **絶対 path 以外を
+走査先に通さない**。回帰は `--selftest` (5 件・`codex_order_lint` と同じ発火形) に固定。
+
+**配備待ち**。
 
 ### handoff の lifecycle 同期を hook で担保する
 
