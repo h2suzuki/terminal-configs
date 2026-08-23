@@ -92,8 +92,18 @@ Goal: session 終了後も生き残り、削除済み worktree を掴んだま�
 回収対象 28 session・滞留プロセス 214 (cwd が削除済み)・約 3.9 GB RSS・最古は 2026-07-12 起動で
 42 日間生存。生存 38 本はすべて PPID=1 に再親付け。
 
-**本端末の実測 (2026-08-23)**: 生存 broker はこの sandbox の `ps` からは 0 本 (2 回測定)。
-ただし sandbox のプロセス可視性の制約があるため host 全体の断定はしない。
+**本端末の確定実測 (2026-08-23・host で `drafts/codex-broker-reap.py` を実行)**:
+**生存 broker 7 本**。内訳 = **reap 5 / keep 2 / stale 114** (計 121 記録)、
+回収で解放 **158 MB** / 残す稼働分 114 MB。
+
+- **reap 5 本**は対象の worktree が消滅済み — `wt-codex-review` `wt-opinion` (terminal-configs)、
+  `wt-gran2b` `wt-refute` (daily-stock-analyzer)、`wt-research` (claude-design-fe-starter)。
+  **3 repo の `git worktree list` に 1 つも登録が無い**ことを確認済み = 回収して安全
+- **keep 2 本**は `wt-mention` `wt-ruling61` で worktree が実在。`state.json` の running job は
+  **どちらも 0 件**なので稼働中の仕事は無い。ただし両 worktree とも作業自体は決着済みなので、
+  worktree を撤去すれば broker も reap 対象へ落ちる (別途判断)
+- **sandbox からは 7 本すべてが見えなかった** (`ps` で 0 本・全件 stale 判定)。
+  プロセス表が要る判定は host で測る、という制約が実データで裏付けられた
 一方 **残骸は 121 件** (`~/.claude/plugins/data` 配下の `broker.json` の全数)。teardown が
 ここでも長期間完走していないことを示す。
 
@@ -199,17 +209,22 @@ Exit Criteria:
   reap (pid 生存だが対象ディレクトリ消滅 → session に SIGTERM → 残れば SIGKILL → state と
   session dir を削除) / stale (pid 既に死亡 → 残骸のみ削除)。依頼元の dry-run 実測で
   28 session / 約 3.9 GB を回収対象と判定し、対象が存命の 10 本は正しく keep した。
-  **本端末の 121 件の内訳は host 実行待ち** (上記の訂正のとおり、sandbox からは
-  プロセス表が正しく見えないため keep / reap / stale を分けられない)。
-  判定に使えるのは broker 自身の argv の `--cwd` で、`broker.json` には入っていない
+  **実装・実測とも完了 2026-08-23**: `drafts/codex-broker-reap.py` (dry-run 既定・`--apply` で実行・
+  `--state` で root 側も走査可)。判定は `broker.json` でなく実プロセスで行う — 対象 dir は
+  broker 自身の argv の `--cwd` にしかなく、記録には入っていない。停止は
+  「停止要求 (plugin と同一の改行区切り JSON `broker/shutdown`) → SIGTERM → SIGKILL」の順で、
+  broker が detached 起動のグループ長であることを使い**グループ単位**で送る (長でなければ
+  巻き添え回避のため単体)。削除は停止を確認できた時だけ行う。host 実測 = reap 5 / keep 2 /
+  stale 114
 - [ ] **対策 D (upstream 報告)**: (i) `handleSessionEnd` は cwd 1 点でなく state root 配下を走査して
   回収すべき、(ii) broker に idle timeout か親死亡監視を持たせるべき、(iii) 鍵不一致時に exit 0 で
   黙るのをやめ警告を出すべき、(iv) **環境変数による代替経路は `pid` を持たないので停止要求しか
   送れない — 到達しても回収は完了しない** (上記の補正 B・本端末で確認)。
   **報告時は社内の path と codename を伏せ、機能名で書く**
 
-Work file: 依頼元に実装例 `drafts/codex-broker-reap.sh` (dry-run 既定・`--apply` で実行) があるが
-**本 repo には存在しない** (2026-08-23 確認)。着手時に取り寄せるか再実装するかを決める。
+Work file: `drafts/codex-broker-reap.py` (2026-08-23 に本 repo で実装。依頼元の
+`codex-broker-reap.sh` は取り寄せず、判定条件を本文から起こして書き直した)。`drafts/` は
+gitignore 対象なので、恒久化するなら `files/` へ移して deploy 対象に載せる判断が要る。
 
 ### handoff の lifecycle 同期を hook で担保する
 
