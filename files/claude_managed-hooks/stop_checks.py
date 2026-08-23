@@ -1642,6 +1642,61 @@ def _handoff_docs_awaiting_marker(
         return []
 
 
+WORK_FILE_RE = re.compile(r"^Work file:\s*(.*)$")
+# 見出し名でなく参照で判定する — 名前一致は todos block の改名だけで誤検出に変わる。
+PATH_TOKEN_RE = re.compile(r"`([^`\s]+\.[A-Za-z0-9]{1,5})`")
+
+
+def _read_text(path: str) -> str | None:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def _handoff_todos_sync_warnings(cwd: str) -> list[str]:
+    """どの todos block からも指されない handoff doc と、 消えた path を指す doc の警告。
+    判定不能は [] (fail-open)。 出所 2026-08-23: e905965 が doc と task を消し section を残した。"""
+    if _handoff_mod is None:
+        return []
+    try:
+        docs = _handoff_mod.handoff_docs(cwd)
+        todos = _read_text(os.path.join(cwd, "todos.md")) if docs else None
+        if not docs or todos is None:
+            return []
+        tracked = {
+            os.path.basename(token)
+            for line in todos.splitlines()
+            if (m := WORK_FILE_RE.match(line))
+            for token in PATH_TOKEN_RE.findall(m.group(1))
+        }
+        warnings: list[str] = []
+        for doc in docs:
+            name = os.path.basename(doc)
+            if name not in tracked:
+                warnings.append(
+                    f"handoff-todos-sync: {name} を `Work file:` で指している todos.md の "
+                    "task block がありません。 作業が終わっているなら doc を削除し、 続くなら "
+                    "対応 block の Work file にこの doc を書いてください。"
+                )
+                continue
+            missing = sorted(
+                token
+                for token in set(PATH_TOKEN_RE.findall(_read_text(doc) or ""))
+                if not os.path.exists(os.path.join(cwd, token))
+            )
+            if missing:
+                warnings.append(
+                    f"handoff-todos-sync: {name} が実在しない path "
+                    f"{'・'.join(missing)} を参照しています。 追跡対象が消えた section は "
+                    "再開に使えないので、 参照を更新するか section ごと削除してください。"
+                )
+        return warnings
+    except Exception:
+        return []
+
+
 def _known_possible_denial(text: str) -> str | None:
     """Block message when an op known to be doable is asserted impossible on one line; else None."""
     for line in strip_fences(text).splitlines():
@@ -1974,6 +2029,8 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
     if stop_hook_active or _stop_latch_claim(payload, _CODEX_LATCH_SUFFIX):
         codex_warnings = _codex_shared_write_warnings(payload)
     worktree_warnings += codex_warnings
+    if stop_hook_active or _stop_latch_claim(payload, ".hts"):
+        worktree_warnings += _handoff_todos_sync_warnings(str(payload.get("cwd") or ""))
     transcript_path = payload.get("transcript_path")
     if not isinstance(transcript_path, str) or not transcript_path:
         return 0, None, "", worktree_warnings
@@ -3819,6 +3876,72 @@ class OpenTasksAtWindDownTest(unittest.TestCase):
         self.assertEqual(self._run_with(True, []), 0)
 
 
+class HandoffTodosSyncTest(unittest.TestCase):
+    """handoff-todos-sync: handoff doc の section が todos.md の task block と 1-to-1 か。
+    出所: 2026-08-23 実測 — 対象 doc も todos block も消えた section が 11 日残存
+    (c2f083a が pointer だけ外し、 e905965 が block を消して section を残した)。"""
+
+    TRACKED = "### 作業 A\n\nWork file: `last-session-handoff.md`\n"
+
+    def _repo(self, todos, handoff, extra=()):
+        import shutil
+        import tempfile
+
+        root = tempfile.mkdtemp(prefix="handoff-sync-")
+        self.addCleanup(shutil.rmtree, root, True)
+        files = [("todos.md", todos), ("last-session-handoff.md", handoff)]
+        files.extend((name, "本文\n") for name in extra)
+        for name, text in files:
+            if text is None:
+                continue
+            with open(os.path.join(root, name), "w", encoding="utf-8") as fh:
+                fh.write(text)
+        return root
+
+    def test_tracked_doc_with_live_references_is_silent(self):
+        root = self._repo(
+            self.TRACKED, "## 作業 A\n\n### 必読\n- `spec.md`\n", extra=("spec.md",)
+        )
+        self.assertEqual(_handoff_todos_sync_warnings(root), [])
+
+    def test_doc_no_task_points_at_warns(self):
+        """block ごと消えて doc だけ残る形 (e905965 の class) を捕まえる。"""
+        root = self._repo("### 別の作業\n\nWork file: なし\n", "## 消えた作業\n")
+
+        warnings = _handoff_todos_sync_warnings(root)
+
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("last-session-handoff.md", warnings[0])
+        self.assertIn("Work file:", warnings[0])
+
+    def test_reference_to_deleted_path_warns(self):
+        """11 日 stale だった実例 = 削除済み doc の review 待ちを指したままの section。"""
+        root = self._repo(self.TRACKED, "## 作業 A\n\n### 必読\n- `SKILL-HOOK.md`\n")
+
+        warnings = _handoff_todos_sync_warnings(root)
+
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("SKILL-HOOK.md", warnings[0])
+
+    def test_renaming_a_task_block_does_not_warn(self):
+        """名前一致をやめた核心 — 見出しを改名しても参照が生きていれば黙る。"""
+        renamed = self.TRACKED.replace("作業 A", "作業 A — 凍結中")
+        root = self._repo(renamed, "## まったく別の見出し\n")
+        self.assertEqual(_handoff_todos_sync_warnings(root), [])
+
+    def test_missing_handoff_doc_is_silent(self):
+        self.assertEqual(
+            _handoff_todos_sync_warnings(self._repo(self.TRACKED, None)), []
+        )
+
+    def test_missing_todos_is_silent(self):
+        """todos.md を持たない repo で doc を宙吊りと報告しない (fail-open)。"""
+        self.assertEqual(_handoff_todos_sync_warnings(self._repo(None, "## x\n")), [])
+
+    def test_unreadable_cwd_is_silent(self):
+        self.assertEqual(_handoff_todos_sync_warnings(""), [])
+
+
 class HandoffDocWithoutMarkerTest(unittest.TestCase):
     """handoff-doc-without-marker: 宣言済 session の doc 更新 turn に marker を強制。
     出所: 2026-08-20 実機 — リセット宣言後に Bash heredoc で handoff doc を編集して
@@ -5165,7 +5288,7 @@ class CodexSharedWriteTest(WorktreeFixtureMixin, unittest.TestCase):
         self.assertIn("wt2", third[0])
         self.assertIn("job-2", third[1])
 
-    def test_stop_hook_active_delivers_both_checks(self):
+    def test_stop_hook_active_delivers_all_structural_checks(self):
         import io
         from contextlib import redirect_stderr
         from unittest import mock
@@ -5179,11 +5302,15 @@ class CodexSharedWriteTest(WorktreeFixtureMixin, unittest.TestCase):
             mock.patch(
                 f"{__name__}._codex_shared_write_warnings", return_value=["codex"]
             ) as codex_check,
+            mock.patch(
+                f"{__name__}._handoff_todos_sync_warnings", return_value=["handoff"]
+            ) as handoff_check,
             redirect_stderr(io.StringIO()),
         ):
             _code, _epoch, _text, warnings = _run(payload)
-        self.assertEqual(warnings, ["wt", "codex"])
+        self.assertEqual(warnings, ["wt", "codex", "handoff"])
         codex_check.assert_called_once()
+        handoff_check.assert_called_once()
 
 
 if __name__ == "__main__":
