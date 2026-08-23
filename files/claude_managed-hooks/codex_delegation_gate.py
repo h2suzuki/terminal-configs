@@ -172,13 +172,44 @@ TRANSPARENT_WRAPPERS = frozenset(
 )
 # option や数値 operand を取る wrapper。 剥がし損ねると実行語が flag や duration にずれる。
 OPTION_WRAPPERS = frozenset(
-    {"stdbuf", "ionice", "chrt", "nice", "setsid", "unbuffer", "script", "timeout"}
+    {
+        "stdbuf",
+        "ionice",
+        "chrt",
+        "nice",
+        "setsid",
+        "unbuffer",
+        "script",
+        "timeout",
+        "watch",
+    }
 )
 OPERAND_WRAPPERS = frozenset({"flock"})
 NUMERIC_OPERAND = re.compile(r"^[\d.]+[smhd]?$")
 # 照合前に剥がされず sandbox へ落ちる wrapper。 sandbox_exclusion_guard は warn 止まり。
 SANDBOX_BREAKING_WRAPPERS = frozenset({"env", "npx", "bunx", "uvx"})
 SHELL_NAMES = frozenset({"bash", "sh", "zsh", "ksh", "dash"})
+# 制御語は実行語ではない。 剥がさないと `do node x` / `while node x` の実行語が制御語に見える。
+SHELL_KEYWORDS = frozenset(
+    {
+        "do",
+        "then",
+        "else",
+        "elif",
+        "fi",
+        "done",
+        "esac",
+        "in",
+        "!",
+        "{",
+        "}",
+        "while",
+        "until",
+        "if",
+        "for",
+        "case",
+    }
+)
 SCRIPT_READ_LIMIT = 65536
 CJK = re.compile(r"[぀-ヿ㐀-䶿一-鿿ｦ-ﾟ]")
 MARKDOWN_TOKEN = re.compile(r"[\w./~-]+\.md\b")
@@ -312,7 +343,7 @@ def _strip_prefix(segment: list[str]) -> tuple[int, frozenset[str], bool]:
             escaped = escaped or token == ESCAPE_HATCH
             index += 1
             continue
-        if name in TRANSPARENT_WRAPPERS:
+        if name in TRANSPARENT_WRAPPERS or name in SHELL_KEYWORDS:
             index += 1
             continue
         if name in OPTION_WRAPPERS:
@@ -797,7 +828,19 @@ def _direct_companion(payload: dict) -> tuple[str, str] | None:
     cwd_value = payload.get("cwd")
     cwd = cwd_value if isinstance(cwd_value, str) else ""
     parsed = any(launch.kind == "companion" for launch in _launches(command, cwd))
-    if COMPANION_SCRIPT not in command and not parsed:
+    segments = _segments(command)
+    executable = not segments
+    for segment in segments:
+        # 実行語は前置きを剥がした先頭にしかない。 塊全体を見ると引数の言及まで起動に見える。
+        start, wrappers, _escaped = _strip_prefix(segment)
+        head = os.path.basename(segment[start]) if start < len(segment) else ""
+        executable = executable or bool(
+            wrappers
+            or head in NODE_NAMES
+            or head in SHELL_NAMES
+            or head == COMPANION_SCRIPT
+        )
+    if not parsed and (COMPANION_SCRIPT not in command or not executable):
         return None
     return tool, command
 
@@ -1284,6 +1327,115 @@ class GateTest(unittest.TestCase):
         self.assertNotIn(COMPANION_SCRIPT, command)
         parsed, _ = self._bash(command, agent_id=None)
         self.assertIn("直接起動を deny", self._reason(parsed))
+
+    def test_rg_companion_mention_is_not_a_direct_launch(self):
+        parsed, _ = self._bash("rg -n 'codex-companion.mjs' path", agent_id=None)
+        self.assertIsNone(parsed)
+
+    def test_grep_companion_mention_is_not_a_direct_launch(self):
+        parsed, _ = self._bash("grep -c codex-companion.mjs path", agent_id=None)
+        self.assertIsNone(parsed)
+
+    def test_node_companion_path_remains_a_direct_launch(self):
+        parsed, _ = self._bash(
+            'node "/path/codex-companion.mjs" task ...', agent_id=None
+        )
+        self.assertIn("直接起動を deny", self._reason(parsed))
+
+    def test_variable_companion_path_remains_a_direct_launch(self):
+        parsed, _ = self._bash(
+            'CC=/path/codex-companion.mjs; node "$CC"', agent_id=None
+        )
+        self.assertIn("直接起動を deny", self._reason(parsed))
+
+    def test_compound_variable_launch_remains_a_direct_launch(self):
+        parsed, _ = self._bash(
+            'CC=/path/codex-companion.mjs; rg foo && node "$CC"', agent_id=None
+        )
+        self.assertIn("直接起動を deny", self._reason(parsed))
+
+    def test_shell_companion_launch_remains_a_direct_launch(self):
+        parsed, _ = self._bash(
+            "sh -c 'node /path/codex-companion.mjs task'", agent_id=None
+        )
+        self.assertIn("直接起動を deny", self._reason(parsed))
+
+    def test_single_line_while_companion_launch_is_denied(self):
+        parsed, _ = self._bash(
+            "while true; do node /path/codex-companion.mjs status; sleep 5; done",
+            agent_id=None,
+        )
+        self.assertIn("直接起動を deny", self._reason(parsed))
+
+    def test_single_line_if_companion_launch_is_denied(self):
+        parsed, _ = self._bash(
+            "if true; then node /path/codex-companion.mjs task; fi", agent_id=None
+        )
+        self.assertIn("直接起動を deny", self._reason(parsed))
+
+    def test_companion_in_loop_condition_is_denied(self):
+        """本 gate が止めたい実害は監視 loop。 条件位置は本体位置と同じく起動である。"""
+        for command in (
+            "while node /path/codex-companion.mjs status; do sleep 5; done",
+            "until node /path/codex-companion.mjs status; do sleep 5; done",
+            "if node /path/codex-companion.mjs task; then echo ok; fi",
+            "until node /path/codex-companion.mjs status | grep -q done; do sleep 10; done",
+        ):
+            with self.subTest(command=command):
+                parsed, _ = self._bash(command, agent_id=None)
+                self.assertIn("直接起動を deny", self._reason(parsed))
+
+    def test_watch_wrapped_companion_is_denied(self):
+        """watch は option を取る wrapper。 剥がさないと実行語が `-n5` にずれる。"""
+        parsed, _ = self._bash(
+            "watch -n5 node /path/codex-companion.mjs status", agent_id=None
+        )
+        self.assertIn("直接起動を deny", self._reason(parsed))
+
+    def test_unparseable_companion_command_is_denied(self):
+        parsed, _ = self._bash(
+            "node /path/codex-companion.mjs task 'unclosed", agent_id=None
+        )
+        self.assertIn("直接起動を deny", self._reason(parsed))
+
+    def test_wrapper_fallback_branch_is_denied(self):
+        command = 'CC=/path/codex-companion.mjs; env "$CC" status'
+        self.assertEqual(_launches(command), [])
+        parsed, _ = self._bash(command, agent_id=None)
+        self.assertIn("直接起動を deny", self._reason(parsed))
+
+    def test_shell_fallback_branch_is_denied(self):
+        command = "CC=/path/codex-companion.mjs; sh -c '\"$CC\" status'"
+        self.assertEqual(_launches(command), [])
+        parsed, _ = self._bash(command, agent_id=None)
+        self.assertIn("直接起動を deny", self._reason(parsed))
+
+    def test_execution_names_work_at_segment_start_and_middle(self):
+        names = (
+            NODE_NAMES
+            | SHELL_NAMES
+            | SANDBOX_BREAKING_WRAPPERS
+            | frozenset({COMPANION_SCRIPT})
+        )
+        for name in names:
+            if name == COMPANION_SCRIPT:
+                commands = (
+                    ("先頭", "/path/codex-companion.mjs status"),
+                    ("途中", "X=1 /path/codex-companion.mjs status"),
+                )
+            else:
+                invocation = f'{name} "$CC" status'
+                commands = (
+                    ("先頭", f"CC=/path/codex-companion.mjs; {invocation}"),
+                    (
+                        "途中",
+                        f"CC=/path/codex-companion.mjs; if true; then {invocation}; fi",
+                    ),
+                )
+            for position, command in commands:
+                with self.subTest(name=name, position=position):
+                    parsed, _ = self._bash(command, agent_id=None)
+                    self.assertIn("直接起動を deny", self._reason(parsed))
 
     def test_bash_bare_codex_cli_denies_with_route_reason(self):
         self._seed()
