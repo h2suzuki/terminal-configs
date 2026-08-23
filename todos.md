@@ -68,7 +68,12 @@ Exit Criteria:
   origin から 21 commit ahead・ユーザー承認待ち)
 - [ ] 残り 2 形を塞ぐ — heredoc 形は上記の試作で塞げると実測済み、行末の継続記号は未検討。
   塞げなければその時点で相談する
-- [ ] 配備し、検索コマンドが通り起動が弾かれることを実地で確認した
+- [x] 配備し、検索コマンドが通り起動が弾かれることを実地で確認した — **2026-08-23 完了**。
+  ユーザーが base setup を実行し、`files/` と `/etc` の hook 34 対すべて `diff -q` IDENTICAL
+  (差分 0)。配備先の gate に payload を直接与えた実測で、**読み取り 3 形 (grep / cat / find) が
+  allow・起動 4 形 (直接実行 / 監視 loop の条件位置 / `watch` 包み / 変数に隠した path) が deny**。
+  さらにこの検証コマンド自身が起動の書き方 4 通りを文字列として含んだまま通っており、
+  言及と実行の区別が実チェーンで機能している
 - [ ] 同型欠陥を class で掃引した — 実測 2026-08-23: `skill_reminder_gate` の handoff doc 分岐が
   同じ「言及と実行を区別しない」形で、`cat` による読み取りと deny message が案内する declare
   CLI 自身を deny する (`mentions_handoff_doc` が command 全文の token 一致・書込経路不問)。
@@ -230,8 +235,10 @@ Exit Criteria:
   `_handoff_todos_sync_warnings` を追加し、worktree cleanup と同じ構造検査系統
   (turn ごと 1 回の latch つき) で配信。回帰 test 7 件は改名で黙ること・block ごと消えた doc を
   拾うこと・消えた path を拾うことを pin。203 tests / ruff / format / ty 緑。
-  実 repo (main と wt-gates) で警告ゼロを実測 = 現状に誤検知なし。**配備待ち**
-- [ ] 配備し、実 session で誤検知と見逃しを観測した
+  実 repo (main と wt-gates) で警告ゼロを実測 = 現状に誤検知なし
+- [ ] 実 session で誤検知と見逃しを観測した — **配備は 2026-08-23 完了** (`diff -q` IDENTICAL・
+  配備先から関数を直叩きして main と wt-gates とも警告ゼロを実測)。残るのは実運用での観測で、
+  handoff doc を実際に作る session が来るまで測れない
 - [x] 現存する stale file を処置した — `last-session-handoff.md` を 2026-08-23 に削除
   (ユーザー承認)。salvage は除外ゼロの grep で走査し、`SKILL-HOOK-CONTRACT` と
   「確定済みファクト」とも working tree の参照 0 件、本体 657 行と todos block 38 行は
@@ -546,7 +553,8 @@ Exit Criteria:
   から「書き手が宣言」へ移る。selftest 38 件 / ruff / ty 緑。回帰 test で
   「という状態になっている」等 4 例が所見を 1 件も増やさないことを pin。
   実 fix 発注書 6 通で計測すると 4 通は増減ゼロ (既に両節を持つ)、2 通が「該当なし」の追記を
-  要する。**配備待ち**
+  要する。**配備完了 2026-08-23**: `/usr/local/bin/codex_order_lint` は `diff -q` IDENTICAL、
+  配備先で selftest 38 件緑、語で引く 2 検査は grep で 0 件 = 消滅を確認
 - [ ] 各 gate の canonical (files/) と deploy 先の diff -q 一致 + 発火の live 観測 —
   **全 35 対の照合 2026-08-22**: IDENTICAL 28 / 実差分 1 (`stop_checks.py`) / 残り 6 は
   非該当 (**2026-08-23 配備完了**: ユーザーが base setup を実行し、`stop_checks.py` と
@@ -554,7 +562,10 @@ Exit Criteria:
   (root 専用の読取不可 1・sandbox が空 overlay で覆う 1・
   root の home が配備先 1・source 側の局所生成物 `.ruff_cache` `__pycache__` `.claude`
   `.gitkeep` と配備側 runtime の `state/` と非配備の test file 3)。
-  **再照合 2026-08-23 (checkpoint 廃止の配備後)**: hooks は **34 対すべて IDENTICAL**、
+  **再照合 2026-08-23 (本日 2 度目の配備後)**: hooks 34 対 + `codex_order_lint` とも
+  `diff -q` IDENTICAL で**配備差分ゼロ**を再確認。廃止済みの自作コード量検査が配備先に
+  存在しないことも grep で確認。以下は同日 1 度目の配備時の記録。
+  hooks は **34 対すべて IDENTICAL**、
   managed CLAUDE.md / settings.json も IDENTICAL、skills の差は source 側の局所生成物
   (`.claude` / `.ruff_cache`) のみ。**配備差分ゼロ**。
   live 発火の観測は 8 family (continuation-claim / decision-question-task /
