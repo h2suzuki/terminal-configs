@@ -76,6 +76,71 @@ Exit Criteria:
 
 Work file: `wt-mention/drafts/mention-guard/` (発注書 2 通と回帰レビュー 2 通 + 本巡の指示書)
 
+### codex plugin の broker がセッション終了後も生き残る (別デバイスからの依頼)
+
+起票: user 2026-08-23 (別セッション/別デバイスの調査結果を共有・「todo に記載して」)
+
+Goal: session 終了後も生き残り、削除済み worktree を掴んだまま蓄積する broker プロセスと
+その残骸を、鍵ずれの解消と状態駆動の回収の両輪で止める。
+
+**依頼元の実測 (別デバイス・plugin 1.0.5)**: 生存 broker 38 本 (root 側と scorer 側の両方)・
+回収対象 28 session・滞留プロセス 214 (cwd が削除済み)・約 3.9 GB RSS・最古は 2026-07-12 起動で
+42 日間生存。生存 38 本はすべて PPID=1 に再親付け。
+
+**本端末の実測 (2026-08-23)**: 生存 broker はこの sandbox の `ps` からは 0 本 (2 回測定)。
+ただし sandbox のプロセス可視性の制約があるため host 全体の断定はしない。
+一方 **残骸は 121 件** — `~/.claude/plugins/data` 配下の `broker.json` を全数走査したところ
+**121 件すべてが「対象ディレクトリが既に消滅」** で、存命は 0 件。teardown がここでも
+長期間完走していないことを示す。
+
+**原因 (依頼元の解析)**:
+
+1. **broker に自決手段が無い** — `detached: true` + `unref()` で起動され、idle timeout も
+   親死亡監視も watchdog も無い (該当語の検索でヒット 0)。終了経路は SIGTERM/SIGINT handler と
+   `broker/shutdown` RPC のみで、停止は SessionEnd hook 一本に依存する
+2. **SessionEnd hook の照会鍵がずれている** — 登録側は job の対象ディレクトリ (worktree root) を
+   鍵に保存し、teardown 側は session の cwd で引く。ずれると hook は exit 0 のまま何もせず、
+   エラーも警告も出ない。使い捨て repo 2 つでの再現 = 登録先と SessionEnd の cwd が一致すれば
+   回収、違えば残存 (どちらも exit 0)
+3. **write 委譲ではこのずれが正規形** — `codex_worktree_gate.py` が共有 checkout への write を
+   deny し「worktree を作ってその path を `--cwd` に渡せ」と要求するため、session の cwd =
+   共有 checkout / 登録鍵 = worktree となり**必ず不一致**。read-only task なら一致し leak しない
+
+**経路別内訳 (生存 38 本)**: P1 = 呼び出し元 PWD と broker の `--cwd` が不一致 20 本 (再現済み)、
+P2 = 両者一致だが teardown が完走していない 18 本 (`broker.json` が全件残存。未完走の理由は
+未確定で、hook 不発 / 途中失敗 / 第三の cwd のいずれも否定できていない)。
+
+**確認済みの非該当**: 版は無関係 (生存 38 本すべて 1.0.5 の path から起動・1.0.4 は不在)。
+1.0.6 へ上げても直らない (`session-lifecycle-hook.mjs` の diff が 0)。既製の回収機構は無い
+(plugin の commands 8 / skills 3 / agents 1 と companion の subcommand 集合に broker 停止動詞なし。
+cancel は job 対象で、しかも壊れているのと同じ cwd 鍵スコープで動く)。
+
+Exit Criteria:
+
+- [ ] 着手時期をユーザーと相談し、対策 A〜D のどれを本端末で実施するか決める
+- [ ] **対策 A (鍵ずれ)**: 発注する session の cwd を worktree に合わせる。hook が受け取る cwd は
+  `cd` に追従することは依頼元で実測済み。**効くのは session 終了時点の cwd**であり発注時ではない
+  ため、1 session が複数 worktree に発注すると最後の 1 本しか回収されない。複数発注するなら
+  worktree ごとに session を分けるか対策 B を併用する。P1 の 20 本を塞ぐが P2 の 18 本には効かない
+- [ ] **対策 B (取りこぼし)**: worktree 削除の**直前**に broker を回収する。順序と粒度が要点 —
+  (i) 削除後は path が消えて `fuser` が引けないので削除前に実行、(ii) 記録から endpoint を読み
+  `broker/shutdown` RPC を先に送る (いきなり SIGKILL すると socket と state file が残る)、
+  (iii) kill は session 単位で行う (`fuser -k <worktree>` は当該 cwd を持つプロセスしか殺さず、
+  依頼元実測で issue-42 は 64 プロセス中 44・issue-440 は 25 中 18 しか掴んでいない。取りこぼした子は
+  broker 死亡後に state file を持たない孤児になり以後どの機構でも拾えない)。`fuser` は最後の
+  掃き残しチェックとして使う
+- [ ] **対策 C (定期回収)**: 状態駆動の reaper を入れる。判定 3 分岐 = keep (`--cwd` が今も存在) /
+  reap (pid 生存だが対象ディレクトリ消滅 → session に SIGTERM → 残れば SIGKILL → state と
+  session dir を削除) / stale (pid 既に死亡 → 残骸のみ削除)。依頼元の dry-run 実測で
+  28 session / 約 3.9 GB を回収対象と判定し、対象が存命の 10 本は正しく keep した。
+  **本端末では残骸 121 件が stale 判定に該当する見込み**
+- [ ] **対策 D (upstream 報告)**: (i) `handleSessionEnd` は cwd 1 点でなく state root 配下を走査して
+  回収すべき、(ii) broker に idle timeout か親死亡監視を持たせるべき、(iii) 鍵不一致時に exit 0 で
+  黙るのをやめ警告を出すべき。**報告時は社内の path と codename を伏せ、機能名で書く**
+
+Work file: 依頼元に実装例 `drafts/codex-broker-reap.sh` (dry-run 既定・`--apply` で実行) があるが
+**本 repo には存在しない** (2026-08-23 確認)。着手時に取り寄せるか再実装するかを決める。
+
 ### handoff の lifecycle 同期を hook で担保する
 
 起票: user 2026-08-23 (「handoff protocol / hook の強化が必要?」への回答として提案)
