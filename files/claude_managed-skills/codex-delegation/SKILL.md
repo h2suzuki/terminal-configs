@@ -10,7 +10,8 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
 
 ## Process
 
-1. **発注書を書く**: 依頼は chat 文でなく発注書 file（作業 dir の drafts/ 等）に固定する。含める: スコープ（触ってよい path / 触らない path）、仕様の優先順位（受け入れ修正節が本文に優先する等の明文）、完了条件（fmt / clippy / test の実行と **結果ログの file 保存**）、「コミットはしない（受け入れレビュー後に発注側が行う）」の明記
+1. **雛形から骨組みを出す**: `codex_order_lint --new plain|fix|review <path>` を最初に実行する。必須節をすべて空欄（`未記入`）で持つ骨組みが書き出され、題名・報告書 path・probe path・fix 巡番号は path から埋まる。記憶から書き起こすと `codex_order_scaffold` が Write を deny して同じ骨組みを置く。空欄が残る間は lint が所見として数えるので、埋め忘れは委譲前に必ず出る
+2. **発注書を書く**: 骨組みの空欄を埋める。依頼は chat 文でなく発注書 file（作業 dir の drafts/ 等）に固定する。含める: スコープ（触ってよい path / 触らない path）、仕様の優先順位（受け入れ修正節が本文に優先する等の明文）、完了条件（fmt / clippy / test の実行と **結果ログの file 保存**）、「コミットはしない（受け入れレビュー後に発注側が行う）」の明記
    - 対象 file kind の規約 skill（`writing-code` / `writing-bash` / `writing-skills` 等）を発注側で invoke し、その規約を発注書に転記する。skill gate は subagent と codex の書き込みには効かないため、規約は発注書経由でしか届かない
    - **「出力言語規約」節を必須で置く**: 納品物（code comment / CLI 出力 / log message / doc）の言語は対象 project / file の既存言語規約に従い、1 文書内で言語を混在させない。発注書自体の言語（日本語）を納品物へ持ち込まないことを明記する（日本語発注書からの leak で英語文書・CLI 出力に日本語が混入し、敵対レビューも素通しした実例。user 報告 2026-08-06）
    - `fuser -k` / `pkill` 等の kill-by-port を禁止し、port が塞がっていれば別 port を使い（この場合も excludedCommands 登録 launcher によるホスト側起動に限定する）、止められない process は放置して報告することも含める。subagent が port 5273 を `fuser -k` で掃除した直後にホスト側の vite が落ちた（2026-07-15）
@@ -18,27 +19,27 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
    - **「作業量上限（worst-case bound）」節を必須で置く**: 外部取得・大量計算・一括変換など作業量が対象規模に比例する発注は、「初回・空状態で 1 実行が最大何を行うか」を上限として明文化し、上限をテストで pin させる。レビュー発注（受け入れ・cross-model・敵対レビュー等）にも同じ blast-radius 上限の観点を必須で含める（レビュー発注に空状態の upper bound が無く、無依頼の大規模データ取得がレビュー 2 巡を通過した実例 2026-07-23）
    - **所要見積もりバンドと調査発動しきい値（目安 = 見積もり 2 倍）を発注時に宣言する**: 規模 × build 状態（cold/warm）× テスト範囲から見積もる。見積もりを持たない監視は生存確認にとどまる（2026-07-23 の user 指摘）
    - **報告書の終端トークンを義務付ける**: 「報告書の最終行は `REPORT_COMPLETE` の 1 行で終える」を発注書に明記する。監視の完了判定が「report file の存在」だと書きかけと完成を機械的に区別できない（user 提案 2026-07-29）。「報告書を書いたら即座に最終出力して終了する（報告後の追加調査禁止）」も併記する
-2. **起動**: 発注は **codex:rescue skill 経由のみ** — model が companion (`codex-companion.mjs`) を Bash で直接起動する形は全 subcommand が gate で deny される（2026-08-21 ユーザー決裁。解除はユーザーが作る承認 file のみ）。rescue の raw request に実行 flag（`--fresh` / `--resume`・`--background`）、runtime flag（`--write`・`--model` 正式 id・`--effort`）、短文 prompt（発注書 path + 報告書 path + 終端 token）、作業 dir（手動 worktree の絶対 path）を渡す。**実装発注は `--write` 必須（既定 = read-only sandbox）**。発注 prompt の第一動作に write probe file 作成を入れ、起動 1-2 分後に実在を確認する（数十分の空走を早期検知）。既存 thread の続き（fix round 等）は resume、新規作業は fresh。wrapper が「background job 起動」とだけ返すのは正常で、完了報告ではない
+3. **起動**: 発注は **codex:rescue skill 経由のみ** — model が companion (`codex-companion.mjs`) を Bash で直接起動する形は全 subcommand が gate で deny される（2026-08-21 ユーザー決裁。解除はユーザーが作る承認 file のみ）。rescue の raw request に実行 flag（`--fresh` / `--resume`・`--background`）、runtime flag（`--write`・`--model` 正式 id・`--effort`）、短文 prompt（発注書 path + 報告書 path + 終端 token）、作業 dir（手動 worktree の絶対 path）を渡す。**実装発注は `--write` 必須（既定 = read-only sandbox）**。発注 prompt の第一動作に write probe file 作成を入れ、起動 1-2 分後に実在を確認する（数十分の空走を早期検知）。既存 thread の続き（fix round 等）は resume、新規作業は fresh。wrapper が「background job 起動」とだけ返すのは正常で、完了報告ではない
    - **報告書を成果物とする発注は read-only レビューでも `--write` で起動する**: 既定 sandbox では報告書 1 file すら書けず、レビュー本体が完走しても成果物ゼロで終わる（sol xhigh のレビューが分析完了後に apply_patch を拒否され全滅した実例 2026-08-13）。スコープの read-only 性は sandbox でなく発注書の禁止事項で担保し、起動後の record 検証では write flag が発注意図と一致することまで見る
    - **起動 command 行に長い日本語 prompt を直書きしない**: auto-mode classifier が長い日本語のコマンド行を確率的に deny する（別 project で 5 回中 3 回 deny の実測 2026-08-12〜13。短い機械的コマンド行は通過する対照実験済み）。prompt は「発注書 path + 第一動作 + 報告書 path + 終端 token 確認」程度の短文に留め、長い指示は発注書 file 側に書く。この注意は rescue の raw request に渡す prompt 文にも適用される（forwarder が組む task コマンド行に乗るため）。過去の「exclusion でホスト実行されるから直接起動でよい」運用と専用 launcher 案は、直接起動の全面禁止（2026-08-21）でいずれも廃止
    - **作業 dir は `task` subcommand の `--cwd <worktree絶対path>` で渡す（shell の cd / pushd 前置は使わない）**: companion は起動時 cwd で workspace を解決するため、cd が不達だと task が誤 workspace（起動元 dir）に登録され、write sandbox もそちらに束縛される。cd 前置は hook deny・auto-mode classifier deny で確率的に不達になる（cd 不達で誤 workspace 登録 → codex 側の probe 失敗で自主停止、pushd 形は classifier deny、`--cwd` + `--prompt-file` の node 先頭単一形で成功 — 3 連実測 2026-08-21）。長い日本語 prompt も同じ理由で `--prompt-file <file>` で渡す
    - background 起動の出力 redirect 先は変数展開に頼らず、既知 writable な絶対 path に固定する
    - 実装委譲では、起動後は job record（plugin data の `state/<worktree>-<hash>/jobs/<job-id>.json` を file 直読）の workspaceRoot が隔離 worktree を指すことを確認し、以降の probe 確認・静穏 find・`git diff`・成果物確認・受け入れレビュー・commit はこの workspaceRoot を唯一の作業 root とし、全 path をその絶対 path で扱う
-3. **完了 / stall 判定**:
+4. **完了 / stall 判定**:
    - 正常完了（2 条件 AND。cancel した task や異常終了した task の running[] 消滅は含まない。完了は成果物で裏取りする）:
      - 作業ツリーの書き込み静穏 5-10 分。bfs 互換の ISO 時刻で判定し、stderr / exit code を確認する:
        `out=$(mktemp -p "${TMPDIR:-/var/tmp}"); cutoff=$(date -d '-8 minutes' +%Y-%m-%dT%H:%M:%S); find <dirs> -type f -newermt "$cutoff" > "$out" || exit 1; wc -l < "$out"`
      - 当該 job record の `status` が running から変わった（record の file 直読。status 系 subcommand の直接起動も deny 対象なので使わない）
    - stall 判定（heartbeat 凍結 7 分超、詳細は Rules）:
      - 監視は background script 内で 170 秒 × 3 回等で poll し、exit 時に re-arm して約 5-8.5 分 cadence を保つ。単発待機は bash tool の timeout 上限 600 秒以内にする
-4. **走行中の並行作業規則**: 同一ツリーへの inline 編集をしない（moving-target）。同一 build dir を共有する build / test / lint を並行実行しない（ロック競合で双方が停滞）。別 path（例: backend 委譲中の frontend/、doc、発注書の次 round 準備）は並行してよい
-5. **受け入れレビュー**: 完了判定後に開始。gates 結果は codex の自己申告でなくログ file / 再実行で確認する。仕様の根拠行（契約・実データの key 文字列等）はコードと突き合わせ、判断が乗る主張は spot-check する。高リスク変更（auth / data-loss / race / rollback）は独立 cross-model レビューを追加する
+5. **走行中の並行作業規則**: 同一ツリーへの inline 編集をしない（moving-target）。同一 build dir を共有する build / test / lint を並行実行しない（ロック競合で双方が停滞）。別 path（例: backend 委譲中の frontend/、doc、発注書の次 round 準備）は並行してよい
+6. **受け入れレビュー**: 完了判定後に開始。gates 結果は codex の自己申告でなくログ file / 再実行で確認する。仕様の根拠行（契約・実データの key 文字列等）はコードと突き合わせ、判断が乗る主張は spot-check する。高リスク変更（auth / data-loss / race / rollback）は独立 cross-model レビューを追加する
    - **表層品質 pass を別回で行う**: 内容の正誤と別に、読者体験で diff を見る — 英語文書内の日本語文 / CLI 出力・log 文字列の言語 / comment 言語と file 規約の一致 / tone・命名の一貫性。抽象的な「自然に見えるか」だけでは素通しするため、観点を列挙してレビューする。cross-model レビューを発注する場合も本観点を発注書に含める
    - **`claude_lang_lint` を worktree diff に必須実行する**: `claude_lang_lint --repo <workspaceRoot>` が ASCII baseline file への CJK 追加を機械検出する（日本語が正の file は baseline 判定で自動除外、新規の意図的日本語 file は `--allow` で指定）。fail は fix round 行き。LLM レビューの注意力に依存しない決定的 gate
    - server を抱えた run では、codex 側の残存検査 (Rules の hang-proof 節) と別に、司令塔側でも workspaceRoot で scope した `pgrep -af <workspaceRoot>` を打ち、残存 process ゼロを確認する（二重の網）
    - 通過後は隔離 worktree 側で commit して本線へ取り込む
-6. **fix round**: 所見を番号付きで発注書または追記 file にまとめ、同一 thread の resume で発注する。発注側が既に直した箇所（trivial fix）は「re-add しない」と明記する
-7. **セッション棚卸し**: 受け入れ・commit 完了後、state dir の job record 群（`jobs/*.json`）を読んで当該委譲の残存 running を確認し、残っていれば cancel をユーザーへ依頼して閉じる（/codex:cancel、または sentinel が印字する cancel コマンドをホスト側ターミナルで実行してもらう）。発注文の指示では防げない codex session 自体の放置（1 日 10h 級の滞留要因）を lifecycle 終端で回収する
+7. **fix round**: 所見を番号付きで発注書または追記 file にまとめ、同一 thread の resume で発注する。発注側が既に直した箇所（trivial fix）は「re-add しない」と明記する
+8. **セッション棚卸し**: 受け入れ・commit 完了後、state dir の job record 群（`jobs/*.json`）を読んで当該委譲の残存 running を確認し、残っていれば cancel をユーザーへ依頼して閉じる（/codex:cancel、または sentinel が印字する cancel コマンドをホスト側ターミナルで実行してもらう）。発注文の指示では防げない codex session 自体の放置（1 日 10h 級の滞留要因）を lifecycle 終端で回収する
 
 ## Rules
 

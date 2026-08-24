@@ -35,6 +35,25 @@ REQUIRED_SECTIONS = (
     "所要見積もり",
 )
 
+# 雛形が置いた印を読み戻すだけ (語から意図を推測しない)。 fence 内にも置くので fence を見ない。
+SLOT = "未記入"
+SLOT_PREVIEW = 8
+
+# 生成器を規約の持ち主に同居させる。 別 binary にすると規則と骨組みが乖離する。
+TEMPLATE_KINDS = {
+    "plain": "template-order.md",
+    "fix": "template-fix-order.md",
+    "review": "template-review-order.md",
+}
+TEMPLATE_DIRS = (
+    "/etc/claude-code/skills/codex-delegation",
+    os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "claude_managed-skills",
+        "codex-delegation",
+    ),
+)
+
 HEADING_RE = re.compile(r"^#{2,}\s+(\S.*?)\s*$")
 FENCE_RE = re.compile(r"^\s*```")
 REPORT_PATH_RE = re.compile(r"[\w./-]*-report\.md")
@@ -119,6 +138,16 @@ def check_sections(found: list[tuple[str, int, int]]) -> list[str]:
         for prefix in REQUIRED_SECTIONS
         if not any(name.startswith(prefix) for name, _, _ in found)
     ]
+
+
+def check_slots(lines: list[str]) -> list[str]:
+    """雛形の空欄が埋まっていない箇所。 節の本文を読まない検査群の死角を塞ぐ。"""
+    marked = [index + 1 for index, line in enumerate(lines) if SLOT in line]
+    if not marked:
+        return []
+    shown = ", ".join(f"L{number}" for number in marked[:SLOT_PREVIEW])
+    rest = f" 他 {len(marked) - SLOT_PREVIEW} 行" if len(marked) > SLOT_PREVIEW else ""
+    return [f"{SLOT} の slot が {len(marked)} 件残っている: {shown}{rest}"]
 
 
 def check_report_path(lines: list[str]) -> list[str]:
@@ -475,6 +504,7 @@ def lint(text: str, path: str = "") -> list[str]:
     lines = text.splitlines()
     found = sections(lines)
     return [
+        *check_slots(lines),
         *check_review_contract(lines),
         *check_sections(found),
         *check_report_path(lines),
@@ -954,6 +984,160 @@ class LintTest(unittest.TestCase):
         self.assertIn("regular file", out.getvalue())
 
 
+class TemplateTest(unittest.TestCase):
+    """雛形と --new: 埋めれば通り、埋め忘れは必ず所見になる。
+    出所 2026-08-24: 未記入のままの骨組みは所見 1 件しか返さず、空欄が検査に見えていなかった。"""
+
+    def _text(self, kind: str) -> str:
+        source = template_source(kind)
+        if source is None:
+            self.skipTest("雛形が配備先にも repo にも無い")
+        with open(source, encoding="utf-8") as handle:
+            return handle.read()
+
+    def _fill(self, text: str) -> str:
+        return (
+            text.replace("**未記入〜未記入 分**", "**20〜30 分**")
+            .replace("**未記入 分**", "**60 分**")
+            .replace("# fix round N:", "# fix round 1:")
+            .replace("scope: 未記入", "scope: diff")
+            .replace("target: 未記入", "target: example")
+            .replace("- 所見 1: 未記入", "- 所見 1: 既存集約")
+            .replace(SLOT, "x")
+        )
+
+    def test_slot_finding_names_the_count_and_lines(self):
+        self.assertEqual(
+            check_slots([SLOT, "ok", SLOT]),
+            [f"{SLOT} の slot が 2 件残っている: L1, L3"],
+        )
+        self.assertEqual(check_slots(["ok"]), [])
+
+    def test_every_template_reports_its_unfilled_slots_first(self):
+        for kind in TEMPLATE_KINDS:
+            with self.subTest(kind=kind):
+                findings = lint(self._text(kind))
+                self.assertTrue(findings[0].startswith(f"{SLOT} の slot が"))
+
+    def test_every_template_is_completable(self):
+        for kind in TEMPLATE_KINDS:
+            with self.subTest(kind=kind):
+                self.assertEqual(lint(self._fill(self._text(kind))), [])
+
+    def test_fix_template_round_header_stays_inert(self):
+        # 文字どおりの N は申告に数えない。 数えると実在の round 1 が「重複」で落ちる。
+        self.assertEqual(fix_round_values(self._text("fix").splitlines()), [])
+
+    def test_new_derives_from_the_path_and_refuses_to_clobber(self):
+        import io
+        from contextlib import redirect_stdout
+
+        self._text("plain")
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
+        target = os.path.join(directory, "sample-order.md")
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["--new", "plain", target]), 0)
+            with open(target, encoding="utf-8") as handle:
+                seeded = handle.read()
+            self.assertEqual(main(["--new", "plain", target]), 3)
+        self.assertIn("# 発注書: sample-order", seeded)
+        self.assertIn(os.path.join(directory, "sample-order-report.md"), seeded)
+
+    def test_new_fix_numbers_the_round_from_its_siblings(self):
+        import io
+        from contextlib import redirect_stdout
+
+        self._text("fix")
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
+        with redirect_stdout(io.StringIO()):
+            main(["--new", "fix", os.path.join(directory, "first.md")])
+            main(["--new", "fix", os.path.join(directory, "second.md")])
+        with open(os.path.join(directory, "first.md"), encoding="utf-8") as handle:
+            first = handle.read()
+        with open(os.path.join(directory, "second.md"), encoding="utf-8") as handle:
+            second = handle.read()
+        self.assertIn("# fix round 1: first", first)
+        self.assertNotIn("前巡 verdict", first)  # 1 巡目に前巡は無い
+        self.assertIn("# fix round 2: second", second)
+        self.assertIn("前巡 verdict", second)
+
+
+def template_source(kind: str) -> str | None:
+    """雛形の実体。 配備先を先に見て、 repo から直接動かす場合は隣を見る。"""
+    name = TEMPLATE_KINDS[kind]
+    return next(
+        (
+            path
+            for directory in TEMPLATE_DIRS
+            if os.path.isfile(path := os.path.join(directory, name))
+        ),
+        None,
+    )
+
+
+def drop_section(text: str, heading: str) -> str:
+    lines = text.splitlines(keepends=True)
+    start = next(
+        (i for i, line in enumerate(lines) if line.strip() == f"## {heading}"), None
+    )
+    if start is None:
+        return text
+    end = next(
+        (i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")),
+        len(lines),
+    )
+    return "".join(lines[:start] + lines[end:])
+
+
+def seed_order(kind: str, path: str) -> str:
+    """雛形を、 著者が選んだ path から決まる値だけ埋めた本文。"""
+    source = template_source(kind)
+    if source is None:
+        raise FileNotFoundError(TEMPLATE_KINDS[kind])
+    with open(source, encoding="utf-8") as handle:
+        text = handle.read()
+    stem = os.path.splitext(os.path.basename(path))[0]
+    directory = os.path.dirname(path)
+    text = text.replace(
+        f"{SLOT}-report.md", os.path.join(directory, f"{stem}-report.md")
+    )
+    text = text.replace(
+        f"{SLOT}-probe.txt", os.path.join(directory, f"{stem}-probe.txt")
+    )
+    text = text.replace(f"# {SLOT} 報告書", f"# {stem} 報告書")
+    if kind == "fix":
+        # 巡番号は検査器自身の申告集計から採る。 欠番・重複・逆行を作れない唯一の取り方。
+        rounds, _ = declared_fix_rounds(path)
+        number = max(rounds, default=0) + 1
+        text = text.replace("# fix round N:", f"# fix round {number}:")
+        if number == 1:
+            text = drop_section(text, "前巡 verdict")
+    return text.replace(f": {SLOT}\n", f": {stem}\n", 1)
+
+
+def write_new_order(kind: str, path: str) -> int:
+    if os.path.exists(path):
+        print(f"{path}: 既にあるので上書きしない")
+        return 3
+    try:
+        text = seed_order(kind, path)
+    except FileNotFoundError as error:
+        print(f"雛形が見つからない: {error}")
+        return 2
+    try:
+        if directory := os.path.dirname(path):
+            os.makedirs(directory, exist_ok=True)
+        with open(path, "x", encoding="utf-8") as handle:
+            handle.write(text)
+    except OSError as error:
+        print(f"{path}: 書けない ({error.strerror})")
+        return 2
+    print(f"{path}: {TEMPLATE_KINDS[kind]} から作成した")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Lint a codex order document.")
     parser.add_argument("paths", nargs="*", help="order documents to check")
@@ -961,12 +1145,24 @@ def main(argv: list[str]) -> int:
         "--metadata", action="store_true", help="emit one JSON object per document"
     )
     parser.add_argument(
+        "--new",
+        choices=tuple(TEMPLATE_KINDS),
+        metavar="KIND",
+        help="雛形から骨組みを書き出す (plain|fix|review)",
+    )
+    parser.add_argument(
         "--selftest", action="store_true", help="run the built-in tests"
     )
     args = parser.parse_args(argv)
 
+    if args.new:
+        if len(args.paths) != 1:
+            parser.error("--new は書き出す path を 1 つ取る")
+        return write_new_order(args.new, args.paths[0])
     if args.selftest:
-        loaded = unittest.defaultTestLoader.loadTestsFromTestCase(LintTest)
+        loaded = unittest.defaultTestLoader.loadTestsFromNames(
+            [f"{__name__}.LintTest", f"{__name__}.TemplateTest"]
+        )
         return 0 if unittest.TextTestRunner().run(loaded).wasSuccessful() else 1
     if not args.paths:
         parser.error("give at least one order document, or --selftest")
