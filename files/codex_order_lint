@@ -855,7 +855,12 @@ class LintTest(unittest.TestCase):
     def test_ordinary_japanese_changes_no_findings(self):
         """普通の日本語が節を要求しない (2026-08-23 実測: 5 通中 4 通が踏んだ誤爆)。"""
         baseline = self._fix_order(1)
-        for phrase in ("空状態のまま", "という状態になっている", "廃止済みの経緯", "latch"):
+        for phrase in (
+            "空状態のまま",
+            "という状態になっている",
+            "廃止済みの経緯",
+            "latch",
+        ):
             with self.subTest(phrase=phrase):
                 text = baseline.replace("例である。", f"{phrase}を説明する。")
                 self.assertEqual(lint(text, "x.md"), lint(baseline, "x.md"))
