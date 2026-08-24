@@ -394,11 +394,26 @@ Exit Criteria:
   `codex_order_lint --new` の 1 実装に寄せ、規則と生成器が乖離しない (house rule
   `codex_delegation_gate.py:91` の一本化方針に一致)、(iii) 空欄は `未記入` sentinel で表し、
   検査器の deny 所見にする (corpus 302 件で衝突ゼロを実測)
-- [ ] **上記の実装範囲を決める (要相談)** — 判定書のリスク欄が挙げた重いもの 2 件が判断材料:
-  (a) **Bash 経由の作成を覆えない** — `cp 前巡.md 今巡.md` と heredoc は Write hook に届かず、
-  しかも corpus ではこれが主流の書き方 (r17..r76 の 60 通が前巡の複製)、
-  (b) **「deny しつつ副作用で file を作る」形はこの repo に前例が無い**。
-  選択肢 = 全体を作る / まず `--new` と雛形だけ入れて実測してから deny を足す
+- [x] **実装した 2026-08-24 (`58bb28d`・ユーザー決裁「一気に作る」)** — 7 file・+708/-9。
+  (i) 検査器に空欄検査 `check_slots` を追加し `lint()` の先頭に配線 (雛形が置いた印を読み戻すだけで、
+  語から意図を推測しない)、(ii) 雛形 3 種を skill dir へ (`writing-skills` の前例に合わせて
+  SKILL.md の隣)、(iii) `codex_order_lint --new plain|fix|review <path>` で骨組みを生成 —
+  題名・報告書 path・probe path は著者の選んだ path から、fix の巡番号は検査器自身の
+  `declared_fix_rounds` から埋める (欠番・重複・逆行を作れない唯一の取り方)、
+  (iv) PreToolUse hook `codex_order_scaffold.py` が記憶からの Write を deny して同じ骨組みを置く
+  (骨組みは hook が書くので model は未読 → `read_before_edit` が次の Edit を止める =
+  雛形を読むことが唯一の進み方になる)、(v) 既存の `^(Edit|Write|MultiEdit)$` block へ 1 行配線、
+  (vi) skill の Process 第 1 手を雛形生成に。
+  **実測**: 未記入のままの基本形は所見 2 件 (空欄 17 + バンド) を返し、派生後 13 slot、
+  埋めれば所見ゼロ。fix は先行なしで round 1 + 前巡 verdict 除去、先行ありで round 2 + 保持。
+  二度目の `--new` は上書きせず exit 3。既存 347 件の .md に `未記入` の衝突ゼロ。
+  検査器 selftest 38 → 44、hook 6 件新設、全 hook suite 400 tests 緑。ruff / format / ty 緑。
+  **配備待ち** (配備先の検査器にはまだ `--new` が無いことを確認済み)
+- [ ] 実装のリスク 2 件を運用で見る — (a) **Bash 経由の作成には届かない**
+  (`cp 前巡.md 今巡.md` と heredoc は Write hook を通らない。corpus ではこれが主流で
+  r17..r76 の 60 通が前巡の複製)。届かない場合は今日と同じ挙動に戻るだけで悪化はしないが、
+  この経路では何も得られない。(b) **「deny しつつ副作用で file を作る」形は前例が無い**ので、
+  deny 文面に「本 hook が書き出した」と作成 path を明記した。実際に踏んだとき紛れないか観測する
 - [ ] 雛形を経由しないと生成できない形にした — 骨組みを出力する経路を作り、それを起点にする
   (参照が生成の一部になり、別の行為でなくなる)。それでも記憶から書き始めた場合は止める
 - [ ] 同型の欠落が他に無いかを棚卸しした — 雛形を持たずに毎回書いている成果物の種類を列挙する
