@@ -408,7 +408,13 @@ Exit Criteria:
   埋めれば所見ゼロ。fix は先行なしで round 1 + 前巡 verdict 除去、先行ありで round 2 + 保持。
   二度目の `--new` は上書きせず exit 3。既存 347 件の .md に `未記入` の衝突ゼロ。
   検査器 selftest 38 → 44、hook 6 件新設、全 hook suite 400 tests 緑。ruff / format / ty 緑。
-  **配備待ち** (配備先の検査器にはまだ `--new` が無いことを確認済み)
+  **配備完了 2026-08-24**: ユーザーが base setup を実行。新規 7 成果物とも `diff -q` IDENTICAL、
+  hooks は 35/35 一致 (新 hook を含めて差分ゼロ)。**配備先の実チェーンで機能を実測** —
+  配備先 selftest 44 件緑、配備先の雛形から生成 → 空欄 13 件を所見化、
+  記憶から書いた Write に deny + 骨組み 2026 byte を生成。素通し側も確認済み
+  (発注書でないメモ = allow かつ file 作成なし / drafts の外 = allow /
+  既存 file への再 Write = allow で割り込みは 1 回 / Edit = allow)。
+  レビュー発注書は review 雛形が選ばれることまで確認
 - [ ] 実装のリスク 2 件を運用で見る — (a) **Bash 経由の作成には届かない**
   (`cp 前巡.md 今巡.md` と heredoc は Write hook を通らない。corpus ではこれが主流で
   r17..r76 の 60 通が前巡の複製)。届かない場合は今日と同じ挙動に戻るだけで悪化はしないが、
