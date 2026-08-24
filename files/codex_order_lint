@@ -6,11 +6,16 @@
 の有無と、 巡を重ねると食い違う 5 点 (報告書 path・終端 token・見積もりと調査しきい値の
 倍率・裁定の採番・kill-by-port 禁止) を検査する。
 
+雛形の生成も本 script が持つ。 規則の持ち主と骨組みの作り手を分けると、 必須節が増えたときに
+片方だけ古くなるため。 空欄は `未記入` で置き、 埋め忘れは check_slots が所見にする。
+
 Usage:
   codex_order_lint ORDER.md [ORDER.md ...]
+  codex_order_lint --metadata ORDER.md
+  codex_order_lint --new plain|fix|review NEW_ORDER.md
   codex_order_lint --selftest
 
-Exit: 0 clean / 1 findings / 2 usage error。
+Exit: 0 clean / 1 findings / 2 usage error / 3 --new の書き出し先が既にある。
 """
 
 from __future__ import annotations
