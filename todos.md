@@ -442,55 +442,6 @@ Exit Criteria:
 
 Work file: なし (本 block で自己完結)
 
-### 自作癖の抑制機構 — 廃止済み・後継は随伴エージェント待ちで凍結
-
-起票: user 2026-08-23 (「いまの implementation-checkpoint は廃棄しないとかな。部品として
-機能していなさそうなので」)
-凍結: user 2026-08-23 (「全く新しい手法である随伴エージェント (別プロジェクトで検討中) が
-できるまで、その hook のこれ以上の改善は凍結する」)
-廃止実施: user 2026-08-23 (「implementation-checkpoint は廃止する予定だったね、こういうことに
-なるから早くやろうね」)
-
-**廃止済み 2026-08-23** (`8b04b7b`・stop_checks.py `+17/-291`): implementation-checkpoint を
-test ごと削除した。死んだ helper (`_repo_relative_source` / `_line_count` /
-`_tool_added_source_lines` / `_load_session_tail` と定数 2 つ) も同時に落とし、warning family は
-6 → 5、上限定数と docstring・該当 test を追随させた。196 tests / ruff / ty 緑。
-**配備済み** (2026-08-25 実測: 配備先 `stop_checks.py` に該当語 0 件)。
-
-方針: 後継 (編集前 deny) には**着手しない**。要件「既存部品があるなら使う・再構築は承認・
-自分で書いてよいのは trivial だけ」は、随伴エージェントが利用可能になった時点でその仕組みの
-上に設計し直す。行数という代理指標を磨く方向は、下記の実測が示すとおり筋が悪い。
-
-**廃止時点で判明していた欠陥 (すべて実測 2026-08-23・再設計時の材料)**:
-
-- **抑止条件**: session に codex 委譲が 1 件でもあると以後恒久的に黙る。委譲 39 件の session は
-  190 行の直接実装を検出せず、委譲 0 件の session では発火した (両側から確認済み)
-- **しきい値の迂回**: 判定式 `added <= 50 and not undercount` により、transcript が 2MB を
-  超えて undercount になるとしきい値ごと外れ 1 行でも鳴る。同一の 34 行が `undercount=False`
-  で silent・`True` で発火することを関数直叩きで確認。長い session では毎 turn 鳴り続け、
-  判定を述べても止まらない。round 9 レビューの「undercount 常時発火の誤誘導」が残存している
-- **要件との乖離**: 正本は「単一 file・追加 10 行以内・test 追加なし」の AND だが、実装は
-  行数のみを、しかも由来のない 50 行で見る。計測単位も正本の session 累積に対し turn 単位。
-  由来調査の結論 = 要件が代理指標にすり替わったまま実装され、レビューは発注書との一致だけを
-  見て通した
-- **subagent 経路**: Claude subagent の編集は計測にも受け入れ鎖にも乗らない。行数では
-  測れないため、再開時は別設計が要る
-
-本 session の直接実装 3 件の委譲不採用理由 (正本が要求する記録): `906ab58` はユーザーの
-直接指示、`18f0c6d` は誤発火の原因を特定した同 turn 内の是正、`8b04b7b` は削除のみで新規実装が
-ゼロ・検証は「参照ゼロ + test 緑」の機械的 oracle で完結するため。いずれも発注書往復のほうが
-高くつくと判断した。
-
-Exit Criteria:
-
-- [x] 廃止を配備した — 2026-08-23 にユーザーが base setup を実行。`files/` と `/etc` の
-  `stop_checks.py` は `diff -q` IDENTICAL、配備先の checkpoint 参照は grep で 0 件、
-  family 上限も 5 に追随済み。code が存在しないため発火し得ない
-- [ ] 随伴エージェント (別プロジェクトで検討中) が利用可能になり、後継の設計を再開できる状態に
-  なった — それまで後継の作業は凍結
-
-Work file: なし (再開に要る実測はすべて本 block に inline)
-
 ### 検問 gate 群の実装・受け入れ・配備
 
 起票: user 2026-08-21 (「強制が必要な事項 2 つ」の列挙)
@@ -635,7 +586,8 @@ Exit Criteria:
   進捗 2026-08-21: (1) は canonical へ明文化・commit 済み (数値境界 + 統治原則)。
   **(2) は無効 (2026-08-25 に矛盾を検出)**: ここでいう hook が implementation-checkpoint
   そのもので、2026-08-23 に `8b04b7b` で廃止済み。行数という代理指標は筋が悪いという裁定に
-  従い、後継は上の「自作癖の抑制機構」block (随伴エージェント待ちで凍結) が引き継ぐ。
+  従い、後継は Medium の「随伴エージェント待ち — モデル判定へ回す案件」block の項目 1 が
+  引き継ぐ (困りごと 4 点と判定アイデアはそちらに移設済み)。
   よってこの criterion に残る作業は無い
 - [ ] **(h) codex-delegation skill と関連 memory entry を plugin-route 前提に改訂する** —
   現 skill は companion 直接起動の command 形を規定しており (launcher 不採用裁定 2026-08-13 の
