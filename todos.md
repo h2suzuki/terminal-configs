@@ -64,8 +64,8 @@ Exit Criteria:
   取得経路も無く、bash の parser 借用は入力を script に埋め込むため任意コード実行の穴
   (実測)、かつ変数展開・間接実行を含めると原理的に決定不能。この criterion は記録のため残す
 - [x] 本線へ merge した — `a65da00` (`--no-ff`)。merge 後の main で 83 tests 緑、
-  現実的な起動 9 形 DENY / 読み取り 5 形 allow を再測定済み。push は未実施 (main は
-  origin から 21 commit ahead・ユーザー承認待ち)
+  現実的な起動 9 形 DENY / 読み取り 5 形 allow を再測定済み。push 済み (2026-08-25 実測:
+  `origin/main..main` = 0 commit)
 - [ ] 残り 2 形を塞ぐ — heredoc 形は上記の試作で塞げると実測済み、行末の継続記号は未検討。
   塞げなければその時点で相談する
 - [x] 配備し、検索コマンドが通り起動が弾かれることを実地で確認した — **2026-08-23 完了**。
@@ -74,17 +74,19 @@ Exit Criteria:
   allow・起動 4 形 (直接実行 / 監視 loop の条件位置 / `watch` 包み / 変数に隠した path) が deny**。
   さらにこの検証コマンド自身が起動の書き方 4 通りを文字列として含んだまま通っており、
   言及と実行の区別が実チェーンで機能している
-- [ ] 同型欠陥を class で掃引した — 実測 2026-08-23: `skill_reminder_gate` の handoff doc 分岐が
+- [x] 同型欠陥を class で掃引した — 実測 2026-08-23: `skill_reminder_gate` の handoff doc 分岐が
   同じ「言及と実行を区別しない」形で、`cat` による読み取りと deny message が案内する declare
   CLI 自身を deny する (`mentions_handoff_doc` が command 全文の token 一致・書込経路不問)。
   本 branch の「前置きを剥がした先頭の語で判定」が適用できるかを判定し、できなければ別設計を起票する。
-  **修正済み 2026-08-24 (`7967982`)**: 隣の検問の設計がそのまま適用できた。判定を
+  **修正済み 2026-08-24 (`bcdea99`)**: 隣の検問の設計がそのまま適用できた。判定を
   `mentions_handoff_doc` から新設の `writes_handoff_doc` へ差し替え、**書込語だけを列挙して
   未知の command は読取へ倒す**形にした (読取語は列挙しない — 列挙漏れが誤 deny になる側を避ける)。
   書込と見なすのは redirect の宛先・書込語 (`cp` `mv` `tee` `install` `sed -i` 等)・
   中身を読めない実行系 (`python3 -c` 等)・heredoc の 4 つ。TDD で red (22 error) → green。
   319 tests / ruff / format / ty 緑。`mentions_handoff_doc` は transcript 走査
-  (`session_resume_context`) が使い続けるので残す。**配備待ち**。
+  (`session_resume_context`) が使い続けるので残す。**配備済み** (2026-08-25 実測:
+  `files/claude_managed-hooks/` ↔ `/etc/claude-code/hooks/` の `diff -rq` 差分ゼロ、
+  配備先に `writes_handoff_doc` が存在)。
   **本日の実測 3 件が根拠**: `ls -la <doc> drafts/` (一覧表示)、`cat <doc>`、そして
   **この修正のための計測コマンド自身**が deny された。読取全般に及ぶことが確認できた
 - [ ] **同型欠陥がもう 1 件ある — `cd` 検問** (2026-08-24 実測): 複合コマンドの先頭 `cd` を
@@ -452,7 +454,8 @@ Work file: なし (本 block で自己完結)
 **廃止済み 2026-08-23** (`8b04b7b`・stop_checks.py `+17/-291`): implementation-checkpoint を
 test ごと削除した。死んだ helper (`_repo_relative_source` / `_line_count` /
 `_tool_added_source_lines` / `_load_session_tail` と定数 2 つ) も同時に落とし、warning family は
-6 → 5、上限定数と docstring・該当 test を追随させた。196 tests / ruff / ty 緑。**配備待ち**。
+6 → 5、上限定数と docstring・該当 test を追随させた。196 tests / ruff / ty 緑。
+**配備済み** (2026-08-25 実測: 配備先 `stop_checks.py` に該当語 0 件)。
 
 方針: 後継 (編集前 deny) には**着手しない**。要件「既存部品があるなら使う・再構築は承認・
 自分で書いてよいのは trivial だけ」は、随伴エージェントが利用可能になった時点でその仕組みの
@@ -684,14 +687,17 @@ Exit Criteria:
   進捗 2026-08-21: fix round 6 で実装・受け入れ済み (wt-gates branch `1994751`・
   gate unittest 65・escape 残骸 0 site)。**deploy 完了 2026-08-22**
   (codex_delegation_gate.py `diff -q` IDENTICAL 実測)。残 = 判定器 round 4 (任意) と live 実測
-- [ ] **(i) 自作癖の抑制** (2026-08-21 ユーザー決裁: 「すぐ自分でコードを書こうとする。
+- [x] **(i) 自作癖の抑制** (2026-08-21 ユーザー決裁: 「すぐ自分でコードを書こうとする。
   ジュニアエンジニアがよくやる悪癖」) — 2 層で: (1) tool-role-delegation skill の「trivial は
   直接編集可」境界を数値で明文化 (例: 単一 file・10 行以内・test 追加なし。超えたら委譲か、
   委譲不採用の理由 1 行の記録を必須)、(2) warn-tier hook = session 内の main tree への
   source 追加行数を累積計測し、しきい値超過かつ session 内に rescue job が無い場合に
   stop_checks が「自作癖 checkpoint」を提示する。導入は warn tier → 実測 → 調整。
   進捗 2026-08-21: (1) は canonical へ明文化・commit 済み (数値境界 + 統治原則)。
-  (2) は fix round 7 (warn family 4 種) で発注・実行中
+  **(2) は無効 (2026-08-25 に矛盾を検出)**: ここでいう hook が implementation-checkpoint
+  そのもので、2026-08-23 に `8b04b7b` で廃止済み。行数という代理指標は筋が悪いという裁定に
+  従い、後継は上の「自作癖の抑制機構」block (随伴エージェント待ちで凍結) が引き継ぐ。
+  よってこの criterion に残る作業は無い
 - [ ] **(h) codex-delegation skill と関連 memory entry を plugin-route 前提に改訂する** —
   現 skill は companion 直接起動の command 形を規定しており (launcher 不採用裁定 2026-08-13 の
   「直接起動へ一本化」)、これが直接起動 pattern を制度化していた。発注書規律・worktree 隔離・
