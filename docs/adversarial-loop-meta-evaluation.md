@@ -17,9 +17,9 @@ entry 118 件・第三者意見書 2 通・文献 30 件を突き合わせ、「
   1 件も止めていない
 - **出口は巡数でも規則でもなく、停止条件と artifact の大きさを変えること。** 受け入れ test と
   変異器 (= 実装に固定の欠陥を仕込み、test が検出するかを測る道具) を発注側が先に持ち、独立
-  レビュー 1 巡で用途内 P0 (= 想定用途の入力で起きる最重要欠陥) が無ければ出荷、残りは台帳へ。
-  sentinel (`codex_task_sentinel`) は凍結、ab_probe (`claude_ab_probe`) は廃棄、方法論
-  (`docs/adversarial-review-methodology.md`) は 1 ページへ
+  レビュー 1 巡で用途内 P0 (= 想定用途の入力で起きる最重要欠陥) が無ければ出荷、残りは記録しない。
+  sentinel (`codex_task_sentinel`) は要件から小さく書き直し、ab_probe (`claude_ab_probe`) は
+  廃棄、方法論 (`docs/adversarial-review-methodology.md`) は 1 ページへ (いずれも 2026-08-26 決裁)
 
 ## 1. 2026-08-25 の session で何が起きていたか
 
@@ -167,7 +167,8 @@ Spolsky 2000 / Fowler strangler fig: 全面 rewrite への歯止め、seam を�
    設計する) が再演する (巡 7「71/71 kill」
    の自己申告が誤りだった)
 3. **context 遮断の独立レビュー 1 巡 (全体 round・道具本体のみ) で、用途内 P0 が無い。**
-   reviewer には「correctness と要件に効くものだけ」を求め、それ以外は台帳へ書いて直さない
+   reviewer には「correctness と要件に効くものだけ」を求め、それ以外は直さず、転記もしない。
+   reviewer の報告書 file がそのまま記録であり、行動を伴わない転記は積み上がるだけで読まれない
 
 巡は最大 3: 基準品質 (read-only) → class 単位の fix 1 回 → 独立再確認 1 回。再確認で P0 が出たら
 4 巡目は回さず、縮小 / rewrite / bounded-risk 受入のいずれかを人間が選ぶ。
@@ -176,11 +177,10 @@ Spolsky 2000 / Fowler strangler fig: 全面 rewrite への歯止め、seam を�
 
 | artifact | 処遇 | 根拠 |
 |---|---|---|
-| `codex_task_sentinel` 8,588 行 | **凍結** — r77 以降を回さない、patch しない、bounded-risk 受入 | 要件は数行。認定 23 巡で通常運用の high は 7 件、以後は exotic と過剰実装。Spolsky / Fowler の警告と memory `self_build_impulse` (部品の再構築はユーザー承認) により、書き直しは既定にしない |
-| 同上 — 小さく書き直す案 | **ユーザーの決裁事項** | 第三者意見書は 3 部品 (reader / poll と終端分類 / CLI adapter)・production 120–220 行・test 80–150 行と見積もる。採るなら seam を切り §5.1 で最大 3 巡。14 exit code と TOCTOU 防御を保つならこの見積もりは成立しない |
-| `claude_ab_probe` 810 行 | **廃棄** (worktree ごと) | false negative を抱え未 merge、配備先で selftest 必失敗。要件 (2 版の出力 diff) は数十行で足りる。両意見書一致 |
-| 方法論 509 行 | **1 ページに置換** (§5.3) | 現行 509 行版は git 履歴に残る |
-| 台帳・分析 3,434 行 | **凍結** (追記禁止) | LLM が台帳を書く時間が product を上回っている。集計は script |
+| `codex_task_sentinel` 8,588 行 | **要件から小さく書き直す** (2026-08-26 決裁)。旧版は書き直し版が配備されるまで凍結 — r77 以降を回さない、patch しない | 要件は数行。認定 23 巡で通常運用の high は 7 件、以後は exotic と過剰実装。第三者意見書の見積もりは 3 部品 (reader / poll と終端分類 / CLI adapter)・production 120–220 行・test 80–150 行。14 exit code と TOCTOU 防御を持ち込むならこの見積もりは成立しないので、契約 (10〜30 行) に無いものは入れない。§5.1 の protocol で最大 3 巡 |
+| `claude_ab_probe` 810 行 | **廃棄** (worktree ごと、2026-08-26 決裁) | false negative を抱え未 merge、配備先で selftest 必失敗。要件 (2 版の出力 diff) は数十行で足りる。両意見書一致 |
+| 方法論 509 行 | **本当に有効な最小限へ書き直す** — §5.3 の 6 項目 (2026-08-26 決裁) | 現行 509 行版は git 履歴に残る |
+| 台帳・分析 3,434 行 | **凍結** (追記禁止)。再発防止は LLM が台帳を書く工程そのものを方法論から消すこと | 台帳は `docs/` の分析文書 3 本 (todos.md ではない)。LLM が台帳を書く時間が product を上回った。巡ごとの件数は reviewer の報告書 file から script が数え、LLM は台帳 prose を書かない。todos.md も同じ病 (983 行、経緯 prose が大半) だったので 2026-08-26 に起票 / Goal / Exit Criteria だけの形へ戻した |
 
 ### 5.3 最小の方法論 (残す 6 項目)
 
@@ -213,7 +213,8 @@ Spolsky 2000 / Fowler strangler fig: 全面 rewrite への歯止め、seam を�
 ### 5.5 meta 作業の予算
 
 - docs / todos の commit 数 ≤ product の commit 数 (同 session)
-- 台帳は 1 巡 1 行。方法論・台帳への追記は禁止、削除のみ
+- 台帳は LLM が書かない。巡ごとの件数は script が報告書 file から数える。方法論・台帳への追記は
+  禁止、削除のみ。直さない指摘は転記しない
 - 失敗に対する反応で「規則・節・entry を足す」を選ぶ前に、先に何を消すかを 1 行書く
 
 ### 5.6 判定指標
@@ -225,8 +226,8 @@ Spolsky 2000 / Fowler strangler fig: 全面 rewrite への歯止め、seam を�
 
 ## 6. 次 session の最初の 3 行動
 
-1. sentinel の認定 loop block を todos から閉じて凍結を宣言し、`wt-abprobe` を削除する。
-   書き直すかどうかはユーザーが §5.2 で決める
+1. `wt-abprobe` を削除し、sentinel の書き直しに向けて発注側が契約 (10〜30 行)・受け入れ test・
+   固定 4 変異を先に書く。旧 sentinel には触らない
 2. 方法論 doc を §5.3 の 1 ページ版に置換し、台帳 3 本に「凍結・追記禁止」を注記する
 3. 次の小さな実案件 1 件を §5.1 で回し、§5.6 の指標で判定する
 
