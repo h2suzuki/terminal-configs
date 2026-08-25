@@ -53,6 +53,25 @@
 `TIMEOUT`) に**厳密に準拠した結果**であり、実装者の逸脱ではない。巡 3 の指摘 1 も同様だった。
 **注入源は実装でなく発注書**という読みが 3 巡で固まった。
 
+### 巡 6 — 発注側の受け入れ所見 (レビュー着地前に記録)
+
+**在庫欠陥は構造的に消えた** (発注側の実測): 同一プログラムを両側 timeout させると
+stderr へ `warning: inconclusive ...` を出し `Compared 0 item(s); 0 difference(s).` / exit 3。
+比較対象から外れるので false positive が原理的に生じない。生成 test 144 組は
+`itertools.product(..., repeat=2)` + `assertEqual(len(cases), 144)` で実在。検出力は 215 件・
+差分 1 件で維持。**初の純減巡** (662 → 625 行・test 定義 23 → 9・`TIMEOUT` literal 0・counter 1 本)。
+
+**発注側が自分で見つけた所見 1 件 (低〜中)**: **exit code の契約がどこにも書かれていない**。
+本巡で exit 3 (判定不能) を追加したが、docstring は
+`"""List deterministic input decisions that differ between two executable revisions."""` の
+1 行のままで、`--help` にも exit code の説明が無い (`--jobs` / `--timeout` は help 文字列すら無い)。
+**機械検査として鎖に組み込む道具にとって exit 契約は interface そのもの**で、呼び手は
+exit 3 の意味を知る手段がない。
+
+**これも発注書の欠落**である。発注書は exit 3 の追加を指示したが、**それを文書化せよとは
+書かなかった**。巡 3・4 に続き **3 度目の under-specification**。レビュー走行中なので
+本巡では直さず (moving target を避ける)、次巡へ回す。
+
 ### 巡 6 のレビュー設計を、結果を見る前に決めておく (2026-08-25)
 
 診断が示したとおり、diff だけを渡すレビューは**在庫欠陥を構造的に見つけられない** (実際 1 件が
