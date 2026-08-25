@@ -808,6 +808,10 @@ test 追加なし」の AND かつ session 累積なのに、実装は由来の�
 declare-and-proceed / work-without-task / decision-question-task / wind-down の `HANDOFF_RE` /
 communication lint の自己採番。**凍結対象外**: mention guard (warn でなく実害を止める deny)。
 
+誤爆 9 件の逐語記録 (発火した文字列・該当 regex・A/B 実測) は `git show 65a4214^:todos.md` に
+残っている。凍結中も**誤爆の記録は続ける**方針なので、新しい誤爆はここへ 1 行で足し、
+逐語の詳細は commit message 側に書く。
+
 #### 3. 契約転写の乖離 — 散文と実装の一致
 
 困りごと: 基礎表 25 件中 5 件で最多タイ。宣言文・docstring・comment を書き直した側だけが
