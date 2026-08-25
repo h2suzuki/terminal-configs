@@ -709,17 +709,28 @@ Goal: codex の利用と各種レビューの要否を規定している記述�
 
 Exit Criteria:
 
-- [ ] 規定箇所の洗い出しと照合が終わった — 6 面 (管理 skill / 個人 skill / docs / 検問と CLI /
-  CLAUDE.md と todos / memory) を並列走査し、各面の抽出を別担当が該当行の再読で照合する構成で
-  起動済み。成果 = 矛盾表・統一文案 (file 行ごとの現行 → 変更後)・発注種別の定義案・
-  緩めない箇所の名指し
-- [ ] 「codex に発注すべき実装の種類」を**判定可能な条件**として定義した (主観語を使わない)
+- [x] 規定箇所の洗い出しと照合が終わった — **完了 2026-08-25**: 6 面 (管理 skill / 個人 skill /
+  docs / 検問と CLI / CLAUDE.md と todos / memory) を並列走査し、各面の抽出を別担当が該当行の
+  再読で照合した (agent 12 本)。**照合済み 120 件 / 却下 4 件**。成果物 =
+  `drafts/codex-usage-unification.md` (374 行) に矛盾表・統一文案・発注クラス定義案・
+  緩めない箇所の名指し・作業順序を収めた。矛盾は 3 系統 20 組 — 実装の委譲先 8 組 /
+  敵対レビューの要否 5 組 / レビュー担当モデル 7 組
+- [ ] 「codex に発注すべき実装の種類」を**判定可能な条件**として定義した (主観語を使わない) —
+  **草案あり・ユーザー未承認**: D1 反復置換 (同種の編集が 3 file 以上・対象を事前列挙可) /
+  D2 決定的 gate 検証 (受入基準が command と exit code だけで書き切れ目視判定を含まない) /
+  D3 長時間並走 (単一 turn を跨ぐため background 起動が要る) / D4 隔離必須 (write を伴い
+  linked worktree で gates が通る) / D5 正しさクリティカル (golden 突合・並行性・migration・
+  auth・data-loss・race・rollback のいずれかに触れる)。1 つでも yes なら codex 発注が既定、
+  全部 no なら Claude が直接書く (degrade でなく既定)。判定に要る観測値は 5 つだけで
+  「複雑」「大規模」等の主観語は 1 語も使っていない
 - [ ] ケース 1 が完走した — 適用の前提
 - [ ] 統一文案を各 file へ反映し、`files/` と配備先の一致まで確認した
 - [ ] **緩めない箇所を名指しで除外した** — companion 直接起動の禁止・監視規律 (job record 直読 +
   sentinel)・worktree 隔離・発注書規律は安全側の gate なので今回は変えない
 
-Work file: `docs/methodology-case-ledger.md` (適用時期の根拠と、ケース 1 が従う版の固定)
+Work file: `drafts/codex-usage-unification.md` (矛盾表・統一文案・発注クラス定義案の正本。
+`drafts/` は gitignore なので git からは復元できない)、
+`docs/methodology-case-ledger.md` (適用時期の根拠と、ケース 1 が従う版の固定)
 
 ## Medium
 
