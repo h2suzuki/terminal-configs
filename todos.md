@@ -794,15 +794,27 @@ Goal: 品質ゲート (回帰 filter・全数列挙・lint) で「捕まえる�
 
 Exit Criteria:
 
-- [ ] 本日の注入 corpus (fix round 4/4 注入・filter 捕獲 22 件・r81 の 2 件) を起源 class 別に
-  集計し、「gate で捕まえた」と「そもそも入らなかった」を分離した基礎表を作る
+- [x] 注入 corpus を起源 class 別に集計し、「gate で捕まえた」と「そもそも入らなかった」を
+  分離した基礎表を作る — **達成 2026-08-25**: `docs/injection-corpus-baseline.md`。
+  起票時は「本日の corpus (fix round 4/4・filter 捕獲 22 件・r81 の 2 件)」と書いていたが、
+  救出した報告書 11 通の全数へ対象を広げた (集計は巡の題名・`VERDICT:` 行・所見見出し・
+  発注書の `## 修正方式` 節・`*-gates.log` 9 通から機械的に取得)。
+  **実測**: 11 巡・新規注入 25 件。捕獲は 6 巡 25 件すべてが**回帰 filter** で、
+  **決定的 gates の捕獲は 0 件** (log の非ゼロ exit 4 件はいずれも red 相か既知の型検査)。
+  注入ゼロは 5 巡。起源 class は 対 site の片側 5 / 契約転写の乖離 5 / 到達性の変化 4 /
+  test の共犯化 4 / failure-mode 不足 4 で、上位 5 class に 22/25 (88%)。
+  §7.3 の r54–r76 era 12 件と比べ**転写の乖離が 1 → 5 に増えて 2 位**、境界条件の未掃引は
+  4 → 1 に低下。**仮説**: 注入ゼロの fix 巡は `既存集約` を 1 件も含まず、
+  `既存集約` を含む fix 巡は 5 巡とも注入している (8/3/2/7/1)。巡単位の集計ゆえ断定は
+  できず、次の計測 = 注入 25 件の hunk 遡及で所見単位へ落とす
 - [ ] 発生率を下げる候補方策 (例: 変更粒度の縮小・対 site の同時変更を強制する発注書式・
   実装前の contract 差分宣言・delta 専用の設計 review 等) を候補ごとに期待効果と実測根拠
   つきで列挙し、ユーザーへ提案する
 - [ ] 採用された方策を方法論 doc / lint / 発注書 template へ正本化し、次の改造案件で
   発生率を再実測する
 
-Work file: `docs/adversarial-review-methodology.md` §7.3 (現行の注入対策の正本)、
+Work file: `docs/injection-corpus-baseline.md` (基礎表の正本)、
+`docs/adversarial-review-methodology.md` §7.3 (現行の注入対策の正本)、
 `drafts/ruling61/` と `drafts/gates/` の回帰レビュー報告書群 (注入 corpus。
 どちらも worktree 内にあったものの救出先 — `drafts/` は gitignore で git 管理外のため、
 worktree を撤去すると復元できない。ruling61 は 2026-08-24、gates は 2026-08-25 に救出)
