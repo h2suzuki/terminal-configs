@@ -13,6 +13,27 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 
 ## High
 
+### 敵対的レビュー loop の出口 — メタ評価の決裁と実施
+
+起票: fable-5 2026-08-26 (ユーザー依頼「transcript を解析しメタ評価を行い、正しい方向を模索せよ」
+から派生。評価本体は `docs/adversarial-loop-meta-evaluation.md`、第三者意見書は
+`drafts/loop-exit-opinion-order-report.md`)
+
+Goal: 「指摘を直すたびに欠陥を作り込み、総合品質が上がらない」loop を、停止条件と artifact の
+大きさを変えることで終わらせる。規則・巡数を足す選択肢は最初から持たない。
+
+Exit Criteria:
+
+- [ ] ユーザーが評価文書 §5.2 の決裁をした — sentinel を凍結 (既定) か、3 部品 200〜370 行へ
+  小さく書き直すか。書き直すなら §5.1 の protocol (最大 3 巡・発注側の受け入れ test + 4 変異) で
+- [ ] ab_probe を廃棄した — `wt-abprobe` worktree と branch を削除し、Medium「改造時のバグ
+  作り込み」block の「機械検査 3 案の実装」から 2 番目を外した
+- [ ] 方法論 doc を §5.3 の 1 ページ版に置換し、台帳 3 本 (`docs/methodology-case-ledger.md` /
+  `docs/sentinel-review-analysis.md` / `docs/sentinel-convergence-log.md`) に凍結・追記禁止を
+  注記した
+- [ ] 次の小さな実案件 1 件を §5.1 で回し、§5.6 の指標 (4 変異の生存 0/4・3 巡以内に出荷・
+  2 週間 P0 0) で判定した。外れたら loop approach を捨てる
+
 ### 検索コマンドの誤 deny の解消 (branch 凍結済み・受け入れ未了)
 
 起票: user 2026-08-23 (「これは対策が打てるなら、打ってよいよ」「検出器のぶっこわれは、今なおします」)
@@ -800,7 +821,10 @@ Exit Criteria:
 - [ ] **どの方策を採るかをユーザーが決める** — 提案は `docs/injection-prevention-proposal.md`。
   7 つのうち「受け入れを変異の生存数で書く」は検出の方策で、しかも**変異器を発注側が用意
   しないと壊れる** (巡 7 で実装者の機械列挙が行を取りこぼし、生存 0 という報告が誤りだった)。
-  「既存集約を避ける」は相関のみで hunk 遡及が要る
+  「既存集約を避ける」は相関のみで hunk 遡及が要る。
+  メタ評価 (`docs/adversarial-loop-meta-evaluation.md` §5.4) の推奨: 契約コード化 (入口限定) /
+  削除第一 / 変異生存数 (発注側所有) を採り、他 4 つは捨てる。High「敵対的レビュー loop の
+  出口」block の決裁と同時に決める
 - [ ] 採用された方策を方法論 doc / lint / 発注書 template へ正本化し、次の改造案件で
   発生率を再実測する
 - [ ] **注入 25 件の hunk 遡及** — 各注入を、それを生んだ fix 所見とその宣言方式に結び付ける。
@@ -812,7 +836,8 @@ Exit Criteria:
   漏れて byte 同一でも差分が出る / 配備先で `--selftest` が必ず失敗する (gitignore 下の契約
   module を import) / 対象 dir が read-only だと動かない / 異常終了で実行可能な copy が
   working tree に残る / 「差分あり」と言いながら diff 本体が 0 行の経路。
-  work file = `wt-abprobe/` (branch `wt-abprobe`・`drafts/` は gitignore で復元不能)
+  work file = `wt-abprobe/` (branch `wt-abprobe`・`drafts/` は gitignore で復元不能)。
+  **メタ評価と第三者意見書はともに廃棄を推奨** (High「敵対的レビュー loop の出口」block)
 - [ ] **敵対的レビューの位置づけのずれを揃える** — 役割分担 skill は「codex の敵対レビューは
   高リスク変更のときに追加」と条件付きで書き、方法論 §7.3 は毎巡前提で書いている。
   緩和方針 (2026-08-25 決裁) に合わせてどちらかへ揃える。適用は「codex 利用規定の統一」
@@ -839,7 +864,10 @@ Exit Criteria:
   **新ツールの敵対レビューは規模にもよるが最大 5 巡以内で収束する方針**が要件。
   **ケース選定は合意済み 2026-08-25**: ケース 1 = `claude_ab_probe` (改造前後で判定が変わった
   入力を列挙する CLI・新規作成・500 行上限・完了条件が機械で測れる)。台帳は
-  `docs/methodology-case-ledger.md`。**残る合意項目 = material 残ゼロの定義・token 量**の 2 つ
+  `docs/methodology-case-ledger.md`。**残る合意項目 = material 残ゼロの定義・token 量**の 2 つ。
+  **ケース 1 の結果 (7 巡・非収束・巡 7 で指摘倍増) のメタ評価 = `docs/adversarial-loop-meta-
+  evaluation.md`**。方法論そのものを 1 ページへ縮約する提案を含むため、本 block の続行は
+  High「敵対的レビュー loop の出口」block の決裁後に判断する
 - [ ] 各ケースの台帳 (由来列つき) を docs/ に記録し、結果を方法論 doc へ反映する。反映必須の
   教訓 (2026-08-21 ユーザー指摘で確定):
   (1) **主因 class の機構的排除は当該 class を止めるが、loop を収束させない** — 敵対 reviewer は
