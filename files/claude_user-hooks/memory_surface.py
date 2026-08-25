@@ -638,7 +638,7 @@ def _warn_degraded(reason: str) -> None:
         pass
     sys.stderr.write(
         f"memory-surface: {reason}; falling back to BM25 only, so hybrid scores and "
-        f"the muted-memory floor no longer hold. Rebuild with claude_memory_rag_builder.\n"
+        f"the muted-memory floor no longer hold. Rebuild with claude_rag_memory_builder.\n"
     )
 
 

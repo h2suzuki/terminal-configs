@@ -100,7 +100,7 @@ run install --mode 0755 --directory ~/.claude/hooks/state
 MEMORY_REPO=/var/lib/claude-rag-memory/claude-lessons-learned
 MEMORY_ROOT="$(dirname "$MEMORY_REPO")"
 command -v flock >/dev/null 2>&1 || { echo "flock not found"; exit 1; }
-# The base installer (claude_memory_rag_builder) owns this dir; the lock fd below needs it
+# The base installer (claude_rag_memory_builder) owns this dir; the lock fd below needs it
 if [ ! -d "$MEMORY_ROOT" ] || [ ! -r "$MEMORY_ROOT" ]; then
     echo -e "${COLOR_RED}$MEMORY_ROOT missing or unreadable — run the base installer first${COLOR_CLEAR}" >&2
     exit 1

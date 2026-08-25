@@ -337,7 +337,7 @@ copy nodejs_clean_installer         /usr/local/bin/nodejs_clean_installer
 copy setup_user_environment         /usr/local/bin/setup_user_environment
 copy install_claude_extensions      /usr/local/bin/install_claude_extensions
 copy claude_user_settings           /usr/local/bin/claude_user_settings
-copy claude_memory_rag_builder      /usr/local/bin/claude_memory_rag_builder
+copy claude_rag_memory_builder      /usr/local/bin/claude_rag_memory_builder
 copy claude_memory_sync             /usr/local/bin/claude_memory_sync
 copy claude_memory_surface_analyzer /usr/local/bin/claude_memory_surface_analyzer
 copy toolbox_bigquery_mcp           /usr/local/bin/toolbox_bigquery_mcp
@@ -348,11 +348,11 @@ copy codex_task_sentinel            /usr/local/bin/codex_task_sentinel
 copy codex_order_lint               /usr/local/bin/codex_order_lint
 copy codex_broker_reap              /usr/local/bin/codex_broker_reap
 
-# Remove the pre-rename command so an upgraded host keeps one implementation
-run rm -f /usr/local/bin/claude_codex_watch
+# Remove the pre-rename commands so an upgraded host keeps one implementation
+run rm -f /usr/local/bin/claude_codex_watch /usr/local/bin/claude_memory_rag_builder
 
 # Initialize our RAG memory
-run claude_memory_rag_builder /var/lib/claude-rag-memory
+run claude_rag_memory_builder /var/lib/claude-rag-memory
 
 
 

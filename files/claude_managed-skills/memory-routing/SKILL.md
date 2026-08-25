@@ -216,7 +216,7 @@ clone に存在する全 scope (org / user / project) を wipe + 再 upsert す�
 
 ### Initial bootstrap
 
-新環境では installer (install_claude_extensions) が clone 作成と `claude_memory_sync --full` まで実行する。 hybrid 検索の embed model DB は base installer が deploy する単独 CLI `claude_memory_rag_builder` (stdlib-only) で構築する。 未構築でも hook は BM25 単独に fail-open する。
+新環境では installer (install_claude_extensions) が clone 作成と `claude_memory_sync --full` まで実行する。 hybrid 検索の embed model DB は base installer が deploy する単独 CLI `claude_rag_memory_builder` (stdlib-only) で構築する。 未構築でも hook は BM25 単独に fail-open する。
 
 ## Rules
 
