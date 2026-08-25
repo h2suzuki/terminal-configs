@@ -107,7 +107,7 @@ Goal: session 終了後も生き残り、削除済み worktree を掴んだま�
 回収対象 28 session・滞留プロセス 214 (cwd が削除済み)・約 3.9 GB RSS・最古は 2026-07-12 起動で
 42 日間生存。生存 38 本はすべて PPID=1 に再親付け。
 
-**本端末の確定実測 (2026-08-23・host で `drafts/codex-broker-reap.py` を実行)**:
+**本端末の確定実測 (2026-08-23・host で `files/codex_broker_reap` を実行)**:
 **生存 broker 7 本**。内訳 = **reap 5 / keep 2 / stale 114** (計 121 記録)、
 回収で解放 **158 MB** / 残す稼働分 114 MB。
 
@@ -131,7 +131,7 @@ Goal: session 終了後も生き残り、削除済み worktree を掴んだま�
 - **前回の `--apply` 自身が孤児を作った可能性がある**: 残骸削除は session dir の `rmdir` に
   失敗しても記録の削除まで進む順序だった (`rmdir` は空でなければ失敗する)。記録が先に消えると
   以後その置き場は辿れない
-- 対策として `codex-broker-reap.py` に**孤児走査**を追加した (`cxc-*` の置き場を直接 glob し、
+- 対策として `files/codex_broker_reap` に**孤児走査**を追加した (`cxc-*` の置き場を直接 glob し、
   記録が指していないものを列挙。prefix は `createBrokerSessionDir` の既定を実装で確認)。
   併せて走査先の既定を `$TMPDIR` のみ → **`/tmp` と `$TMPDIR` の両方**に修正
   (`$TMPDIR` だけ見ていたため sandbox では孤児 0 件と誤報していた)
@@ -247,7 +247,7 @@ Exit Criteria:
   reap (pid 生存だが対象ディレクトリ消滅 → session に SIGTERM → 残れば SIGKILL → state と
   session dir を削除) / stale (pid 既に死亡 → 残骸のみ削除)。依頼元の dry-run 実測で
   28 session / 約 3.9 GB を回収対象と判定し、対象が存命の 10 本は正しく keep した。
-  **実装・実測とも完了 2026-08-23**: `drafts/codex-broker-reap.py` (dry-run 既定・`--apply` で実行・
+  **実装・実測とも完了 2026-08-23**: `files/codex_broker_reap` (dry-run 既定・`--apply` で実行・
   `--state` で root 側も走査可)。判定は `broker.json` でなく実プロセスで行う — 対象 dir は
   broker 自身の argv の `--cwd` にしかなく、記録には入っていない。停止は
   「停止要求 (plugin と同一の改行区切り JSON `broker/shutdown`) → SIGTERM → SIGKILL」の順で、
