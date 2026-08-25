@@ -560,7 +560,7 @@ Exit Criteria:
   U0-5 (companion 名の文字列言及まで deny) と U0-7 (checkpoint の cwd scope) は
   live finding 1・2 と同根で独立収束。U1 2 件 (route provenance の信頼境界 /
   checkpoint の対象言語) は人間裁定待ち。**処置の決定はユーザー判断待ち**
-- [ ] **(g) codex の直接起動を禁止する — 強固に** (2026-08-21 ユーザー決裁 + 同日「強固に
+- [x] **(g) codex の直接起動を禁止する — 強固に** (2026-08-21 ユーザー決裁 + 同日「強固に
   おこなうべき」で強化) — codex_delegation_gate を「注意喚起」から「deny」へ:
   main agent の Bash からの companion 起動 (全 subcommand・`task-worker` 含む) は**一律 deny**。
   判定は先頭一致でなく command 文字列中の `codex-companion.mjs` の存在で行い、path 前置・
@@ -576,7 +576,12 @@ Exit Criteria:
   org CLAUDE.md への禁則追記の提案も同時に撤回 (常時 load 層はほぼ効かない実測に矛盾)。
   進捗 2026-08-21: fix round 6 で実装・受け入れ済み (wt-gates branch `1994751`・
   gate unittest 65・escape 残骸 0 site)。**deploy 完了 2026-08-22**
-  (codex_delegation_gate.py `diff -q` IDENTICAL 実測)。残 = 判定器 round 4 (任意) と live 実測
+  (codex_delegation_gate.py `diff -q` IDENTICAL 実測)。
+  **完了 2026-08-25 (ユーザー承認で close)**: live 実測が 2 件揃った — (i) 直接起動の deny を
+  2026-08-21T18:54:10Z に transcript で確認、(ii) 本日の実発注で同 gate の `[order-file]` 検査が
+  発火し、発注文に `.md` が 2 つあって発注書 path が曖昧な形を deny した (案内どおり
+  `--prompt-file` へ直して通過)。gate が配備先で生きていることを別々の検査で 2 度観測した。
+  判定器 round 4 は当初から任意
 - [x] **(i) 自作癖の抑制** (2026-08-21 ユーザー決裁: 「すぐ自分でコードを書こうとする。
   ジュニアエンジニアがよくやる悪癖」) — 2 層で: (1) tool-role-delegation skill の「trivial は
   直接編集可」境界を数値で明文化 (例: 単一 file・10 行以内・test 追加なし。超えたら委譲か、
@@ -589,13 +594,19 @@ Exit Criteria:
   従い、後継は Medium の「随伴エージェント待ち — モデル判定へ回す案件」block の項目 1 が
   引き継ぐ (困りごと 4 点と判定アイデアはそちらに移設済み)。
   よってこの criterion に残る作業は無い
-- [ ] **(h) codex-delegation skill と関連 memory entry を plugin-route 前提に改訂する** —
+- [x] **(h) codex-delegation skill と関連 memory entry を plugin-route 前提に改訂する** —
   現 skill は companion 直接起動の command 形を規定しており (launcher 不採用裁定 2026-08-13 の
   「直接起動へ一本化」)、これが直接起動 pattern を制度化していた。発注書規律・worktree 隔離・
   監視規律は rescue 経由でも維持する形で書き直す。(g) と同時に land しないと skill が gate 違反を
   指示し続ける。進捗 2026-08-21: canonical を全面改訂・commit 済み (companion 言及 16 site
   掃引・監視 = job record 直読・cancel = ユーザー起動へ)。**deploy 完了 2026-08-22**
-  (/etc の codex-delegation SKILL.md `diff -q` IDENTICAL 実測)
+  (/etc の codex-delegation SKILL.md `diff -q` IDENTICAL 実測)。
+  **完了 2026-08-25 (ユーザー承認で close)**: 残っていた「関連 memory entry」側を実測で確認 —
+  `feedback_codex_plugin_route_only.md` は既に plugin 経路前提で書かれており
+  (reminder 行が「既製 /codex:* 経路だけで実行せよ・node での companion 直接起動は禁止」)、
+  正規経路の節も rescue / setup skill とユーザー起動の command に分けて列挙している。
+  skill 側も本日 `files/claude_managed-skills/` ↔ `/etc/claude-code/skills/` の
+  `diff -rq` で差分ゼロを再実測済み
 - [ ] **判断待ちの Task 化を強制する hook family** — 型付き命名規約 (判断待ち Task は名前に
   `採否待ち|判断待ち|決裁待ち` を含める) を前提とする stop_checks family。
   「open Task 0 件」だけの検査は別件 Task 残存時に素通しするため不採用 (2026-08-21 ユーザー
@@ -722,8 +733,10 @@ Exit Criteria:
   完了済み)。**決着 2026-08-22**: 収束 2/2 成立 (r60 + r82 = ship・U0 ゼロ)・凍結 97743bd・
   main merge・deploy 一致まで完了 (経過の正本 = `docs/sentinel-convergence-log.md` 末尾)
 - [ ] ケース選定と成功基準をユーザーと合意する — round 上限はユーザー指定済み (2026-08-21):
-  **新ツールの敵対レビューは規模にもよるが最大 5 巡以内で収束する方針**が要件。残る合意項目 =
-  ケース選定・material 残ゼロの定義・token 量
+  **新ツールの敵対レビューは規模にもよるが最大 5 巡以内で収束する方針**が要件。
+  **ケース選定は合意済み 2026-08-25**: ケース 1 = `claude_ab_probe` (改造前後で判定が変わった
+  入力を列挙する CLI・新規作成・500 行上限・完了条件が機械で測れる)。台帳は
+  `docs/methodology-case-ledger.md`。**残る合意項目 = material 残ゼロの定義・token 量**の 2 つ
 - [ ] 各ケースの台帳 (由来列つき) を docs/ に記録し、結果を方法論 doc へ反映する。反映必須の
   教訓 (2026-08-21 ユーザー指摘で確定):
   (1) **主因 class の機構的排除は当該 class を止めるが、loop を収束させない** — 敵対 reviewer は
@@ -759,7 +772,8 @@ Exit Criteria:
   利用可能だった) / 在庫掃引 = 全体 round (round 1 と構造変更後のみ) に分離する。分離は由来推定
   (fix 由来 vs 在庫) を構造的に自動化し、52% 自己交絡の再発を防ぐ
 
-Work file: `docs/adversarial-review-methodology.md` (§6 チェックリストを各ケースの入場 gate に使う)
+Work file: `docs/methodology-case-ledger.md` (ケース台帳の正本)、
+`docs/adversarial-review-methodology.md` (§6 チェックリストを各ケースの入場 gate に使う)
 
 ### 随伴エージェント待ち — モデル判定へ回す案件 (凍結)
 
