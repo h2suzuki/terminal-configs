@@ -19,6 +19,26 @@
 | 指摘の由来から「仕様側の欠落」が半分以下に | **外れ** — 高 1 件と中 1 件が発注側の契約由来 |
 | 変異生存数が単調減少 | **測定自体が信用できなかった** (下記) |
 
+### 巡 7 の全体 round — findings 8。巡 6 の 5 件より**増えた**
+
+| 巡 | diff round | 全体 round | 合計 |
+|---|---|---|---|
+| 6 | 2 | 5 | **7** |
+| 7 | 6 | 8 | **14** |
+
+**倍に増えた。** 内訳には巡 7 が新設した構造に由来するものと、5 巡以上生き延びていた在庫の
+両方が含まれる。とくに重いもの:
+
+- **ELF binary を target にすると、byte 同一 revision で false DIFF**。base は絶対 temp path、
+  target は相対 path で argv[0] が渡るため、argv[0] の長さや dirname を使う target が差分になる。
+  shebang script では kernel が argv[0] を置き換えるため露見せず、binary でのみ出る
+- **`--repo` に subdirectory を渡すと、別々の 2 file を比較して verdict を出す**。
+  `validate_target` は `--repo` 基準、`git show` は repository root 基準で解決するため
+- **corpus の file 名に改行があると、報告行数と件数表示が食い違う** (`DIFF` 行 5 に対し
+  `2 difference(s)`)。警告行の偽造も同様に可能
+- **宣言域内の `--timeout 2147484` が uncaught 例外で exit 1** — 「差分あり」と同じ exit code
+  になり、呼び手が区別できない
+
 ### 反証の中身
 
 **(1) 契約で直した欠陥が、別の場所で同じ形に再発した**。基準版の乱数を「親 directory 名」から
