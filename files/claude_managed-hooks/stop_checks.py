@@ -1645,6 +1645,39 @@ def _handoff_docs_awaiting_marker(
 WORK_FILE_RE = re.compile(r"^Work file:\s*(.*)$")
 # 見出し名でなく参照で判定する — 名前一致は todos block の改名だけで誤検出に変わる。
 PATH_TOKEN_RE = re.compile(r"`([^`\s]+\.[A-Za-z0-9]{1,5})`")
+# doc 本文の token は「path らしさ」で絞る — URL / mail / glob / placeholder を除く。
+_NON_PATH_CHARS = "*?[]<>@"
+_HEADING_RE = re.compile(r"^#{1,6}\s")
+
+
+def _looks_like_path(token: str) -> bool:
+    return not token.startswith("/") and not any(c in token for c in _NON_PATH_CHARS)
+
+
+def _required_reading_tokens(text: str) -> set[str]:
+    """`### 必読` 節の token だけを実在検査の対象にする (SKILL.md が Read 推奨 file と定義する唯一の節)。"""
+    tokens: set[str] = set()
+    inside = False
+    for line in text.splitlines():
+        if _HEADING_RE.match(line):
+            inside = line.startswith("### ") and line[4:].lstrip().startswith("必読")
+        elif inside:
+            tokens.update(PATH_TOKEN_RE.findall(line))
+    return tokens
+
+
+def _tracked_basenames(cwd: str) -> set[str]:
+    """git 管理下 file の basename 索引。 root 直下に無い参照を救う。"""
+    try:
+        out = subprocess.run(
+            ["git", "-C", cwd, "ls-files", "-z"],
+            capture_output=True,
+            timeout=5,
+            check=True,
+        ).stdout.decode("utf-8", "replace")
+    except Exception:
+        return set()
+    return {os.path.basename(p) for p in out.split("\0") if p}
 
 
 def _read_text(path: str) -> str | None:
@@ -1672,6 +1705,7 @@ def _handoff_todos_sync_warnings(cwd: str) -> list[str]:
             for token in PATH_TOKEN_RE.findall(m.group(1))
         }
         warnings: list[str] = []
+        basenames: set[str] | None = None
         for doc in docs:
             name = os.path.basename(doc)
             if name not in tracked:
@@ -1681,10 +1715,18 @@ def _handoff_todos_sync_warnings(cwd: str) -> list[str]:
                     "対応 block の Work file にこの doc を書いてください。"
                 )
                 continue
+            unresolved = {
+                token
+                for token in _required_reading_tokens(_read_text(doc) or "")
+                if _looks_like_path(token)
+                and not os.path.exists(os.path.join(cwd, token))
+            }
+            if unresolved and basenames is None:
+                basenames = _tracked_basenames(cwd)  # 索引は cwd 単位で不変。
             missing = sorted(
                 token
-                for token in set(PATH_TOKEN_RE.findall(_read_text(doc) or ""))
-                if not os.path.exists(os.path.join(cwd, token))
+                for token in unresolved
+                if os.path.basename(token) not in (basenames or ())
             )
             if missing:
                 warnings.append(
@@ -3898,6 +3940,16 @@ class HandoffTodosSyncTest(unittest.TestCase):
                 fh.write(text)
         return root
 
+    def _tracked_repo(self, todos, handoff, paths):
+        root = self._repo(todos, handoff)
+        for rel in paths:
+            os.makedirs(os.path.dirname(os.path.join(root, rel)), exist_ok=True)
+            with open(os.path.join(root, rel), "w", encoding="utf-8") as fh:
+                fh.write("本文\n")
+        for args in (["init", "-q"], ["add", "-A"]):
+            subprocess.run(["git", "-C", root, *args], check=True, capture_output=True)
+        return root
+
     def test_tracked_doc_with_live_references_is_silent(self):
         root = self._repo(
             self.TRACKED, "## 作業 A\n\n### 必読\n- `spec.md`\n", extra=("spec.md",)
@@ -3922,6 +3974,64 @@ class HandoffTodosSyncTest(unittest.TestCase):
 
         self.assertEqual(len(warnings), 1)
         self.assertIn("SKILL-HOOK.md", warnings[0])
+
+    def test_reference_outside_required_reading_is_ignored(self):
+        """SKILL.md section schema 上、 Read 推奨 file を並べる節は `### 必読` だけ。"""
+        root = self._repo(self.TRACKED, "## 作業 A\n\n### Caveat\n- `gone.md` が罠\n")
+        self.assertEqual(_handoff_todos_sync_warnings(root), [])
+
+    def test_non_path_shapes_are_ignored(self):
+        """URL / mail / glob / placeholder / 絶対 path は path でない (末尾 `.io` `.com` が match していた)。"""
+        body = "## 作業 A\n\n### 必読\n- `/socket.io` `dev@sparrow.com` `drafts/*.md` `<slug>.md`\n"
+        self.assertEqual(
+            _handoff_todos_sync_warnings(self._repo(self.TRACKED, body)), []
+        )
+
+    def test_heading_closes_required_reading_section(self):
+        """必読 節は次の見出しで閉じる — 閉じ損ねると後続節の prose token を実在検査にかける。"""
+        body = "## 作業 A\n\n### 必読\n- `spec.md`\n\n# 付録\n\n- `gone.md` は未作成\n"
+        root = self._repo(self.TRACKED, body, extra=("spec.md",))
+        self.assertEqual(_handoff_todos_sync_warnings(root), [])
+
+    def test_reference_resolved_in_subdirectory_is_silent(self):
+        """root 直下に無くても git 管理下に実在すれば不在ではない。"""
+        root = self._tracked_repo(
+            self.TRACKED,
+            "## 作業 A\n\n### 必読\n- `RunAll.sh`\n",
+            ("scripts/RunAll.sh",),
+        )
+        self.assertEqual(_handoff_todos_sync_warnings(root), [])
+
+    def test_git_index_is_skipped_when_references_resolve(self):
+        """root 直下で解決する限り git を spawn しない — Stop hook は毎 turn 走る。"""
+        from unittest import mock
+
+        root = self._repo(
+            self.TRACKED, "## 作業 A\n\n### 必読\n- `spec.md`\n", extra=("spec.md",)
+        )
+        with mock.patch(f"{__name__}._tracked_basenames") as index:
+            self.assertEqual(_handoff_todos_sync_warnings(root), [])
+        index.assert_not_called()
+
+    def test_git_index_is_consulted_once_across_docs(self):
+        """doc 数だけ git を spawn しない (索引は cwd 単位で不変)。"""
+        from unittest import mock
+
+        root = self._repo(
+            self.TRACKED + "\n### 作業 B\n\nWork file: `b-handoff.md`\n",
+            "## 作業 A\n\n### 必読\n- `gone.md`\n",
+        )
+        os.makedirs(os.path.join(root, "drafts"))
+        with open(
+            os.path.join(root, "drafts", "b-handoff.md"), "w", encoding="utf-8"
+        ) as fh:
+            fh.write("## 作業 B\n\n### 必読\n- `gone.md`\n")
+
+        with mock.patch(f"{__name__}._tracked_basenames", return_value=set()) as index:
+            warnings = _handoff_todos_sync_warnings(root)
+
+        self.assertEqual(len(warnings), 2)
+        index.assert_called_once()
 
     def test_renaming_a_task_block_does_not_warn(self):
         """名前一致をやめた核心 — 見出しを改名しても参照が生きていれば黙る。"""
