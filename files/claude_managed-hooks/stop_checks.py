@@ -1198,7 +1198,10 @@ def strip_fences(text: str) -> str:
 
 
 SELF_NUMBER_RE = re.compile(r"(?:候補|案|選択肢|パターン)\s?[0-9]")
-EMOJI_START_RE = re.compile(r"[☀-➿\U0001f1e6-\U0001f1ff\U0001f300-\U0001faff]")
+# ☀ (U+2600) 起点だと U+2300 台の ⌛ ⏰ ⏳ ⏸ が漏れるので、 該当 range を個別に足す。
+EMOJI_START_RE = re.compile(
+    r"[⌚⌛⏩-⏳⏸-⏺☀-➿\U0001f1e6-\U0001f1ff\U0001f300-\U0001faff]"
+)
 
 
 def _strip_code_and_quotes(text: str) -> str:
@@ -3468,6 +3471,17 @@ class CommunicationLintWarningTest(unittest.TestCase):
                     any(
                         "communication-final-line" in item
                         for item in _communication_lint_warnings(text)
+                    )
+                )
+
+    def test_low_block_emoji_start_is_accepted(self):
+        """U+2300 台の絵文字は ☀ (U+2600) 起点の範囲から丸ごと漏れていた。"""
+        for final in ("⏳ 待機中", "⏸️ 保留", "⌛ 計測中", "⏰ 期限"):
+            with self.subTest(final=final):
+                self.assertFalse(
+                    any(
+                        "communication-final-line" in item
+                        for item in _communication_lint_warnings(final)
                     )
                 )
 
