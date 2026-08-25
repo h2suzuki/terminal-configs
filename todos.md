@@ -524,8 +524,8 @@ Exit Criteria:
   **判定器 round 3 (2026-08-21・base main) = needs-attention 5 件**: critical 1 (承認ファイル
   touch/ln 偽造 → 廃止可否のユーザー裁定待ち) + 独立 4 件 (並び順 bypass / lint 故障
   fail-open / blocked turn で warning 消失 / undercount 無言)。verdict 全文は
-  `wt-gates/drafts/review-gates-verdict-3.md` へ verbatim 保存 (job log prune 対策)。
-  fix round 9 発注書 = `wt-gates/drafts/review-gates-fixes-9.md` (独立 4 件 +
+  `drafts/gates/review-gates-verdict-3.md` へ verbatim 保存 (job log prune 対策)。
+  fix round 9 発注書 = `drafts/gates/review-gates-fixes-9.md` (独立 4 件 +
   方向 2 防止機構の lint 4 検査 + 承認機構削除・lint rc=0)。
   **決裁 2026-08-22: 承認ファイル方式は廃止** — ユーザー基準「ユーザー提示のユースケースに
   由来しない機能は廃止」に該当 (出自は解除経路の実装選択・使用実績ゼロ・ユーザーは host 権限で
@@ -538,8 +538,8 @@ Exit Criteria:
   prompt 混入 / **元の判定器指摘 (option 前置) 自体が companion 実装と不一致という前提誤りの
   検出** / FIX_METHOD_RE の片側未拡張 / warning 配達が実質未達 + test が現状固定 / 表層 2 件。
   → loopback fix round 10 を 2 方向分析つき発注書 (deployed lint rc=0) で発注済み
-  (`wt-gates/drafts/review-gates-fixes-10.md`・回帰 filter 全文 =
-  `wt-gates/drafts/review-gates-fixes-9-regression-review.md`)。防止機構「上流指摘の断定は
+  (`drafts/gates/review-gates-fixes-10.md`・回帰 filter 全文 =
+  `drafts/gates/review-gates-fixes-9-regression-review.md`)。防止機構「上流指摘の断定は
   一次ソース照合」を方法論 §7.2 へ正本化 commit 済み。新 lint 4 検査は sentinel loopback
   発注書で初実戦し依存閉包棚卸し節の欠落を正しく検出 (機能確認 1 例)。
   **fix round 10 納品** → 決定的 gates 全緑 (発注側再実行) → **filter round 2 = 前巡 8 件中
@@ -547,14 +547,14 @@ Exit Criteria:
   passthrough 全捨ての振り子 (companion は `--` 以降を prompt 連結 = 検査の穴) / 偽 comment・
   stale docstring / subTest 外 assert。同段不通過 2 回目 → 構造再審 =「gate の CLI model は
   companion の写し」原則を明記し fix round 11 発注済み
-  (`wt-gates/drafts/review-gates-fixes-11.md`・両 lint rc=0・filter round 2 報告 =
-  `wt-gates/drafts/review-gates-fixes-10-regression-review.md`)。
+  (`drafts/gates/review-gates-fixes-11.md`・両 lint rc=0・filter round 2 報告 =
+  `drafts/gates/review-gates-fixes-10-regression-review.md`)。
   **fix round 11 納品 → 決定的 gates 全緑 → filter round 3 = 前巡 4 件全解消・新規 low 2 件**
   (D: round 11 の funnel 補強枝が production 到達不能 — 前巡「指摘 7 残余」自体が mock 由来の
   誤測と判明・filter が実路検証で自己訂正 / E: comment の latch 極性反転)。指摘推移
   8 → 4 → 2 で収束中と判断し、fix round 12 (到達不能枝の削除 + matrix 実路化 + comment 訂正)
-  を発注済み (`wt-gates/drafts/review-gates-fixes-12.md`・両 lint rc=0・filter round 3 報告 =
-  `wt-gates/drafts/review-gates-fixes-11-regression-review.md`)。
+  を発注済み (`drafts/gates/review-gates-fixes-12.md`・両 lint rc=0・filter round 3 報告 =
+  `drafts/gates/review-gates-fixes-11-regression-review.md`)。
   **fix round 12 納品 → 決定的 gates 全緑 → filter round 4 = VERDICT: pass (2026-08-22)** —
   推移 8 → 4 → 2 → 0 で**検問 line も回帰 filter 通過**。production mutation 7 種で matrix の
   非 vacuous 性まで確認。**凍結 commit `0a0dc2e`** (`gates: Harden lint checks and warning
@@ -658,9 +658,9 @@ Exit Criteria:
   例外を設けるか一本化のままかは判断待ち。例外を作る場合、判定は plugin の起動形でなく
   「そのターンにユーザーの slash 起動があるか」で書く (上流の実装形に縛らない)
 - [ ] **検問実装への挑戦レビュー (発注書方式・2026-08-22 ユーザー承認)** — 発注書
-  `wt-gates/drafts/gates-challenge-review-order.md` (lint rc=0)・対象 = 検問 line 全 diff
+  `drafts/gates/gates-challenge-review-order.md` (lint rc=0)・対象 = 検問 line 全 diff
   (3 file・+2210/−173)。**verdict 受領 2026-08-22 = needs-attention・U0 8 / U1 2 / U2 0**
-  (報告書 `wt-gates/drafts/gates-challenge-report.md`・検証 190+37 test 全緑を含む)。
+  (報告書 `drafts/gates/gates-challenge-report.md`・検証 190+37 test 全緑を含む)。
   high 3 件: U0-1 warning が active retry で再配達され続け実質 loop (live の
   警告なぎ倒し現象と一致) / U0-2 fix round 番号が directory 全体 namespace で独立案件と
   衝突 / U0-3 shell redirect・`--` 境界の argv 解釈が gate と companion で不一致。
@@ -723,7 +723,7 @@ Exit Criteria:
   無駄 / 浪費 / もったいない が含まれる turn に、memory-routing での記録検討を促す
   warn。無駄の実例が entry 化されずに流れる class の防止。**2026-08-22 ユーザー指示で着手**
   — 実装先は UserPromptSubmit でなく Stop family とし (同 turn の memory Write との
-  pairing を既存機構で行うため)、発注書 `wt-gates/drafts/warn-family-order.md`
+  pairing を既存機構で行うため)、発注書 `drafts/gates/warn-family-order.md`
   (両 lint rc=0) で codex へ発注済み。次の 1 件と同一 round
 - [ ] **コミュニケーション規則の hook 強化 — CLAUDE.md は削らない** (2026-08-21 ユーザー決裁:
   「stop が効いている実感がまだ無い。hook 強化に倒して本当に守られるようになってから考える。
@@ -797,8 +797,9 @@ Exit Criteria:
   発生率を再実測する
 
 Work file: `docs/adversarial-review-methodology.md` §7.3 (現行の注入対策の正本)、
-`drafts/ruling61/` と `wt-gates/drafts/` の回帰レビュー報告書群 (注入 corpus。
-`drafts/ruling61/` は worktree 撤去 2026-08-24 の際に救出したもの)
+`drafts/ruling61/` と `drafts/gates/` の回帰レビュー報告書群 (注入 corpus。
+どちらも worktree 内にあったものの救出先 — `drafts/` は gitignore で git 管理外のため、
+worktree を撤去すると復元できない。ruling61 は 2026-08-24、gates は 2026-08-25 に救出)
 
 ### 方法論の実証: 小規模ツール新規作成で敵対レビューの収束を実測する
 
