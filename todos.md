@@ -728,13 +728,13 @@ Exit Criteria:
   緩めない箇所の名指し・作業順序を収めた。矛盾は 3 系統 20 組 — 実装の委譲先 8 組 /
   敵対レビューの要否 5 組 / レビュー担当モデル 7 組
 - [x] **置換対象を文言で特定した一覧を用意した** (受入れ準備の本体) — **完了 2026-08-25**:
-  `drafts/codex-usage-anchors.md`。統一案の「現行」引用 26 件を対象に、行番号を捨てて
+  `docs/codex-usage-anchors.md`。統一案の「現行」引用 26 件を対象に、行番号を捨てて
   **逐語 anchor で grep して 1 件だけ当たること**を実測した。**25/26 が一意に当たる**。
   残る 1 件は行跨ぎ (`todos.md:833` の「正しくは fix 検証 = diff round」) で、適用時に手で当てる。
   **統合レポート側の誤りも 2 種見つかった** — (i) file 帰属が 4 件ずれ (hook file の節に
   置かれていた 4 引用は実際は memory entry の文言)、(ii) 行番号が 1 件ずれ (117 → 119)。
   ゆえに適用は行番号でなく本表の anchor で当てる
-- [x] **緩めない箇所を名指しで除外した** — **完了 2026-08-25**: `drafts/codex-usage-donottouch.md`。
+- [x] **緩めない箇所を名指しで除外した** — **完了 2026-08-25**: `docs/codex-usage-donottouch.md`。
   7 分類・参照 38 件を列挙し、**各 file の実在を実測**した (未解決 1 件は別 project scope の
   entry で、§4-7 が最初から対象外と書いているもの)。分類 = 経路の gate / worktree 隔離 /
   監視規律 / 発注書規律 / 受け入れの証拠規律 / skill invoke の強制 / 緩和で壊れるもの。
@@ -750,7 +750,7 @@ Exit Criteria:
 D3 長時間並走 / D4 隔離必須 / D5 正しさクリティカル の 5 分類が起草された。全文は work file。
 **ユーザーの別議論が正本になるので、これは判断材料として残すだけ**
 
-Work file: `drafts/codex-usage-anchors.md` (置換対象の anchor 一覧・適用はこれで当てる)、
+Work file: `docs/codex-usage-anchors.md` (置換対象の anchor 一覧・適用はこれで当てる)、
 `drafts/codex-usage-unification.md` (矛盾表・統一文案・参考の発注クラス案。
 `drafts/` は gitignore なので git からは復元できない)、
 `docs/methodology-case-ledger.md` (適用時期の根拠と、ケース 1 が従う版の固定)
