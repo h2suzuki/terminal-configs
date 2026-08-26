@@ -304,34 +304,6 @@ Exit Criteria:
 
 Work file: `drafts/gates/` (発注書・verdict・回帰レビュー報告書)
 
-### codex 利用規定の統一 — 受入れ準備までが scope
-
-起票: user 2026-08-25 (「codex 敵対的レビューは『必ず』ではなくてよい。緩和する方向で統一」)。
-scope 限定: user 2026-08-25 (発注ポリシーは別途議論中、持ち込みは別 session)
-
-Goal: 外から持ち込まれる発注ポリシーを、正本 1 箇所の差し替えで反映できる状態にしておく。
-
-方針 (2026-08-25 決裁): リグレッションレビューは opus subagent (発注書のみ・effort 高・同族許容) /
-codex の敵対的レビューは指示時と高リスク時のみ / 実装は codex 固定でない。
-
-Exit Criteria:
-
-- [x] 規定箇所の洗い出しと照合が終わった — 6 面・120 件照合 (2026-08-25、
-  `drafts/codex-usage-unification.md`、矛盾 3 系統 20 組)
-- [x] 置換対象を文言で特定した一覧を用意した — `docs/codex-usage-anchors.md` (25/26 が一意に当たる)
-- [x] 緩めない箇所を名指しで除外した — `docs/codex-usage-donottouch.md` (7 分類 38 件)
-- [x] 発注ポリシーの持ち込み — `drafts/claude_code_codex_delegation_guide_ja.pdf` を精読し (2026-08-27)、
-  同日のユーザー決裁「A. pdf を受け入れる」「B. 推奨でよい」「C. 推奨でよい」(A = pdf の境界を採用、非委譲 =
-  Claude 直書きとは限らず opus / sonnet subagent を token・effort を抑えて使う / B = 回帰レビューは opus
-  subagent のまま、時期は milestone / C = transfer は Claude が適時提案し起動はユーザー、gate 不変。worktree
-  隔離は donottouch 優先) を正本 `docs/codex-delegation-policy.md` (199 行、`a116341`) に書いた
-- [x] 統一文案を各 file へ反映し、`files/` と配備先の一致まで確認した — 2026-08-27: skill 2 本 + surface hook
-  (`5c30436`、sonnet 3 視点レビューの転記漏れ 5 件を `a55b9b1` で修正)、後継 memory entry (clone `5bce428`)、
-  凍結 doc は対象外。配備先 3 file とも `diff -q` IDENTICAL を実測
-
-Work file: `last-session-handoff.md` (再開手順)、`drafts/claude_code_codex_delegation_guide_ja.pdf` (方針の正本)、`docs/codex-usage-anchors.md`、
-`docs/codex-usage-donottouch.md`、`drafts/codex-usage-unification.md` (矛盾表・統一文案・発注クラス案 D1〜D5)
-
 ## Medium
 
 ### 改造時のバグ作り込みを減らす方策の検討
