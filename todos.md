@@ -136,8 +136,9 @@ Exit Criteria:
   causal_claim_without_reading_source / per_tab_state_localstorage / external_pattern_vocab_annotation /
   lock_terms_be_decisive / report_unexpected_events / sandbox_dotfile_shadow)、user へ 1 件、退役 9 件 (古い reference 3 +
   chat_emoji + 陳腐化 1 + Managed 規則が覆う 4)。旧 path は全て `--retire` 済み・push 済み
-- [ ] worktree_order_gitignored_refs の実測 1 回 — worktree 内 session から codex task を起動し、worktree 外の絶対 path が
-  読めるかを試す。読めれば reminder を「絶対 path で参照」に書き換えて org へ、読めなければ P のまま
+- [x] worktree_order_gitignored_refs の実測 1 回 — 2026-08-27: `wt-delegation-gates` 内 session から発注した codex の
+  第一動作 probe が main checkout の `docs/codex-delegation-policy.md` (200 行) と `/tmp/…/scratchpad/replay_gates.py`
+  (91 行) を絶対 path で読めた → reminder を「絶対 path で参照」へ書き換えて org へ Write、旧 project entry を `--retire`
 
 Work file: `drafts/memory-scope-audit.md` (一次分類表)、`last-session-handoff.md` (再開手順)
 
