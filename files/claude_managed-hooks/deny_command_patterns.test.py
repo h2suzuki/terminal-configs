@@ -153,6 +153,8 @@ class GateTest(unittest.TestCase):
             "grep -n codex file.txt",
             "python3 files/codex_task_sentinel job-1",
             "node /x/other.mjs",
+            "P=/x; node $P/scripts/codex-companion.mjs status",
+            "cd /x && node build.js",
         ):
             self.allow(command)
 
