@@ -88,6 +88,26 @@ Exit Criteria:
 Work file: `last-session-handoff.md` (再開手順)、`~/.claude/hooks/memory_surface.py` (surface 方針の実装)、
 `/var/lib/claude-rag-memory/memory_index.sqlite3` の `inject_log` (emit / mismatch の実測)
 
+### memory surface の有効性 — 効く advise と効かない advise を実測で分ける
+
+起票: user 2026-08-26 (「大多数の advise memory が効かなかったとして、有効な memory もゼロなのでしょうか？」
+「効く advise 効かない advise のカテゴリーを知りたい」)
+
+Goal: surface された教訓が行動を変えた event を transcript 実測で数え、効く / 効かない advise の型を分けて、
+Stop 時 surface (2026-08-26 に削除) の扱いを根拠つきで決める。
+
+Exit Criteria:
+
+- [x] 実測した — 2026-08-27、全 transcript の surface 1,459 件から 508 件を opus 25 agent が判定・16 agent が反証:
+  生存 17 件 (11 entry、全て Stop 時)、prompt 時 0、対照比 順守 +20 pt (Stop 時)、定型文のみ fable-5 85% / opus-5 17%。
+  効いた型 = 直前の出力に今すぐ当てられる検査動作を 1 つ指定する reminder (T1 / T2 / T3 / T6)、効かない型 = 態度・文体・否定形
+- [ ] 報告を docs/ へ正本化した (`drafts/memory-surface-efficacy-2026-08-27.md` を document-editor 経由で移す)
+- [ ] Stop 時 surface の処遇をユーザーが決めた — (a) 削除のまま / (b) 効いた型に限り文言を「抵触するなら修正、しなければ
+  何も書かない」に変えて再導入 / (c) opus 限定で再導入
+- [ ] 決定を実装・配備した (削除のままなら本項目は閉じる)
+
+Work file: `drafts/memory-surface-efficacy-2026-08-27.md` (報告)、`drafts/corpus-tools/` (抽出・sampling・集計 script)
+
 ### memory entry の scope 再チェック
 
 起票: user 2026-08-26 (「project/ にあるものも、本当に project 依存か、ちょっと疑わしくなってきた」
