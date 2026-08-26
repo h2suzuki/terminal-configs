@@ -45,7 +45,8 @@ HANDOFF_RE = re.compile(
     r"(?:^|[\s。、「『(])handoff(?:\s*doc)?\s*(?:を)?\s*"
     r"(?:お願い|おねがい|よろしく|して|しといて|しよう|しましょう|します|する)"
     r"|^\s*handoff\s*[!！。.]*\s*$"
-    r"|セッション(終了|リセット|を?閉じ)|お疲れさま(でし)?(た)?|終わります|またね"
+    r"|(?<!前回)(?<!前回の)(?<!前の)セッション(終了|リセット|を?閉じ)(?!時)"
+    r"|お疲れさま(でし)?(た)?|終わります|またね"
     r"|sign\s?off|本日はこれで",
     re.IGNORECASE,
 )
@@ -650,7 +651,7 @@ class HandoffWriteIntentTest(unittest.TestCase):
 
 class HandoffPhraseTest(unittest.TestCase):
     """HANDOFF_RE: 終了示唆だけを拾い、 同語の別用途は拾わない。
-    出所: 2026-08-08 実機 — 「セッションを閉じます」が未収載で取りこぼした。"""
+    出所: 2026-08-08 実機 — 「セッションを閉じます」が未収載で取りこぼした。 2026-08-27 実機 — 「前回セッション終了時に」を終了示唆と誤検出。"""
 
     def test_wind_down_phrases_match(self):
         for text in (
@@ -670,6 +671,9 @@ class HandoffPhraseTest(unittest.TestCase):
     def test_closing_something_else_does_not_match(self):
         for text in (
             "この項目を閉じます",
+            "前回セッション終了時にエラーがでていた",
+            "前回のセッション終了でエラーが出た",
+            "セッション終了時に handoff を書く仕組み",
             "issue を閉じました",
             "次の実装をお願いします",
             # 2026-08-23 実機: doc 名と話題語での言及が終了示唆として拾われた。
