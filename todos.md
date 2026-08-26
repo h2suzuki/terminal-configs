@@ -112,7 +112,9 @@ Exit Criteria:
 - [ ] 実装 2 = Stop 時 surface の再導入: `check:` を持つ entry のみ、文言「抵触するなら修正してから完了。しなければ
   何も書かない」で surface する family を stop_checks 書き直しの契約に含める (旧文言の「確認せよ」は使わない)。
   あわせて entry に `when:` (prompt / stop / after-subagent) を設け、surface hook がそれで振り分ける (ユーザー提案 2026-08-27)
-- [ ] 既存 entry の移行: 効いた 11 entry に `check:` を書き、態度・文体だけの entry は `check:` を書かずに Stop 対象外とする
+- [x] 既存 entry の移行: 効いた 11 entry のうち現存 10 件 (org) に `check:` (44〜62 字の検査動作) と `when: prompt stop` を
+  書いた — 2026-08-27、gate 通過 10/10・clone commit 10 件・push 済み (to push 0 / to pull 0、index org 72)。態度・文体だけの
+  entry には書かない (Stop 対象外)
 
 Work file: `last-session-handoff.md` (再開手順)、`docs/memory-surface-efficacy.md` (報告の正本)、`drafts/corpus-tools/` (抽出・sampling・集計 script)
 
