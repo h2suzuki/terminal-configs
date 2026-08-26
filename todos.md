@@ -153,7 +153,8 @@ Exit Criteria:
 - [ ] stop_checks (2,431 行) を書き直し配備した — 契約に done_state_ledger の Stop block 化 (完了語 +
   commit / push / gate / E2E / merge の欠落で block) と「warn 系は当該 Stop の最終本文だけを走査」
   を含める (turn 全文走査の再警告自走と数量の序数誤検出は 2026-08-26 に hotfix 済み `58149c2`。
-  書き直し契約はこの 2 挙動を test で固定して引き継ぐ)
+  書き直し契約はこの 2 挙動を test で固定して引き継ぐ)。wind-down family に「起動した background task −
+  完了通知 ≠ 0 なら block」を足す (handoff lifecycle block から 2026-08-27 に転記)
 - [ ] skill_reminder_gate (1,073 行) と codex_order_lint (592 行) を書き直し配備した — order_lint は
   「機構追加」の字面で必須節を連鎖要求する判定 (2026-08-26 に 2 回誤発火) を落とし、fix 発注 3 巡目以降に
   `## 処置の種別` (閉じた選択肢) を必須にする gate を足す
@@ -241,8 +242,9 @@ Exit Criteria:
 - [x] 現存する stale file を処置した — `last-session-handoff.md` を削除 (2026-08-23、ユーザー承認)
 - [ ] background 作業の残処理を protocol に足す — 2026-08-27 ユーザー指摘「Background work is running と言われて終了を
   阻害されます。これは handoff protocol にチェックがもれている」(残っていたのは readback 完了待ちの Bash loop)。handoff
-  skill の Pre-handoff checks に「Agent / Workflow / Monitor / run_in_background の残りを完了通知で確かめ、残れば TaskStop」
-  を追加し、stop_checks の wind-down family に「起動した background task − 完了通知 ≠ 0 なら block」を契約 claim で足す
+  skill の Pre-handoff checks に step 4「Agent / Workflow / Monitor / run_in_background の残りを完了通知で確かめ、残れば
+  TaskStop」を追加 (2026-08-27 commit 済み、配備先 `diff -q` 待ち)。stop_checks 側の block 条件は「肥大化した hook と CLI」
+  block の stop_checks 項目へ契約 claim として転記済み
 
 Work file: なし (本 block で自己完結)
 
