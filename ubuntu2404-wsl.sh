@@ -377,6 +377,12 @@ run rm -f /usr/local/bin/claude_codex_watch /usr/local/bin/claude_memory_rag_bui
 # Initialize our RAG memory
 run claude_rag_memory_builder /var/lib/claude-rag-memory
 
+# Self-heal shared clone perms broken by root-run git ops (only root can chmod files of any owner)
+if [ -d /var/lib/claude-rag-memory/claude-lessons-learned/.git ]; then
+    run chmod -R a+rwX /var/lib/claude-rag-memory/claude-lessons-learned
+    run chmod 0755 /var/lib/claude-rag-memory/claude-lessons-learned
+fi
+
 
 
 echo -e "${COLOR_GREEN}"
