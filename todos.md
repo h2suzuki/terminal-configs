@@ -110,25 +110,6 @@ Exit Criteria:
 Work file: `last-session-handoff.md` (再開手順)、`docs/adversarial-review-methodology.md` (protocol)、
 `files/claude_managed-hooks/deny_command_patterns.test.py` (契約 test と変異器の実例)
 
-### 決裁記録の consent 検査 gate
-
-起票: user 2026-08-26 (「yes、(b) を実装して」)
-
-Goal: todos.md の決裁語 (決裁/承認/合意/採用) を含む新規段落に発話引用か未承認 marker を強制する
-検査を todos_structure_gate に追加し、配備・E2E まで完了する。
-
-Exit Criteria:
-
-- [x] 契約 C9/C10 + 変異 m5〜m8 を先に書き red 1 件を確認した — 契約 commit `b7ffd0e`
-- [x] codex 実装を受け入れた — +53/−1 行、契約 15/15・変異 0/8・ruff/ty pass (発注側で再実行)
-- [x] 独立レビュー 1 巡 — P0 0 件、実 todos.md で exit 0・敵対 probe 18 本 pass
-  (`drafts/consent-gate/review-1.md`、2026-08-26)
-- [x] main へ --no-ff merge・push した — `07af68a` (2026-08-26)、worktree・branch 撤去済み
-- [x] 配備と E2E — 2026-08-26 実測: 2 file とも diff -q IDENTICAL、引用なし決裁行の commit は
-  「consent」で deny (exit 2)、引用ありは allow、実 todos.md は pass (exit 0)
-
-Work file: `drafts/consent-gate/` (発注書・報告書・gate log・レビュー報告)
-
 ### 検索コマンドの誤 deny の解消
 
 起票: user 2026-08-23 (「これは対策が打てるなら、打ってよいよ」「検出器のぶっこわれは、今なおします」)
