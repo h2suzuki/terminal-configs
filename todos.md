@@ -92,11 +92,11 @@ Goal: 敵対レビューで膨らんだ 5 本を、契約 test で現行の deny
 
 Exit Criteria:
 
-- [ ] 着手順は合意済み (2026-08-26): codex_delegation_gate + codex_worktree_gate → stop_checks →
-  skill_reminder_gate → codex_order_lint。各 script の契約 test は実 corpus (transcript の Bash 全 command)
-  で deny / allow を固定し、固定 4 変異 → codex 実装 → 独立レビュー 1 巡の同 protocol で受け入れる
+- [x] 着手順と protocol を合意した (2026-08-26): codex_delegation_gate + codex_worktree_gate → stop_checks →
+  skill_reminder_gate → codex_order_lint。契約 test は command 文字列で決まる分岐を実 corpus で、状態依存の
+  分岐を合成 case で固定し、固定 4 変異 → codex 実装 → 独立レビュー 1 巡の同 protocol で受け入れる
 - [ ] codex_delegation_gate (production 1,038 行) と codex_worktree_gate (1,035 行) を書き直し配備した
-- [ ] stop_checks (2,484 行) を書き直し配備した — 契約に done_state_ledger の Stop block 化 (完了語 +
+- [ ] stop_checks (2,431 行) を書き直し配備した — 契約に done_state_ledger の Stop block 化 (完了語 +
   commit / push / gate / E2E / merge の欠落で block) を含める
 - [ ] skill_reminder_gate (1,073 行) と codex_order_lint (592 行) を書き直し配備した — order_lint は
   「機構追加」の字面で必須節を連鎖要求する判定 (2026-08-26 に 2 回誤発火) を落とす
