@@ -13,9 +13,9 @@ codegraph / codex が使える環境での役割分担 (managed CLAUDE.md「ツ�
 1. **検索は codegraph を優先**: コード探索は codegraph を Grep / Read より先に使う。
 2. **Claude が仕様・指示を書く**: 何を作るか・どう直すか・受入基準を Claude が明文化する。
 3. **委譲判定は境界で決める (既定は委譲しない)**: 2 file 以下かつ 50 行以下かつ 方針一意・検証 1 回・15 分以内 なら委譲しない。 3 file 以上、 100 行以上、 または edit-test-inspect 3 周以上で委譲を開始する。 その間は 6 軸 (能動工数・境界の明確さ・検証可能性・並列化価値・隔離性・文脈可搬性、 各 0–2 点) の合計 10 点以上で委譲する。 10 分未満・単純検索・単一コマンド・小修正は委譲しない。
-4. **委譲する時は `/codex:rescue <spec>`**: 定型で境界が狭い仕事は `--model gpt-5.6-luna` (Luna)、 曖昧・横断・高リスクは `--model gpt-5.6-sol` (Sol、 effort の上限は `xhigh`)。 長時間は `--background`、 進捗 `/codex:status`、 結果 `/codex:result`、 中断 `/codex:cancel`。 前回 run の継続は `--resume`、 仕切り直しは `--fresh`。 spec は Goal / Scope / Constraints / Done when / Return の 5 項目で書く。 5 項目に圧縮できず会話文脈の再掲が要る時は `/codex:transfer` をユーザーに提案する (Claude は起動できない)。
-5. **委譲しない時の担い手**: Claude が直接処理する。 subagent-gate の 4 条件のいずれかを満たす時だけ subagent を使い、 機械的で境界が明確な作業は sonnet、 設計判断・レビュー・裁定を含む作業は opus。 effort は既定を継承し、 review / judgment 層だけ上げる。
-6. **Claude がレビュー**: codex が返したコードを敵対的 / 受け入れレビューし、 バグ・仕様逸脱・副作用を検査する。 patch 反映も Claude が行う (実装でなくレビューの一部)。 回帰レビューは opus subagent (発注書のみ渡す・effort 高) を milestone (機能完成 / test 成功 / commit・PR 形成 / merge 前) で回し、 毎 edit 後には回さない。
+4. **委譲する時は `/codex:rescue <spec>`**: 定型で境界が狭い仕事は `--model gpt-5.6-luna` (Luna)、 曖昧・横断・高リスクは `--model gpt-5.6-sol` (Sol、 effort の上限は `xhigh`)。 長時間は `--background`、 進捗 `/codex:status`、 結果 `/codex:result`、 中断 `/codex:cancel`。 前回 run の継続は `--resume`、 仕切り直しは `--fresh`。 spec は Goal / Scope / Constraints / Done when / Return の 5 項目で書く。 5 項目に圧縮できず会話文脈の再掲が要る、 60 分超で 20–45 分の独立単位に分割できない、 `--fresh` の後も進展がない — のいずれかで `/codex:transfer` をユーザーに提案する (Claude は起動できない)。
+5. **委譲しない時の担い手**: Claude が直接処理する。 subagent-gate の 4 条件のいずれかを満たす時だけ subagent を使い、 機械的で境界が明確な作業は sonnet、 設計判断・レビュー・裁定を含む作業は opus。 effort は既定を継承し、 review / judgment 層だけ上げ、 機械的作業は下げる。
+6. **Claude がレビュー**: codex が返したコードを敵対的 / 受け入れレビューし、 バグ・仕様逸脱・副作用を検査する。 patch 反映も Claude が行う (実装でなくレビューの一部)。 回帰レビューは opus subagent (発注書のみ渡す・effort 高・実装と同族でよいが別 agent) を milestone (機能完成 / test 成功 / commit・PR 形成 / merge 前) で回し、 毎 edit 後には回さない。 実装・受け入れ・検証設計・認定を同一 agent が兼務しない (兼務は多巡 loop の再発条件)。
 7. **高リスク変更は cross-model 第二レビュー**: auth・認可・data-loss・migration・retry・idempotency・race・rollback・cache 整合性に触れる変更は規模不問で `/codex:adversarial-review` (Sol xhigh) を追加する。 ユーザー指示時も同様。 それ以外で codex の敵対レビューを既定にしない。
 
 ## Rules

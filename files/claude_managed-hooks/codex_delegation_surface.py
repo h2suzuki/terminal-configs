@@ -52,7 +52,8 @@ PRUNE_SECONDS = 24 * 3600
 DELEGATE_MSG = (
     "[codex-delegation] plan を終え実装に入ります。 tool-role-delegation: 既定は委譲しない — "
     "2 file 以下かつ 50 行以下かつ方針一意・検証 1 回・15 分以内は Claude が直接 (subagent-gate "
-    "の 4 条件を満たす時だけ subagent: 機械的 = sonnet / 判断・レビュー = opus)。 3 file 以上"
+    "の 4 条件を満たす時だけ subagent: 機械的 = sonnet で effort を下げ / 判断・レビュー = "
+    "opus で effort を上げる)。 3 file 以上"
     "または 100 行以上または edit-test-inspect 3 周以上は `/codex:rescue <spec>` へ委譲 — "
     "spec は Goal / Scope / Constraints / Done when / Return の 5 項目 (定型は --model "
     "gpt-5.6-luna、 曖昧・横断・高リスクは --model gpt-5.6-sol、 長時間は --background、 "

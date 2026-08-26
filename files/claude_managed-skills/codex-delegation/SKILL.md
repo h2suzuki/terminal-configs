@@ -1,7 +1,7 @@
 ---
 name: codex-delegation
 description: Lifecycle discipline for delegating implementation work to the Codex CLI plugin — ordering, isolated worktrees, launch registration, heartbeat-based stall detection, completion detection, review, and fix rounds.
-when_to_use: TRIGGER when about to delegate implementation to codex ("codex に発注" / "codex に委譲" / invoking a codex rescue command), when waiting for a running codex task, or when about to review / commit codex-generated changes. SKIP when codex plugin is unavailable or the change stays inside the no-delegation boundary (2 files or fewer and 50 lines or fewer, single approach, one verification) that Claude or a subagent handles directly.
+when_to_use: TRIGGER when about to delegate implementation to codex ("codex に発注" / "codex に委譲" / invoking a codex rescue command), when waiting for a running codex task, or when about to review / commit codex-generated changes. SKIP when codex plugin is unavailable or the change stays inside the no-delegation boundary (2 files or fewer and 50 lines or fewer, single approach, one verification, within 15 minutes) that Claude or a subagent handles directly.
 ---
 
 # Codex Delegation
