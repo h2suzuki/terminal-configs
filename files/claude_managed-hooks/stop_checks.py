@@ -144,19 +144,10 @@ Combined Stop hook for org-managed Claude Code:
     (counter は turn 毎 1 bump)。 この once-per-turn 不変条件は memory_surface.py も同
     .turns を読むので cross-hook で load-bearing。 完全 fail-open。
 
-  memory-surface (bonus, regex-pass path, exit 0):
-    enforcement が pass し block しない turn の first Stop でのみ、 当 turn の assistant 出力 (text)
-    を query に memory_surface.surface_for_text を呼び、 最良 1 件を hookSpecificOutput.additionalContext
-    で model に inject + systemMessage で user 表示 (Stop の additionalContext は v2.1.163+ で turn を
-    継続させ feedback を返す channel)。 turn 毎最大 1 回 — stop_hook_active gate に加え .turns count を
-    key にした turn-latch (継続で stop_hook_active が立たない場合の belt) で継続 Stop を抑え、
-    surface_for_text の throttle が UPS surface と同一 entry の重複を抑止。 import / DB 不在は fail-open で
-    surfacing 無効。 surfacing した Stop では counter を bump せず、 clean 終了 (継続後の retry) 側で 1 回 bump。
-
   muted-memory-at-wall (bonus, exit 0 / block 併記):
     「できない」 系の断定 / 誤読の自認を検出した turn の first Stop でのみ、 否定の周辺 ±120 字を
     query に memory_surface.search_unfiltered (model filter を通さない) を引き、 実行中モデルの
-    tag を持たない上位 1 件を additionalContext で inject する。 sibling の memory-surface は
+    tag を持たない上位 1 件を additionalContext で inject する。 UserPromptSubmit の memory-surface は
     model filter 越しなので、 tag の無い entry はこの family でしか見えない。 floor 0.35 は実測
     (該当局面の top 0.397 / 無関係文の top 0.270) の分離点。 enforcement が block した turn は
     additionalContext 経路に届かず継続 Stop も stop_hook_active で閉じるため、 block 側は
@@ -2208,44 +2199,6 @@ def _stop_latch_claim(payload: dict, suffix: str = ".surf") -> bool:
     return True
 
 
-def _memory_surface_at_stop(payload: dict, text: str) -> str | None:
-    """Regex-pass path: a Stop additionalContext reason surfacing the top memory entry for the turn's output `text`, else None; fires at most once/turn (stop_hook_active gate + counter latch + throttle) and is fully fail-open."""
-    if _memory_surface_mod is None or payload.get("stop_hook_active"):
-        return None
-    if not text or not text.strip():
-        return None
-    # Turn-scoped latch: guarantee max-once even if the runtime does not set
-    # stop_hook_active on the additionalContext continuation (belt to that gate).
-    if not _stop_latch_claim(payload):
-        return None
-    session_id = payload.get("session_id") or ""
-    cwd = payload.get("cwd")
-    if not isinstance(cwd, str) or not cwd:
-        cwd = os.getcwd()
-    project_id = _memory_surface_mod._encoded_project_id(cwd)
-    try:
-        model = _memory_surface_mod._resolve_model(payload)
-    except Exception:
-        model = None  # 旧 deploy の memory_surface に helper 不在でも fail-open
-    try:
-        picks = _memory_surface_mod.surface_for_text(
-            text, session_id, project_id, 1, model
-        )
-    except Exception:
-        return None
-    if not picks:
-        return None
-    file_path, reminder, _score = picks[0]
-    display = reminder or "(reminder 未設定)"
-    return (
-        "<memory-surface>\n"
-        f"今ターンの出力に関連する過去の教訓: {display} 詳細: {file_path}\n"
-        "完了前に今の応答がこの教訓に抵触しないか確認し、 抵触するなら修正してから完了して "
-        "ください (抵触しなければそのまま完了して構いません)。\n"
-        "</memory-surface>"
-    )
-
-
 def _bounded(call):
     """`call()` の値、 または timeout / 例外なら None。 daemon thread なので居残っても Stop の終了は待たされない。"""
     out: list = []
@@ -2427,19 +2380,13 @@ def main() -> int:
         exit_code, prompt_epoch, text, worktree_warnings = 0, None, "", []
     if exit_code != 0:
         return exit_code  # regex enforcement blocked — unchanged path, no marker/memory
-    # regex passed: surface one memory entry for the assistant's own output (if any) and
-    # inject it via Stop additionalContext, which keeps the turn going (v2.1.163+).
-    try:
-        reason = _memory_surface_at_stop(payload, text)
-    except Exception:
-        reason = None
     try:
         muted = _muted_memory_at_stop(payload, text)
     except Exception:
         muted = None
     # surfaced warnings ride the same additionalContext channel so the model actually sees them.
     wt_text = "\n\n".join(worktree_warnings)
-    combined = "\n\n".join(p for p in (reason, muted, wt_text) if p)
+    combined = "\n\n".join(p for p in (muted, wt_text) if p)
     if combined:
         print(
             json.dumps(
@@ -4245,18 +4192,9 @@ class CourtWarningTest(unittest.TestCase):
 
 
 class StopMemorySurfaceTest(unittest.TestCase):
-    """RAG memory surface on the regex-pass Stop path. Run: python3 -m unittest stop_checks"""
+    """Muted-memory notice on the Stop path. Run: python3 -m unittest stop_checks"""
 
     M = sys.modules[__name__]
-
-    @staticmethod
-    def _fake_mod(picks):
-        from unittest import mock
-
-        m = mock.Mock()
-        m._encoded_project_id = lambda c: c.replace("/", "-")
-        m.surface_for_text = lambda *a, **k: list(picks)
-        return m
 
     @staticmethod
     def _fake_search(hits, model="claude-opus-5[1m]"):
@@ -4267,56 +4205,6 @@ class StopMemorySurfaceTest(unittest.TestCase):
         m._resolve_model = lambda p: model.removeprefix("claude-").removesuffix("[1m]")
         m.search_unfiltered = lambda *a, **k: list(hits)
         return m
-
-    def test_none_when_module_absent(self):
-        from unittest import mock
-
-        with mock.patch.object(self.M, "_memory_surface_mod", None):
-            self.assertIsNone(
-                _memory_surface_at_stop({"stop_hook_active": False}, "output text")
-            )
-
-    def test_none_when_stop_hook_active(self):
-        from unittest import mock
-
-        mod = self._fake_mod([("/m/x.md", "lesson X", 0.6)])
-        with mock.patch.object(self.M, "_memory_surface_mod", mod):
-            self.assertIsNone(
-                _memory_surface_at_stop(
-                    {"stop_hook_active": True, "cwd": "/p"}, "output text"
-                )
-            )
-
-    def test_none_when_text_blank(self):
-        from unittest import mock
-
-        mod = self._fake_mod([("/m/x.md", "lesson X", 0.6)])
-        with mock.patch.object(self.M, "_memory_surface_mod", mod):
-            self.assertIsNone(
-                _memory_surface_at_stop({"stop_hook_active": False, "cwd": "/p"}, "  ")
-            )
-
-    def test_reason_built_from_top_pick(self):
-        from unittest import mock
-
-        mod = self._fake_mod([("/m/x.md", "lesson X", 0.6)])
-        with mock.patch.object(self.M, "_memory_surface_mod", mod):
-            r = _memory_surface_at_stop(
-                {"stop_hook_active": False, "cwd": "/p", "session_id": "s"}, "output"
-            )
-        assert r is not None
-        self.assertIn("lesson X", r)
-        self.assertIn("/m/x.md", r)
-        self.assertIn("memory-surface", r)
-
-    def test_none_when_no_picks(self):
-        from unittest import mock
-
-        mod = self._fake_mod([])
-        with mock.patch.object(self.M, "_memory_surface_mod", mod):
-            self.assertIsNone(
-                _memory_surface_at_stop({"stop_hook_active": False, "cwd": "/p"}, "out")
-            )
 
     def test_muted_stays_quiet_when_the_deployed_helper_is_missing(self):
         """fail-open は戻り値だけでなく黙ることまで — thread へ投げた例外は traceback を stderr へ出す。"""
@@ -4574,7 +4462,7 @@ class StopMemorySurfaceTest(unittest.TestCase):
         marker = mock.Mock()
         with (
             mock.patch.object(self.M, "_run", lambda p: run_ret),
-            mock.patch.object(self.M, "_memory_surface_at_stop", lambda p, t: reason),
+            mock.patch.object(self.M, "_muted_memory_at_stop", lambda p, t: reason),
             mock.patch.object(self.M, "_emit_turn_marker", marker),
             mock.patch.object(sys, "stdin", io.StringIO("{}")),
         ):
@@ -4583,13 +4471,13 @@ class StopMemorySurfaceTest(unittest.TestCase):
                 code = main()
         return code, marker, buf.getvalue().strip()
 
-    def test_main_regex_block_skips_memory_and_marker(self):
+    def test_main_regex_block_skips_muted_and_marker(self):
         import io
         from unittest import mock
 
         with (
             mock.patch.object(self.M, "_run", lambda p: (2, None, "txt", [])),
-            mock.patch.object(self.M, "_memory_surface_at_stop") as ms,
+            mock.patch.object(self.M, "_muted_memory_at_stop") as ms,
             mock.patch.object(self.M, "_emit_turn_marker") as mk,
             mock.patch.object(sys, "stdin", io.StringIO("{}")),
         ):
@@ -4604,7 +4492,7 @@ class StopMemorySurfaceTest(unittest.TestCase):
 
         with (
             mock.patch.object(self.M, "_run", lambda p: (2, None, "txt", ["WT-WARN"])),
-            mock.patch.object(self.M, "_memory_surface_at_stop") as ms,
+            mock.patch.object(self.M, "_muted_memory_at_stop") as ms,
             mock.patch.object(self.M, "_emit_turn_marker") as mk,
             mock.patch.object(sys, "stdin", io.StringIO("{}")),
         ):
@@ -4612,7 +4500,7 @@ class StopMemorySurfaceTest(unittest.TestCase):
             ms.assert_not_called()
             mk.assert_not_called()
 
-    def test_main_regex_pass_with_memory_injects_additionalcontext(self):
+    def test_main_regex_pass_with_muted_injects_additionalcontext(self):
         code, marker, out = self._main_out((0, 1.0, "txt", []), "REASON-TEXT")
         self.assertEqual(code, 0)
         payload = json.loads(out)
@@ -4631,7 +4519,7 @@ class StopMemorySurfaceTest(unittest.TestCase):
         self.assertEqual(payload["systemMessage"], "WT-WARN")
         marker.assert_not_called()
 
-    def test_main_combines_memory_and_worktree_reason_first(self):
+    def test_main_combines_muted_and_worktree_reason_first(self):
         code, marker, out = self._main_out((0, 1.0, "txt", ["WT-WARN"]), "REASON-TEXT")
         self.assertEqual(code, 0)
         payload = json.loads(out)
@@ -4640,73 +4528,11 @@ class StopMemorySurfaceTest(unittest.TestCase):
         self.assertEqual(payload["systemMessage"], combined)
         marker.assert_not_called()
 
-    def test_main_regex_pass_no_memory_emits_marker(self):
+    def test_main_regex_pass_no_muted_emits_marker(self):
         code, marker, out = self._main_out((0, 1.0, "txt", []), None)
         self.assertEqual(code, 0)
         marker.assert_called_once()
         self.assertEqual(out, "")
-
-    def test_end_to_end_through_real_surface_for_text(self):
-        # Real cross-module chain: load the repo-source memory_surface (not the deployed
-        # copy), seed a temp DB, stub only retrieval scoring, verify a reason is built.
-        import importlib.util
-        import tempfile
-        from unittest import mock
-
-        ms_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "..",
-            "claude_user-hooks",
-            "memory_surface.py",
-        )
-        if not os.path.exists(ms_path):
-            self.skipTest("repo-source memory_surface.py not found")
-        spec = importlib.util.spec_from_file_location("memory_surface_src", ms_path)
-        assert spec is not None and spec.loader is not None
-        ms = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(ms)
-        db = os.path.join(tempfile.mkdtemp(), "idx.sqlite3")
-        pick = [("/mem/feedback_x.md", "deploy 先だけ編集して repo を放置しない", -5.0)]
-        with (
-            mock.patch.object(ms, "DB_PATH", db),
-            mock.patch.object(ms, "_hybrid_picks", lambda *a: list(pick)),
-            mock.patch.object(self.M, "_memory_surface_mod", ms),
-        ):
-            r = _memory_surface_at_stop(
-                {"stop_hook_active": False, "cwd": "/proj", "session_id": "sess"},
-                "deploy したので repo も更新する",
-            )
-        assert r is not None
-        self.assertIn("repo を放置しない", r)
-        self.assertIn("/mem/feedback_x.md", r)
-
-    def test_stop_latch_prevents_repeat_when_active_false(self):
-        import tempfile
-        from unittest import mock
-
-        d = tempfile.mkdtemp()
-        tp = os.path.join(d, "t.jsonl")
-        open(tp, "w").close()
-        with open(tp[:-6] + ".turns", "w", encoding="utf-8") as f:
-            f.write(
-                "5 1000\n"
-            )  # current-turn count "5", stable across the turn's Stops
-        mod = self._fake_mod([("/m/x.md", "lesson X", 0.6)])
-        payload = {
-            "stop_hook_active": False,
-            "cwd": "/p",
-            "session_id": "s",
-            "transcript_path": tp,
-        }
-        with mock.patch.object(self.M, "_memory_surface_mod", mod):
-            first = _memory_surface_at_stop(payload, "output")
-            second = _memory_surface_at_stop(payload, "output")
-            with open(tp[:-6] + ".turns", "w", encoding="utf-8") as f:
-                f.write("6 2000\n")  # next turn -> latch key differs -> allowed again
-            third = _memory_surface_at_stop(payload, "output")
-        assert first is not None
-        self.assertIsNone(second)  # same turn -> latched
-        assert third is not None  # new turn -> surfaces again
 
 
 class WorktreeFixtureMixin:
