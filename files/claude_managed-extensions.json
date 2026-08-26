@@ -83,6 +83,10 @@
       {
         "matcher": "Bash",
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/check_todo_completion.py" } ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/codex_broker_sweep.py" } ]
       }
     ],
     "PostToolUseFailure": [
@@ -103,6 +107,7 @@
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/feature_findings_build.py", "timeout": 30 } ] },
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/session_resume_context.py" } ] },
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/reap_orphan_helpers.py" } ] },
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/codex_broker_sweep.py" } ] },
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/memory_sync_pull.py" } ] }
     ],
     "UserPromptSubmit": [
