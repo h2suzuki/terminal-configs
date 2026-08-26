@@ -27,6 +27,7 @@ import os
 import signal
 import socket
 import sys
+import tempfile
 import time
 import unittest
 
@@ -59,6 +60,8 @@ FALLBACK_STATE_LEAF = "codex-companion"
 SHUTDOWN_LINE = json.dumps({"id": 1, "method": "broker/shutdown", "params": {}}) + "\n"
 SHUTDOWN_WAIT = 3.0
 SIGTERM_WAIT = 5.0
+# broker が pid / 記録を書き終える前の窓 (node 起動 + endpoint 待ち 2 s) を stale と誤認しない猶予。
+MIN_AGE_SECONDS = 60.0
 
 
 # Node の os.tmpdir() と同じ規則 (実測): 空文字は未設定として飛ばし、末尾の / を落とす。
@@ -175,6 +178,26 @@ def decide(entry: dict) -> dict:
     return entry
 
 
+def age_seconds(path: str | None) -> float | None:
+    if path is None:
+        return None
+    try:
+        return time.time() - os.stat(path).st_mtime
+    except OSError:
+        return None
+
+
+def guard_young(entry: dict, path: str | None) -> dict:
+    """stale 判定の対象が若ければ keep に倒す — 起動中 broker の残骸を消すと永続漏れになる。"""
+    age = age_seconds(path)
+    if entry["kind"] == "stale" and age is not None and age < MIN_AGE_SECONDS:
+        entry["kind"] = "keep"
+        entry["why"] = (
+            f"作成 {age:.0f} 秒前・起動中の可能性 — 次回判定 ({entry['why']})"
+        )
+    return entry
+
+
 def from_record(record_path: str) -> dict:
     name = os.path.basename(os.path.dirname(record_path))
     try:
@@ -183,8 +206,8 @@ def from_record(record_path: str) -> dict:
     except (OSError, ValueError) as exc:
         entry = new_entry(name, record_path, {})
         entry["why"] = f"記録が読めない ({exc.__class__.__name__})"
-        return entry
-    return decide(new_entry(name, record_path, data))
+        return guard_young(entry, record_path)
+    return guard_young(decide(new_entry(name, record_path, data)), record_path)
 
 
 def read_pid(path: str) -> int | None:
@@ -205,7 +228,7 @@ def from_orphan(session_dir: str) -> dict:
     }
     entry = decide(new_entry(f"(孤児) {os.path.basename(session_dir)}", None, data))
     entry["why"] += " / 記録なし"
-    return entry
+    return guard_young(entry, session_dir)
 
 
 def orphans(owned: set[str], dirs: list[str]) -> list[dict]:
@@ -347,6 +370,45 @@ class TmpdirTest(unittest.TestCase):
         self.assertEqual(tmpdirs({"TMPDIR": "/var/tmp"}), ["/tmp", "/var/tmp"])
 
 
+class MinAgeTest(unittest.TestCase):
+    """起動中 broker の窓 (dir 作成 → pid 書込、 記録の非 atomic 書込) を stale と誤認しない。
+    出所 2026-08-27: 独立レビュー — 誤認は残骸削除 → 二重起動 → 永続漏れの経路。"""
+
+    def _session_dir(self, age: float = 0) -> str:
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        session = os.path.join(holder.name, "cxc-test")
+        os.mkdir(session)
+        stamp = time.time() - age
+        os.utime(session, (stamp, stamp))
+        return session
+
+    def _record(self, text: str, age: float = 0) -> str:
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        os.mkdir(os.path.join(holder.name, "x"))
+        record = os.path.join(holder.name, "x", "broker.json")
+        with open(record, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        stamp = time.time() - age
+        os.utime(record, (stamp, stamp))
+        return record
+
+    def test_young_orphan_dir_is_kept(self):
+        self.assertEqual(from_orphan(self._session_dir())["kind"], "keep")
+
+    def test_old_orphan_dir_is_stale(self):
+        self.assertEqual(from_orphan(self._session_dir(age=120))["kind"], "stale")
+
+    def test_young_unreadable_record_is_kept(self):
+        self.assertEqual(from_record(self._record("{not json"))["kind"], "keep")
+
+    def test_old_unreadable_record_is_stale(self):
+        self.assertEqual(
+            from_record(self._record("{not json", age=120))["kind"], "stale"
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -368,7 +430,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.selftest:
-        loaded = unittest.defaultTestLoader.loadTestsFromTestCase(TmpdirTest)
+        loaded = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
         return 0 if unittest.TextTestRunner().run(loaded).wasSuccessful() else 1
 
     roots = args.state or state_roots(args.all_users)
