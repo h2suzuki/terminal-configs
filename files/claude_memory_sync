@@ -20,6 +20,7 @@ Subcommands (each fails open: network/auth loss degrades to the buffer):
   --retire <p>  git rm <p>, commit, detach a push, drop <p> from the index
   --full        wipe the NULL scope, then per-scope --rebuild of the clone
   --status      human-readable clone/index state (fetches, best-effort)
+  --reach       list never-reached and hot entries in the index
   --push-bg     internal detached push helper
 
 The clone is created by the installer (install_claude_extensions); while it
@@ -52,6 +53,8 @@ SURFACE_CLI = os.environ.get("CLAUDE_MEMORY_SURFACE") or os.path.expanduser(
     "~/.claude/hooks/memory_surface.py"
 )
 DB_PATH = os.path.join(STATE_DIR, "memory_index.sqlite3")
+REACH_DAYS = 30
+HOT_EMITS = 20
 # git itself refreshes FETCH_HEAD on every fetch: free "last fetch" stamp
 FETCH_STAMP = os.path.join(REPO_DIR, ".git", "FETCH_HEAD")
 SYNC_LOG = REPO_DIR + ".sync.log"
@@ -484,6 +487,40 @@ def main_status() -> int:
     return 0
 
 
+def main_reach() -> int:
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % DB_PATH, uri=True, timeout=2.0)
+        rows = con.execute(
+            "SELECT e.file_path, COUNT(l.id) FROM entries_fts AS e "
+            "LEFT JOIN inject_log AS l ON l.file_path = e.file_path "
+            "AND l.ts >= ? "
+            "AND coalesce(kind, 'emit') = 'emit' "
+            "GROUP BY e.file_path",
+            (time.time() - REACH_DAYS * 86400,),
+        ).fetchall()
+        con.close()
+    except (OSError, sqlite3.Error):
+        print("index: unavailable")
+        return 1
+    never = sorted(
+        os.path.relpath(path, REPO_DIR) for path, count in rows if count == 0
+    )
+    hot = sorted(
+        (
+            (count, os.path.relpath(path, REPO_DIR))
+            for path, count in rows
+            if count >= HOT_EMITS
+        ),
+        key=lambda item: (-item[0], item[1]),
+    )
+    print("reach[%dd]: never=%d hot=%d" % (REACH_DAYS, len(never), len(hot)))
+    for path in never:
+        print("never: %s" % path)
+    for count, path in hot:
+        print("hot: %d %s" % (count, path))
+    return 0
+
+
 def main() -> int:
     os.umask(0o002)  # group-writable clone/state artifacts (matches the DB convention)
     argv = sys.argv[1:]
@@ -508,6 +545,8 @@ def main() -> int:
         return 1 if errs else 0
     if cmd == "--status":
         return main_status()
+    if cmd == "--reach":
+        return main_reach()
     if cmd == "--push-bg":
         return main_push_bg()
     note("unknown command: %s" % cmd)

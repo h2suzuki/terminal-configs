@@ -96,6 +96,7 @@ def _state_path(filename: str) -> str:
 
 DB_PATH = _state_path("memory_index.sqlite3")
 THROTTLE_SECONDS = 900  # 15 min per (file_path, session_id)
+SESSION_EMIT_CAP = 2
 # top-1 を surface する floor (負が深いほど良 match、 ~0 は弱 noise)
 BM25_SURFACE_FLOOR = -2.0
 # 2 件目は強候補 (bm25 <= これ) の時だけ追加。 大抵は top-1 のみ
@@ -740,6 +741,17 @@ def _throttle_check(
     return (now - row[0]) < THROTTLE_SECONDS
 
 
+def _session_emits(con: sqlite3.Connection, file_path: str, session_id: str) -> int:
+    row = con.execute(
+        "SELECT COUNT(*) FROM inject_log "
+        "WHERE file_path = ? "
+        "AND coalesce(session_id, '') = coalesce(?, '') "
+        "AND coalesce(kind, 'emit') = 'emit'",
+        (file_path, session_id),
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
 def _record_inject(
     con: sqlite3.Connection,
     file_path: str,
@@ -891,6 +903,8 @@ def _surface_core(
         if len(out) >= max_emit:
             break
         if _throttle_check(con, file_path, session_id, now):
+            continue
+        if _session_emits(con, file_path, session_id) >= SESSION_EMIT_CAP:
             continue
         _record_inject(
             con, file_path, project_id, session_id, now, score, query_text, model
