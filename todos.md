@@ -43,7 +43,8 @@ Exit Criteria:
 - [ ] 実案件を §5.1 で回し、§5.6 の指標で判定した — ケース 1 = sentinel 書き直し (2026-08-26:
   変異 0/4・1 巡で出荷・配備済み)、ケース 2 = todos 構造 gate (契約の訂正で再入場 1 回)。
   残り = 配備後 2 週間 (〜2026-09-09) の実運用で用途内 P0 が 0 であること。外れたら loop
-  approach を捨てる
+  approach を捨てる。ケース 3〜7 = hook / CLI 5 本の書き直し (Medium「方法論の実証」block は
+  2026-08-27 決裁で本 block へ併合)
 
 Work file: `docs/adversarial-loop-meta-evaluation.md` (評価の正本)、
 `drafts/loop-exit-opinion-order-report.md` (第三者意見書・gitignore)
@@ -65,16 +66,16 @@ Exit Criteria:
 - [ ] memory 衛生を機構化した — org 上限 60 は実装・配備まで進めたが、承認不備 (D3 は label への
   一括承認のみ・60 の根拠は未提示) の指摘で 2026-08-26 に revert (`14c568e`。配備側も同日 cp で
   巻き戻し・E2E 済み)。近接重複の検出は corpus 計測で不採用 (dup pair と無関係 pair の score が重なり
-  分離閾値なし)。残り = 衛生 gate の要否と形をユーザーと再設計 (退役要求含む)
+  分離閾値なし)。2026-08-27 方向: 衛生 deny は `memory_routing_gate.py` (Write lint gate、revert した cap の
+  元の場所) へ統合する。規則と数値は scope 再チェック後に挙動 1 行で承認を取ってから実装
 - [ ] 決定的に検出できる教訓 8 件を blocking gate へ昇格し entry を退役した — 2026-08-26 に 7 件を配備
   (`deny_command_patterns.py` 5 規則・`deny_llm_call_in_hook.py`・`playwright_listener_gate.py`、
   E2E で deny を実測) し entry 10 件を退役。残り = done_state_ledger の Stop block 化 (stop_checks の
   書き直しで実装)。list 形式 (`"claude", "-p"`) を覆う v2 も同日 19:56 に配備済み
-- [x] 重複 cluster を統合した — 2026-08-26 に 3 組 8 件を org の新 entry 3 本へ統合 Write
-  (自己採点系 → `feedback_lesson_to_action_not_report`、規則追加系 →
-  `feedback_violation_countermeasure_delete_first`、自作・委譲系 → `feedback_self_build_over_delegation`)
-  し、旧 8 件を `claude_memory_sync --retire` で退役 (Bash から直接通った。commit `2c85170`〜`908bab7`、
-  push 済み、org 70 → 62 で disk と index が一致)。gate cover 済みの 3 件は同日退役済み
+- [x] 重複 cluster を統合した — 2026-08-26 に 3 組 8 件を org の新 entry 3 本 (`feedback_lesson_to_action_not_report` /
+  `feedback_violation_countermeasure_delete_first` / `feedback_self_build_over_delegation`) へ統合 Write し、
+  旧 8 件を `claude_memory_sync --retire` で退役 (Bash から直接通った。commit `2c85170`〜`908bab7`、push 済み、
+  org 70 → 62 で disk と index が一致)。gate cover 済みの 3 件は同日退役済み
 - [x] 到達経路を測って回す機構を配備した (2026-08-26、aa3c1dd) — surface の (entry, session) 上限 2 回と
   `claude_memory_sync --reach` (30 日 emit 0 / ≥ 20 の列挙。初回: never 70 / hot 6)。30 日後に到達可能
   entry の未到達率が 43% → 25% 未満かで判定
@@ -147,7 +148,8 @@ Exit Criteria:
 - [x] 本線へ merge した — `a65da00`、push 済み
 - [ ] 残り 2 形を塞ぐ — heredoc 形は再 token 化で塞げると実測済み、行末継続記号は未検討。
   塞げなければ相談する。2026-08-26 実測: 発注書を書く heredoc が「codex」で始まる行で 3 回
-  誤 deny (mention と execution の未区別)
+  誤 deny (mention と execution の未区別)。2026-08-27 決裁: delegation gate の書き直し後に対応を考える
+  (現行 1,038 行への patch はしない)
 - [x] 配備し実地確認した — 2026-08-23 (hook 34 対 IDENTICAL、読み取り allow / 起動 deny を実測)
 - [x] 同型欠陥を class で掃引した — `skill_reminder_gate` の handoff 分岐を `writes_handoff_doc`
   (書込語だけを列挙) へ差し替え (2026-08-24、`bcdea99`、配備済み)
@@ -230,7 +232,7 @@ Exit Criteria:
 - [ ] review 運用の gate 群を実装・smoke・deploy — (a)〜(f) + stateless 化 + warn は fix round 12
   まで回して回帰 filter pass、main merge・deploy 済み (2026-08-22)。残り: warn family の
   発火と誤爆の実測 (誤爆 9 件と凍結判断は Medium「随伴エージェント待ち」block へ集約済み)、
-  live finding 1 (task の anchor ずれ、修正 `29f1891`、deploy 待ち)、live finding 2
+  live finding 1 (task の anchor ずれ、修正 `29f1891`、配備済み = stop_checks が IDENTICAL)、live finding 2
   (`adversarial-review` command が gate と衝突、例外を設けるかは判断待ち)
 - [ ] 検問実装への挑戦レビュー — verdict 受領 2026-08-22 (U0 8 / U1 2)。処置の決定はユーザー判断待ち
 - [x] (g) codex の直接起動を禁止する — deny 化・配備・live 実測 2 件 (2026-08-25 close)
@@ -238,8 +240,8 @@ Exit Criteria:
   「随伴エージェント待ち」block の項目 1
 - [x] (h) codex-delegation skill と関連 memory entry を plugin-route 前提に改訂 — 配備済み
   (2026-08-25 close)
-- [ ] 判断待ちの Task 化を強制する hook family — 実装・受け入れ済み (`5323179`)。実測・deploy が残
-- [ ] 決裁受領の記録強制を同 family に併合 — 実装済み (`5323179`)。実測・deploy が残
+- [ ] 判断待ちの Task 化を強制する hook family — 実装・受け入れ済み (`5323179`)、配備済み (2026-08-27 に IDENTICAL を実測)。実測が残
+- [ ] 決裁受領の記録強制を同 family に併合 — 実装済み (`5323179`)、配備済み。実測が残
 - [ ] 「無駄」keyword の memory 記録 reminder — Stop family として発注済み
   (`drafts/gates/warn-family-order.md`)。2026-08-26 実測: 配備済みで発火するが、entry を書くまで
   毎 Stop で再発火する (結論確定前に書けない turn では noise)
@@ -268,7 +270,8 @@ Exit Criteria:
   `drafts/codex-usage-unification.md`、矛盾 3 系統 20 組)
 - [x] 置換対象を文言で特定した一覧を用意した — `docs/codex-usage-anchors.md` (25/26 が一意に当たる)
 - [x] 緩めない箇所を名指しで除外した — `docs/codex-usage-donottouch.md` (7 分類 38 件)
-- [ ] (別 session) 発注ポリシーの持ち込み — ユーザーの別議論の成果を正本へ書き下ろす
+- [ ] (別 session) 発注ポリシーの持ち込み — ポリシーは pdf 化済み (2026-08-27 ユーザー)。独立タスクとして
+  新 session で着手する
 - [ ] (別 session) 統一文案を各 file へ反映し、`files/` と配備先の一致まで確認した — 前提
   「ケース 1 完走」は 2026-08-26 に満たされた。残る前提はポリシー確定
 
