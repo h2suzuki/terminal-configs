@@ -63,8 +63,8 @@ Exit Criteria:
   同日追加決裁: blocking 昇格 8 件を採用、gate 済み entry 3 件はホストで退役。scope 上限 (org 60)
   も同枠で採用扱いにしたが、説明不足の一括承認だったため同日 revert (経緯は上の衛生 gate 項目)
 - [ ] memory 衛生を機構化した — org 上限 60 は実装・配備まで進めたが、承認不備 (D3 は label への
-  一括承認のみ・60 の根拠は未提示) の指摘で 2026-08-26 に revert (`14c568e`。配備側の巻き戻しは
-  base setup 待ち)。近接重複の検出は corpus 計測で不採用 (dup pair と無関係 pair の score が重なり
+  一括承認のみ・60 の根拠は未提示) の指摘で 2026-08-26 に revert (`14c568e`。配備側も同日 cp で
+  巻き戻し・E2E 済み)。近接重複の検出は corpus 計測で不採用 (dup pair と無関係 pair の score が重なり
   分離閾値なし)。残り = 衛生 gate の要否と形をユーザーと再設計 (退役要求含む)
 - [ ] 決定的に検出できる教訓 8 件を blocking gate へ昇格し entry を退役した — 2026-08-26 に 7 件を配備
   (`deny_command_patterns.py` 5 規則・`deny_llm_call_in_hook.py`・`playwright_listener_gate.py`、
@@ -85,6 +85,23 @@ Exit Criteria:
 
 Work file: `last-session-handoff.md` (再開手順)、`~/.claude/hooks/memory_surface.py` (surface 方針の実装)、
 `/var/lib/claude-rag-memory/memory_index.sqlite3` の `inject_log` (emit / mismatch の実測)
+
+### memory entry の scope 再チェック
+
+起票: user 2026-08-26 (「project/ にあるものも、本当に project 依存か、ちょっと疑わしくなってきた」
+「１つずつ、プロジェクト固有か、一般的な話か、再チェックしたほうがよい」)
+
+Goal: project 43 件 + user 2 件の entry を 1 件ずつ本文まで読んで P (固有) / G (一般) を確定し、
+G は org へ移動して、scope が実態と一致した状態にする。
+
+Exit Criteria:
+
+- [x] 一次分類を作った — 2026-08-26 reminder 全読で G 候補 14 / G? 5 / 要精読 8 / P 20
+  (`drafts/memory-scope-audit.md`)
+- [ ] 1 件ずつ本文精読で P / G を確定しユーザーと裁定した (org の退役・統合と同時に扱う)
+- [ ] G 確定分を org へ移動した (org へ新規 Write → 旧 path をホストで retire、sudo 不要)
+
+Work file: `drafts/memory-scope-audit.md` (一次分類表)、`last-session-handoff.md` (再開手順)
 
 ### 肥大化した hook と CLI を新 protocol で最小限へ書き直す
 
