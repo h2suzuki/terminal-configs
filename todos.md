@@ -101,10 +101,14 @@ Exit Criteria:
 - [x] 実測した — 2026-08-27、全 transcript の surface 1,459 件から 508 件を opus 25 agent が判定・16 agent が反証:
   生存 17 件 (11 entry、全て Stop 時)、prompt 時 0、対照比 順守 +20 pt (Stop 時)、定型文のみ fable-5 85% / opus-5 17%。
   効いた型 = 直前の出力に今すぐ当てられる検査動作を 1 つ指定する reminder (T1 / T2 / T3 / T6)、効かない型 = 態度・文体・否定形
-- [ ] 報告を docs/ へ正本化した (`drafts/memory-surface-efficacy-2026-08-27.md` を document-editor 経由で移す)
-- [ ] Stop 時 surface の処遇をユーザーが決めた — (a) 削除のまま / (b) 効いた型に限り文言を「抵触するなら修正、しなければ
-  何も書かない」に変えて再導入 / (c) opus 限定で再導入
-- [ ] 決定を実装・配備した (削除のままなら本項目は閉じる)
+- [x] 報告を docs/ へ正本化した — `docs/memory-surface-efficacy.md` (2026-08-27、計測日・母数・執筆規準 6 点を含む)
+- [x] Stop 時 surface の処遇をユーザーが決めた — 2026-08-27 決裁「b 効いた型に限り文言を変えて再導入、memory writing の
+  フォーマットチェックで、効かない文面の混入を防止」
+- [ ] 実装 1 = memory 書式 gate: entry frontmatter に `check:` (直前の出力に当てる検査動作 1 文・肯定形・100 字以内) を
+  新設し、`memory_routing_gate.py` が欠落 / 否定形のみ (「するな」だけで動作なし) を deny する — 挙動 1 行の承認後に実装
+- [ ] 実装 2 = Stop 時 surface の再導入: `check:` を持つ entry のみ、文言「抵触するなら修正してから完了。しなければ
+  何も書かない」で surface する family を stop_checks 書き直しの契約に含める (旧文言の「確認せよ」は使わない)
+- [ ] 既存 entry の移行: 効いた 11 entry に `check:` を書き、態度・文体だけの entry は `check:` を書かずに Stop 対象外とする
 
 Work file: `drafts/memory-surface-efficacy-2026-08-27.md` (報告)、`drafts/corpus-tools/` (抽出・sampling・集計 script)
 
@@ -120,7 +124,8 @@ Exit Criteria:
 
 - [x] 一次分類を作った — 2026-08-26 reminder 全読、行別 tally (script 検算) で G 候補 17 / G? 5 /
   要精読 9 / P 14 (`drafts/memory-scope-audit.md`)
-- [ ] 1 件ずつ本文精読で P / G を確定しユーザーと裁定した (org の退役・統合と同時に扱う)
+- [ ] 1 件ずつ本文精読で P / G を確定しユーザーと裁定した — 精読は 2026-08-27 に opus 15 agent で完了 (G 18 / 統合退役 7 /
+  P 17 / U 3 / 要裁定 4、表は `drafts/memory-scope-audit.md` 末尾)。残り = ユーザーが reminder 一覧を見て裁定
 - [ ] G 確定分を org へ移動した (org へ新規 Write → 旧 path を `claude_memory_sync --retire` で退役。
   Bash から直接実行できる・sudo 不要)
 
