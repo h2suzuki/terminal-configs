@@ -70,11 +70,11 @@ Exit Criteria:
   (`deny_command_patterns.py` 5 規則・`deny_llm_call_in_hook.py`・`playwright_listener_gate.py`、
   E2E で deny を実測) し entry 10 件を退役。残り = done_state_ledger の Stop block 化 (stop_checks の
   書き直しで実装)。list 形式 (`"claude", "-p"`) を覆う v2 も同日 19:56 に配備済み
-- [ ] 重複 cluster を統合した — 2026-08-26 に 3 組 8 件を org の新 entry 3 本へ統合 Write 済み
+- [x] 重複 cluster を統合した — 2026-08-26 に 3 組 8 件を org の新 entry 3 本へ統合 Write
   (自己採点系 → `feedback_lesson_to_action_not_report`、規則追加系 →
-  `feedback_violation_countermeasure_delete_first`、自作・委譲系 → `feedback_self_build_over_delegation`。
-  index 反映・search で上位に入ることを実測)。残り = 旧 8 entry のホスト退役 (`claude_memory_sync --retire`、
-  sudo 不要)。gate で逐語 cover 済みだった 3 件 (`codex_delegation_skill_skip` 等) は同日退役済み
+  `feedback_violation_countermeasure_delete_first`、自作・委譲系 → `feedback_self_build_over_delegation`)
+  し、旧 8 件を `claude_memory_sync --retire` で退役 (Bash から直接通った。commit `2c85170`〜`908bab7`、
+  push 済み、org 70 → 62 で disk と index が一致)。gate cover 済みの 3 件は同日退役済み
 - [x] 到達経路を測って回す機構を配備した (2026-08-26、aa3c1dd) — surface の (entry, session) 上限 2 回と
   `claude_memory_sync --reach` (30 日 emit 0 / ≥ 20 の列挙。初回: never 70 / hot 6)。30 日後に到達可能
   entry の未到達率が 43% → 25% 未満かで判定
@@ -100,7 +100,8 @@ Exit Criteria:
 - [x] 一次分類を作った — 2026-08-26 reminder 全読、行別 tally (script 検算) で G 候補 17 / G? 5 /
   要精読 9 / P 14 (`drafts/memory-scope-audit.md`)
 - [ ] 1 件ずつ本文精読で P / G を確定しユーザーと裁定した (org の退役・統合と同時に扱う)
-- [ ] G 確定分を org へ移動した (org へ新規 Write → 旧 path をホストで retire、sudo 不要)
+- [ ] G 確定分を org へ移動した (org へ新規 Write → 旧 path を `claude_memory_sync --retire` で退役。
+  Bash から直接実行できる・sudo 不要)
 
 Work file: `drafts/memory-scope-audit.md` (一次分類表)、`last-session-handoff.md` (再開手順)
 
