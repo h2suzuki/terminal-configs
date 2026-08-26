@@ -29,19 +29,21 @@ Exit Criteria:
   書き直す / 方法論も同じく最小限へ (1 ページ) / ab_probe は廃棄 / 直さない指摘は台帳に書かない
 - [x] ab_probe を廃棄した — 2026-08-26。`wt-abprobe` と branch を削除、発注書・報告書 31 file は
   `drafts/ab-probe-archive/` に退避
-- [ ] sentinel を要件から書き直した — **受け入れ・main merge 済み 2026-08-26** (8,588 → 231 行、
-  exit 14 種 → 7 種、契約 = `files/codex_task_sentinel.test.py` C1〜C12 の 17 test、発注側の
-  変異器 = `files/codex_task_sentinel.mutants.py` で 0/4 生存、独立レビュー 1 巡 P0 なし、
-  1 巡で終了)。skill の exit 表も更新済み。**残り = 配備** (base setup の再実行で
-  `/usr/local/bin/codex_task_sentinel` と skill が `diff -q` IDENTICAL になること)
+- [x] sentinel を要件から書き直した — 2026-08-26 完了 (8,588 → 231 行、exit 14 種 → 7 種、契約 =
+  `files/codex_task_sentinel.test.py` の 17 test、変異器 `files/codex_task_sentinel.mutants.py` で
+  0/4 生存、独立レビュー 1 巡 P0 なし、1 巡で終了、merge `8208fe0`)。配備 = base setup 後に
+  `/usr/local/bin` と skill が `diff -q` IDENTICAL、実 job record 2 件 (completed / cancelled) で
+  verdict done / failed を実測
 - [x] 方法論 doc を 6 項目 1 ページに置換し、台帳 3 本に凍結注記を入れた — 2026-08-26
 - [ ] todos.md の構造 lint を決定的 gate にする — block 行数・criterion 行数の上限と、起票 /
   Goal / Exit Criteria / Work file 以外の prose 節を deny。書き直しの次に着手
 - [ ] 台帳の再発防止 — 書き出し欲求の逃がし先 (`drafts/journal/`、読み返さない・gitignore) を
   用意し、凍結した docs/ への書込を deny する gate と組にする (「書くな」だけでは別の場所に
   書き始める、というユーザー所見に沿う)
-- [ ] 次の小さな実案件 1 件を §5.1 で回し、§5.6 の指標 (4 変異の生存 0/4・3 巡以内に出荷・
-  2 週間 P0 0) で判定した。外れたら loop approach を捨てる
+- [ ] 実案件を §5.1 で回し、§5.6 の指標で判定した — ケース 1 = sentinel 書き直し (2026-08-26:
+  変異 0/4・1 巡で出荷・配備済み)、ケース 2 = todos 構造 gate (契約の訂正で再入場 1 回)。
+  残り = 配備後 2 週間 (〜2026-09-09) の実運用で用途内 P0 が 0 であること。外れたら loop
+  approach を捨てる
 
 Work file: `docs/adversarial-loop-meta-evaluation.md` (評価の正本)、
 `drafts/loop-exit-opinion-order-report.md` (第三者意見書・gitignore)
