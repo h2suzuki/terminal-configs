@@ -62,9 +62,10 @@ Exit Criteria:
   (B) 予告 entry は `## 処置の種別` の閉じた選択肢 gate へ (合意) / (C) 文章だけの entry を減らす (OK)。
   同日追加決裁: blocking 昇格 8 件と scope 上限 (org 60) を採用、gate 済み entry 3 件はホストで退役
 - [ ] memory 衛生を機構化した — scope 上限 (org 60 超で新規 org entry を deny し `--reach` の never
-  一覧を印字) を `memory_routing_gate` に実装・merge (09ddce6、契約 13 test・変異 0/4・独立レビュー
-  P0 なし)。残り = host での base setup 配備と E2E。近接重複の検出は corpus 計測で不採用 (無関係 pair の
-  最近傍 score が dup pair と重なり分離閾値なし)。逐語 cover 済み entry の退役要求は未着手
+  一覧を印字) は完了: 実装・merge (09ddce6、契約 13 test・変異 0/4・独立レビュー P0 なし)、2026-08-26
+  21:13 配備 (diff -q IDENTICAL)、E2E 3 経路実測 (org 65 件で cap deny + 実 never 15 件 / Edit deny /
+  user scope allow)。近接重複の検出は corpus 計測で不採用 (dup pair と無関係 pair の score が重なり
+  分離閾値なし)。残り = 逐語 cover 済み entry の退役要求 (未着手)
 - [ ] 決定的に検出できる教訓 8 件を blocking gate へ昇格し entry を退役した — 2026-08-26 に 7 件を配備
   (`deny_command_patterns.py` 5 規則・`deny_llm_call_in_hook.py`・`playwright_listener_gate.py`、
   E2E で deny を実測) し entry 10 件を退役。残り = done_state_ledger の Stop block 化 (stop_checks の
