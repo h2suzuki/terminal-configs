@@ -4,15 +4,17 @@
 Contract (each claim maps to one test):
   C1  the hook is a PreToolUse(Bash) gate: payload JSON on stdin, exit 0 = allow, exit 2 = deny with the
       reason on stderr starting with "todos-structure:"
-  C2  it acts only on a `git commit` whose command text names todos.md; any other command exits 0
-  C3  it lints the STAGED todos.md (`git show :todos.md` from the payload cwd's repo), not the working tree
+  C2  it acts only on a `git commit` whose pathspec (tokens after `--`) names todos.md; a todos.md
+      mentioned only in the message, or any other command, exits 0
+  C3  it lints the WORKING-TREE todos.md at the repo root (what `git commit -- todos.md` records), not
+      the index blob
   C4  a `### ` block (heading line through the line before the next `### ` / `## ` / EOF) may span at most
       MAX_BLOCK_LINES = 40 lines; a longer block is denied and named with its line count
   C5  a checkbox item (`- [ ]` / `- [x]` line plus its indented continuation lines) may span at most
       MAX_ITEM_LINES = 6 lines; a longer item is denied and quoted by its first 30 characters
   C6  every block must contain the lines `起票:`, `Goal:` and `Exit Criteria:`; a missing key is denied
   C7  the repository's own todos.md (two directories above this file) passes
-  C8  fail-open: not a git repo, todos.md not staged, or unreadable payload → exit 0
+  C8  fail-open: not a git repo, no todos.md in the working tree, or unreadable payload → exit 0
 """
 
 from __future__ import annotations
@@ -150,17 +152,18 @@ class GateTest(unittest.TestCase):
             "git add todos.md",
             "git status",
             'git commit -m "x" -- README.md',
+            'git commit -m "docs: mention todos.md in README" -- README.md',
             "cat todos.md",
         ):
             self.assertEqual(run_hook(self.repo.root, command).returncode, 0, command)
 
-    def test_c3_staged_content_is_what_gets_linted(self) -> None:
+    def test_c3_worktree_content_is_what_gets_linted(self) -> None:
         self.repo.stage_todos(HEAD + block("A"))
         self.repo.overwrite_worktree(HEAD + block("Long block", extra_lines=30))
-        self.assertEqual(run_hook(self.repo.root, COMMIT).returncode, 0)
+        self.assertEqual(run_hook(self.repo.root, COMMIT).returncode, 2)
         self.repo.stage_todos(HEAD + block("Long block", extra_lines=30))
         self.repo.overwrite_worktree(HEAD + block("A"))
-        self.assertEqual(run_hook(self.repo.root, COMMIT).returncode, 2)
+        self.assertEqual(run_hook(self.repo.root, COMMIT).returncode, 0)
 
     def test_c7_repository_todos_passes(self) -> None:
         with open(REPO_TODOS, encoding="utf-8") as fh:
@@ -173,7 +176,7 @@ class GateTest(unittest.TestCase):
             self.assertEqual(run_hook(plain, COMMIT).returncode, 0)
         self.assertEqual(
             run_hook(self.repo.root, COMMIT).returncode, 0
-        )  # nothing staged
+        )  # no todos.md in the working tree
         self.assertEqual(
             run_hook(self.repo.root, COMMIT, payload="{not json").returncode, 0
         )
