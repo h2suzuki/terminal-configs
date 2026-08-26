@@ -307,27 +307,6 @@ Exit Criteria:
 Work file: `last-session-handoff.md` (再開手順)、`docs/injection-corpus-baseline.md`、
 `docs/injection-prevention-proposal.md`、`drafts/ruling61/` と `drafts/gates/` (gitignore)
 
-### 方法論の実証: 小規模ツール新規作成で敵対レビューの収束を実測する
-
-起票: user 2026-08-13
-
-Goal: 小さな要件の新規ツール作成を数ケース、方法論を適用して実施し、収束の成否・round 数・token を
-実測して最終成果を測る。
-
-Exit Criteria:
-
-- [x] 前提: sentinel の出口が決着している — 2026-08-22 決着 (凍結 `97743bd`)。2026-08-26 に
-  小さく書き直す決裁へ更新
-- [ ] ケース選定と成功基準をユーザーと合意する — ケース 1 = `claude_ab_probe` (合意 2026-08-25)。
-  結果 = 7 巡・非収束・巡 7 で指摘倍増、評価は `docs/adversarial-loop-meta-evaluation.md`。
-  ケース 2 以降は方法論の 1 ページ化後に §5.1 の protocol で行う
-- [ ] 各ケースの結果を方法論へ反映する — 2026-08-21 に確定した教訓 6 点 (機構的排除は loop を
-  収束させない / fix しながら埋め込む行動の排除 / レビューは品質推定 / 計数は script /
-  統計装置は規模で選ぶ / scope は round 種別で設計) は評価文書 §5.3 の 6 項目へ統合する
-
-Work file: `docs/methodology-case-ledger.md` (ケース 1 の台帳・凍結予定)、
-`docs/adversarial-review-methodology.md` (1 ページ版へ置換予定)
-
 ### 随伴エージェント待ち — モデル判定へ回す案件 (凍結)
 
 起票: user 2026-08-25 (「随伴エージェント行きを凍結扱いでまとめて」)。
