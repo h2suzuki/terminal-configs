@@ -56,13 +56,11 @@ Goal: 状況に当てはまる教訓が session 中に届き、届いた教訓�
 
 Exit Criteria:
 
-- [ ] ユーザーが対策の方向を決めた — (A) Stop 時の advisory surface (`_memory_surface_at_stop`、
-  「抵触しなければそのまま完了」型) を削除し行動前の surface だけ残す / (B) 予告 entry 3 件を
-  発注 lint の検査へ昇格して entry を退役 — 同じ artifact への fix 発注 3 巡目以降は
-  `## 処置の種別` 節で閉じた選択肢 (削除・縮小 / 契約の訂正 → 再入場 / 構造化の別発注 /
-  bounded-risk 受入 / 廃棄) の 1 つと対象を名指ししないと deny。局所 patch の継続だけが
-  選択肢に無い (2026-08-26 ユーザー質問「消すことが解にならないケース」への回答) /
-  (C) 文章だけの entry を減らす — 2026-08-26 ユーザー OK
+- [ ] ユーザーが対策の方向を決めた — (A) Stop 時の advisory surface (`_memory_surface_at_stop`) を
+  削除し行動前の surface だけ残す (決裁待ち) / (B) 予告 entry 3 件を発注 lint へ昇格して退役 —
+  fix 発注 3 巡目以降は `## 処置の種別` 節で閉じた選択肢 (削除・縮小 / 契約の訂正 → 再入場 /
+  構造化の別発注 / bounded-risk 受入 / 廃棄) の 1 つと対象を名指ししないと deny。局所 patch の
+  継続だけが選択肢に無い (2026-08-26 ユーザー合意) / (C) 文章だけの entry を減らす (同日 OK)
 - [ ] memory 衛生を機構化した — `memory_routing_gate` に近接重複の検出 (search score が閾値超なら
   新規 Write を deny して既存 entry への追記を案内) と、gate / lint が逐語 cover した entry の退役
   要求を入れる
