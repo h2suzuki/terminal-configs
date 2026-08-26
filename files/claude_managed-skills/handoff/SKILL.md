@@ -27,9 +27,10 @@ session 終了時に作業が完結し次 session 再開不要なら、 該当 t
 1. **作業途中判定**: 次 session で再開が必要か? 完了済なら handoff section 不要、 todos.md と commit log で充分
 2. `git status` で working tree clean か確認、 未 commit は `commit-discipline` skill で処理
 3. **Task 残処理**: TaskList (Task tool が gate off の session は mytask MCP) で open 項目を列挙し、 ゼロにする — 次 session へ持ち越す項目は todos.md parent task block へ移してから close、 持ち越さない項目はその場で close。 session 終了で Task list は死蔵され次 session から見えない。 open Task を残した wind-down は stop_checks hook (open-tasks-at-wind-down) が block する
-4. `todos.md` の Critical / High / Medium に対応 parent task block が登録済か確認 (`writing-todos` skill format: Goal + Exit Criteria + `Work file:`)。 task block が無いまま handoff section だけ書くのは禁止 (lifecycle 紐付けが切れる)
-5. 本 session で触れた canonical doc (`.claude/CLAUDE.md` / `~/.claude/CLAUDE.md` / `/etc/claude-code/CLAUDE.md`) に新規 rule が反映済か確認 — rule 追加分は当該 file に書き、 handoff には pointer のみ
-6. 該当 task block の `Work file:` フィールドに handoff doc path が記載されているか確認、 無ければ追加
+4. **background 残処理**: 本 session で起動した Agent / Workflow / Monitor / `run_in_background` の Bash が完了通知を返したかを確かめ、 残っていれば TaskStop で止める。 残したまま終了すると harness が「Background work is running」で終了を阻む
+5. `todos.md` の Critical / High / Medium に対応 parent task block が登録済か確認 (`writing-todos` skill format: Goal + Exit Criteria + `Work file:`)。 task block が無いまま handoff section だけ書くのは禁止 (lifecycle 紐付けが切れる)
+6. 本 session で触れた canonical doc (`.claude/CLAUDE.md` / `~/.claude/CLAUDE.md` / `/etc/claude-code/CLAUDE.md`) に新規 rule が反映済か確認 — rule 追加分は当該 file に書き、 handoff には pointer のみ
+7. 該当 task block の `Work file:` フィールドに handoff doc path が記載されているか確認、 無ければ追加
 
 ### 2. Project-specific extension (optional)
 
