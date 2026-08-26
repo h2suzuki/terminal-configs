@@ -118,30 +118,6 @@ Exit Criteria:
 
 Work file: `last-session-handoff.md` (再開手順)、`docs/memory-surface-efficacy.md` (報告の正本)、`drafts/corpus-tools/` (抽出・sampling・集計 script)
 
-### memory entry の scope 再チェック
-
-起票: user 2026-08-26 (「project/ にあるものも、本当に project 依存か、ちょっと疑わしくなってきた」
-「１つずつ、プロジェクト固有か、一般的な話か、再チェックしたほうがよい」)
-
-Goal: project 43 件 + user 2 件の entry を 1 件ずつ本文まで読んで P (固有) / G (一般) を確定し、
-G は org へ移動して、scope が実態と一致した状態にする。
-
-Exit Criteria:
-
-- [x] 一次分類を作った — 2026-08-26 reminder 全読、行別 tally (script 検算) で G 候補 17 / G? 5 /
-  要精読 9 / P 14 (`drafts/memory-scope-audit.md`)
-- [x] 1 件ずつ本文精読で P / G を確定しユーザーと裁定した — opus agent の分類は参考にとどめ、45 件全てを私 (fable-5)
-  が本文精読して判定し直し、2026-08-27 決裁「実行してよいです」(表は `drafts/memory-scope-audit.md` 末尾)
-- [x] G 確定分を org へ移動した — 2026-08-27: org へ 8 件 (mcp_json_mask_stub / ask_after_rereading_rulings /
-  causal_claim_without_reading_source / per_tab_state_localstorage / external_pattern_vocab_annotation /
-  lock_terms_be_decisive / report_unexpected_events / sandbox_dotfile_shadow)、user へ 1 件、退役 9 件 (古い reference 3 +
-  chat_emoji + 陳腐化 1 + Managed 規則が覆う 4)。旧 path は全て `--retire` 済み・push 済み
-- [x] worktree_order_gitignored_refs の実測 1 回 — 2026-08-27: `wt-delegation-gates` 内 session から発注した codex の
-  第一動作 probe が main checkout の `docs/codex-delegation-policy.md` (200 行) と `/tmp/…/scratchpad/replay_gates.py`
-  (91 行) を絶対 path で読めた → reminder を「絶対 path で参照」へ書き換えて org へ Write、旧 project entry を `--retire`
-
-Work file: `drafts/memory-scope-audit.md` (一次分類表)、`last-session-handoff.md` (再開手順)
-
 ### 肥大化した hook と CLI を新 protocol で最小限へ書き直す
 
 起票: user 2026-08-26 (「敵対レビューで肥大化したスクリプトがあれば、すべて simplify した方がよい」)
