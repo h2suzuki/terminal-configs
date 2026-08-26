@@ -1188,7 +1188,10 @@ def strip_fences(text: str) -> str:
     return re.sub(r"`[^`\n]*`", " ", text)
 
 
-SELF_NUMBER_RE = re.compile(r"(?:候補|案|選択肢|パターン)\s?[0-9]")
+# 数量表現 (候補 17 件 等) と桁続きを除外し、序数 label 参照だけを検出する
+SELF_NUMBER_RE = re.compile(
+    r"(?:候補|案|選択肢|パターン)\s?[0-9]+(?![0-9])(?!\s*(?:件|つ|個|本|点))"
+)
 # ☀ (U+2600) 起点だと U+2300 台の ⌛ ⏰ ⏳ ⏸ が漏れるので、 該当 range を個別に足す。
 EMOJI_START_RE = re.compile(
     r"[⌚⌛⏩-⏳⏸-⏺☀-➿\U0001f1e6-\U0001f1ff\U0001f300-\U0001faff]"
@@ -1334,12 +1337,9 @@ def _decision_record_warning(
     )
 
 
-def _communication_lint_warnings(
-    final_text: str, assistant_text: str | None = None
-) -> list[str]:
-    prose = _strip_code_and_quotes(
-        final_text if assistant_text is None else assistant_text
-    )
+def _communication_lint_warnings(final_text: str) -> list[str]:
+    # 最終本文だけを走査する: turn 全文だと再出力で直した過去文を毎 Stop 再警告し自走する
+    prose = _strip_code_and_quotes(final_text)
     final_line = _last_prose_line(final_text)
     warnings: list[str] = []
     if (
@@ -1364,7 +1364,6 @@ def _new_warning_families(
     entries: list[dict],
     final_text: str,
     payload: dict,
-    assistant_text: str | None = None,
 ) -> list[str]:
     warnings: list[str] = []
     session_id = payload.get("session_id")
@@ -1386,7 +1385,7 @@ def _new_warning_families(
     except Exception:
         pass
     try:
-        communication = _communication_lint_warnings(final_text, assistant_text)
+        communication = _communication_lint_warnings(final_text)
         if communication:
             warnings.append(" ".join(communication))
     except Exception:
@@ -2125,7 +2124,7 @@ def _run(payload: dict) -> tuple[int, float | None, str, list[str]]:
     )
     new_warnings: list[str] = []
     if warning_stop_allowed:
-        new_warnings = _new_warning_families(entries, final_text, payload, text)
+        new_warnings = _new_warning_families(entries, final_text, payload)
         warnings.extend(new_warnings)
     surfaced_warnings = worktree_warnings + new_warnings
     if exit_code == 2 and stop_hook_active:
@@ -3446,6 +3445,20 @@ class CommunicationLintWarningTest(unittest.TestCase):
                 for item in _communication_lint_warnings("選択肢 3 を採用\n✅ 完了")
             )
         )
+        self.assertTrue(
+            any(
+                "communication-self-number" in item
+                for item in _communication_lint_warnings("候補 12 で進める\n✅ 完了")
+            )
+        )
+        for quantity in ("G 候補 17 件を提示\n✅ 完了", "案 3 つを並記\n✅ 完了"):
+            self.assertFalse(
+                any(
+                    "communication-self-number" in item
+                    for item in _communication_lint_warnings(quantity)
+                ),
+                quantity,
+            )
 
     def test_all_new_families_are_warning_only(self):
         entries = [TurnMarkerTest._asst("通常行")]
