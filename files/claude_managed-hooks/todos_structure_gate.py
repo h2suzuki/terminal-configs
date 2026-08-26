@@ -5,6 +5,7 @@ Purpose
 =======
 Before a git commit naming todos.md, validate the working-tree file's block size,
 checkbox item size, and required metadata keys.
+Decision-bearing added paragraphs also require consent evidence or a non-decision marker.
 
 Exit:
   0: command is outside scope or working-tree todos.md passes
@@ -24,6 +25,8 @@ import sys
 MAX_BLOCK_LINES = 40
 MAX_ITEM_LINES = 6
 REQUIRED_KEYS = ("起票:", "Goal:", "Exit Criteria:")
+DECISION_WORDS = ("決裁", "承認", "合意", "採用")
+CONSENT_MARKERS = ("提案中", "発話証跡なし", "要確認", "未承認", "無承認", "承認不備", "不採用")  # fmt: skip
 GIT_OPTIONS_WITH_VALUES = {
     "-C",
     "-c",
@@ -113,6 +116,53 @@ def lint(text: str) -> list[str]:
     return violations
 
 
+def _consent_satisfied(paragraph: str) -> bool:
+    return "「" in paragraph or any(marker in paragraph for marker in CONSENT_MARKERS)
+
+
+def _consent_violations(text: str, repo_root: str) -> list[str]:
+    try:
+        baseline = subprocess.run(
+            ["git", "-C", repo_root, "show", "HEAD:todos.md"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return []
+    if baseline.returncode != 0:
+        return []
+
+    work_lines = text.splitlines()
+    head_lines = baseline.stdout.splitlines()
+    added = set(work_lines) - set(head_lines)
+    violations: list[str] = []
+    paragraph_lines: list[str] = []
+    for current in [*work_lines, ""]:
+        if current.strip():
+            paragraph_lines.append(current)
+            continue
+        if not paragraph_lines:
+            continue
+        paragraph = "\n".join(paragraph_lines)
+        if (
+            any(item in added for item in paragraph_lines)
+            and any(word in paragraph for word in DECISION_WORDS)
+            and not _consent_satisfied(paragraph)
+        ):
+            line = next(
+                line
+                for line in paragraph_lines
+                if any(word in line for word in DECISION_WORDS)
+            )
+            violations.append(
+                f"consent {line[:40]!r}: needs a 「…」 quote or an explicit non-decision marker"
+            )
+        paragraph_lines = []
+    return violations
+
+
 def _run(payload: object) -> int:
     if not isinstance(payload, dict) or payload.get("tool_name") != "Bash":
         return 0
@@ -127,7 +177,9 @@ def _run(payload: object) -> int:
     if target is None:
         return 0
     with open(target, encoding="utf-8") as handle:
-        violations = lint(handle.read())
+        text = handle.read()
+    violations = lint(text)
+    violations.extend(_consent_violations(text, os.path.dirname(target)))
     if not violations:
         return 0
     sys.stderr.write("todos-structure:\n")
