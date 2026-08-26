@@ -4,10 +4,11 @@
 Contract (each claim maps to one test):
   C1  the hook is a PreToolUse(Bash) gate: payload JSON on stdin, exit 0 = allow, exit 2 = deny with the
       reason on stderr starting with "todos-structure:"
-  C2  it acts only on a `git commit` whose pathspec (tokens after `--`) names todos.md; a todos.md
-      mentioned only in the message, or any other command, exits 0
-  C3  it lints the WORKING-TREE todos.md at the repo root (what `git commit -- todos.md` records), not
-      the index blob
+  C2  it acts only on a `git commit` whose pathspec (tokens after `--`), resolved against the effective
+      cwd, is the repository root's todos.md; `git -C <dir>` (repeatable, relative to the payload cwd)
+      moves the effective cwd; a todos.md mentioned only in the message, or any other command, exits 0
+  C3  it lints the WORKING-TREE todos.md at the root of the repository containing the effective cwd
+      (what `git commit -- todos.md` records), not the index blob and not the payload cwd's repository
   C4  a `### ` block (heading line through the line before the next `### ` / `## ` / EOF) may span at most
       MAX_BLOCK_LINES = 40 lines; a longer block is denied and named with its line count
   C5  a checkbox item (`- [ ]` / `- [x]` line plus its indented continuation lines) may span at most
@@ -164,6 +165,22 @@ class GateTest(unittest.TestCase):
         self.repo.stage_todos(HEAD + block("Long block", extra_lines=30))
         self.repo.overwrite_worktree(HEAD + block("A"))
         self.assertEqual(run_hook(self.repo.root, COMMIT).returncode, 0)
+
+    def test_c2_c3_dash_c_moves_the_repository(self) -> None:
+        self.repo.stage_todos(HEAD + block("Long block", extra_lines=30))
+        with tempfile.TemporaryDirectory() as plain:
+            command = f'git -C {self.repo.root} commit -m "todos: x" -- todos.md'
+            self.assertEqual(run_hook(plain, command).returncode, 2, command)
+            other = Repo(plain)
+            other.stage_todos(HEAD + block("A"))
+            self.assertEqual(run_hook(plain, command).returncode, 2, command)
+            mirror = f'git -C {plain} commit -m "todos: x" -- todos.md'
+            self.assertEqual(run_hook(self.repo.root, mirror).returncode, 0, mirror)
+        parent, name = os.path.split(self.repo.root)
+        relative = f'git -C {name} commit -m "todos: x" -- todos.md'
+        self.assertEqual(run_hook(parent, relative).returncode, 2, relative)
+        absolute = f'git commit -m "todos: x" -- {self.repo.root}/todos.md'
+        self.assertEqual(run_hook(self.repo.root, absolute).returncode, 2, absolute)
 
     def test_c7_repository_todos_passes(self) -> None:
         with open(REPO_TODOS, encoding="utf-8") as fh:

@@ -20,12 +20,15 @@ REPO_TODOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tod
 
 MUTANTS = {
     "m1-block-limit-removed": ("MAX_BLOCK_LINES = 40", "MAX_BLOCK_LINES = 4000"),
-    "m2-item-limit-removed": ("MAX_ITEM_LINES = 6", "MAX_ITEM_LINES = 600"),
+    "m2-dash-c-ignored": ('if token == "-C":', 'if token == "-Z":'),
     "m3-goal-not-required": (
         'REQUIRED_KEYS = ("起票:", "Goal:", "Exit Criteria:")',
         'REQUIRED_KEYS = ("起票:",)',
     ),
-    "m4-never-triggers": ("if not is_todos_commit(command):", "if True:"),
+    "m4-never-triggers": (
+        "target = todos_commit_target(command, cwd)",
+        "target = None",
+    ),
 }
 
 
