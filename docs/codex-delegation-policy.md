@@ -139,7 +139,7 @@ effort は既定を継承し、review / judgment 層だけ上げ、機械的作�
 
 ### 隔離
 
-- write を伴う委譲は repo の worktree 隔離が必須。発注 session 自身を worktree 内で起動し、`--cwd` でも作業 dir を明示する (codex-delegation skill)。同一 checkout 内の領域分離では足りない (donottouch 4-2 が優先)
+- write を伴う委譲は repo の worktree 隔離が必須。発注前に単独の `cd` で worktree へ移って session 終了まで留まり、`--cwd` でも作業 dir を明示する (codex-delegation skill)。同一 checkout 内の領域分離では足りない (donottouch 4-2 が優先)
 - read-only の証拠収集・review は隔離不要。同一 file の同時編集・formatter・大規模置換・schema 生成は競合対象
 
 ### 代表的な起動形式
