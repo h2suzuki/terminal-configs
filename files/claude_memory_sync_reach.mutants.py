@@ -21,7 +21,7 @@ MUTANTS = {
     "m1-window-removed": ("REACH_DAYS = 30", "REACH_DAYS = 3000"),
     "m2-hot-threshold-removed": ("HOT_EMITS = 20", "HOT_EMITS = 2000"),
     "m3-mismatch-counted": ("\"AND coalesce(kind, 'emit') = 'emit' \"", '"" '),
-    "m4-hot-off-by-one": ("if count >= HOT_EMITS:", "if count > HOT_EMITS:"),
+    "m4-hot-off-by-one": ("if count >= HOT_EMITS", "if count > HOT_EMITS"),
 }
 
 
