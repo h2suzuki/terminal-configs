@@ -35,11 +35,11 @@ Exit Criteria:
   `/usr/local/bin` と skill が `diff -q` IDENTICAL、実 job record 2 件 (completed / cancelled) で
   verdict done / failed を実測
 - [x] 方法論 doc を 6 項目 1 ページに置換し、台帳 3 本に凍結注記を入れた — 2026-08-26
-- [ ] todos.md の構造 lint を決定的 gate にする — block 行数・criterion 行数の上限と、起票 /
-  Goal / Exit Criteria / Work file 以外の prose 節を deny。書き直しの次に着手
-- [ ] 台帳の再発防止 — 書き出し欲求の逃がし先 (`drafts/journal/`、読み返さない・gitignore) を
-  用意し、凍結した docs/ への書込を deny する gate と組にする (「書くな」だけでは別の場所に
-  書き始める、というユーザー所見に沿う)
+- [x] todos.md の構造 lint を決定的 gate にする — `todos_structure_gate.py` (block ≤ 40 行・項目 ≤ 6 行・
+  必須 key 3 つ) を 2026-08-26 に配備、41 行 block の commit が deny されることを E2E で実測
+- [x] 台帳の再発防止 — `frozen_docs_gate.py` (HEAD に `凍結 (日付)` 行を持つ file の行数増加 commit を
+  deny し、逃がし先 `drafts/journal/` を案内) を 2026-08-26 に配備、凍結 doc +1 行の commit が deny
+  されることを E2E で実測
 - [ ] 実案件を §5.1 で回し、§5.6 の指標で判定した — ケース 1 = sentinel 書き直し (2026-08-26:
   変異 0/4・1 巡で出荷・配備済み)、ケース 2 = todos 構造 gate (契約の訂正で再入場 1 回)。
   残り = 配備後 2 週間 (〜2026-09-09) の実運用で用途内 P0 が 0 であること。外れたら loop
@@ -58,11 +58,9 @@ Goal: 状況に当てはまる教訓が session 中に届き、届いた教訓�
 
 Exit Criteria:
 
-- [ ] ユーザーが対策の方向を決めた — (A) Stop 時の advisory surface (`_memory_surface_at_stop`) を
-  削除し行動前の surface だけ残す (決裁待ち) / (B) 予告 entry 3 件を発注 lint へ昇格して退役 —
-  fix 発注 3 巡目以降は `## 処置の種別` 節で閉じた選択肢 (削除・縮小 / 契約の訂正 → 再入場 /
-  構造化の別発注 / bounded-risk 受入 / 廃棄) の 1 つと対象を名指ししないと deny。局所 patch の
-  継続だけが選択肢に無い (2026-08-26 ユーザー合意) / (C) 文章だけの entry を減らす (同日 OK)
+- [x] ユーザーが対策の方向を決めた (2026-08-26) — (A) Stop 時 advisory surface を削除 (11005b1、配備済み) /
+  (B) 予告 entry は `## 処置の種別` の閉じた選択肢 gate へ (合意) / (C) 文章だけの entry を減らす (OK)。
+  追加の決裁待ち = blocking 昇格候補 8 件と scope 上限 (org 60) の採否
 - [ ] memory 衛生を機構化した — `memory_routing_gate` に近接重複の検出 (search score が閾値超なら
   新規 Write を deny して既存 entry への追記を案内) と、gate / lint が逐語 cover した entry の退役
   要求を入れる
@@ -72,6 +70,9 @@ Exit Criteria:
   (`self_build_impulse` / `delegation_failure_no_self_impl` / `inventory_existing_tools_first`)。
   gate で逐語 cover 済みの例: `codex_delegation_skill_skip` (delegation gate が skill invoke を deny で
   強制)、`codex_monitor_job_state` (sentinel が実装)
+- [x] 到達経路を測って回す機構を配備した (2026-08-26、aa3c1dd) — surface の (entry, session) 上限 2 回と
+  `claude_memory_sync --reach` (30 日 emit 0 / ≥ 20 の列挙。初回: never 70 / hot 6)。30 日後に到達可能
+  entry の未到達率が 43% → 25% 未満かで判定
 - [ ] 採用した対策を実装し、2026-08-25 session の prompt 列で backtest して予告 entry が届くことを
   確認した (memory-surface-analyzer)
 
