@@ -38,12 +38,10 @@ PreToolUse `^(Edit|Write|MultiEdit)$` → guard:
       ため。「/memory-routing 経由で full content を Write」へ誘導。
   Write on entry:
     1. grant 不在 (or 鮮度切れ) → deny「/memory-routing を使え」。
-    2. org scope の新規 entry 数が上限超 → deny。既存 path の再 Write と user /
-       project scope は対象外。
-    3. 内容不備 (下記) → deny (具体的是正指示)。grant は残す (直して再 Write が
+    2. 内容不備 (下記) → deny (具体的是正指示)。grant は残す (直して再 Write が
        そのまま通る = 一発 Write の趣旨)。warn は出さない (Edit を塞いだ以上、
        warn は「直す→Edit→denied」の詰みになるため、受理できる内容まで deny)。
-    4. 両方 OK → allow (silent) + grant を consume (削除)。
+    3. 両方 OK → allow (silent) + grant を consume (削除)。
 
   内容不備の判定 (memory_surface._parse_entry / _build_query と同契約):
     - content が MAX_ENTRY_SIZE 超 → memory_surface が index しない。
@@ -86,13 +84,8 @@ import time
 HOME = os.path.expanduser("~")
 STATE_DIR = os.path.join(HOME, ".claude", "hooks", "state")
 GRANTS_DIR = os.path.join(STATE_DIR, "memory-routing", "grants")
-MEMORY_REPO_DIR = (
-    os.environ.get("CLAUDE_MEMORY_REPO")
-    or "/var/lib/claude-rag-memory/claude-lessons-learned"
-)
-SYNC_CLI = (
-    os.environ.get("CLAUDE_MEMORY_SYNC_CLI") or "/usr/local/bin/claude_memory_sync"
-)
+MEMORY_REPO_DIR = "/var/lib/claude-rag-memory/claude-lessons-learned"
+SYNC_CLI = "/usr/local/bin/claude_memory_sync"
 # Legacy pre-clone locations: writes there get a redirect deny.
 LEGACY_USER_MEM_DIR = os.path.join(HOME, ".claude", "memory")
 _LEGACY_PROJ_MEM_RE = re.compile(r".*/\.claude/projects/([^/]+)/memory/[^/]+\.md$")
@@ -100,9 +93,6 @@ _LEGACY_PROJ_MEM_RE = re.compile(r".*/\.claude/projects/([^/]+)/memory/[^/]+\.md
 MAX_ENTRY_SIZE = 50_000  # memory_surface._parse_entry と一致
 GRANT_STALE_SECONDS = 3600  # 放置 grant を無効化 + 掃除する閾値
 SYNC_TIMEOUT_SECONDS = 20  # index upsert + local git commit (push は detached)
-ORG_CAP = 60
-NEVER_SHOWN = 15
-REACH_TIMEOUT_SECONDS = 5
 INDEX_NAMES = {"MEMORY.md", "OLD-MEMORY.md", "README.md"}
 OPT_OUT = "memory-guard: allow"
 
@@ -179,50 +169,6 @@ def _repo_rel(path: str) -> str | None:
     """Repo-relative path, or None when outside the clone."""
     rel = os.path.relpath(path, os.path.realpath(MEMORY_REPO_DIR))
     return None if rel.startswith("..") else rel
-
-
-def _is_new_entry(path: str) -> bool:
-    return not os.path.exists(path)
-
-
-def _is_org_entry(path: str) -> bool:
-    rel = _repo_rel(path)
-    return rel is not None and rel.split(os.sep)[0] == "org"
-
-
-def _org_count() -> int:
-    org_dir = os.path.join(MEMORY_REPO_DIR, "org")
-    try:
-        with os.scandir(org_dir) as entries:
-            return sum(
-                1
-                for entry in entries
-                if entry.is_file(follow_symlinks=False) and _is_entry_name(entry.name)
-            )
-    except OSError:
-        return 0
-
-
-def _never_org() -> list[str]:
-    try:
-        result = subprocess.run(
-            [sys.executable, SYNC_CLI, "--reach"],
-            timeout=REACH_TIMEOUT_SECONDS,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return []
-    if result.returncode != 0 or not result.stdout:
-        return []
-    return [
-        line.removeprefix("never: ")
-        for line in result.stdout.splitlines()
-        if line.startswith("never: org/")
-    ]
 
 
 def _is_memory_entry(path: str) -> bool:
@@ -447,24 +393,6 @@ def cmd_guard(payload: dict) -> None:
             "この memory entry は /memory-routing skill を経由して書いてください。 "
             "skill が書込直前に grant を mint し、 routing 判断・正書式・DB 同期を "
             "一括で担保します (直接 Write は grant 不在で deny されます)。"
-        )
-        return
-
-    if _is_org_entry(path) and _is_new_entry(path) and _org_count() > ORG_CAP:
-        org_count = _org_count()
-        never = _never_org()[:NEVER_SHOWN]
-        never_text = "\n".join(f"- {item}" for item in never)
-        if not never_text:
-            never_text = "(一覧を取得できませんでした)"
-        _emit_deny(
-            f"org scope の entry 数が {org_count} 件で上限 {ORG_CAP} 件を超えています。 "
-            "退役候補 (claude_memory_sync --reach の never: org/...):\n"
-            f"{never_text}\n"
-            "残りの候補、または一覧の取得失敗は claude_memory_sync --reach で確認してください。 "
-            "never 一覧の entry を読んで統合・退役し、ホスト側で "
-            "claude_memory_sync --retire <abs path> を実行して 60 件以下にしてから、"
-            "同じ grant で Write し直してください。既存 path の再 Write と user / project "
-            "scope は対象外です。この hook 自身は file を変更しません。"
         )
         return
 
