@@ -216,10 +216,8 @@ run claude mcp add toolbox --scope user -- toolbox_bigquery_mcp
 claude mcp remove mytask --scope user
 run claude mcp add mytask --scope user -- claude_mytask_mcp
 
-# Vercel CLI + plugin (MCP comes from the plugin)
+# Vercel CLI
 run npm install -g @vercel/vc-native
-run CI=1 npx -y plugins add vercel/vercel-plugin --yes --target claude-code
-run claude plugin update vercel@claude-plugins-official
 
 
 run claude mcp list

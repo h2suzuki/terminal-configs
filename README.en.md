@@ -123,7 +123,7 @@ Adds Claude Code's "trust-building" machinery plus external tool integrations.
 - **User-side hooks**: commit author check, push-prompting detection, memory surfacing, and subagent gate are installed into `~/.claude/hooks/`, and a per-user RAG memory index is built.
 - **LSP**: language servers (clangd via APT in the base setup; typescript-language-server / pyright via npm) and their plugins (clangd-lsp / typescript-lsp / pyright-lsp).
 - **MCP servers (scope=user)**: Playwright (browser), CodeGraph (code knowledge graph), Cloud Run, Toolbox (BigQuery)
-- **Plugins**: security-guidance (disabled by default), figma, codex (delegation to OpenAI Codex / code review), vercel (Vercel's MCP is provided through this plugin)
+- **Plugins**: security-guidance (disabled by default), figma, codex (delegation to OpenAI Codex / code review)
 - **CLI**: agent-browser (Vercel Labs), Vercel CLI
 
 After setup, complete the authentication / initial setup below (only the MCP servers registered here; `claude mcp list` also shows MCP servers configured elsewhere).
@@ -134,7 +134,6 @@ After setup, complete the authentication / initial setup below (only the MCP ser
 | cloud-run | `gcloud auth login`<br>`gcloud auth application-default login` |
 | toolbox | `gcloud config set project <PROJECT_ID>`<br>`gcloud auth application-default login` |
 | figma | OAuth2 via `/mcp` in the Claude Code console |
-| vercel | OAuth2 via `/mcp` in the Claude Code console |
 
 After authenticating, check the connections with `/mcp` and `/doctor`.
 
