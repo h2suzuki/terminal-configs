@@ -27,15 +27,18 @@ Exit Criteria:
 
 - [x] ユーザーが処遇を決めた — 2026-08-26 決裁: sentinel は本当に有効な最小限まで小さく
   書き直す / 方法論も同じく最小限へ (1 ページ) / ab_probe は廃棄 / 直さない指摘は台帳に書かない
-- [ ] ab_probe を廃棄した — `wt-abprobe` worktree と branch を削除
-- [ ] sentinel を要件から書き直した — 発注側が契約 (10〜30 行)・受け入れ test・固定 4 変異を
-  先に書き、評価文書 §5.1 の protocol (最大 3 巡) で実装する。旧版は書き直し版が配備されるまで
-  凍結 (patch しない)
-- [ ] 方法論 doc を評価文書 §5.3 の 1 ページ版に置換し、台帳 3 本 (`docs/methodology-case-ledger.md` /
-  `docs/sentinel-review-analysis.md` / `docs/sentinel-convergence-log.md`) を凍結した
-- [ ] 台帳を LLM が書く工程を再び作らない対策をユーザーが決めた — 候補: 方法論から台帳記述の
-  工程を削除する / 集計は script のみ / docs・todos の commit 数 ≤ product の commit 数を
-  Stop 時に検査する
+- [x] ab_probe を廃棄した — 2026-08-26。`wt-abprobe` と branch を削除、発注書・報告書 31 file は
+  `drafts/ab-probe-archive/` に退避
+- [ ] sentinel を要件から書き直した — **発注済み 2026-08-26** (worktree `wt-sentinel`、契約 =
+  `files/codex_task_sentinel.test.py` の C1〜C12、発注側の変異 4 種 = `drafts/sentinel-mutants.py`、
+  発注書 `drafts/sentinel-rewrite-order.md`)。受け入れ = test 全通過 + 変異 0/4 生存 + 独立
+  レビュー 1 巡 (P0 なし)。その後 skill の exit 表を更新し配備。旧版は配備まで patch しない
+- [x] 方法論 doc を 6 項目 1 ページに置換し、台帳 3 本に凍結注記を入れた — 2026-08-26
+- [ ] todos.md の構造 lint を決定的 gate にする — block 行数・criterion 行数の上限と、起票 /
+  Goal / Exit Criteria / Work file 以外の prose 節を deny。書き直しの次に着手
+- [ ] 台帳の再発防止 — 書き出し欲求の逃がし先 (`drafts/journal/`、読み返さない・gitignore) を
+  用意し、凍結した docs/ への書込を deny する gate と組にする (「書くな」だけでは別の場所に
+  書き始める、というユーザー所見に沿う)
 - [ ] 次の小さな実案件 1 件を §5.1 で回し、§5.6 の指標 (4 変異の生存 0/4・3 巡以内に出荷・
   2 週間 P0 0) で判定した。外れたら loop approach を捨てる
 
@@ -52,9 +55,19 @@ Goal: 状況に当てはまる教訓が session 中に届き、届いた教訓�
 
 Exit Criteria:
 
-- [ ] ユーザーが対策の方向を決めた — 候補は評価文書と 2026-08-26 の報告に列挙
-  (retrieval を prompt 語彙でなく状態 signal で引く / Stop 時の surface を削る / 高価値 entry を
-  gate へ昇格して entry を退役 / entry 総数を減らす)
+- [ ] ユーザーが対策の方向を決めた — (A) Stop 時の advisory surface (`_memory_surface_at_stop`、
+  「抵触しなければそのまま完了」型) を削除し行動前の surface だけ残す / (B) 予告 entry 3 件を
+  発注 lint の検査へ昇格 (同じ artifact への fix 発注 3 巡目以降は「何を消すか」節が無いと deny)
+  して entry を退役 / (C) 文章だけの entry を減らす
+- [ ] memory 衛生を機構化した — `memory_routing_gate` に近接重複の検出 (search score が閾値超なら
+  新規 Write を deny して既存 entry への追記を案内) と、gate / lint が逐語 cover した entry の退役
+  要求を入れる
+- [ ] 重複 cluster を統合した — 例: 自己採点系 (`lesson_is_input_not_report` /
+  `close_question_before_remorse` / `check_report_verdict_wording`)、規則追加系
+  (`rule_violation_means_countermeasure` / `failure_response_adds_rules`)、自作・委譲系
+  (`self_build_impulse` / `delegation_failure_no_self_impl` / `inventory_existing_tools_first`)。
+  gate で逐語 cover 済みの例: `codex_delegation_skill_skip` (delegation gate が skill invoke を deny で
+  強制)、`codex_monitor_job_state` (sentinel が実装)
 - [ ] 採用した対策を実装し、2026-08-25 session の prompt 列で backtest して予告 entry が届くことを
   確認した (memory-surface-analyzer)
 
