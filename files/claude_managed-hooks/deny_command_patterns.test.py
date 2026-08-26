@@ -106,6 +106,7 @@ class GateTest(unittest.TestCase):
         self.deny("until false; do ls; done", "loop")
         self.deny("for ((;;)); do sleep 1; done", "loop")
         self.allow("timeout 300 bash -c 'while true; do sleep 5; done'")
+        self.allow("while true; do timeout 5 curl -s localhost && break; done")
         self.allow("for i in $(seq 1 30); do sleep 1; done")
         self.allow("until [ -f done.txt ]; do sleep 1; done")
 

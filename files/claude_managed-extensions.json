@@ -25,6 +25,7 @@
           { "type": "command", "command": "/etc/claude-code/hooks/deny_compound_git_commit.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/todos_structure_gate.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/frozen_docs_gate.py" },
+          { "type": "command", "command": "/etc/claude-code/hooks/deny_command_patterns.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/skill_reminder_gate.py commit-gate" },
           { "type": "command", "command": "/etc/claude-code/hooks/check_commit_format.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/deny_unsafe_git_reset.py" },
