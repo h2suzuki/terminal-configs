@@ -76,6 +76,7 @@ Exit Criteria:
   `feedback_violation_countermeasure_delete_first` / `feedback_self_build_over_delegation`) へ統合 Write し、
   旧 8 件を `claude_memory_sync --retire` で退役 (Bash から直接通った。commit `2c85170`〜`908bab7`、push 済み、
   org 70 → 62 で disk と index が一致)。gate cover 済みの 3 件は同日退役済み
+- [ ] 退役の他マシン伝播は SessionStart の pull が担う (実装済み・smoke 38/38)。残り = 未 push / pull 失敗の起動時通知の要否 (未決)
 - [x] 到達経路を測って回す機構を配備した (2026-08-26、aa3c1dd) — surface の (entry, session) 上限 2 回と
   `claude_memory_sync --reach` (30 日 emit 0 / ≥ 20 の列挙。初回: never 70 / hot 6)。30 日後に到達可能
   entry の未到達率が 43% → 25% 未満かで判定
@@ -107,10 +108,11 @@ Exit Criteria:
 - [ ] 実装 1 = memory 書式 gate: entry frontmatter に `check:` (直前の出力に当てる検査動作 1 文・肯定形・100 字以内) を
   新設し、`memory_routing_gate.py` が欠落 / 否定形のみ (「するな」だけで動作なし) を deny する — 挙動 1 行の承認後に実装
 - [ ] 実装 2 = Stop 時 surface の再導入: `check:` を持つ entry のみ、文言「抵触するなら修正してから完了。しなければ
-  何も書かない」で surface する family を stop_checks 書き直しの契約に含める (旧文言の「確認せよ」は使わない)
+  何も書かない」で surface する family を stop_checks 書き直しの契約に含める (旧文言の「確認せよ」は使わない)。
+  あわせて entry に `when:` (prompt / stop / after-subagent) を設け、surface hook がそれで振り分ける (ユーザー提案 2026-08-27)
 - [ ] 既存 entry の移行: 効いた 11 entry に `check:` を書き、態度・文体だけの entry は `check:` を書かずに Stop 対象外とする
 
-Work file: `drafts/memory-surface-efficacy-2026-08-27.md` (報告)、`drafts/corpus-tools/` (抽出・sampling・集計 script)
+Work file: `last-session-handoff.md` (再開手順)、`docs/memory-surface-efficacy.md` (報告の正本)、`drafts/corpus-tools/` (抽出・sampling・集計 script)
 
 ### memory entry の scope 再チェック
 
@@ -155,6 +157,9 @@ Exit Criteria:
 - [ ] skill_reminder_gate (1,073 行) と codex_order_lint (592 行) を書き直し配備した — order_lint は
   「機構追加」の字面で必須節を連鎖要求する判定 (2026-08-26 に 2 回誤発火) を落とし、fix 発注 3 巡目以降に
   `## 処置の種別` (閉じた選択肢) を必須にする gate を足す
+- [ ] stop_checks の契約に足す family 4 つ — Task 常時計画 (新規 prompt に応答する turn で最初の非 Task tool 呼び出し前に
+  Task upsert が無ければ block)、読まずに裁定 (subagent / workflow の結果を受けた turn で、最終本文が挙げた entry / path を開く
+  tool 呼び出しが無ければ block)、Stop 時 surface (`check:` を持つ entry 限定)、「無駄」reminder の prompt ごと 1 回化
 - [ ] 配備後 2 週間の実運用で誤 deny 0
 
 Work file: `last-session-handoff.md` (再開手順)、`docs/adversarial-review-methodology.md` (protocol)、
@@ -216,7 +221,7 @@ Exit Criteria:
 - [x] 対策 D (upstream 報告): #380 へコメント投稿 (2026-08-24、
   `https://github.com/openai/codex-plugin-cc/issues/380#issuecomment-5388760433`)
 
-Work file: `files/codex_broker_reap` (host 実行・手順は `--help`)、
+Work file: `last-session-handoff.md` (再開手順)、`files/codex_broker_reap` (host 実行・手順は `--help`)、
 `drafts/codex-broker-leak-upstream-report.md`、`drafts/broker-leak-repro.sh`、
 memory `feedback_codex_broker_outlives_session` (org)
 
@@ -317,7 +322,7 @@ Exit Criteria:
 - [ ] (別 session) 統一文案を各 file へ反映し、`files/` と配備先の一致まで確認した — 前提
   「ケース 1 完走」は 2026-08-26 に満たされた。残る前提はポリシー確定
 
-Work file: `drafts/claude_code_codex_delegation_guide_ja.pdf` (方針の正本)、`docs/codex-usage-anchors.md`、
+Work file: `last-session-handoff.md` (再開手順)、`drafts/claude_code_codex_delegation_guide_ja.pdf` (方針の正本)、`docs/codex-usage-anchors.md`、
 `docs/codex-usage-donottouch.md`、`drafts/codex-usage-unification.md` (矛盾表・統一文案・発注クラス案 D1〜D5)
 
 ## Medium
