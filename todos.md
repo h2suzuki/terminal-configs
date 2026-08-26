@@ -320,11 +320,11 @@ Exit Criteria:
   `drafts/codex-usage-unification.md`、矛盾 3 系統 20 組)
 - [x] 置換対象を文言で特定した一覧を用意した — `docs/codex-usage-anchors.md` (25/26 が一意に当たる)
 - [x] 緩めない箇所を名指しで除外した — `docs/codex-usage-donottouch.md` (7 分類 38 件)
-- [ ] 発注ポリシーの持ち込み — `drafts/claude_code_codex_delegation_guide_ja.pdf` を精読済み (2026-08-27)。
-  同日決裁: A = pdf の境界を採用 (非委譲 = Claude 直書きとは限らず opus / sonnet subagent を token・effort を
-  抑えて使う) / B = 回帰レビューは opus subagent のまま、時期は milestone / C = transfer は Claude が適時
-  提案し起動はユーザー (gate 不変)。worktree 隔離は donottouch 優先。残り = 正本
-  `docs/codex-delegation-policy.md` を書く (反映は次項)
+- [x] 発注ポリシーの持ち込み — `drafts/claude_code_codex_delegation_guide_ja.pdf` を精読し (2026-08-27)、
+  同日決裁 (A = pdf の境界を採用、非委譲 = Claude 直書きとは限らず opus / sonnet subagent を token・effort を
+  抑えて使う / B = 回帰レビューは opus subagent のまま、時期は milestone / C = transfer は Claude が適時
+  提案し起動はユーザー、gate 不変。worktree 隔離は donottouch 優先) を正本 `docs/codex-delegation-policy.md`
+  (199 行、`a116341`) に書いた
 - [ ] 統一文案を各 file へ反映し、`files/` と配備先の一致まで確認した — 生存 anchor 14 件 (#1-8, #16-21、
   2026-08-27 再実測)。前提「ケース 1 完走」と「ポリシー確定」は満たされた。残る前提は正本の完成
 
