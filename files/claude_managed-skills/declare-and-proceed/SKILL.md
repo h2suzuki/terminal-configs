@@ -15,7 +15,7 @@ user に質問するのは一見 cheap だが、 累積すると ownership ぼ�
 ## Process
 
 1. 質問を発しかけた瞬間に **停止**
-2. 1 拍 verbalize: 「これは material existing か? default で進めるか? parallel 実行で両立できるか?」
+2. 1 拍 verbalize: 「これは material existing か? default で進めるか? parallel 実行で両立できるか? 質問の前提にした rule / doc / 仕様の原文を、 質問の直前に Read したか?」
 3. いずれかで yes なら自分で決めて proceed (1 unit 目で style 方針 / 結論方針を verbalize 宣言)
 4. 残るのは genuine user-taste / unrecoverable destructive op の pre-approval / design-level (architecture / naming / priority / scope) の 3 case — そこは ask
 
@@ -46,6 +46,13 @@ batch / iterative work では per-entry / per-batch に user 確認を求めな�
 - 件数 / 完了基準
 
 宣言後は per-unit の 「これで良い?」 を user に聞かない。 user が tone / depth / 用語を変えたい時は事後 chat log review で指摘する流れに任せる。
+
+### Re-read the source before asking
+
+質問の前提にした rule / doc / 仕様の該当行を、 質問の直前に Read で開いて verbatim 引用する。 記憶・要約・他 file の類似文言を根拠にしない。 引用できない前提は質問に載せない。
+
+- 悪い: 別 project の seed CLAUDE.md の文言を管轄 project の規則と思い込んだまま裁定を求める (2026-08-27 実例 — 原文の該当行は別の意味で、 Read していれば質問自体が要らなかった)
+- 良い: 「project CLAUDE.md:6 は『…』(verbatim) なので、 判断が要るのは X だけです」 と原文つきで問う
 
 ### Exceptions (依然 user 合意を取る case)
 
