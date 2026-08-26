@@ -61,8 +61,8 @@ Exit Criteria:
 
 - [x] ユーザーが対策の方向を決めた (2026-08-26) — (A) Stop 時 advisory surface を削除 (11005b1、配備済み) /
   (B) 予告 entry は `## 処置の種別` の閉じた選択肢 gate へ (合意) / (C) 文章だけの entry を減らす (OK)。
-  同日追加決裁: blocking 昇格 8 件を採用、gate 済み entry 3 件はホストで退役。scope 上限 (org 60)
-  も同枠で採用扱いにしたが、説明不足の一括承認だったため同日 revert (経緯は上の衛生 gate 項目)
+  同日追加決裁: blocking 昇格 8 件を採用、gate 済み entry 3 件はホストで退役。scope 上限 (org 60) は説明不足の
+  一括承認だったため同日 revert
 - [ ] memory 衛生を機構化した — org 上限 60 は実装・配備まで進めたが、承認不備 (D3 は label への
   一括承認のみ・60 の根拠は未提示) の指摘で 2026-08-26 に revert (`14c568e`。配備側も同日 cp で
   巻き戻し・E2E 済み)。近接重複の検出は corpus 計測で不採用 (dup pair と無関係 pair の score が重なり
@@ -70,13 +70,13 @@ Exit Criteria:
   元の場所) へ統合する。規則と数値は scope 再チェック後に挙動 1 行で承認を取ってから実装
 - [ ] 決定的に検出できる教訓 8 件を blocking gate へ昇格し entry を退役した — 2026-08-26 に 7 件を配備
   (`deny_command_patterns.py` 5 規則・`deny_llm_call_in_hook.py`・`playwright_listener_gate.py`、
-  E2E で deny を実測) し entry 10 件を退役。残り = done_state_ledger の Stop block 化 (stop_checks の
-  書き直しで実装)。list 形式 (`"claude", "-p"`) を覆う v2 も同日 19:56 に配備済み
-- [x] 重複 cluster を統合した — 2026-08-26 に 3 組 8 件を org の新 entry 3 本 (`feedback_lesson_to_action_not_report` /
-  `feedback_violation_countermeasure_delete_first` / `feedback_self_build_over_delegation`) へ統合 Write し、
-  旧 8 件を `claude_memory_sync --retire` で退役 (Bash から直接通った。commit `2c85170`〜`908bab7`、push 済み、
-  org 70 → 62 で disk と index が一致)。gate cover 済みの 3 件は同日退役済み
-- [ ] 退役の他マシン伝播は SessionStart の pull が担う (実装済み・smoke 38/38)。残り = 未 push / pull 失敗の起動時通知の要否 (未決)
+  E2E で deny を実測、list 形式を覆う v2 も配備) し entry 10 件を退役。残り = done_state_ledger の Stop block 化
+  (stop_checks の書き直しで実装)
+- [x] 重複 cluster を統合した — 2026-08-26 に 3 組 8 件を org の新 entry 3 本へ統合 Write し旧 8 件を `--retire`
+  (`2c85170`〜`908bab7`、push 済み、org 70 → 62 で disk と index が一致)。gate cover 済みの 3 件も同日退役
+- [ ] 退役の他マシン伝播は SessionStart の pull が担う (実装済み)。通知の要否は 2026-08-27 決裁「認証系エラーだったら
+  通知してよい。単なる push 失敗は自動解決」→ push 前 rebase-pull・120 s 超の stray は stash・認証失敗のみ SessionStart で
+  nag を実装 (smoke 44/44)。残り = CLI と hook の配備先 `diff -q` IDENTICAL
 - [x] 到達経路を測って回す機構を配備した (2026-08-26、aa3c1dd) — surface の (entry, session) 上限 2 回と
   `claude_memory_sync --reach` (30 日 emit 0 / ≥ 20 の列挙。初回: never 70 / hot 6)。30 日後に到達可能
   entry の未到達率が 43% → 25% 未満かで判定
