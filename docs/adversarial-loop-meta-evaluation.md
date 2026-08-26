@@ -18,8 +18,9 @@ entry 118 件・第三者意見書 2 通・文献 30 件を突き合わせ、「
 - **出口は巡数でも規則でもなく、停止条件と artifact の大きさを変えること。** 受け入れ test と
   変異器 (= 実装に固定の欠陥を仕込み、test が検出するかを測る道具) を発注側が先に持ち、独立
   レビュー 1 巡で用途内 P0 (= 想定用途の入力で起きる最重要欠陥) が無ければ出荷、残りは記録しない。
-  sentinel (`codex_task_sentinel`) は要件から小さく書き直し、ab_probe (`claude_ab_probe`) は
-  廃棄、方法論 (`docs/adversarial-review-methodology.md`) は 1 ページへ (いずれも 2026-08-26 決裁)
+  sentinel (`codex_task_sentinel`) は要件から書き直し (8,588 → 231 行・1 巡で出荷・配備済み)、
+  ab_probe (`claude_ab_probe`) は廃棄、方法論 (`docs/adversarial-review-methodology.md`) は
+  6 項目 20 行へ (いずれも 2026-08-26 に決裁・実施。§6 に記録)
 
 ## 1. 2026-08-25 の session で何が起きていたか
 
@@ -102,6 +103,24 @@ entry 118 件・第三者意見書 2 通・文献 30 件を突き合わせ、「
 - gate 群は「検出層を足す」と同じ設計思想で、同じ結果を出している: 摩擦は増え、行動は変わらない。
   Anthropic 自身の Stop hook は 8 回連続 block で強制解除される (公式 doc)。本 repo の gate は
   mention と execution を区別できないまま、発注書を書く行為を 3 回止めた
+- memory surface の故障は 2 種類ある (2026-08-26 backtest)。届かなかった側: retrieval の query は
+  ユーザー発話の語彙で、「loop が 7 巡続いている」という状況は発話に現れない。予告 entry の
+  keywords を足しても当日の発話 4 本で top 4 圏外のまま (surface は top-1 のみ・15 分 throttle)。
+  届いて効かなかった側: 1 行の reminder だけで本文は 0 回 Read、Stop 時の surface は「抵触しなければ
+  そのまま完了」型の advisory で自己採点に化けた。deny する Stop 検査は行動を変えている (本 session
+  でも 3 回とも即時に直した) ので、削る対象は advisory の方だけ
+
+## 2.4 決裁 (2026-08-26)
+
+- Stop 検査は blocking を残し advisory (`_memory_surface_at_stop`) の削除可否は未決
+- 予告 entry 3 件は発注 lint の検査へ昇格して退役する: 同じ artifact への fix 発注 3 巡目以降は
+  `## 処置の種別` 節で閉じた選択肢 (削除・縮小 / 契約の訂正 → 再入場 / 構造化の別発注 /
+  bounded-risk 受入 / 廃棄) の 1 つと対象を名指ししないと deny。削除が解にならない P0 は実在する
+  ので、gate が要求するのは「消すこと」ではなく「閉じた選択肢から選び対象を名指しすること」。
+  選択肢に無いのは局所 patch の継続だけ
+- 文章だけの entry は減らす: gate が逐語 cover 済み (`codex_delegation_skill_skip` /
+  `codex_monitor_job_state`) は退役、重複 cluster 3 組 (自己採点系 / 規則追加系 / 自作・委譲系) は
+  統合し、`memory_routing_gate` に近接重複の検出と cover 済み entry の退役要求を入れる
 
 ## 3. 既に手元にあった答え
 
@@ -180,10 +199,10 @@ Spolsky 2000 / Fowler strangler fig: 全面 rewrite への歯止め、seam を�
 
 | artifact | 処遇 | 根拠 |
 |---|---|---|
-| `codex_task_sentinel` 8,588 行 | **要件から小さく書き直す** (2026-08-26 決裁)。旧版は書き直し版が配備されるまで凍結 — r77 以降を回さない、patch しない | 要件は数行。認定 23 巡で通常運用の high は 7 件、以後は exotic と過剰実装。第三者意見書の見積もりは 3 部品 (reader / poll と終端分類 / CLI adapter)・production 120–220 行・test 80–150 行。14 exit code と TOCTOU 防御を持ち込むならこの見積もりは成立しないので、契約 (10〜30 行) に無いものは入れない。§5.1 の protocol で最大 3 巡 |
-| `claude_ab_probe` 810 行 | **廃棄** (worktree ごと、2026-08-26 決裁) | false negative を抱え未 merge、配備先で selftest 必失敗。要件 (2 版の出力 diff) は数十行で足りる。両意見書一致 |
-| 方法論 509 行 | **本当に有効な最小限へ書き直す** — §5.3 の 6 項目 (2026-08-26 決裁) | 現行 509 行版は git 履歴に残る |
-| 台帳・分析 3,434 行 | **凍結** (追記禁止)。再発防止は LLM が台帳を書く工程そのものを方法論から消すこと | 台帳は `docs/` の分析文書 3 本 (todos.md ではない)。LLM が台帳を書く時間が product を上回った。巡ごとの件数は reviewer の報告書 file から script が数え、LLM は台帳 prose を書かない。todos.md も同じ病 (983 行、経緯 prose が大半) だったので 2026-08-26 に起票 / Goal / Exit Criteria だけの形へ戻した |
+| `codex_task_sentinel` 8,588 行 | **要件から書き直した** (2026-08-26): 231 行・exit 14 種 → 7 種。契約 17 test と変異 4 種を発注側が先に書き、codex 実装 6 分、変異 0/4 生存、独立レビュー P0 なし (P1 2 件は契約の選択として直さず)、**1 巡で出荷**・merge `8208fe0`・配備済み | 要件は数行。認定 23 巡で通常運用の high は 7 件、以後は exotic と過剰実装。第三者意見書の見積もり (3 部品・production 120–220 行) の内側に収まった |
+| `claude_ab_probe` 810 行 | **廃棄した** (2026-08-26)。発注書・報告書 31 file は `drafts/ab-probe-archive/` に退避 | false negative を抱え未 merge、配備先で selftest 必失敗。要件 (2 版の出力 diff) は数十行で足りる。両意見書一致 |
+| 方法論 509 行 | **6 項目 20 行に置換した** (2026-08-26)。追記禁止・削除のみ | 旧版は git 履歴に残る |
+| 台帳・分析 3,434 行 | **凍結した** (追記禁止の注記)。再発防止は「書くな」でなく逃がし先 + gate の組: `drafts/journal/` (gitignore・読み返さない) に書かせ、凍結 4 file は行数が増える commit を deny する gate で守る | 台帳は `docs/` の分析文書 3 本 (todos.md ではない)。「書くなと言うと別の場所に書き始める」というユーザー所見に沿う。todos.md も同じ病 (983 行、経緯 prose が大半) だったので 2026-08-26 に 284 行の 起票 / Goal / Exit Criteria だけの形へ戻し、block ≤ 40 行・項目 ≤ 6 行・必須 key 3 つを commit 時に deny する gate (`todos_structure_gate.py`) を同じ protocol で作った |
 
 ### 5.3 最小の方法論 (残す 6 項目)
 
@@ -196,8 +215,9 @@ Spolsky 2000 / Fowler strangler fig: 全面 rewrite への歯止め、seam を�
 4. fix は 1 回。同 round に発注側の failing repro・変異器・独立 reviewer を入れる。自己申告と
    test 本数は証拠にしない
 5. 採否は用途内 P0 と変異の生存数で決める。緑と指摘総数は補助記録
-6. 最大 3 巡で止める。非ゼロなら patch を継ぎ足さず、縮小 / rewrite / bounded-risk 受入を選ぶ。
-   この文書と方法論への追記は禁止し、削除のみ許す
+6. 最大 3 巡で止める。非ゼロなら patch を継ぎ足さず、閉じた選択肢 (削除・縮小 / 契約の訂正 →
+   再入場 / 構造化の別発注 / bounded-risk 受入 / 廃棄) から選ぶ。この文書と方法論への追記は
+   禁止し、削除のみ許す
 
 ### 5.4 prevention の実体 — 触る量を減らす
 
@@ -226,13 +246,25 @@ Spolsky 2000 / Fowler strangler fig: 全面 rewrite への歯止め、seam を�
 - approach 全体: 次の新規 tool 1 件が **3 巡以内に出荷** (§5.1 の 3 条件) し、**出荷後 2 週間の
   実運用で用途内 P0 が 0**。達成できなければ敵対的レビュー loop という approach 自体を捨て、
   受け入れ test + 独立レビュー 1 回のみに戻す。巡数と規則を足して延命する選択肢は事前に除外する
+- 実測 (2026-08-26): ケース 1 = sentinel 書き直しは 1 巡で出荷。ケース 2 = todos 構造 gate は
+  独立レビューが発注側の契約の誤り (`git commit -- todos.md` は index でなく working tree を記録
+  する) を P0 として出し、契約の訂正 → 再入場 1 回で受け入れ。両ケースとも変異 0/4。残る判定は
+  配備後 2 週間 (〜2026-09-09) の用途内 P0
 
-## 6. 次 session の最初の 3 行動
+## 6. 実施状況 (2026-08-26)
 
-1. `wt-abprobe` を削除し、sentinel の書き直しに向けて発注側が契約 (10〜30 行)・受け入れ test・
-   固定 4 変異を先に書く。旧 sentinel には触らない
-2. 方法論 doc を §5.3 の 1 ページ版に置換し、台帳 3 本に「凍結・追記禁止」を注記する
-3. 次の小さな実案件 1 件を §5.1 で回し、§5.6 の指標で判定する
+| 項目 | 状態 |
+|---|---|
+| sentinel の書き直し | 完了・配備済み (1 巡・231 行) |
+| ab_probe の廃棄 | 完了 |
+| 方法論の 6 項目化・台帳 3 本の凍結 | 完了 |
+| todos.md の再構築 (983 → 284 行) と構造 gate | 再構築は完了。gate は受け入れ済み (契約訂正で再入場 1 回)、独立レビューと配備が残り |
+| 台帳の逃がし先 + 凍結 gate | 設計に異論なし、未着手 |
+| memory: advisory surface の削除 | 未決 |
+| memory: 予告 entry の lint 昇格・退役、重複 cluster の統合、衛生 gate | 方向は合意、未着手 |
+| 肥大化 script の書き直し (production 行: `stop_checks` 2,484 / `skill_reminder_gate` 1,073 / `codex_delegation_gate` 1,038 / `codex_worktree_gate` 1,035 / `codex_order_lint` 592) | 順序 (delegation・worktree gate → stop_checks → skill_reminder → order_lint) と scope (契約 test で deny 挙動を固定し実 corpus を通す最小実装) を合意。次の session で実施 |
+
+作業台帳は `todos.md` の High 2 block (Exit Criteria) が正本。
 
 この文書自身への注意: 規則を足す文書ではなく減らす文書である。次に足すべきものが出たら、
 先に何を消すかを書く。
