@@ -212,9 +212,9 @@ Exit Criteria:
 - [x] 方式をユーザーが決めた — 2026-08-27 決裁「書き換えるのとセットなら費用が小さく、推奨に変えます。
   → それでお願いします」: 正本を書き換えたうえで下の 4 点を全部載せる。止血として同日
   `codex_broker_reap --apply` で 11 本 (614 MB) を回収済み
-- [ ] 正本の書き換え — 2026-08-27 に「worktree 内で起動」(`ca2f7e9`) と書いたが機構 (SessionEnd 時点の cwd の git root
+- [x] 正本の書き換え — 2026-08-27 に「worktree 内で起動」(`ca2f7e9`) と書いたが機構 (SessionEnd 時点の cwd の git root
   が鍵、#380) より強く、隣 session 経由のユーザー発言「使い物にならないルールは壊れている」で同日「発注前に単独 cd で
-  移り終了まで留まる」へ再改訂 (skill L25 / L79・policy §8)。配備先 `diff -q` IDENTICAL の実測待ち
+  移り終了まで留まる」へ再改訂 (`00df73e`、skill L25 / L79・policy §8)。配備先 `diff -q` IDENTICAL を同日実測
 - [ ] deny (鍵ずれの回避): 発注 session の git root ≠ `--cwd` の git root を deny — worktree gate 書き直しの
   契約 claim として実装・配備した
 - [ ] 記録 + SessionEnd 回収 (取りこぼし): 発注 hook が session → `--cwd` を記録し、SessionEnd hook が
