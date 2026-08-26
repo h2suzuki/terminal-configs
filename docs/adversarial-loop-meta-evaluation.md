@@ -112,7 +112,7 @@ entry 118 件・第三者意見書 2 通・文献 30 件を突き合わせ、「
 
 ## 2.4 決裁 (2026-08-26)
 
-- Stop 検査は blocking を残し advisory (`_memory_surface_at_stop`) の削除可否は未決
+- Stop 検査は blocking を残し advisory (`_memory_surface_at_stop`) は削除 (2026-08-26 決裁・同日配備)
 - 予告 entry 3 件は発注 lint の検査へ昇格して退役する: 同じ artifact への fix 発注 3 巡目以降は
   `## 処置の種別` 節で閉じた選択肢 (削除・縮小 / 契約の訂正 → 再入場 / 構造化の別発注 /
   bounded-risk 受入 / 廃棄) の 1 つと対象を名指ししないと deny。削除が解にならない P0 は実在する
@@ -259,10 +259,10 @@ Spolsky 2000 / Fowler strangler fig: 全面 rewrite への歯止め、seam を�
 | ab_probe の廃棄 | 完了 |
 | 方法論の 6 項目化・台帳 3 本の凍結 | 完了 |
 | todos.md の再構築 (983 → 284 行) と構造 gate | 再構築は完了。gate は受け入れ済み (契約訂正で再入場 1 回)、独立レビューと配備が残り |
-| 台帳の逃がし先 + 凍結 gate | 設計に異論なし、未着手 |
-| memory: advisory surface の削除 | 未決 |
-| memory: 予告 entry の lint 昇格・退役、重複 cluster の統合、衛生 gate | 方向は合意、未着手 |
-| 肥大化 script の書き直し (production 行: `stop_checks` 2,484 / `skill_reminder_gate` 1,073 / `codex_delegation_gate` 1,038 / `codex_worktree_gate` 1,035 / `codex_order_lint` 592) | 順序 (delegation・worktree gate → stop_checks → skill_reminder → order_lint) と scope (契約 test で deny 挙動を固定し実 corpus を通す最小実装) を合意。次の session で実施 |
+| 台帳の逃がし先 + 凍結 gate | 完了・配備済み (`frozen_docs_gate.py`、HEAD の `凍結 (日付)` 行を持つ file の行数増加 commit を deny。fix round 1 回) |
+| memory: advisory surface の削除 | 完了・配備済み (2026-08-26、`11005b1`) |
+| memory: 予告 entry の lint 昇格・退役、重複 cluster の統合、衛生 gate | 決定的に検出できる 7 件を blocking gate (`deny_command_patterns` / `deny_llm_call_in_hook` / `playwright_listener_gate`) へ昇格して配備、entry 10 件を退役、露出回転 (session 上限 2) と `claude_memory_sync --reach` を配備 (2026-08-26)。残り = 衛生 gate (近接重複・org 上限 60)、cluster 統合、予告 entry 3 件の `## 処置の種別` gate 昇格 (todos.md が正本) |
+| 肥大化 script の書き直し (production 行: `stop_checks` 2,431 / `skill_reminder_gate` 1,073 / `codex_delegation_gate` 1,038 / `codex_worktree_gate` 1,035 / `codex_order_lint` 592) | 順序 (delegation・worktree gate → stop_checks → skill_reminder → order_lint) と scope (契約 test で deny 挙動を固定し実 corpus を通す最小実装) を合意。次の session で実施 |
 
 作業台帳は `todos.md` の High 2 block (Exit Criteria) が正本。
 

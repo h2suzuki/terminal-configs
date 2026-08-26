@@ -66,19 +66,19 @@ Exit Criteria:
   要求、scope 上限 (org 60 超で新規 feedback を deny し `--reach` の never 一覧を印字) を入れる
 - [ ] 決定的に検出できる教訓 8 件を blocking gate へ昇格し entry を退役した — 2026-08-26 に 7 件を配備
   (`deny_command_patterns.py` 5 規則・`deny_llm_call_in_hook.py`・`playwright_listener_gate.py`、
-  E2E で deny を実測) し entry 10 件を退役。残り = done_state_ledger の Stop block 化 (Task 15 の
-  stop_checks 契約へ) と、`claude -p` の list 形式 (`"claude", "-p"`) を覆う再入場の配備
+  E2E で deny を実測) し entry 10 件を退役。残り = done_state_ledger の Stop block 化 (stop_checks の
+  書き直しで実装)。list 形式 (`"claude", "-p"`) を覆う v2 も同日 19:56 に配備済み
 - [ ] 重複 cluster を統合した — 例: 自己採点系 (`lesson_is_input_not_report` /
   `close_question_before_remorse` / `check_report_verdict_wording`)、規則追加系
   (`rule_violation_means_countermeasure` / `failure_response_adds_rules`)、自作・委譲系
   (`self_build_impulse` / `delegation_failure_no_self_impl` / `inventory_existing_tools_first`)。
-  gate で逐語 cover 済みの例: `codex_delegation_skill_skip` (delegation gate が skill invoke を deny で
-  強制)、`codex_monitor_job_state` (sentinel が実装)
+  gate で逐語 cover 済みだった 3 件 (`codex_delegation_skill_skip` 等) は 2026-08-26 に退役済み
 - [x] 到達経路を測って回す機構を配備した (2026-08-26、aa3c1dd) — surface の (entry, session) 上限 2 回と
   `claude_memory_sync --reach` (30 日 emit 0 / ≥ 20 の列挙。初回: never 70 / hot 6)。30 日後に到達可能
   entry の未到達率が 43% → 25% 未満かで判定
-- [ ] 採用した対策を実装し、2026-08-25 session の prompt 列で backtest して予告 entry が届くことを
-  確認した (memory-surface-analyzer)
+- [ ] 予告 entry 3 件 (`architecture_before_review` / `self_build_impulse` / `threat_model_in_review_order`) を
+  codex_order_lint の `## 処置の種別` gate へ昇格して退役した (gate は「肥大化した hook と CLI」block の
+  order_lint 書き直しに含める。retrieval で届かせる backtest は行わない — 2026-08-26 決裁)
 
 Work file: `last-session-handoff.md` (再開手順)、`~/.claude/hooks/memory_surface.py` (surface 方針の実装)、
 `/var/lib/claude-rag-memory/memory_index.sqlite3` の `inject_log` (emit / mismatch の実測)
@@ -99,7 +99,8 @@ Exit Criteria:
 - [ ] stop_checks (2,431 行) を書き直し配備した — 契約に done_state_ledger の Stop block 化 (完了語 +
   commit / push / gate / E2E / merge の欠落で block) を含める
 - [ ] skill_reminder_gate (1,073 行) と codex_order_lint (592 行) を書き直し配備した — order_lint は
-  「機構追加」の字面で必須節を連鎖要求する判定 (2026-08-26 に 2 回誤発火) を落とす
+  「機構追加」の字面で必須節を連鎖要求する判定 (2026-08-26 に 2 回誤発火) を落とし、fix 発注 3 巡目以降に
+  `## 処置の種別` (閉じた選択肢) を必須にする gate を足す
 - [ ] 配備後 2 週間の実運用で誤 deny 0
 
 Work file: `last-session-handoff.md` (再開手順)、`docs/adversarial-review-methodology.md` (protocol)、
