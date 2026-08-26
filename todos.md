@@ -96,8 +96,8 @@ G は org へ移動して、scope が実態と一致した状態にする。
 
 Exit Criteria:
 
-- [x] 一次分類を作った — 2026-08-26 reminder 全読で G 候補 14 / G? 5 / 要精読 8 / P 20
-  (`drafts/memory-scope-audit.md`)
+- [x] 一次分類を作った — 2026-08-26 reminder 全読、行別 tally (script 検算) で G 候補 17 / G? 5 /
+  要精読 9 / P 14 (`drafts/memory-scope-audit.md`)
 - [ ] 1 件ずつ本文精読で P / G を確定しユーザーと裁定した (org の退役・統合と同時に扱う)
 - [ ] G 確定分を org へ移動した (org へ新規 Write → 旧 path をホストで retire、sudo 不要)
 
