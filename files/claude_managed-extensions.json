@@ -6,13 +6,20 @@
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/read_before_edit.py check" } ]
       },
       {
-        "matcher": "^(Edit|Write|MultiEdit)$",
+        "matcher": "^(Write|Edit|MultiEdit)$",
         "hooks": [
           { "type": "command", "command": "/etc/claude-code/hooks/check_dangling_refs.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/memory_routing_gate.py guard" },
           { "type": "command", "command": "/etc/claude-code/hooks/skill_reminder_gate.py gate" },
           { "type": "command", "command": "/etc/claude-code/hooks/comment_rationale_gate.py" },
-          { "type": "command", "command": "/etc/claude-code/hooks/codex_order_scaffold.py" }
+          { "type": "command", "command": "/etc/claude-code/hooks/codex_order_scaffold.py" },
+          { "type": "command", "command": "/etc/claude-code/hooks/deny_llm_call_in_hook.py" }
+        ]
+      },
+      {
+        "matcher": "^mcp__playwright__browser_run_code_unsafe$",
+        "hooks": [
+          { "type": "command", "command": "/etc/claude-code/hooks/playwright_listener_gate.py" }
         ]
       },
       {
