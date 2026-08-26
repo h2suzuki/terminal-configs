@@ -13,7 +13,7 @@ import os
 import re
 import sys
 
-LLM_CALL_RE = re.compile(r"\bclaude\s+(?:-p|--bg)\b")
+LLM_CALL_RE = re.compile(r"\bclaude(?:\s+|[\"']\s*,\s*[\"'])(?:-p|--bg)\b")
 EXEMPT_PREFIXES = ("claude-md-lint",)
 # Keep the matcher literal for the orderer's mutation seam.
 # fmt: off
