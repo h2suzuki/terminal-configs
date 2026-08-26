@@ -1,249 +1,298 @@
 #!/usr/bin/env python3
-"""Keeps the codex-delegation skill's exit table in step with the watcher's own and with the CLI it documents, since the skill is what a caller reads before choosing flags."""
+"""Acceptance tests for codex_task_sentinel, written by the ordering side before the implementation.
+
+Contract (each claim maps to one test):
+  C1  records are searched as <root>/*/jobs/<job-id>.json in every --state-root; zero or several → exit 6
+  C2  an unreadable or non-object record → exit 6
+  C3  status "queued" / "running" is alive; any other status is terminal
+  C4  deliverable ready ⇔ regular file, UTF-8, last non-blank line equals --token exactly
+  C5  terminal "completed" + ready → exit 0
+  C6  terminal "completed" + not ready → exit 3
+  C7  terminal but not "completed" (cancelled / failed / other) → exit 5
+  C8  alive with heartbeat age ≤ --stall-seconds → --once exits 1; watch mode keeps polling
+  C9  alive with heartbeat age > --stall-seconds → exit 4
+  C10 watch mode with no verdict by --timeout-seconds, or past 2×--estimate-seconds → exit 4
+  C11 every exit prints verdict= and record= lines; non-zero exits add status=, heartbeat_age=, deliverable=, log_tail
+  C12 missing --artifact or --token → exit 2 (argparse usage)
+Heartbeat = newest mtime among the record, its log (<id>.log beside it), and the artifact.
+"""
 
 from __future__ import annotations
 
-import ast
-import importlib.machinery
-import importlib.util
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-SENTINEL = os.path.join(HERE, "codex_task_sentinel")
-SKILL = os.path.join(HERE, "claude_managed-skills", "codex-delegation", "SKILL.md")
-RULINGS = os.path.join(HERE, "..", "docs", "sentinel-rulings.md")
-
-# "  4  stall             --trust-log only: log and tree quiet — ..."
-MODULE_ROW = re.compile(r"^ {2}(\d+)\s+(\S+)\s{2,}(.+)$")
-# "  | 4 | stall (`--trust-log` 時のみ) | log を読み、... |"
-SKILL_ROW = re.compile(r"^\s*\|\s*(\d+)\s*\|([^|]*)\|([^|]*)\|")
-RULING_ROW = re.compile(r"^\|\s*(\d+)\s*\|.*\|\s*[A-D]\s*\|\s*(.*?)\s*\|$")
-RULING_TEST = re.compile(r"`(test_[A-Za-z0-9_]+)`")
-LAST_RULING = 63
-
-TRUST_FLAG = "--trust-log"
-
-SPEC = importlib.util.spec_from_loader(
-    "codex_task_sentinel",
-    importlib.machinery.SourceFileLoader("codex_task_sentinel", SENTINEL),
+SENTINEL = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "codex_task_sentinel"
 )
-assert SPEC is not None and SPEC.loader is not None
-sentinel = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = sentinel
-SPEC.loader.exec_module(sentinel)
+JOB = "task-abc123-def456"
+TOKEN = "REPORT_COMPLETE"
 
 
-def _read(path: str) -> list[str]:
-    with open(path, encoding="utf-8") as f:
-        return f.read().splitlines()
+def run(*extra: str, root: str, once: bool = True) -> subprocess.CompletedProcess:
+    cmd = [sys.executable, SENTINEL, JOB, "--state-root", root, *extra]
+    if once:
+        cmd.append("--once")
+    return subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=60)
 
 
-def _rows(lines: list[str], pattern: re.Pattern[str]) -> dict[str, tuple[str, ...]]:
-    """code -> 以降の列。 重複 code は dict の後勝ちで隠れるので _row_codes と併用する。"""
-    return {
-        m.group(1): tuple(g.strip() for g in m.groups()[1:])
-        for m in map(pattern.match, lines)
-        if m
-    }
+class Fixture:
+    def __init__(self, root: str, workspace: str = "ws-1") -> None:
+        self.root = root
+        self.jobs = os.path.join(root, workspace, "jobs")
+        os.makedirs(self.jobs, exist_ok=True)
+        self.record = os.path.join(self.jobs, f"{JOB}.json")
+        self.log = os.path.join(self.jobs, f"{JOB}.log")
+        self.artifact = os.path.join(root, "report.md")
+
+    def write_record(self, status: str, raw: str | None = None) -> None:
+        with open(self.record, "w", encoding="utf-8") as fh:
+            fh.write(
+                raw if raw is not None else json.dumps({"id": JOB, "status": status})
+            )
+
+    def write_log(self, *lines: str) -> None:
+        with open(self.log, "w", encoding="utf-8") as fh:
+            fh.write("".join(f"[2026-08-26T00:00:00.000Z] {line}\n" for line in lines))
+
+    def write_artifact(self, text: str) -> None:
+        with open(self.artifact, "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+    def age_everything(self, seconds: float) -> None:
+        stamp = time.time() - seconds
+        for path in (self.record, self.log, self.artifact):
+            if os.path.exists(path):
+                os.utime(path, (stamp, stamp))
+
+    def args(self) -> list[str]:
+        return ["--artifact", self.artifact, "--token", TOKEN]
 
 
-def _row_codes(lines: list[str], pattern: re.Pattern[str]) -> list[str]:
-    return [m.group(1) for m in map(pattern.match, lines) if m]
+class VerdictTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.fx = Fixture(self.tmp.name)
 
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
 
-class ExitTableSyncTest(unittest.TestCase):
-    """The skill teaches the operating rule; a stale table sends callers to the wrong branch."""
+    def test_c5_completed_and_ready_is_done(self) -> None:
+        self.fx.write_record("completed")
+        self.fx.write_artifact("body\n\n" + TOKEN + "\n")
+        done = run(*self.fx.args(), root=self.fx.root)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("verdict=done", done.stdout)
+        self.assertIn(f"record={self.fx.record}", done.stdout)
 
-    def setUp(self):
-        self.module = _rows(_read(SENTINEL), MODULE_ROW)
-        self.skill = _rows(_read(SKILL), SKILL_ROW)
-
-    @staticmethod
-    def _runtime_codes() -> set[str]:
-        """実装が実際に返す exit 値 — 表どうしの比較だけでは定数の書き換えを見逃す。"""
-        return {str(row[0]) for row in sentinel.EXIT_CONTRACT}
-
-    def test_the_contract_covers_every_constant_exactly_once(self):
-        """値の集合だけを見ると、 名前の入れ替えも値の重複も同じ集合のまま通る。"""
-        declared = {
-            n: v
-            for n, v in vars(sentinel).items()
-            if n.startswith("EXIT_") and isinstance(v, int)
-        }
-        self.assertEqual(
-            declared, {n: code for code, n, _s, _m, _a in sentinel.EXIT_CONTRACT}
-        )
-        codes = [code for code, _n, _s, _m, _a in sentinel.EXIT_CONTRACT]
-        self.assertEqual(len(codes), len(set(codes)))
-
-    def test_neither_table_repeats_a_code(self):
-        """重複行は dict の後勝ちで消える — 誤った行を正しい行の前に足す変異が隠れる。"""
-        for lines, pattern in (
-            (_read(SENTINEL), MODULE_ROW),
-            (_read(SKILL), SKILL_ROW),
+    def test_c4_token_must_be_the_last_nonblank_line(self) -> None:
+        self.fx.write_record("completed")
+        for text in (
+            TOKEN + "\ntrailing\n",
+            "prefix " + TOKEN + "\n",
+            TOKEN + " \n",
+            "no token\n",
         ):
-            codes = _row_codes(lines, pattern)
-            self.assertEqual(len(codes), len(set(codes)), codes)
+            self.fx.write_artifact(text)
+            self.assertEqual(
+                run(*self.fx.args(), root=self.fx.root).returncode, 3, repr(text)
+            )
+        self.fx.write_artifact(TOKEN)
+        self.assertEqual(run(*self.fx.args(), root=self.fx.root).returncode, 0)
 
-    def test_the_docstring_row_carries_the_contract_slug(self):
-        for code, _n, slug, _m, _a in sentinel.EXIT_CONTRACT:
-            self.assertEqual(self.module[str(code)][0], slug, f"exit {code}")
+    def test_c4_non_utf8_or_missing_artifact_is_not_ready(self) -> None:
+        self.fx.write_record("completed")
+        self.assertEqual(run(*self.fx.args(), root=self.fx.root).returncode, 3)
+        with open(self.fx.artifact, "wb") as fh:
+            fh.write(b"\xff\xfe\n" + TOKEN.encode() + b"\n")
+        self.assertEqual(run(*self.fx.args(), root=self.fx.root).returncode, 3)
 
-    def test_the_skill_row_carries_the_contract_meaning_and_action(self):
-        """意味も呼び手の行動も契約と揃える — 数値集合が同じ変異は集合比較では捕まらない。"""
-        for code, _n, _s, meaning, action in sentinel.EXIT_CONTRACT:
-            self.assertEqual(self.skill[str(code)], (meaning, action), f"exit {code}")
+    def test_c6_completed_without_deliverable_says_so(self) -> None:
+        self.fx.write_record("completed")
+        self.fx.write_log("Starting Codex Task.", "Turn started.")
+        out = run(*self.fx.args(), root=self.fx.root)
+        self.assertEqual(out.returncode, 3)
+        self.assertIn("verdict=no-deliverable", out.stdout)
+        self.assertIn("deliverable=", out.stdout)
+        self.assertIn("Turn started.", out.stdout)
 
-    def test_both_tables_are_populated(self):
-        """空の parse は差分ゼロに見えてしまうので、まず両表が読めていることを確かめる。"""
-        self.assertGreaterEqual(len(self.module), 10)
-        self.assertGreaterEqual(len(self.skill), 10)
-        self.assertGreaterEqual(len(self._runtime_codes()), 10)
+    def test_c7_cancelled_or_failed_is_never_a_result(self) -> None:
+        self.fx.write_artifact(TOKEN + "\n")
+        for status in ("cancelled", "failed", "exploded"):
+            self.fx.write_record(status)
+            out = run(*self.fx.args(), root=self.fx.root)
+            self.assertEqual(out.returncode, 5, status)
+            self.assertIn("verdict=failed", out.stdout)
+            self.assertIn(f"status={status}", out.stdout)
 
-    def test_the_skill_lists_every_exit_code(self):
-        self.assertEqual(sorted(self.module, key=int), sorted(self.skill, key=int))
+    def test_c3_c8_alive_and_fresh_reports_alive_under_once(self) -> None:
+        for status in ("queued", "running"):
+            self.fx.write_record(status)
+            out = run(*self.fx.args(), "--stall-seconds", "420", root=self.fx.root)
+            self.assertEqual(out.returncode, 1, status)
+            self.assertIn("verdict=alive", out.stdout)
+            self.assertIn("heartbeat_age=", out.stdout)
 
-    def test_both_tables_match_the_values_the_code_returns(self):
-        """docstring と skill が揃っていても、 定数を変えれば実 exit だけがずれる。"""
-        runtime = self._runtime_codes()
-        self.assertEqual(set(self.module), runtime)
-        self.assertEqual(set(self.skill), runtime)
+    def test_c9_alive_but_quiet_past_stall_is_undecided(self) -> None:
+        self.fx.write_record("running")
+        self.fx.write_log("Starting Codex Task.")
+        self.fx.age_everything(1000)
+        out = run(*self.fx.args(), "--stall-seconds", "420", root=self.fx.root)
+        self.assertEqual(out.returncode, 4)
+        self.assertIn("verdict=undecided", out.stdout)
+        self.assertIn("Starting Codex Task.", out.stdout)
 
-    def test_the_two_tables_agree_on_which_codes_are_opt_in(self):
-        """片方向の含意だと、 module 側だけを既定へ書き換える drift が green のまま通る。"""
+    def test_c8_artifact_activity_counts_as_heartbeat(self) -> None:
+        self.fx.write_record("running")
+        self.fx.age_everything(1000)
+        self.fx.write_artifact("partial\n")
         self.assertEqual(
-            {c for c, t in self.module.items() if TRUST_FLAG in t},
-            {c for c, t in self.skill.items() if TRUST_FLAG in t},
+            run(
+                *self.fx.args(), "--stall-seconds", "420", root=self.fx.root
+            ).returncode,
+            1,
         )
 
-    def test_the_skill_states_the_default_hands_over(self):
-        body = "\n".join(_read(SKILL))
-        self.assertIn("既定は cancel を指示しない", body)
-
-
-class DocumentedDefaultTest(unittest.TestCase):
-    """両表が同じ誤記で揃えば docs 同士の比較は通る — 実 CLI の既定そのものを pin する。"""
-
-    def test_the_parser_defaults_to_not_trusting_the_log(self):
-        parser = sentinel.build_parser()
-        self.assertIs(parser.parse_args(["task-x"]).trust_log, False)
-        self.assertIs(parser.parse_args(["task-x", TRUST_FLAG]).trust_log, True)
-
-    def _quiet_job(self) -> str:
-        """静穏な log とツリーを持つ running job 一式を作り、 state root を返す。"""
-        root = tempfile.mkdtemp()
-        jobs = os.path.join(root, "ws", "jobs")
-        tree = os.path.join(root, "tree")
-        os.makedirs(jobs)
-        os.makedirs(tree)
-        with open(os.path.join(jobs, "task-q.json"), "w", encoding="utf-8") as f:
-            json.dump({"id": "task-q", "status": "running", "workspaceRoot": tree}, f)
-        log = os.path.join(jobs, "task-q.log")
-        with open(log, "w", encoding="utf-8") as f:
-            f.write("[2026-08-08T22:00:00.000Z] quiet\n")
-        written = os.path.join(tree, "f")  # 空ツリーは 「読めない」 側に落ちる
-        with open(written, "w", encoding="utf-8") as f:
-            f.write("x")
-        stale = time.time() - 600
-        for path in (log, written, tree):
-            os.utime(path, (stale, stale))
-        return root
-
-    def _run(self, root: str, *extra: str) -> int:
-        return subprocess.run(
+    def test_c8_watch_mode_polls_until_the_record_turns_terminal(self) -> None:
+        self.fx.write_record("running")
+        self.fx.write_artifact(TOKEN + "\n")
+        proc = subprocess.Popen(
             [
                 sys.executable,
                 SENTINEL,
-                "task-q",
+                JOB,
                 "--state-root",
-                root,
-                "--once",
-                "--stall-seconds",
-                "1",
-                "--hang-seconds",
-                "1",
-                # 成果物は不存在のまま指定する — quiet-job の oracle を保つ
-                "--artifact",
-                os.path.join(root, "report.md"),
-                "--token",
-                "REPORT_COMPLETE",
-                *extra,
+                self.fx.root,
+                *self.fx.args(),
+                "--poll-seconds",
+                "0.2",
+                "--timeout-seconds",
+                "30",
             ],
-            capture_output=True,
-            check=False,
-        ).returncode
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        time.sleep(1.0)
+        self.assertIsNone(
+            proc.poll(), "watch mode must not exit while the job is alive"
+        )
+        self.fx.write_record("completed")
+        stdout, _ = proc.communicate(timeout=30)
+        self.assertEqual(proc.returncode, 0, stdout)
 
-    def test_a_quiet_job_is_handed_over_by_default_and_asserted_only_on_opt_in(self):
-        root = self._quiet_job()
-        self.assertEqual(self._run(root), sentinel.EXIT_UNVERIFIABLE)
-        self.assertEqual(self._run(root, TRUST_FLAG), sentinel.EXIT_STALL)
+    def test_c10_watch_mode_timeout_is_undecided(self) -> None:
+        self.fx.write_record("running")
+        out = run(
+            *self.fx.args(),
+            "--poll-seconds",
+            "0.2",
+            "--timeout-seconds",
+            "1",
+            root=self.fx.root,
+            once=False,
+        )
+        self.assertEqual(out.returncode, 4)
+        self.assertIn("verdict=undecided", out.stdout)
 
+    def test_c10_over_estimate_is_undecided(self) -> None:
+        self.fx.write_record("running")
+        out = run(
+            *self.fx.args(),
+            "--poll-seconds",
+            "0.2",
+            "--estimate-seconds",
+            "1",
+            "--timeout-seconds",
+            "30",
+            root=self.fx.root,
+            once=False,
+        )
+        self.assertEqual(out.returncode, 4)
+        self.assertIn("estimate", out.stdout)
 
-class RulingsSyncTest(unittest.TestCase):
-    """The canonical rulings stay ordered and name tests that exist in the source."""
+    def test_c1_no_record_anywhere(self) -> None:
+        out = run(*self.fx.args(), root=self.fx.root)
+        self.assertEqual(out.returncode, 6)
+        self.assertIn("verdict=unresolved", out.stdout)
 
-    def test_rulings_are_contiguous_and_reference_existing_test_methods(self):
-        rows = [
-            (int(match.group(1)), match.group(2))
-            for match in map(RULING_ROW.match, _read(RULINGS))
-            if match
-        ]
-        numbers = [number for number, _assurance in rows]
-        self.assertEqual(numbers, list(range(1, LAST_RULING + 1)))
+    def test_c1_several_records_are_listed_not_chosen(self) -> None:
+        self.fx.write_record("completed")
+        other = Fixture(self.fx.root, workspace="ws-2")
+        other.write_record("running")
+        self.fx.write_artifact(TOKEN + "\n")
+        out = run(*self.fx.args(), root=self.fx.root)
+        self.assertEqual(out.returncode, 6)
+        self.assertIn(self.fx.record, out.stdout)
+        self.assertIn(other.record, out.stdout)
 
-        source = "\n".join(_read(SENTINEL))
-        methods = {
-            node.name
-            for node in ast.walk(ast.parse(source))
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name.startswith("test_")
-        }
-        referenced = {
-            name
-            for _number, assurance in rows
-            for name in RULING_TEST.findall(assurance)
-        }
-        self.assertTrue(referenced)
-        self.assertEqual(referenced - methods, set())
+    def test_c1_second_state_root_is_searched(self) -> None:
+        with tempfile.TemporaryDirectory() as second:
+            fx2 = Fixture(second)
+            fx2.write_record("completed")
+            fx2.write_artifact(TOKEN + "\n")
+            cmd = [
+                sys.executable,
+                SENTINEL,
+                JOB,
+                "--state-root",
+                self.fx.root,
+                "--state-root",
+                second,
+                *fx2.args(),
+                "--once",
+            ]
+            out = subprocess.run(
+                cmd, capture_output=True, text=True, check=False, timeout=60
+            )
+            self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
 
+    def test_c2_unreadable_record_is_unresolved(self) -> None:
+        for raw in ("{not json", "[]", '"string"'):
+            self.fx.write_record("x", raw=raw)
+            out = run(*self.fx.args(), root=self.fx.root)
+            self.assertEqual(out.returncode, 6, raw)
 
-class RunnerConfigurationTest(unittest.TestCase):
-    """The external suite must keep its own terminal output behind the sink."""
+    def test_c11_log_tail_is_bounded(self) -> None:
+        self.fx.write_record("completed")
+        self.fx.write_log(*[f"line {i}" for i in range(50)], "x" * 5000)
+        out = run(*self.fx.args(), root=self.fx.root)
+        self.assertEqual(out.returncode, 3)
+        self.assertNotIn("line 0\n", out.stdout)
+        self.assertIn("line 4", out.stdout)
+        self.assertLess(max(len(line) for line in out.stdout.splitlines()), 400)
 
-    def test_the_runner_uses_the_oserror_stream(self):
-        tree = ast.parse("\n".join(_read(__file__)))
-        main_calls = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "unittest"
-            and node.func.attr == "main"
-        ]
-        self.assertEqual(len(main_calls), 1)
-        runners = [
-            keyword.value
-            for keyword in main_calls[0].keywords
-            if keyword.arg == "testRunner"
-        ]
-        self.assertEqual(len(runners), 1)
-        runner = ast.dump(runners[0])
-        self.assertIn("TextTestRunner", runner)
-        self.assertIn("OSErrorStream", runner)
+    def test_c12_usage_errors(self) -> None:
+        for cmd in (
+            [
+                sys.executable,
+                SENTINEL,
+                JOB,
+                "--state-root",
+                self.fx.root,
+                "--token",
+                TOKEN,
+            ],
+            [
+                sys.executable,
+                SENTINEL,
+                JOB,
+                "--state-root",
+                self.fx.root,
+                "--artifact",
+                self.fx.artifact,
+            ],
+        ):
+            out = subprocess.run(
+                cmd, capture_output=True, text=True, check=False, timeout=60
+            )
+            self.assertEqual(out.returncode, 2, cmd)
 
 
 if __name__ == "__main__":
-    unittest.main(
-        testRunner=unittest.TextTestRunner(
-            verbosity=2,
-            stream=sentinel.Observation.OSErrorStream(sys.stderr),
-        )
-    )
+    unittest.main()
