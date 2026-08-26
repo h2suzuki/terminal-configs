@@ -52,26 +52,20 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
 - **完了 monitor は当該 task の起動登録確認後に張る**: probe file の出現または state dir に当該 task の新しい job record file が現れるまで待つ。未登録のまま監視だけが成立した実例がある（2026-07-15）
 - **running[]-empty 型 monitor を使わない**: 直前の task が終了済みで running[] が元から空だったため、起動前の空を完了と誤認して即時 false-fire した（2026-07-15）。当該 task id が running[] に現れてから消える遷移を待つ
 - **監視は集合でなく当該 job の state file を id 直指定で poll する**: `status --json` の running[] は集合ゆえ、起動登録の前後で「空」が二度現れ、待機側からは完了と区別できない。plugin data の `state/<worktree>-<hash>/jobs/<job-id>.json` の `status` が `running` から変わるのを待てば集合の状態に依存しない。running[]-empty 型で 2026-08-08 に再度 false-fire し、実際は実行中の task を「成果物ゼロ = 非起動」と誤報告した
-- **監視 loop を手書きせず `codex_task_sentinel <job-id> --artifact <path> --token <str> --estimate-seconds <見積もり>` を使う**: 判定を決定的に実装済で、job の state file を全 workspace から探すため隔離 worktree 起動でも見失わない。手書き loop は本節の rule を毎回書き直すことになり、2026-08-08 に 1 session 内で「id を JSON 全体から grep して latestFinished に永久 match」と「本線 workspace から status を引いて隔離 worktree の job を running 0 件と誤読」の 2 通りで壊れた (前者で 4 時間 24 分の空待ち)。全 exit code と test 件数は module docstring と `--help` が canonical。呼び分けは次の通り:
+- **監視 loop を手書きせず `codex_task_sentinel <job-id> --artifact <path> --token <str> --estimate-seconds <見積もり>` を使う**: 判定を決定的に実装済で、job の state file を全 workspace から探すため隔離 worktree 起動でも見失わない。手書き loop は本節の rule を毎回書き直すことになり、2026-08-08 に 1 session 内で「id を JSON 全体から grep して latestFinished に永久 match」と「本線 workspace から status を引いて隔離 worktree の job を running 0 件と誤読」の 2 通りで壊れた (前者で 4 時間 24 分の空待ち)。契約の正本は `codex_task_sentinel.test.py` (C1〜C12)。呼び分けは次の通り:
 
   | exit | 意味 | 呼び手の行動 |
   |---|---|---|
-  | 0 | 完了 | 成果物を受け入れレビューへ |
-  | 3 | 完了後 hang (`--trust-log` 時のみ) | 成果物を検証してから cancel |
-  | 4 | stall (`--trust-log` 時のみ) | log を読み、cancel して fresh 再発注 |
-  | 5 | 成果物なし完了 | log が何を報告したか読む |
-  | 6 | 未登録 | 起動が成立していない。発注し直す |
-  | 7 | timeout | 待ち続けるか判断する |
-  | 8 | cancel / 失敗 | 結果ではない。fresh 再発注 |
-  | 9 | id 重複 | どの job か特定してから信じる |
-  | 10 | record 消失 | prune 済で outcome は読めない |
-  | 11 | 生存 (`--once`) | re-arm するか調査に入る |
-  | 12 | 見積もり 2 倍超 | log を発注書と突き合わせて調査 |
-  | 13 | record 破損 | stall と読まない |
-  | 14 | 検証不能 | ツリーを読めない、または既定で log もツリーも静穏。evidence を読んで人が決める |
+  | 0 | 完了 (record が completed かつ成果物が token で終わる) | 成果物を受け入れレビューへ |
+  | 1 | 生存 (`--once` のみ。heartbeat が停滞閾値内) | re-arm する |
+  | 2 | 引数誤り | 呼び出しを直す |
+  | 3 | 成果物なし完了 | log を読む |
+  | 4 | 判定不能 (停滞 / timeout / 見積もり 2 倍超) | 印字された evidence を読み、cancel するか待つかを人が決める |
+  | 5 | cancel / 失敗 | 結果ではない。fresh 再発注 |
+  | 6 | record が無い、または複数 | 起動が成立していないか id が曖昧。印字された record path で特定する |
 
-  **既定は cancel を指示しない**: plugin が message 本文を無加工で append するため、log の同じ bytes が「本文が引用した偽 event」と「真正 event」の両方を表しうる。静穏 log から stall を断定できないので、既定は exit 14 で evidence（成果物 ready / 末尾複数行 / 未完了 command / cancel コマンド）を渡し、判断は呼び手が行う。`--trust-log` を明示した呼び手だけが exit 3 / 4 の断定へ落ちる。下の「3 分岐で exit する」rule の cancel 条件も、機械に委ねてよいのは opt-in した監視だけと読む
-  `--once` は 1 cadence だけ評価して返すので、自分で cadence を持つ監視に使う。`--estimate-seconds` を渡すと見積もりの 2 倍で exit 12 に落ち、「乖離したら調査」が機械化される
+  **cancel は指示しない**: 停滞と真の hang は log から区別できないので、exit 4 は evidence (status / heartbeat 年齢 / 成果物の状態 / log 末尾 5 行) を渡すだけで、判断は呼び手が行う。heartbeat は record・log・成果物の mtime の最新で、停滞閾値の既定は 420 秒 (`--stall-seconds`)
+  `--once` は 1 回だけ評価して返すので、自分で cadence を持つ監視に使う。`--estimate-seconds` を渡すと見積もりの 2 倍で exit 4 に落ち、「乖離したら調査」が機械化される
 - **wrapper が報告する task id を監視対象にしない**: 1 回の起動で task が複数登録されることがあり、wrapper 報告の id が即終了した短命 task で、実作業は別 id という実例がある（2026-07-21）。state dir の job record 群を file 直読し、heartbeat（`updatedAt`）が更新され続けている running record を監視対象にする
 - **完了は成果物で裏取りする**: `git diff`、対象 file の mtime、job record の `completedAt` / `status` 変化のいずれかを確認する。`git diff README.md` が空で初めて非起動に気づいた実例があり、成果物ゼロは非起動または未着手と扱う（2026-07-15）。probe file は起動登録の確認に使い、完了の証拠にはしない
 - **wrapper return / timeout ≠ 完了**: wrapper は起動直後 return または実行途中で切断する。codex 本体はサーバー側 thread として走り続け、切断報告後も 40 分以上書き続けた実例がある
