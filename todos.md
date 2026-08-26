@@ -320,11 +320,13 @@ Exit Criteria:
   `drafts/codex-usage-unification.md`、矛盾 3 系統 20 組)
 - [x] 置換対象を文言で特定した一覧を用意した — `docs/codex-usage-anchors.md` (25/26 が一意に当たる)
 - [x] 緩めない箇所を名指しで除外した — `docs/codex-usage-donottouch.md` (7 分類 38 件)
-- [ ] (次 session の入口) 発注ポリシーの持ち込み — `drafts/claude_code_codex_delegation_guide_ja.pdf`
-  (2026-08-27 ユーザー「よく読んで、これをコード化するのが、次セッションのタスクです」) を精読し、
-  コード化する
-- [ ] (別 session) 統一文案を各 file へ反映し、`files/` と配備先の一致まで確認した — 前提
-  「ケース 1 完走」は 2026-08-26 に満たされた。残る前提はポリシー確定
+- [ ] 発注ポリシーの持ち込み — `drafts/claude_code_codex_delegation_guide_ja.pdf` を精読済み (2026-08-27)。
+  同日決裁: A = pdf の境界を採用 (非委譲 = Claude 直書きとは限らず opus / sonnet subagent を token・effort を
+  抑えて使う) / B = 回帰レビューは opus subagent のまま、時期は milestone / C = transfer は Claude が適時
+  提案し起動はユーザー (gate 不変)。worktree 隔離は donottouch 優先。残り = 正本
+  `docs/codex-delegation-policy.md` を書く (反映は次項)
+- [ ] 統一文案を各 file へ反映し、`files/` と配備先の一致まで確認した — 生存 anchor 14 件 (#1-8, #16-21、
+  2026-08-27 再実測)。前提「ケース 1 完走」と「ポリシー確定」は満たされた。残る前提は正本の完成
 
 Work file: `last-session-handoff.md` (再開手順)、`drafts/claude_code_codex_delegation_guide_ja.pdf` (方針の正本)、`docs/codex-usage-anchors.md`、
 `docs/codex-usage-donottouch.md`、`drafts/codex-usage-unification.md` (矛盾表・統一文案・発注クラス案 D1〜D5)
