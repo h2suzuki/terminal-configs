@@ -11,14 +11,18 @@ import re
 import subprocess
 import sys
 from datetime import datetime
+from typing import TextIO
 
-WORKTREE_RE = re.compile(r"\bgit\b(?:\s+-C\s+\S+)?\s+worktree\s+(?:remove|prune)\b")
+WORKTREE_RE = re.compile(
+    r"\bgit\b(?:\s+(?:-C\s+(?:\"[^\"]*\"|'[^']*'|\S+)|-c\s+\S+|--git-dir=\S+|--work-tree=\S+))*"
+    r"\s+worktree\s+(?:remove|prune)\b"
+)
 SUMMARY_RE = re.compile(r"keep=(\d+)\s+reap=(\d+)\s+stale=(\d+)")
 FREED_RE = re.compile(r"回収で解放=\s*(\d+)\s*MB")
 DEFAULT_LEDGER = os.path.expanduser(
     "~/.claude/hooks/state/codex_broker_sweep/ledger.jsonl"
 )
-DEFAULT_TIMEOUT = 20.0
+DEFAULT_TIMEOUT = 90.0
 
 
 def ledger_path() -> str:
@@ -38,17 +42,29 @@ def should_sweep(payload: dict) -> tuple[bool, str | None]:
     return False, None
 
 
-def acquire_lock(lock_path: str):
-    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
-    handle = open(lock_path, "a+", encoding="utf-8")
+def _report_lock_failure(exc: OSError) -> None:
+    sys.stderr.write(
+        f"codex_broker_sweep: lock unavailable ({exc!r}), sweeping without lock\n"
+    )
+
+
+def try_lock(lock_path: str) -> tuple[str, TextIO | None]:
+    """Return ("locked", handle) / ("held", None) / ("unavailable", None)."""
+    try:
+        os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+        handle = open(lock_path, "a+", encoding="utf-8")
+    except OSError as exc:
+        _report_lock_failure(exc)
+        return "unavailable", None
     try:
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError as exc:
         handle.close()
         if exc.errno in (errno.EACCES, errno.EAGAIN):
-            return None
-        raise
-    return handle
+            return "held", None
+        _report_lock_failure(exc)
+        return "unavailable", None
+    return "locked", handle
 
 
 def run_reaper(timeout: float) -> subprocess.CompletedProcess | None:
@@ -69,7 +85,7 @@ def run_reaper(timeout: float) -> subprocess.CompletedProcess | None:
 
 
 def excerpt(text: str) -> str:
-    return text.strip()[:200]
+    return " ".join(text.split())[:200]
 
 
 def parse_summary(stdout: str) -> tuple[int, int, int, int] | None:
@@ -82,9 +98,14 @@ def parse_summary(stdout: str) -> tuple[int, int, int, int] | None:
 
 
 def append_ledger(path: str, record: dict) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def emit_summary(event: str | None, summary: str) -> None:
+    out = {"hookSpecificOutput": {"hookEventName": event, "additionalContext": summary}}
+    print(json.dumps(out))
 
 
 def sweep(payload: dict, command: str | None) -> None:
@@ -121,13 +142,19 @@ def sweep(payload: dict, command: str | None) -> None:
     }
     if command is not None:
         record["command"] = command
-    append_ledger(path, record)
-    print(
-        f"codex broker 掃引: reap {reap} / stale {stale} / 解放 {freed} MB (台帳 {path})"
-    )
+    try:
+        append_ledger(path, record)
+    except OSError as exc:
+        sys.stderr.write(f"codex_broker_sweep: ledger unwritable ({exc!r})\n")
+    summary = f"codex broker 掃引: reap {reap} / stale {stale} / 解放 {freed} MB (台帳 {path})"
+    emit_summary(payload.get("hook_event_name"), summary)
 
 
 def main() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
     raw = sys.stdin.read()
     try:
         payload = json.loads(raw) if raw.strip() else {}
@@ -138,9 +165,13 @@ def main() -> None:
     trigger, command = should_sweep(payload)
     if not trigger:
         return
-    lock_path = os.path.join(os.path.dirname(ledger_path()), "lock")
-    handle = acquire_lock(lock_path)
+    lock_dir = os.path.dirname(os.path.abspath(ledger_path()))
+    state, handle = try_lock(os.path.join(lock_dir, "lock"))
+    if state == "held":
+        sys.stderr.write("codex_broker_sweep: sweep skipped (lock held)\n")
+        return
     if handle is None:
+        sweep(payload, command)
         return
     try:
         sweep(payload, command)

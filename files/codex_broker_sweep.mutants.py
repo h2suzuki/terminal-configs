@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Orderer-owned mutants for codex_broker_sweep.py: each must make the acceptance tests fail.
 
-The implementation must contain the four seam lines verbatim so the mutants apply;
+The implementation must contain the six seam lines verbatim so the mutants apply;
 a missing seam counts as a failure of the delivery, not of this script.
 """
 
@@ -19,20 +19,28 @@ TESTS = os.path.join(HOOKS, "codex_broker_sweep.test.py")
 
 MUTANTS = {
     "m1-worktree-regex-drops-prune": (
-        'WORKTREE_RE = re.compile(r"\\bgit\\b(?:\\s+-C\\s+\\S+)?\\s+worktree\\s+(?:remove|prune)\\b")',
-        'WORKTREE_RE = re.compile(r"\\bgit\\b(?:\\s+-C\\s+\\S+)?\\s+worktree\\s+(?:remove)\\b")',
+        '    r"\\s+worktree\\s+(?:remove|prune)\\b"',
+        '    r"\\s+worktree\\s+(?:remove)\\b"',
     ),
     "m2-ledger-condition-fires-on-zero": (
-        "if reap + stale <= 0:",
-        "if reap + stale < 0:",
+        "    if reap + stale <= 0:",
+        "    if reap + stale < 0:",
     ),
     "m3-fail-open-swallows-timeout": (
-        "except (FileNotFoundError, subprocess.TimeoutExpired) as exc:",
-        "except (FileNotFoundError,) as exc:",
+        "    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:",
+        "    except (FileNotFoundError,) as exc:",
     ),
     "m4-summary-regex-never-matches": (
         'SUMMARY_RE = re.compile(r"keep=(\\d+)\\s+reap=(\\d+)\\s+stale=(\\d+)")',
         'SUMMARY_RE = re.compile(r"keep=(\\d+)\\s+REAP=(\\d+)\\s+stale=(\\d+)")',
+    ),
+    "m5-lock-shared": (
+        "        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)",
+        "        fcntl.flock(handle, fcntl.LOCK_SH | fcntl.LOCK_NB)",
+    ),
+    "m6-double-invocation": (
+        "    proc = run_reaper(timeout)",
+        "    proc = run_reaper(timeout)\n    run_reaper(timeout)",
     ),
 }
 
