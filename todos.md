@@ -165,17 +165,24 @@ Work file: `drafts/mention-guard/` (発注書 2 通と回帰レビュー 2 通)
 Goal: session 終了後も生き残り、削除済み worktree を掴んだまま蓄積する broker プロセスと
 その残骸を、鍵ずれの解消と状態駆動の回収の両輪で止める。
 
-原因は単一 = 鍵ずれ: 登録は git repo root の hash、回収は session 終了時点の cwd で引くため、
-linked worktree への write 委譲では必ず不一致。版は無関係、既製の回収機構は無い (2026-08-23 確定)。
+原因は単一 = 鍵ずれ (登録 = `--cwd` の git root の hash、回収 = 終了時 cwd の hash の 1 点照会)。
+既製の回収機構は無い (2026-08-23 確定)。
 
 Exit Criteria:
 
-- [ ] 着手時期をユーザーと相談し、対策 A〜D のどれを本端末で実施するか決める
-- [ ] 対策 A (鍵ずれ): 発注する session の cwd を worktree に合わせる。効くのは session 終了時点の
-  cwd なので 1 session 1 worktree。原因が単一と分かったため本命
-- [ ] 対策 B (取りこぼし): worktree 削除の直前に、停止要求 → SIGTERM → SIGKILL の順で session
-  単位に回収する
-- [x] 対策 C (定期回収): `files/codex_broker_reap` を実装・配備 (2026-08-23)。host 実測 =
+- [x] 方式をユーザーが決めた — 2026-08-27 決裁「書き換えるのとセットなら費用が小さく、推奨に変えます。
+  → それでお願いします」: 正本を書き換えたうえで下の 4 点を全部載せる。止血として同日
+  `codex_broker_reap --apply` で 11 本 (614 MB) を回収済み
+- [ ] 正本の書き換え — codex-delegation skill L25 / L79 (repo root の session から `--cwd wt-*` へ発注 =
+  漏れる形そのもの) を「発注 session は worktree 内 (`cd wt-x && claude`) で起動する」へ改訂し配備した。
+  実測 (transcript 全件 2026-08-27): 発注 374 件中 345 件が wt-* 宛、session 自身が wt-* 内起動は 13 件
+- [ ] deny (鍵ずれの回避): 発注 session の git root ≠ `--cwd` の git root を deny — worktree gate 書き直しの
+  契約 claim として実装・配備した
+- [ ] 記録 + SessionEnd 回収 (取りこぼし): 発注 hook が session → `--cwd` を記録し、SessionEnd hook が
+  その worktree を掴む broker を停止要求 → SIGTERM → SIGKILL で回収した (`codex_broker_reap` に cwd filter)
+- [ ] worktree 回収時 reap + 台帳: `git worktree remove` の PostToolUse hook で `codex_broker_reap --apply` を
+  走らせ回収数を台帳に追記した (= 再発の記録)。SessionStart でも同 `--apply` を走らせた (取りこぼし用)
+- [x] 対策 C (回収 tool): `files/codex_broker_reap` を実装・配備 (2026-08-23)。host 実測 =
   reap 5 / keep 2 / stale 114、孤児 3 本も回収、停止要求だけで全件停止
 - [x] 対策 D (upstream 報告): #380 へコメント投稿 (2026-08-24、
   `https://github.com/openai/codex-plugin-cc/issues/380#issuecomment-5388760433`)
@@ -232,9 +239,13 @@ Exit Criteria:
 - [ ] review 運用の gate 群を実装・smoke・deploy — (a)〜(f) + stateless 化 + warn は fix round 12
   まで回して回帰 filter pass、main merge・deploy 済み (2026-08-22)。残り: warn family の
   発火と誤爆の実測 (誤爆 9 件と凍結判断は Medium「随伴エージェント待ち」block へ集約済み)、
-  live finding 1 (task の anchor ずれ、修正 `29f1891`、配備済み = stop_checks が IDENTICAL)、live finding 2
-  (`adversarial-review` command が gate と衝突、例外を設けるかは判断待ち)
-- [ ] 検問実装への挑戦レビュー — verdict 受領 2026-08-22 (U0 8 / U1 2)。処置の決定はユーザー判断待ち
+  live finding 1 (task の anchor ずれ、修正 `29f1891`、配備済み = stop_checks が IDENTICAL)
+- [ ] `/codex:adversarial-review` は rescue 経路で代替 — 2026-08-27 決裁「rescue で代替でよい。発注書で
+  同等以上のレビューができることをどうやって担保するのかが重要」。担保 = rescue subagent から companion の
+  `adversarial-review` subcommand (plugin 同梱 template) を呼ぶ手順を skill に書き、gate が通すことを 1 回実測
+- [ ] 検問実装への挑戦レビュー (U0 8 / U1 2、2026-08-22) の処置 — 検索コマンド block の決裁「書き直して
+  シンプルに refactor した後に、対応を考える」と同扱い。U0 の 6 件は書き直し対象 3 script の契約 claim の
+  候補、U0-7 と U1-2 は廃止済み hook (`8b04b7b`) 宛、U1-1 は harness 側の情報が要る (bounded-risk 候補)
 - [x] (g) codex の直接起動を禁止する — deny 化・配備・live 実測 2 件 (2026-08-25 close)
 - [x] (i) 自作癖の抑制 — skill の数値境界は明文化済み。hook 側は廃止 (`8b04b7b`)、後継は Medium
   「随伴エージェント待ち」block の項目 1
@@ -244,7 +255,8 @@ Exit Criteria:
 - [ ] 決裁受領の記録強制を同 family に併合 — 実装済み (`5323179`)、配備済み。実測が残
 - [ ] 「無駄」keyword の memory 記録 reminder — Stop family として発注済み
   (`drafts/gates/warn-family-order.md`)。2026-08-26 実測: 配備済みで発火するが、entry を書くまで
-  毎 Stop で再発火する (結論確定前に書けない turn では noise)
+  毎 Stop で再発火する (結論確定前に書けない turn では noise)。2026-08-27 決裁「書き直し契約でよい」→
+  prompt ごと 1 回の latch を stop_checks 書き直しの契約へ
 - [ ] コミュニケーション規則の hook 強化 — CLAUDE.md は削らない (2026-08-21 決裁)。round 7 で
   実装済み、追加 2 項目 (過去参照語の warn / 判断依頼の書式 template) を同発注書で発注済み。
   実測・deploy が残
@@ -270,13 +282,14 @@ Exit Criteria:
   `drafts/codex-usage-unification.md`、矛盾 3 系統 20 組)
 - [x] 置換対象を文言で特定した一覧を用意した — `docs/codex-usage-anchors.md` (25/26 が一意に当たる)
 - [x] 緩めない箇所を名指しで除外した — `docs/codex-usage-donottouch.md` (7 分類 38 件)
-- [ ] (別 session) 発注ポリシーの持ち込み — ポリシーは pdf 化済み (2026-08-27 ユーザー)。独立タスクとして
-  新 session で着手する
+- [ ] (次 session の入口) 発注ポリシーの持ち込み — `drafts/claude_code_codex_delegation_guide_ja.pdf`
+  (2026-08-27 ユーザー「よく読んで、これをコード化するのが、次セッションのタスクです」) を精読し、
+  コード化する
 - [ ] (別 session) 統一文案を各 file へ反映し、`files/` と配備先の一致まで確認した — 前提
   「ケース 1 完走」は 2026-08-26 に満たされた。残る前提はポリシー確定
 
-Work file: `docs/codex-usage-anchors.md`、`docs/codex-usage-donottouch.md`、
-`drafts/codex-usage-unification.md` (矛盾表・統一文案・参考の発注クラス案 D1〜D5)
+Work file: `drafts/claude_code_codex_delegation_guide_ja.pdf` (方針の正本)、`docs/codex-usage-anchors.md`、
+`docs/codex-usage-donottouch.md`、`drafts/codex-usage-unification.md` (矛盾表・統一文案・発注クラス案 D1〜D5)
 
 ## Medium
 
