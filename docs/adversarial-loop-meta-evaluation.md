@@ -171,7 +171,10 @@ Spolsky 2000 / Fowler strangler fig: 全面 rewrite への歯止め、seam を�
    reviewer の報告書 file がそのまま記録であり、行動を伴わない転記は積み上がるだけで読まれない
 
 巡は最大 3: 基準品質 (read-only) → class 単位の fix 1 回 → 独立再確認 1 回。再確認で P0 が出たら
-4 巡目は回さず、縮小 / rewrite / bounded-risk 受入のいずれかを人間が選ぶ。
+4 巡目は回さず、閉じた選択肢から人間が選ぶ — 削除・縮小 / 契約の訂正 (test を先に直して
+再入場、巡数は 1 から) / 構造化 (funnel・enumerator を別発注) / bounded-risk 受入 / 廃棄。
+削除が解にならない P0 (用途内の要件を満たしていない、契約自体が誤っていた) は実在し、その時の
+出口は契約の訂正か構造化である。選択肢に無いのは「同じ artifact へもう 1 巡 patch」だけ。
 
 ### 5.2 artifact の処遇
 
