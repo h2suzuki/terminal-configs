@@ -60,10 +60,13 @@ Exit Criteria:
 
 - [x] ユーザーが対策の方向を決めた (2026-08-26) — (A) Stop 時 advisory surface を削除 (11005b1、配備済み) /
   (B) 予告 entry は `## 処置の種別` の閉じた選択肢 gate へ (合意) / (C) 文章だけの entry を減らす (OK)。
-  追加の決裁待ち = blocking 昇格候補 8 件と scope 上限 (org 60) の採否
+  同日追加決裁: blocking 昇格 8 件と scope 上限 (org 60) を採用、gate 済み entry 3 件はホストで退役
 - [ ] memory 衛生を機構化した — `memory_routing_gate` に近接重複の検出 (search score が閾値超なら
-  新規 Write を deny して既存 entry への追記を案内) と、gate / lint が逐語 cover した entry の退役
-  要求を入れる
+  新規 Write を deny して既存 entry への追記を案内)、gate / lint が逐語 cover した entry の退役
+  要求、scope 上限 (org 60 超で新規 feedback を deny し `--reach` の never 一覧を印字) を入れる
+- [ ] 決定的に検出できる教訓 8 件を blocking gate へ昇格し entry を退役した — Bash pattern gate
+  (fuser -k・pkill / 無限 loop / --autosquash / voicevox --loopback / 除外 command の裸名)、hooks 内
+  `claude -p` の Write deny、playwright `page.on` 未 off の deny、done_state_ledger の Stop block 化
 - [ ] 重複 cluster を統合した — 例: 自己採点系 (`lesson_is_input_not_report` /
   `close_question_before_remorse` / `check_report_verdict_wording`)、規則追加系
   (`rule_violation_means_countermeasure` / `failure_response_adds_rules`)、自作・委譲系
