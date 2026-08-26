@@ -17,6 +17,10 @@ or
 
     # ./debian12.sh
 
+The script ends by running `setup_user_environment` as the login user, which in turn runs
+`install_claude_extensions` (the per-user install of Claude Code hooks, skills and the shared memory
+clone). There is no separate step to run.
+
 ### Optional add-ons (opt-in)
 
 After the base setup, run the scripts under `extra/` as root as needed.

@@ -17,6 +17,10 @@
 
     # ./debian12.sh
 
+スクリプトは末尾でログインユーザーとして `setup_user_environment` を実行し、その中で
+`install_claude_extensions`（Claude Code の hooks・skills・共有 memory clone のユーザー側インストール）まで
+行います。別途実行する必要はありません。
+
 ### 追加セットアップ（opt-in）
 
 基本セットアップの後、必要に応じて `extra/` 配下のスクリプトを root で実行します。
