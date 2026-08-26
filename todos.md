@@ -121,8 +121,9 @@ Exit Criteria:
 
 - [x] 契約 C9/C10 + 変異 m5〜m8 を先に書き red 1 件を確認した — 契約 commit `b7ffd0e`
 - [x] codex 実装を受け入れた — +53/−1 行、契約 15/15・変異 0/8・ruff/ty pass (発注側で再実行)
-- [ ] 独立レビュー 1 巡 (P0 限定・再現必須) — fresh subagent 実行中
-- [ ] main へ --no-ff merge・push
+- [x] 独立レビュー 1 巡 — P0 0 件、実 todos.md で exit 0・敵対 probe 18 本 pass
+  (`drafts/consent-gate/review-1.md`、2026-08-26)
+- [x] main へ --no-ff merge・push した — `07af68a` (2026-08-26)、worktree・branch 撤去済み
 - [ ] 配備 (gate と契約 test の 2 file を sudo cp) と E2E (引用なし決裁行の commit が deny される)
 
 Work file: `drafts/consent-gate/` (発注書・報告書・gate log・レビュー報告)
