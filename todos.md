@@ -80,7 +80,8 @@ Exit Criteria:
   entry の未到達率が 43% → 25% 未満かで判定
 - [ ] 予告 entry 3 件 (`architecture_before_review` / `self_build_impulse` / `threat_model_in_review_order`) を
   codex_order_lint の `## 処置の種別` gate へ昇格して退役した (gate は「肥大化した hook と CLI」block の
-  order_lint 書き直しに含める。retrieval で届かせる backtest は行わない — 2026-08-26 決裁)
+  order_lint 書き直しに含める。retrieval で届かせる backtest は行わない — 発話証跡なし。gate 昇格
+  合意 (2026-08-26 00:46「それなら良さそうです」) からの派生であり決裁ではない。要確認)
 
 Work file: `last-session-handoff.md` (再開手順)、`~/.claude/hooks/memory_surface.py` (surface 方針の実装)、
 `/var/lib/claude-rag-memory/memory_index.sqlite3` の `inject_log` (emit / mismatch の実測)
