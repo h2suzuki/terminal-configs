@@ -1,15 +1,8 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) hook: deny command patterns that are unsafe or sandbox-bound.
-
-The rule table covers kill-by-port, unbounded loops, non-interactive autosquash,
-voicevox without loopback, and indirect sandbox excluded-command invocations.
-
-Exit:
-  0: allow, or allow when the payload/settings cannot be read
-  2: deny and explain the matching command patterns on stderr
-
-Always exits 0 on any parse, settings, or matcher error (fail-open).
-"""
+"""PreToolUse(Bash) hook for unsafe or sandbox-bound command patterns.
+Rules: kill-by-port, unbounded loops, non-interactive autosquash, voicevox without
+loopback, and indirect sandbox excluded-command invocations.
+Exit 0 allows or fails open (including unreadable input/settings); exit 2 denies."""
 
 from functools import partial
 import glob
@@ -29,7 +22,7 @@ INTERACTIVE_RE = re.compile(
 )
 VOICEVOX_RE = re.compile(r"\bvoicevox_paplay\b")
 LOOPBACK_RE = re.compile(r"(?<!\w)--loopback\b")
-QUOTED_RE = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
+QUOTED_RE = re.compile(r'"(?:\\[\s\S]|[^"\\])*"|\'(?:\\[\s\S]|[^\'\\])*\'')
 HEREDOC_RE = re.compile(
     r"<<-?\s*['\"]?(\w+)['\"]?([^\n]*)\n[\s\S]*?^[ \t]*\1\b",
     re.MULTILINE,
@@ -40,7 +33,7 @@ WHICH_RE = re.compile(r"\$\(\s*which\s+([^\s()]+)\s*\)")
 COMMAND_V_RE = re.compile(r"\$\(\s*command\s+-v\s+([^\s()]+)\s*\)")
 HEAD_RE = re.compile(r"^([^\s*]+) \*$")
 START_EXEMPT = frozenset({"git"})
-WRAPPERS = frozenset({"timeout", "env", "sudo", "exec", "nohup"})
+WRAPPERS = frozenset({"timeout", "env", "sudo", "exec", "nohup", "xargs"})
 SEPARATORS = frozenset({";", "&&", "||", "|", "&", "(", ")", "\n"})
 
 
@@ -80,9 +73,9 @@ def wrapped_target(tokens: list[str]) -> str | None:
     return rest[0] if rest else None
 
 
-def sandbox_violation(command: str, heads: set[str] | None = None) -> bool:
+def sandbox_violation(command: str, heads=None, probe=None):
     heads = load_heads() if heads is None else heads
-    if not heads:
+    if not heads and probe is None:
         return False
     for pattern in (WHICH_RE, COMMAND_V_RE):
         for match in pattern.finditer(command):
@@ -107,6 +100,8 @@ def sandbox_violation(command: str, heads: set[str] | None = None) -> bool:
         if prefix < len(tokens):
             program = tokens[prefix]
             target = wrapped_target(tokens[prefix:]) if program in WRAPPERS else None
+            if probe and probe(tokens[prefix:], program, target):
+                return True
             if bad(program, first and not prefix) or target and bad(target, False):
                 return True
         tokens = []
@@ -127,13 +122,28 @@ def without(pattern: re.Pattern[str], exception: re.Pattern[str], text: str) -> 
     return bool(pattern.search(text)) and not exception.search(text)
 
 
+def segment_hit(pattern, tokens, program, target, exception=None):
+    index = tokens.index(target, 1) if target else 0
+    program = target or program
+    phrase = " ".join((os.path.basename(program), *tokens[index + 1 : index + 2]))
+    if (match := pattern.search(phrase)) and match.start() == 0:
+        return exception is None or not exception.search(" ".join(tokens[index:]))
+    return False
+
+
+def program_hit(pattern, command: str, exception=None) -> bool:
+    probe = partial(segment_hit, pattern, exception=exception)
+    return sandbox_violation(command, set(), probe=probe)
+
+
 LOOP_HIT = partial(without, LOOP_RE, TIMEOUT_RE)
 AUTOSQUASH_HIT = partial(without, AUTOSQUASH_RE, INTERACTIVE_RE)
-VOICEVOX_HIT = partial(without, VOICEVOX_RE, LOOPBACK_RE)
+KILL_HIT = partial(program_hit, KILL_RE)
+VOICEVOX_HIT = partial(program_hit, VOICEVOX_RE, exception=LOOPBACK_RE)
 
 
 RULES = (
-    ("kill-by-port", KILL_RE.search, KILL_REASON),
+    ("kill-by-port", KILL_HIT, KILL_REASON),
     ("unbounded-loop", LOOP_HIT, LOOP_REASON),
     ("noninteractive-autosquash", AUTOSQUASH_HIT, AUTOSQUASH_REASON),
     ("voicevox-loopback", VOICEVOX_HIT, LOOPBACK_REASON),
