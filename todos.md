@@ -124,7 +124,8 @@ Exit Criteria:
 - [x] 独立レビュー 1 巡 — P0 0 件、実 todos.md で exit 0・敵対 probe 18 本 pass
   (`drafts/consent-gate/review-1.md`、2026-08-26)
 - [x] main へ --no-ff merge・push した — `07af68a` (2026-08-26)、worktree・branch 撤去済み
-- [ ] 配備 (gate と契約 test の 2 file を sudo cp) と E2E (引用なし決裁行の commit が deny される)
+- [x] 配備と E2E — 2026-08-26 実測: 2 file とも diff -q IDENTICAL、引用なし決裁行の commit は
+  「consent」で deny (exit 2)、引用ありは allow、実 todos.md は pass (exit 0)
 
 Work file: `drafts/consent-gate/` (発注書・報告書・gate log・レビュー報告)
 
@@ -299,8 +300,8 @@ Exit Criteria:
 - [ ] 敵対的レビューの位置づけのずれを揃える — skill (高リスク時のみ) と方法論 §7.3 (毎巡) の
   食い違い。方法論の 1 ページ化で解消する
 
-Work file: `docs/injection-corpus-baseline.md`、`docs/injection-prevention-proposal.md`、
-`drafts/ruling61/` と `drafts/gates/` (注入 corpus の回帰レビュー報告書・gitignore)
+Work file: `last-session-handoff.md` (再開手順)、`docs/injection-corpus-baseline.md`、
+`docs/injection-prevention-proposal.md`、`drafts/ruling61/` と `drafts/gates/` (gitignore)
 
 ### 方法論の実証: 小規模ツール新規作成で敵対レビューの収束を実測する
 
