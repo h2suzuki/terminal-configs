@@ -240,11 +240,11 @@ Exit Criteria:
 - [x] warn tier で実装・test した — `stop_checks.py` `_handoff_todos_sync_warnings` (2026-08-23、配備済み)
 - [ ] 実 session で誤検知と見逃しを観測した — handoff doc を作る session が来るまで測れない
 - [x] 現存する stale file を処置した — `last-session-handoff.md` を削除 (2026-08-23、ユーザー承認)
-- [ ] background 作業の残処理を protocol に足す — 2026-08-27 ユーザー指摘「Background work is running と言われて終了を
+- [x] background 作業の残処理を protocol に足す — 2026-08-27 ユーザー指摘「Background work is running と言われて終了を
   阻害されます。これは handoff protocol にチェックがもれている」(残っていたのは readback 完了待ちの Bash loop)。handoff
   skill の Pre-handoff checks に step 4「Agent / Workflow / Monitor / run_in_background の残りを完了通知で確かめ、残れば
-  TaskStop」を追加 (2026-08-27 commit 済み、配備先 `diff -q` 待ち)。stop_checks 側の block 条件は「肥大化した hook と CLI」
-  block の stop_checks 項目へ契約 claim として転記済み
+  TaskStop」を追加 (`75486d5`、配備先 `diff -q` IDENTICAL を同日実測)。stop_checks 側の block 条件は「肥大化した hook と
+  CLI」block の stop_checks 項目へ契約 claim として転記済み
 
 Work file: なし (本 block で自己完結)
 
