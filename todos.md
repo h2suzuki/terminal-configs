@@ -216,8 +216,9 @@ Exit Criteria:
   契約 claim として実装・配備した
 - [ ] 記録 + SessionEnd 回収 (取りこぼし): 発注 hook が session → `--cwd` を記録し、SessionEnd hook が
   その worktree を掴む broker を停止要求 → SIGTERM → SIGKILL で回収した (`codex_broker_reap` に cwd filter)
-- [ ] worktree 回収時 reap + 台帳: `git worktree remove` の PostToolUse hook で `codex_broker_reap --apply` を
-  走らせ回収数を台帳に追記した (= 再発の記録)。SessionStart でも同 `--apply` を走らせた (取りこぼし用)
+- [x] worktree 回収時 reap + 台帳: `codex_broker_sweep.py` (SessionStart と `git worktree remove|prune` の PostToolUse
+  Bash で `codex_broker_reap --apply`、回収時のみ台帳 `~/.claude/hooks/state/codex_broker_sweep/ledger.jsonl` に追記) を
+  契約 test 21 件 + 変異 6 体で固定し配備 (merge `3c56a03`、配備先 2 file IDENTICAL、host smoke exit 0 — 2026-08-27)
 - [ ] `codex_broker_reap` に起動中 broker の min-age guard を足す — 2026-08-27 の独立レビュー所見: `cxc-*` dir 作成 →
   `broker.pid` 書込の窓 (node 起動 0.1〜0.5 s) と `broker.json` の非 atomic 書込を stale と誤判定し、削除で永続漏れを作る。
   若い (60 s 未満) 孤児 dir と parse 不能 record は keep 扱いにし、selftest で固定する
