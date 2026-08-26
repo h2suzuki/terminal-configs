@@ -1,5 +1,7 @@
 # codex_task_sentinel 収束対策の実行ログ
 
+凍結 (2026-08-26): 追記しない。評価は `docs/adversarial-loop-meta-evaluation.md`。
+
 `files/codex_task_sentinel` の敵対レビュー loop を収束させるための対策の記録である。
 巡ごとの指摘の集計は `docs/sentinel-review-analysis.md` にあり、本文書はそれを踏まえた
 対策の内容・決定・実行結果を段階ごとに記録する。

@@ -1,5 +1,7 @@
 # 方法論の実証 — ケース台帳
 
+凍結 (2026-08-26): 追記しない。評価は `docs/adversarial-loop-meta-evaluation.md`。
+
 小さい道具を新規に作り、敵対レビューが 5 巡以内で収束するかを実測する台帳。
 方法論の正本は `docs/adversarial-review-methodology.md`、集計の前提は
 `docs/injection-corpus-baseline.md`。
