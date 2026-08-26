@@ -70,18 +70,19 @@ Exit Criteria:
   (`deny_command_patterns.py` 5 規則・`deny_llm_call_in_hook.py`・`playwright_listener_gate.py`、
   E2E で deny を実測) し entry 10 件を退役。残り = done_state_ledger の Stop block 化 (stop_checks の
   書き直しで実装)。list 形式 (`"claude", "-p"`) を覆う v2 も同日 19:56 に配備済み
-- [ ] 重複 cluster を統合した — 例: 自己採点系 (`lesson_is_input_not_report` /
-  `close_question_before_remorse` / `check_report_verdict_wording`)、規則追加系
-  (`rule_violation_means_countermeasure` / `failure_response_adds_rules`)、自作・委譲系
-  (`self_build_impulse` / `delegation_failure_no_self_impl` / `inventory_existing_tools_first`)。
-  gate で逐語 cover 済みだった 3 件 (`codex_delegation_skill_skip` 等) は 2026-08-26 に退役済み
+- [ ] 重複 cluster を統合した — 2026-08-26 に 3 組 8 件を org の新 entry 3 本へ統合 Write 済み
+  (自己採点系 → `feedback_lesson_to_action_not_report`、規則追加系 →
+  `feedback_violation_countermeasure_delete_first`、自作・委譲系 → `feedback_self_build_over_delegation`。
+  index 反映・search で上位に入ることを実測)。残り = 旧 8 entry のホスト退役 (`claude_memory_sync --retire`、
+  sudo 不要)。gate で逐語 cover 済みだった 3 件 (`codex_delegation_skill_skip` 等) は同日退役済み
 - [x] 到達経路を測って回す機構を配備した (2026-08-26、aa3c1dd) — surface の (entry, session) 上限 2 回と
   `claude_memory_sync --reach` (30 日 emit 0 / ≥ 20 の列挙。初回: never 70 / hot 6)。30 日後に到達可能
   entry の未到達率が 43% → 25% 未満かで判定
 - [ ] 予告 entry 3 件 (`architecture_before_review` / `self_build_impulse` / `threat_model_in_review_order`) を
   codex_order_lint の `## 処置の種別` gate へ昇格して退役した (gate は「肥大化した hook と CLI」block の
-  order_lint 書き直しに含める。retrieval で届かせる backtest は行わない — 発話証跡なし。gate 昇格
-  合意 (2026-08-26 00:46「それなら良さそうです」) からの派生であり決裁ではない。要確認)
+  order_lint 書き直しに含める。`self_build_impulse` は 2026-08-26 に `feedback_self_build_over_delegation`
+  へ統合済みなので gate 着地時は部分 cover 注記に留める。retrieval で届かせる backtest は行わない —
+  発話証跡なし。gate 昇格合意 (2026-08-26 00:46「それなら良さそうです」) からの派生であり決裁ではない。要確認)
 
 Work file: `last-session-handoff.md` (再開手順)、`~/.claude/hooks/memory_surface.py` (surface 方針の実装)、
 `/var/lib/claude-rag-memory/memory_index.sqlite3` の `inject_log` (emit / mismatch の実測)
