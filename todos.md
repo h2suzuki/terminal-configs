@@ -105,8 +105,10 @@ Exit Criteria:
 - [x] 報告を docs/ へ正本化した — `docs/memory-surface-efficacy.md` (2026-08-27、計測日・母数・執筆規準 6 点を含む)
 - [x] Stop 時 surface の処遇をユーザーが決めた — 2026-08-27 決裁「b 効いた型に限り文言を変えて再導入、memory writing の
   フォーマットチェックで、効かない文面の混入を防止」
-- [ ] 実装 1 = memory 書式 gate: entry frontmatter に `check:` (直前の出力に当てる検査動作 1 文・肯定形・100 字以内) を
-  新設し、`memory_routing_gate.py` が欠落 / 否定形のみ (「するな」だけで動作なし) を deny する — 挙動 1 行の承認後に実装
+- [x] 実装 1 = memory 書式 gate: entry frontmatter に `check:` (直前の出力に当てる検査動作 1 文・肯定形・100 字以内) と
+  `when:` (prompt / stop / after-subagent) を新設し、`memory_routing_gate.py` が新規 entry の欠落 / 100 字超 / 否定形のみ
+  (禁止語尾の手前に動作語なし) / `when:` 値域外を deny (既存 entry の再 Write は省略可) — 契約 test 15 件 + 変異 0/4、
+  merge `7a47768`、配備先 gate と skill が IDENTICAL (2026-08-27)。parser の読取は実装 2 の契約へ
 - [ ] 実装 2 = Stop 時 surface の再導入: `check:` を持つ entry のみ、文言「抵触するなら修正してから完了。しなければ
   何も書かない」で surface する family を stop_checks 書き直しの契約に含める (旧文言の「確認せよ」は使わない)。
   あわせて entry に `when:` (prompt / stop / after-subagent) を設け、surface hook がそれで振り分ける (ユーザー提案 2026-08-27)
