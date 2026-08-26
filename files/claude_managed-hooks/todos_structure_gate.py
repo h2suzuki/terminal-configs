@@ -35,39 +35,42 @@ GIT_OPTIONS_WITH_VALUES = {
 }
 
 
-def is_todos_commit(command: str) -> bool:
-    """Return whether command text names a git commit and todos.md."""
+def todos_commit_target(command: str, cwd: str) -> str | None:
+    """Return the working-tree todos.md path for a matching git commit."""
     try:
         tokens = shlex.split(command)
     except ValueError:
-        return False
-    if "--" not in tokens:
-        return False
-    separator = tokens.index("--")
+        return None
     if not tokens or os.path.basename(tokens[0]) != "git":
-        return False
+        return None
     index = 1
-    while index < separator:
+    while index < len(tokens) and tokens[index] != "commit":
         token = tokens[index]
-        if token == "commit":
-            return any(
-                os.path.normpath(path) == "todos.md" for path in tokens[separator + 1 :]
-            )
-        if not token.startswith("-"):
-            return False
+        if token == "--" or not token.startswith("-"):
+            return None
+        if token == "-C":
+            if index + 1 >= len(tokens):
+                return None
+            cwd = os.path.join(cwd, tokens[index + 1])
+            index += 2
+            continue
         index += 2 if token in GIT_OPTIONS_WITH_VALUES else 1
-    return False
-
-
-def working_todos(cwd: str) -> str:
-    """Resolve the repository, then return its working-tree todos.md file."""
-    root = subprocess.check_output(
-        ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
-        stderr=subprocess.DEVNULL,
-        text=True,
-    ).strip()
-    with open(os.path.join(root, "todos.md"), encoding="utf-8") as handle:
-        return handle.read()
+    if index == len(tokens):
+        return None
+    try:
+        separator = tokens.index("--", index + 1)
+        root = subprocess.check_output(
+            ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    target = os.path.abspath(os.path.join(root, "todos.md"))
+    paths = (
+        os.path.abspath(os.path.join(cwd, path)) for path in tokens[separator + 1 :]
+    )
+    return target if target in paths else None
 
 
 def lint(text: str) -> list[str]:
@@ -120,9 +123,11 @@ def _run(payload: object) -> int:
     cwd = payload.get("cwd")
     if not isinstance(command, str) or not isinstance(cwd, str):
         return 0
-    if not is_todos_commit(command):
+    target = todos_commit_target(command, cwd)
+    if target is None:
         return 0
-    violations = lint(working_todos(cwd))
+    with open(target, encoding="utf-8") as handle:
+        violations = lint(handle.read())
     if not violations:
         return 0
     sys.stderr.write("todos-structure:\n")
