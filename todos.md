@@ -80,8 +80,30 @@ Exit Criteria:
 - [ ] 採用した対策を実装し、2026-08-25 session の prompt 列で backtest して予告 entry が届くことを
   確認した (memory-surface-analyzer)
 
-Work file: `~/.claude/hooks/memory_surface.py` (surface 方針の実装)、
+Work file: `last-session-handoff.md` (再開手順)、`~/.claude/hooks/memory_surface.py` (surface 方針の実装)、
 `/var/lib/claude-rag-memory/memory_index.sqlite3` の `inject_log` (emit / mismatch の実測)
+
+### 肥大化した hook と CLI を新 protocol で最小限へ書き直す
+
+起票: user 2026-08-26 (「敵対レビューで肥大化したスクリプトがあれば、すべて simplify した方がよい」)
+
+Goal: 敵対レビューで膨らんだ 5 本を、契約 test で現行の deny 挙動を固定したうえで最小実装に置き換え、
+配備後も実 corpus で誤 deny 0 を保つ。
+
+Exit Criteria:
+
+- [ ] 着手順は合意済み (2026-08-26): codex_delegation_gate + codex_worktree_gate → stop_checks →
+  skill_reminder_gate → codex_order_lint。各 script の契約 test は実 corpus (transcript の Bash 全 command)
+  で deny / allow を固定し、固定 4 変異 → codex 実装 → 独立レビュー 1 巡の同 protocol で受け入れる
+- [ ] codex_delegation_gate (production 1,038 行) と codex_worktree_gate (1,035 行) を書き直し配備した
+- [ ] stop_checks (2,484 行) を書き直し配備した — 契約に done_state_ledger の Stop block 化 (完了語 +
+  commit / push / gate / E2E / merge の欠落で block) を含める
+- [ ] skill_reminder_gate (1,073 行) と codex_order_lint (592 行) を書き直し配備した — order_lint は
+  「機構追加」の字面で必須節を連鎖要求する判定 (2026-08-26 に 2 回誤発火) を落とす
+- [ ] 配備後 2 週間の実運用で誤 deny 0
+
+Work file: `last-session-handoff.md` (再開手順)、`docs/adversarial-review-methodology.md` (protocol)、
+`files/claude_managed-hooks/deny_command_patterns.test.py` (契約 test と変異器の実例)
 
 ### 検索コマンドの誤 deny の解消
 
