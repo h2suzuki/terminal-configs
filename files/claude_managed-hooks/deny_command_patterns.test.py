@@ -4,12 +4,15 @@
 Contract (each claim maps to one test):
   C1  the hook is a PreToolUse(Bash) gate: payload JSON on stdin, exit 0 = allow, exit 2 = deny with the
       reason on stderr starting with "command-pattern:" and naming the rule
-  C2  kill-by-port: `fuser -k`, `pkill` or `killall` as a command word is denied
+  C2  kill-by-port: `fuser -k`, `pkill` or `killall` as the program of a command segment (directly or after
+      `timeout N` / `env` / `sudo` / `exec` / `nohup` / `xargs`, with or without a path prefix) is denied;
+      the same words as an argument, a grep pattern, or a path component are allowed
   C3  unbounded loop: a loop head `while true` / `while :` / `while [ 1 ]` / `until false` / `for ((;;))`
       is denied unless the command also contains the word `timeout`
   C4  autosquash: `git rebase ... --autosquash` is denied unless `-i` / `--interactive` or
       `GIT_SEQUENCE_EDITOR` is present
-  C5  voicevox: `voicevox_paplay` without `--loopback` is denied
+  C5  voicevox: `voicevox_paplay` as the program of a segment without `--loopback` is denied; the name as an
+      argument or path component is allowed
   C6  roster: the sandbox excludedCommands roster is read from `<dir>/managed-settings.json` and
       `<dir>/managed-settings.d/*.json` (dir = $CLAUDE_MANAGED_SETTINGS_DIR or /etc/claude-code); a head is
       the first word of a `<word> *` glob. A head invoked with a path prefix, via `$(which head)` /
@@ -17,7 +20,8 @@ Contract (each claim maps to one test):
       the start of the command (after `;`, `&&`, `||`, `|`, `(`, newline, `do`/`then`/`else`, `timeout N`,
       `env`, `sudo`, `exec`, `nohup`) is denied — except heads in START_EXEMPT = {"git"}, which only the
       path-prefix and $(which) forms deny
-  C7  text inside quoted strings and heredoc bodies is ignored by every rule
+  C7  text inside quoted strings (including a double-quoted string that spans a backslash-newline) and
+      heredoc bodies is ignored by every rule
   C8  fail-open: non-Bash tool, unreadable payload, or unreadable settings → exit 0 (the roster rule is
       skipped; the other rules still apply)
 """
@@ -97,8 +101,20 @@ class GateTest(unittest.TestCase):
         self.deny("fuser -k 5273/tcp", "kill")
         self.deny("pkill -f vite", "kill")
         self.deny("cd /x && killall node", "kill")
+        self.deny("xargs pkill -f vite", "kill")
+        self.deny("sudo pkill -f vite", "kill")
+        self.deny("/usr/bin/pkill -f vite", "kill")
         self.allow("fuser 5273/tcp")
         self.allow("kill 1234")
+        for command in (
+            "grep -rn pkill /x/files",
+            "git log --oneline -S pkill -- files/",
+            "which pkill",
+            "cat /x/notes/pkill-policy.md",
+            "ls /usr/bin/pkill",
+            "echo pkill killall",
+        ):
+            self.allow(command)
 
     def test_c3_unbounded_loop_needs_timeout(self) -> None:
         self.deny("while true; do sleep 5; done", "loop")
@@ -121,6 +137,8 @@ class GateTest(unittest.TestCase):
         self.deny("voicevox_paplay 'done'", "loopback")
         self.deny("echo x | voicevox_paplay", "loopback")
         self.allow("voicevox_paplay --loopback 'done'")
+        self.allow("cat /usr/local/bin/voicevox_paplay")
+        self.allow("grep -n loopback /usr/local/bin/voicevox_paplay")
 
     def test_c6_roster_forms(self) -> None:
         for command in (
@@ -168,6 +186,7 @@ class GateTest(unittest.TestCase):
         self.allow("cat > x.md <<'EOF'\npkill and codex exec and while true\nEOF")
         self.allow("python3 - <<'EOF'\nprint('fuser -k')\nEOF\nls")
         self.deny("echo 'x' && pkill vite", "kill")
+        self.allow('bash -c "sleep 1 && \\\n  pkill -f vite"')
 
     def test_c8_fail_open(self) -> None:
         self.assertEqual(run_hook("pkill x", self.settings, tool="Write").returncode, 0)
