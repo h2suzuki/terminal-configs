@@ -219,9 +219,10 @@ Exit Criteria:
 - [x] worktree 回収時 reap + 台帳: `codex_broker_sweep.py` (SessionStart と `git worktree remove|prune` の PostToolUse
   Bash で `codex_broker_reap --apply`、回収時のみ台帳 `~/.claude/hooks/state/codex_broker_sweep/ledger.jsonl` に追記) を
   契約 test 21 件 + 変異 6 体で固定し配備 (merge `3c56a03`、配備先 2 file IDENTICAL、host smoke exit 0 — 2026-08-27)
-- [ ] `codex_broker_reap` に起動中 broker の min-age guard を足す — 2026-08-27 の独立レビュー所見: `cxc-*` dir 作成 →
-  `broker.pid` 書込の窓 (node 起動 0.1〜0.5 s) と `broker.json` の非 atomic 書込を stale と誤判定し、削除で永続漏れを作る。
-  若い (60 s 未満) 孤児 dir と parse 不能 record は keep 扱いにし、selftest で固定する
+- [x] `codex_broker_reap` に起動中 broker の min-age guard を足した — 2026-08-27 の独立レビュー所見 (`cxc-*` dir 作成 →
+  `broker.pid` 書込の窓と `broker.json` の非 atomic 書込を stale と誤判定し、削除で永続漏れを作る) に対し、60 s 未満の
+  孤児 dir / 読めない・pid 未起動の記録を keep に倒す `guard_young` を selftest 4 件付きで実装 (`0a08044`)、
+  配備先 IDENTICAL・host selftest 9/9 OK を同日実測
 - [x] 対策 C (回収 tool): `files/codex_broker_reap` を実装・配備 (2026-08-23)。host 実測 =
   reap 5 / keep 2 / stale 114、孤児 3 本も回収、停止要求だけで全件停止
 - [x] 対策 D (upstream 報告): #380 へコメント投稿 (2026-08-24、
