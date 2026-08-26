@@ -7,7 +7,8 @@ Contract (each claim maps to one test):
   C2  scope: file_path whose last directory is claude_managed-hooks, claude_user-hooks, .claude/hooks,
       claude-code/hooks or skel/hooks; any other path is allowed whatever the content
   C3  the written text (Write: content; Edit: new_string; MultiEdit: every edits[].new_string) containing
-      `claude -p` or `claude --bg` is denied
+      `claude -p` or `claude --bg` — as adjacent shell words, or as adjacent list items such as
+      `"claude", "-p"` / `'claude', '--bg'` — is denied
   C4  exempt basenames: those starting with `claude-md-lint`, and those ending in `.test.py` or
       `.mutants.py`
   C5  fail-open: other tools, unreadable payload, missing fields → exit 0
@@ -62,6 +63,9 @@ class GateTest(unittest.TestCase):
             "Write", write(HOOK_PATH, "run(['claude', '-p', prompt])\nclaude -p x")
         )
         self.deny("Write", write(HOOK_PATH, "subprocess.run('claude --bg review')"))
+        self.deny("Write", write(HOOK_PATH, 'subprocess.run(["claude", "-p", prompt], check=False)'))
+        self.deny("Write", write(HOOK_PATH, "run(['claude', '--bg', task])"))
+        self.deny("Write", write(HOOK_PATH, 'args = ["claude",\n    "-p",\n    q]'))
         self.deny(
             "Edit",
             {

@@ -19,8 +19,8 @@ TESTS = os.path.join(HOOKS, "deny_llm_call_in_hook.test.py")
 
 MUTANTS = {
     "m1-bg-not-a-call": (
-        'LLM_CALL_RE = re.compile(r"\\bclaude\\s+(?:-p|--bg)\\b")',
-        'LLM_CALL_RE = re.compile(r"\\bclaude\\s+(?:-p)\\b")',
+        r"""LLM_CALL_RE = re.compile(r"\bclaude(?:\s+|[\"']\s*,\s*[\"'])(?:-p|--bg)\b")""",
+        r"""LLM_CALL_RE = re.compile(r"\bclaude(?:\s+|[\"']\s*,\s*[\"'])(?:-p)\b")""",
     ),
     "m2-lint-not-exempt": (
         'EXEMPT_PREFIXES = ("claude-md-lint",)',
