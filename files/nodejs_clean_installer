@@ -31,6 +31,24 @@ run()
     fi
 }
 
+# Versions a live process has in PATH or runs from: removing the dir breaks its later node spawns
+in_use_versions()
+{
+    { grep -a -o -H "$NVM_DIR/versions/node/v[0-9]*\.[0-9]*\.[0-9]*" /proc/[0-9]*/environ
+      find /proc/[0-9]* -maxdepth 1 -name exe -printf '%p:%l\n'
+    } 2>/dev/null |
+    awk -F: -v prefix="$NVM_DIR/versions/node/" '
+        index($2, prefix) == 1 {
+            v = substr($2, length(prefix) + 1); sub("/.*", "", v)
+            split($1, f, "/"); pid = f[3]
+            if ((v, pid) in seen) next
+            seen[v, pid] = 1
+            c = "/proc/" pid "/comm"; comm = ""; getline comm < c; close(c)
+            holders[v] = holders[v] " " pid "(" comm ")"
+        }
+        END { for (v in holders) print v holders[v] }'
+}
+
 
 [ -s /tmp/nvm_install.sh ] ||
 run curl -o /tmp/nvm_install.sh \
@@ -47,10 +65,14 @@ run nvm current
 
 
 # Remove the other installed versions (--no-alias skips alias rows -> no no-op uninstalls)
+IN_USE="$(in_use_versions)"
+[ -z "$IN_USE" ] || echo -e "${COLOR_YELLOW}Kept for running processes (removed on a later run):${COLOR_CLEAR}\n${IN_USE}\n"
 nvm ls --no-colors --no-alias |
-  awk '{for(i=1;i<=NF;i++) {if($i ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/ && $i!=CURRENT) print $i}}' CURRENT=$(nvm current) |
+  awk -v keep="$(nvm current) $IN_USE" '
+    BEGIN { n = split(keep, k, "[[:space:]]+"); for (i = 1; i <= n; i++) skip[k[i]] = 1 }
+    { for (i = 1; i <= NF; i++) if ($i ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/ && !($i in skip)) print $i }' |
   sort | uniq |
-  while read -r v; do run nvm uninstall $v; done
+  while read -r v; do run nvm uninstall "$v"; done
 
 
 # Check the remaining versions
