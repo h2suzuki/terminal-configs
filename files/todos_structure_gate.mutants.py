@@ -29,6 +29,22 @@ MUTANTS = {
         "target = todos_commit_target(command, cwd)",
         "target = None",
     ),
+    "m5-kessai-not-a-decision-word": (
+        'DECISION_WORDS = ("決裁", "承認", "合意", "採用")',
+        'DECISION_WORDS = ("承認", "合意", "採用")',
+    ),
+    "m6-consent-always-satisfied": (
+        '    return "「" in paragraph or any(marker in paragraph for marker in CONSENT_MARKERS)',
+        "    return True",
+    ),
+    "m7-baseline-ignored": (
+        "    added = set(work_lines) - set(head_lines)",
+        "    added = set(work_lines)",
+    ),
+    "m8-teianchu-not-a-marker": (
+        'CONSENT_MARKERS = ("提案中", "発話証跡なし", "要確認", "未承認", "無承認", "承認不備", "不採用")',
+        'CONSENT_MARKERS = ("発話証跡なし", "要確認", "未承認", "無承認", "承認不備", "不採用")',
+    ),
 }
 
 

@@ -16,6 +16,14 @@ Contract (each claim maps to one test):
   C6  every block must contain the lines `起票:`, `Goal:` and `Exit Criteria:`; a missing key is denied
   C7  the repository's own todos.md (two directories above this file) passes
   C8  fail-open: not a git repo, no todos.md in the working tree, or unreadable payload → exit 0
+  C9  consent: against the HEAD:todos.md baseline (git show; unreadable baseline → the consent check is
+      skipped, the other checks still run), a working-tree line absent from the baseline whose paragraph
+      (contiguous non-blank lines) contains 決裁 / 承認 / 合意 / 採用 is denied as "consent" unless that
+      paragraph also holds a 「…」 utterance quote or an explicit non-decision marker (提案中 /
+      発話証跡なし / 要確認 / 未承認 / 無承認 / 承認不備 / 不採用); paragraphs without such a new line
+      are untouched
+  C10 the negated forms double as satisfiers: a paragraph whose only decision word sits inside 不採用 /
+      未承認 etc. passes
 """
 
 from __future__ import annotations
@@ -63,6 +71,24 @@ def block(
             + "\n"
         )
     return text
+
+
+def commit_todos(repo: Repo, text: str) -> None:
+    repo.stage_todos(text)
+    subprocess.run([*repo.git, "commit", "-q", "-m", "seed"], check=True)
+
+
+def consent_block(item: str) -> str:
+    return (
+        "### Consent\n\n起票: user 2026-08-26\n\nGoal: one line.\n\n"
+        "Exit Criteria:\n\n" + item + "\nWork file: なし\n"
+    )
+
+
+DECISION_ITEM = "- [x] 処遇を決めた — 2026-08-26 決裁: 縮小する\n"
+QUOTED_ITEM = DECISION_ITEM.rstrip("\n") + "\n  (発話 22:00「縮小してよい」)\n"
+MARKED_ITEM = "- [x] 縮小を採用したい (提案中)\n"
+NEGATED_ITEM = "- [x] 近接重複の検出は計測で不採用\n"
 
 
 def run_hook(
@@ -198,6 +224,39 @@ class GateTest(unittest.TestCase):
             run_hook(self.repo.root, COMMIT, payload="{not json").returncode, 0
         )
         self.assertEqual(run_hook(self.repo.root, COMMIT, payload="[]").returncode, 0)
+
+    def test_c9_added_decision_paragraph_needs_quote(self) -> None:
+        commit_todos(self.repo, HEAD + block("A"))
+        self.repo.stage_todos(HEAD + block("A") + consent_block(DECISION_ITEM))
+        out = run_hook(self.repo.root, COMMIT)
+        self.assertEqual(out.returncode, 2, out.stderr)
+        self.assertIn("consent", out.stderr)
+        self.assertIn("決裁", out.stderr)
+
+    def test_c9_quote_or_marker_satisfies(self) -> None:
+        commit_todos(self.repo, HEAD + block("A"))
+        for item in (QUOTED_ITEM, MARKED_ITEM):
+            self.repo.stage_todos(HEAD + block("A") + consent_block(item))
+            out = run_hook(self.repo.root, COMMIT)
+            self.assertEqual(out.returncode, 0, f"{item!r}: {out.stderr}")
+
+    def test_c9_unchanged_decision_paragraph_is_grandfathered(self) -> None:
+        old = HEAD + block("A") + consent_block(DECISION_ITEM)
+        commit_todos(self.repo, old)
+        self.repo.stage_todos(old + block("B"))
+        out = run_hook(self.repo.root, COMMIT)
+        self.assertEqual(out.returncode, 0, out.stderr)
+
+    def test_c10_negated_decision_word_passes(self) -> None:
+        commit_todos(self.repo, HEAD + block("A"))
+        self.repo.stage_todos(HEAD + block("A") + consent_block(NEGATED_ITEM))
+        out = run_hook(self.repo.root, COMMIT)
+        self.assertEqual(out.returncode, 0, out.stderr)
+
+    def test_c9_unreadable_baseline_skips_consent_only(self) -> None:
+        self.repo.stage_todos(HEAD + block("A") + consent_block(DECISION_ITEM))
+        out = run_hook(self.repo.root, COMMIT)
+        self.assertEqual(out.returncode, 0, out.stderr)
 
 
 if __name__ == "__main__":
