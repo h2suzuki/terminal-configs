@@ -118,7 +118,8 @@ Exit Criteria:
 - [ ] codex_delegation_gate (production 1,038 行) と codex_worktree_gate (1,035 行) を書き直し配備した
 - [ ] stop_checks (2,431 行) を書き直し配備した — 契約に done_state_ledger の Stop block 化 (完了語 +
   commit / push / gate / E2E / merge の欠落で block) と「warn 系は当該 Stop の最終本文だけを走査」
-  (2026-08-26 実測: self-number 警告が再出力後も前の本文を再走査して誤発火) を含める
+  (2026-08-26 実測: self-number 警告が再出力後も前の本文を再走査して誤発火。同警告は数量表現
+  「候補 17 件」も序数ラベルと誤検出する — 語+数字の regex が数量と番号を区別しない) を含める
 - [ ] skill_reminder_gate (1,073 行) と codex_order_lint (592 行) を書き直し配備した — order_lint は
   「機構追加」の字面で必須節を連鎖要求する判定 (2026-08-26 に 2 回誤発火) を落とし、fix 発注 3 巡目以降に
   `## 処置の種別` (閉じた選択肢) を必須にする gate を足す
