@@ -39,6 +39,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -58,8 +59,17 @@ HOT_EMITS = 20
 # git itself refreshes FETCH_HEAD on every fetch: free "last fetch" stamp
 FETCH_STAMP = os.path.join(REPO_DIR, ".git", "FETCH_HEAD")
 SYNC_LOG = REPO_DIR + ".sync.log"
+AUTH_MARKER = os.path.join(REPO_DIR, ".git", "auth-failure")
+# 認証系だけ通知する: 非 fast-forward は push 前の rebase-pull で自動解決するので黙る
+_AUTH_RE = re.compile(
+    r"authentication failed|could not read username|permission denied \(publickey\)"
+    r"|invalid credentials|http 40[13]|gh auth",
+    re.IGNORECASE,
+)
 LOG_MAX_BYTES = 512_000
 GIT_TIMEOUT = 30
+# a gate Write is committed by the next hook within seconds; older uncommitted changes are strays
+IN_FLIGHT_SECONDS = 120
 INSTALL_HINT = "re-run install_claude_extensions"
 # Non-entry .md files an entry dir may carry (legacy rosters + repo docs).
 NON_ENTRY_MD = {"MEMORY.md", "OLD-MEMORY.md", "README.md"}
@@ -74,6 +84,20 @@ def _open_to_all(path: str) -> None:
     # State files stay writable by every trusted local user (umask strips o+w).
     with contextlib.suppress(OSError):
         os.chmod(path, 0o666)
+
+
+def record_transport(ok: bool, stderr: str) -> None:
+    """Auth failures leave a marker the SessionStart hook nags about; any success clears it."""
+    if ok:
+        with contextlib.suppress(OSError):
+            os.unlink(AUTH_MARKER)
+        return
+    if _AUTH_RE.search(stderr):
+        with (
+            contextlib.suppress(OSError),
+            open(AUTH_MARKER, "w", encoding="utf-8") as fh,
+        ):
+            fh.write(stderr.strip()[:300] + "\n")
 
 
 def logline(msg: str) -> None:
@@ -289,7 +313,40 @@ def _drain_pending_push() -> None:
         spawn_push()
 
 
-def main_pull() -> int:
+def _settle_worktree() -> bool:
+    """Young uncommitted changes are a write in flight (defer); older ones are strays and get stashed."""
+    listed = run_git(
+        "ls-files", "--modified", "--others", "--exclude-standard", "-z"
+    ).stdout
+    paths = [p for p in listed.split("\0") if p]
+    if not paths:
+        return True
+    present = [os.path.join(REPO_DIR, p) for p in paths]
+    newest = max(
+        (os.path.getmtime(p) for p in present if os.path.exists(p)), default=0.0
+    )
+    if time.time() - newest < IN_FLIGHT_SECONDS:
+        logline(
+            "pull deferred: %d uncommitted path(s) changed within %ds"
+            % (len(paths), IN_FLIGHT_SECONDS)
+        )
+        return False
+    r = run_git(
+        "stash",
+        "push",
+        "--include-untracked",
+        "--quiet",
+        "-m",
+        "claude_memory_sync: strays before pull",
+    )
+    logline(
+        "stashed %d stray path(s) before pull (git stash list) rc=%d"
+        % (len(paths), r.returncode)
+    )
+    return r.returncode == 0
+
+
+def main_pull(drain: bool = True) -> int:
     if not repo_ok():
         note("clone missing/broken at %s; skip pull (%s)" % (REPO_DIR, INSTALL_HINT))
         return 0
@@ -297,6 +354,8 @@ def main_pull() -> int:
         note("a rebase is already in progress (manual recovery?); skip pull")
         return 0
     with lock():
+        if not _settle_worktree():
+            return 0
         before = head()
         branch = run_git("branch", "--show-current").stdout.strip() or "main"
         # explicit refspec: an unborn clone has no upstream until its first push
@@ -308,7 +367,9 @@ def main_pull() -> int:
                 % (r.returncode, ab.returncode, r.stderr.strip()[:300])
             )
             note("pull failed (local buffer keeps working; see --status)")
+            record_transport(False, r.stderr)
             return 0
+        record_transport(True, "")
         after = head()
         if after is None:
             return 0
@@ -324,7 +385,8 @@ def main_pull() -> int:
                     "pull %s -> %s indexed with %d error(s)"
                     % ((before or "unborn")[:9], after[:9], errs)
                 )
-        _drain_pending_push()
+        if drain:
+            _drain_pending_push()
         return 1 if errs else 0
 
 
@@ -402,12 +464,15 @@ def main_retire(argv: list[str]) -> int:
 def main_push_bg() -> int:
     if not repo_ok():
         return 0
+    # A remote advance would otherwise make the push non-fast-forward.
+    main_pull(drain=False)
     # Own lock (the .git dir fd): a 60s network push must not block commit/pull.
     with lock(".git"):
         if head() is None:
             return 0
         # -u: the first push creates and binds the remote branch (empty-repo bootstrap).
         r = run_git("push", "--quiet", "-u", "origin", "HEAD", timeout=60)
+    record_transport(r.returncode == 0, r.stderr)
     if r.returncode != 0:  # a successful push stays silent (visible in --status)
         logline("push failed rc=%d: %s" % (r.returncode, r.stderr.strip()[:300]))
     return 0
@@ -472,6 +537,7 @@ def main_status() -> int:
         print("sync: %s commit(s) to push, %s to pull" % (ahead, behind))
     dirty = run_git("status", "--porcelain").stdout.splitlines()
     print("uncommitted: %d file(s)" % len([ln for ln in dirty if ln.strip()]))
+    print("stashed: %d" % len(run_git("stash", "list").stdout.splitlines()))
     for scope_name, n in _disk_counts():
         print("entries[%s]: %d" % (scope_name, n))
     try:

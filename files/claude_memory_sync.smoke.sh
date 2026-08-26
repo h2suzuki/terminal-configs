@@ -93,6 +93,17 @@ check "retire: index --delete called" 'calls | grep -q "^--delete	$S/clone/user/
 git -C "$S/b" pull --quiet 2>/dev/null
 check "retire: deletion pushed to remote" '[[ ! -e "$S/b/user/alice/feedback_t.md" ]]'
 
+# 6b. bg push rebases onto a remote advance instead of failing non-fast-forward
+mkdir -p "$S/b/org"
+printf 'reminder: a\nkeywords: k\nmodels: fable-5\n\nbody\n' > "$S/b/org/feedback_adv.md"
+git -C "$S/b" add -A && git -C "$S/b" commit --quiet -m adv && git -C "$S/b" push --quiet
+: > "$S/calls.log"
+printf 'reminder: l\nkeywords: k\nmodels: fable-5\n\nbody\n' > "$S/clone/user/alice/feedback_local.md"
+"$CLI" --commit "$S/clone/user/alice/feedback_local.md" >/dev/null 2>&1
+sleep 2
+check "push: rebased onto the remote advance" '[[ "$(git -C "$S/remote.git" rev-parse "refs/heads/$branch")" == "$(git -C "$S/clone" rev-parse HEAD)" ]]'
+check "push: remote advance indexed locally" 'calls | grep -q "^--upsert	$S/clone/org/feedback_adv.md$"'
+
 # 7. pull failure is fail-open; a failed push leaves the commit counted as pending
 git -C "$S/clone" remote set-url origin "$S/nonexistent.git"
 "$CLI" --pull >/dev/null 2>&1
@@ -141,6 +152,20 @@ export CLAUDE_MEMORY_REPO="$S/c"
 check "pull: unborn clone catches up without upstream" '[[ -e "$S/c/user/alice/feedback_first.md" ]]'
 check "pull: unborn catch-up indexed via full rebuild" 'calls | grep -q "^--rebuild	$S/c/user/alice	user-alice$"'
 export CLAUDE_MEMORY_REPO="$S/clone"
+
+# 7f. stray files: a write in flight defers the pull; old junk is stashed so the pull proceeds
+mkdir -p "$S/b/org"
+printf 'reminder: s\nkeywords: k\nmodels: fable-5\n\nbody\n' > "$S/b/org/feedback_stray.md"
+git -C "$S/b" add -A && git -C "$S/b" commit --quiet -m stray && git -C "$S/b" push --quiet
+printf 'junk\n' > "$S/clone/org/feedback_junk.md"
+"$CLI" --pull >/dev/null 2>&1
+check "pull: in-flight stray file defers the pull" '[[ ! -e "$S/clone/org/feedback_stray.md" && -e "$S/clone/org/feedback_junk.md" ]]'
+touch -d "-10 minutes" "$S/clone/org/feedback_junk.md"
+"$CLI" --pull >/dev/null 2>&1
+check "pull: old junk stashed and remote applied" '[[ -e "$S/clone/org/feedback_stray.md" && ! -e "$S/clone/org/feedback_junk.md" ]]'
+check "pull: junk recoverable from stash" '[[ "$(git -C "$S/clone" stash list | wc -l)" -ge 1 ]]'
+out=$("$CLI" --status 2>&1)
+check "status: stash count shown" '[[ "$out" == *"stashed: 1"* ]]'
 
 # 8. missing clone: fail-open pull, hard-fail full
 export CLAUDE_MEMORY_REPO="$S/absent"

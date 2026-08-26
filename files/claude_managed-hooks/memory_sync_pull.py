@@ -21,6 +21,7 @@ REPO_DIR = "/var/lib/claude-rag-memory/claude-lessons-learned"
 SYNC_CLI = "/usr/local/bin/claude_memory_sync"
 FETCH_STAMP = os.path.join(REPO_DIR, ".git", "FETCH_HEAD")
 SYNC_LOG = REPO_DIR + ".sync.log"
+AUTH_MARKER = os.path.join(REPO_DIR, ".git", "auth-failure")
 PULL_THROTTLE = 900
 CLOSED_MSG = (
     "memory-sync: 共有 memory clone が不在/破損です。 install_claude_extensions "
@@ -33,6 +34,28 @@ def _fresh(path: str, window: int) -> bool:
         return (time.time() - os.path.getmtime(path)) < window
     except OSError:
         return False
+
+
+def _nag_auth_failure() -> None:
+    """No throttle: an auth failure blocks every push until someone fixes the credential."""
+    try:
+        with open(AUTH_MARKER, encoding="utf-8") as fh:
+            detail = fh.readline().strip()
+    except OSError:
+        return
+    msg = (
+        "memory-sync: push / pull が認証エラーで失敗しています (%s)。 `gh auth status` で"
+        " 切り分け、 復旧後は `claude_memory_sync --push-bg` で再送 (成功すると通知は消えます)。"
+        % detail
+    )
+    out = {
+        "systemMessage": msg,
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": msg,
+        },
+    }
+    sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
 
 
 def main() -> int:
@@ -61,6 +84,7 @@ def main() -> int:
             finally:
                 if log:
                     log.close()
+        _nag_auth_failure()
         return 0
     # No throttle on purpose: a broken clone deserves a nag at every session start.
     out = {
