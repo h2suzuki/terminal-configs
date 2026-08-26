@@ -1,6 +1,6 @@
 ---
 name: memory-routing
-description: Decide memory entry save location (org / user / project scope in the shared git clone), save timing, absolute date format, and per-model tags (models: line, cross-model search, tag propagation); retire entries via claude_memory_sync --retire when fully covered by a Managed skill / hook / CLAUDE.md rule.
+description: Decide memory entry save location (org / user / project scope in the shared git clone), save timing, absolute date format, and per-model tags (models line, cross-model search, tag propagation); retire entries via claude_memory_sync --retire when fully covered by a Managed skill / hook / CLAUDE.md rule.
 when_to_use: TRIGGER when user gives a correction / feedback, about to say "memory に書く / 保存" etc, uncertain about org / user / project routing, a feedback entry becomes covered by a new skill / hook / CLAUDE.md rule, or about to conclude "できない" / "実行不能" / "環境の制約" or hitting a second failure on the same work (pull side, not write).
 ---
 
@@ -103,9 +103,9 @@ entry の種別は file 名 prefix で表す (gate が検証し、 他 prefix �
 
 **2 層契約**: h2 = 固定の役割語彙、 h3 = 自由。 深掘り分析 (`### 技術的真相` 等) は `## 理由` の下、 再発 ・追記は `## 事例` の下に `### YYYY-MM-DD — <要旨>` を積む (日付先頭 = 時系列 log として append)。 旧 prefix (project_* 等) の entry は再 Write する機会に feedback_* へ rename する。
 
-### reminder + keywords + models lines in frontmatter
+### reminder + keywords + models + check + when lines in frontmatter
 
-各 entry の frontmatter 内 (metadata の後) に **3 行** を置く。 UserPromptSubmit の SQLite hook が、 prompt に **keywords** が match した entry の **reminder** 文を inject する。 reminder (表示) と keywords (match) を分離するのは、 表示文を keyword 詰めにして「要約」化させないため。 **models** はその教訓を観測したモデルの tag で、 surface を model-scope 化する。
+各 entry の frontmatter 内 (metadata の後) に reminder / keywords / models の **3 行** (必須) と check / when の **2 行** (check は新規 entry のみ必須、 when は任意) を置く。 UserPromptSubmit の SQLite hook が、 prompt に **keywords** が match した entry の **reminder** 文を inject する。 reminder (表示) と keywords (match) を分離するのは、 表示文を keyword 詰めにして「要約」化させないため。 **models** はその教訓を観測したモデルの tag で、 surface を model-scope 化する。 **check** は Stop 時に直前の出力へ当てる検査動作、 **when** は surface する timing。
 
 ```markdown
 ---
@@ -116,6 +116,8 @@ metadata:
 reminder: <同じミスを二度としないための actionable な是正指示。 1 文>
 keywords: <その状況が再発した時の prompt に出る選択的な match 語>
 models: <観測モデルの短形式 tag (例 fable-5)。 複数は space 区切り>
+check: <直前の出力に今すぐ当てられる検査動作。 1 文・肯定形・100 字以内 (新規 entry は必須)>
+when: <surface する timing。 prompt / stop / after-subagent の space 区切り部分集合 (省略時は既定 prompt)>
 ---
 
 ## 理由
@@ -171,6 +173,17 @@ surface hook (UserPromptSubmit / Stop) は **実行中モデルの tag を持つ
 - **複数可**: 同じ教訓を複数モデルで観測したら space 区切りで並べる (例 `models: opus-4.8 fable-5`)
 - **観測ベース**: 「効きそうだから」で tag を盛らない。 そのモデルで実際に観測・再発した時に下記 Tag propagation で追記する
 
+**check (Stop 時に直前の出力へ当てる検査動作)**:
+
+transcript 調査 (2026-08 実施) では、 態度・文体・否定のみの reminder は行動を変えなかった一方、 **直前の出力に今すぐ当てられる検査動作を 1 つ名指しした reminder だけが行動を変えた**。 `check:` はその動作を書く行 — 1 文・肯定形・100 字以内で、 「直前の出力の X を Y せよ」 のように読んだ瞬間に実行できる検査に限る。 新規 entry は必須 (gate が deny)、 既存 entry の再 Write では省略可。 検査可能な動作が無い教訓 (態度・文体の教訓等) は、 その不在を確認する動作を書く (例: 「直前の本文に相対日付が無いことを確認せよ」)。
+
+- 効いた例: 「最終本文の完了語ごとに commit hash か test 結果が添えてあるか照合せよ」 (直前の出力に今すぐ当てられる)
+- 効かない例: 「丁寧に確認すること」 「〜するな」 (態度・禁止のみで検査動作が無い)
+
+**when (surface する timing)**:
+
+`prompt` (UserPromptSubmit) / `stop` (Stop) / `after-subagent` の space 区切り部分集合。 省略時は既定 `prompt`。
+
 ### Tag propagation (新しい学びを得た時 / 壁と結論する前)
 
 **引く側の trigger**: 「できない」 「実行不能」 「権限がない」 「環境の制約」 と結論しかけた時と、 同じ作業で 2 回失敗した時は、 entry を書く予定が無くても下記 1. の横断検索を先に実行する。 `--search` は model filter を通さないので、 **自分の tag が無くて mute されていた過去の教訓がここで初めて見える**。 今の状況にも当てはまれば 2. で tag を追記し、 当てはまらなければ何もしない (「効きそうだから」 で tag を盛らない)。
@@ -198,7 +211,7 @@ hook を通すには、 entry を Write する **直前に** grant ファイル�
 2. 直後に entry 本体を Write する (grant は hook が消費 = 1 回限り)。
 3. 複数 entry を書くなら各 entry の直前にそれぞれ grant を作る。
 
-内容も hook が検査し、 不備なら deny する (warn は無い → **一発で受理される内容を Write**): 非空の `reminder:` / `keywords:` / `models:` 行が **frontmatter 内** に必須、 file 名 prefix は feedback_ / reference_ のみ、 feedback は本文 h2 が固定語彙 ・固定順 (`## 理由` ・`## 事例` 必須、 自由見出しは h3)、 本文に絶対日付 (YYYY-MM-DD) 必須、 `oneline_summary:` 禁止、 keywords は FTS で match する固有語を含む (一般語のみ ・空は不可)、 models は小文字短形式 tag (フル ID も可)。 書式は上記「reminder + keywords + models」に従う。
+内容も hook が検査し、 不備なら deny する (warn は無い → **一発で受理される内容を Write**): 非空の `reminder:` / `keywords:` / `models:` 行が **frontmatter 内** に必須、 file 名 prefix は feedback_ / reference_ のみ、 feedback は本文 h2 が固定語彙 ・固定順 (`## 理由` ・`## 事例` 必須、 自由見出しは h3)、 本文に絶対日付 (YYYY-MM-DD) 必須、 `oneline_summary:` 禁止、 keywords は FTS で match する固有語を含む (一般語のみ ・空は不可)、 models は小文字短形式 tag (フル ID も可)。 新規 entry (path 不在) は `check:` 行が必須 (既存 entry の再 Write では省略可)、 `check:` は 100 字以内かつ禁止文のみ (検査動作 token 無し) は deny、 `when:` は指定するなら prompt / stop / after-subagent の部分集合のみ許可。 書式は上記「reminder + keywords + models + check + when」に従う。
 
 ### Hook sync after entry write
 

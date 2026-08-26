@@ -51,6 +51,8 @@ PreToolUse `^(Edit|Write|MultiEdit)$` → guard:
     - frontmatter に非空の `keywords:` 行が無い。
     - keywords が FTS token を 1 つも産まない / 一般語 (STOPWORDS) のみ = 無効/広すぎ。
     - frontmatter に非空の `models:` 行が無い / tag 書式不正 (観測 model の tag、例 fable-5)。
+    - 新規 entry (path 不在) に `check:` 行が無い / 100 字超 / 禁止文のみで検査動作 token
+      が無い。`when:` は prompt/stop/after-subagent の部分集合以外を deny (既定 prompt)。
     - feedback: h2 が 理由/対処/事例/関連 の固定語彙・固定順・各 1 回でない、
       または ## 理由 / ## 事例 が無い (## 対処 / ## 関連 は任意。自由見出しは h3)。
     - 本文に絶対日付 (YYYY-MM-DD) が 1 つも無い。
@@ -102,6 +104,32 @@ _ASCII_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{3,}")
 
 ENTRY_PREFIXES = ("feedback_", "reference_")  # 行動是正の教訓 / 外部仕様の調査 snapshot
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+CHECK_MAX_LEN = 100  # check: は reminder より短く保つ (Stop 時 1 動作限定)
+WHEN_VALUES = {"prompt", "stop", "after-subagent"}
+# 禁止文のみ (肯定の検査動作 token を 1 つも含まない) を deny する判定用
+_CHECK_NEGATIVE_RE = re.compile(r"(するな|しないこと|禁止|べからず|NG)[。.!！]?$")
+_CHECK_ACTION_TOKENS = (
+    "せよ",
+    "して",
+    "する",
+    "確認",
+    "照合",
+    "検査",
+    "比較",
+    "読",
+    "実行",
+    "走らせ",
+    "数え",
+    "挙げ",
+    "示せ",
+    "直せ",
+    "修正",
+    "書",
+    "測",
+    "添え",
+    "開",
+)
 
 # 一般語 (=match に効かず context を flood する語; CJK 3+/ASCII 4+ のみ列挙) を deny する閾値判定用。保守的に
 # 「これらだけ」弾く: 1 つでも固有語があれば通す。tunable。
@@ -232,6 +260,21 @@ def _split_frontmatter(text: str) -> tuple[str, str]:
     return "", text
 
 
+def _check_value(fm: str) -> str:
+    """frontmatter の check: 値 (無ければ空文字)。"""
+    m = re.search(r"^check:[ \t]*(.+)$", fm, flags=re.MULTILINE)
+    return m.group(1).strip() if m else ""
+
+
+def _check_negative_only(value: str) -> bool:
+    """禁止文で終わり、 その手前に肯定の検査動作 token が 1 つも無いか。"""
+    m = _CHECK_NEGATIVE_RE.search(value)
+    if not m:
+        return False
+    head = value[: m.start()]
+    return not any(tok in head for tok in _CHECK_ACTION_TOKENS)
+
+
 def _content_problem(path: str, content: str) -> str | None:
     """受理できない内容なら是正指示文字列、OK なら None。"""
     if len(content.encode("utf-8")) > MAX_ENTRY_SIZE:
@@ -295,6 +338,30 @@ def _content_problem(path: str, content: str) -> str | None:
             "models: の tag 書式が不正です (小文字英数と . - のみ、 例 opus-4.8 / "
             "fable-5)。 モデル ID 全体 (claude-fable-5) でも可 (index 時に正規化)。"
         )
+    check_val = _check_value(fm)
+    if not os.path.exists(path) and not check_val:
+        return (
+            "frontmatter に check: 行 (直前の出力に当てる検査動作 1 文・肯定形・100 字以内) が "
+            "必要です。 既存 entry の再 Write では省略可。 検査できる動作が無い教訓なら、 その "
+            "不在を確認する動作を書いてください (例: 「直前の本文に X が無いことを確認せよ」)。"
+        )
+    if len(check_val) > CHECK_MAX_LEN:
+        return (
+            f"check: が {CHECK_MAX_LEN} 字を超えています (1 文・{CHECK_MAX_LEN} 字以内)。 "
+            "直前の出力に今すぐ当てられる検査動作 1 つに絞ってください。"
+        )
+    if _check_negative_only(check_val):
+        return (
+            "check: は禁止文でなく 「X を Y せよ」 の肯定形で、 直前の出力に今すぐ当てられる "
+            "検査動作を 1 つ書いてください。"
+        )
+    mw = re.search(r"^when:[ \t]*(.+)$", fm, flags=re.MULTILINE)
+    if mw and mw.group(1).strip():
+        if not all(v in WHEN_VALUES for v in mw.group(1).strip().split()):
+            return (
+                "when: の値は prompt / stop / after-subagent の space 区切り部分集合のみです "
+                "(省略時は既定 prompt)。"
+            )
     if base.startswith("feedback_"):
         # fence 内の見出し様行を除外 (check_skill_writing と同じ手当て)
         prose = re.sub(
