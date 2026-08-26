@@ -29,10 +29,11 @@ Exit Criteria:
   書き直す / 方法論も同じく最小限へ (1 ページ) / ab_probe は廃棄 / 直さない指摘は台帳に書かない
 - [x] ab_probe を廃棄した — 2026-08-26。`wt-abprobe` と branch を削除、発注書・報告書 31 file は
   `drafts/ab-probe-archive/` に退避
-- [ ] sentinel を要件から書き直した — **発注済み 2026-08-26** (worktree `wt-sentinel`、契約 =
-  `files/codex_task_sentinel.test.py` の C1〜C12、発注側の変異 4 種 = `drafts/sentinel-mutants.py`、
-  発注書 `drafts/sentinel-rewrite-order.md`)。受け入れ = test 全通過 + 変異 0/4 生存 + 独立
-  レビュー 1 巡 (P0 なし)。その後 skill の exit 表を更新し配備。旧版は配備まで patch しない
+- [ ] sentinel を要件から書き直した — **受け入れ・main merge 済み 2026-08-26** (8,588 → 231 行、
+  exit 14 種 → 7 種、契約 = `files/codex_task_sentinel.test.py` C1〜C12 の 17 test、発注側の
+  変異器 = `files/codex_task_sentinel.mutants.py` で 0/4 生存、独立レビュー 1 巡 P0 なし、
+  1 巡で終了)。skill の exit 表も更新済み。**残り = 配備** (base setup の再実行で
+  `/usr/local/bin/codex_task_sentinel` と skill が `diff -q` IDENTICAL になること)
 - [x] 方法論 doc を 6 項目 1 ページに置換し、台帳 3 本に凍結注記を入れた — 2026-08-26
 - [ ] todos.md の構造 lint を決定的 gate にする — block 行数・criterion 行数の上限と、起票 /
   Goal / Exit Criteria / Work file 以外の prose 節を deny。書き直しの次に着手
