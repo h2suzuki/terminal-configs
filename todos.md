@@ -64,9 +64,10 @@ Exit Criteria:
 - [ ] memory 衛生を機構化した — `memory_routing_gate` に近接重複の検出 (search score が閾値超なら
   新規 Write を deny して既存 entry への追記を案内)、gate / lint が逐語 cover した entry の退役
   要求、scope 上限 (org 60 超で新規 feedback を deny し `--reach` の never 一覧を印字) を入れる
-- [ ] 決定的に検出できる教訓 8 件を blocking gate へ昇格し entry を退役した — Bash pattern gate
-  (fuser -k・pkill / 無限 loop / --autosquash / voicevox --loopback / 除外 command の裸名)、hooks 内
-  `claude -p` の Write deny、playwright `page.on` 未 off の deny、done_state_ledger の Stop block 化
+- [ ] 決定的に検出できる教訓 8 件を blocking gate へ昇格し entry を退役した — 2026-08-26 に 7 件を配備
+  (`deny_command_patterns.py` 5 規則・`deny_llm_call_in_hook.py`・`playwright_listener_gate.py`、
+  E2E で deny を実測) し entry 10 件を退役。残り = done_state_ledger の Stop block 化 (Task 15 の
+  stop_checks 契約へ) と、`claude -p` の list 形式 (`"claude", "-p"`) を覆う再入場の配備
 - [ ] 重複 cluster を統合した — 例: 自己採点系 (`lesson_is_input_not_report` /
   `close_question_before_remorse` / `check_report_verdict_wording`)、規則追加系
   (`rule_violation_means_countermeasure` / `failure_response_adds_rules`)、自作・委譲系
