@@ -18,3 +18,4 @@ Task ツールが gate で使えないセッションに限り、mytask MCP で�
 
 - TodoWrite semantics に従い、常に `in_progress` は 1 件だけにする。`TaskUpdate` で新項目を着手すると、前の `in_progress` は自動で `pending` に降格される。
 - rendering・emoji・完了 12h 非表示・court-guard 検査は MCP が内部で行う。この skill 側で再現しない。
+- mytask の一覧は TUI に描画されない。最初の登録時と状態が変わった turn では、`TaskList` の結果をターン末尾の本文に転記する (2026-08-27 ユーザー指摘)。

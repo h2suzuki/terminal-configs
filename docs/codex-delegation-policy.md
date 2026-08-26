@@ -195,5 +195,6 @@ adversarial-review --background --base main <specific risk focus>
 |---|---|
 | `files/claude_managed-skills/tool-role-delegation/SKILL.md` | 7 |
 | `files/claude_managed-skills/codex-delegation/SKILL.md` | 1 |
-| `docs/sentinel-convergence-log.md` | 1 |
 | `files/claude_managed-hooks/codex_delegation_surface.py` | 5 |
+
+凍結済みの履歴 doc (`docs/sentinel-convergence-log.md`) は反映先に含めない。
