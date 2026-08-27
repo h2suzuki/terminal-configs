@@ -58,7 +58,7 @@ def _state_path(payload: dict) -> str | None:
     session_id = payload.get("session_id")
     if STATE_ROOT is None or not isinstance(session_id, str) or not session_id:
         return None
-    if "/" in session_id or ".." in session_id:
+    if session_id in {".", ".."} or "/" in session_id or ".." in session_id:
         return None
     return os.path.join(STATE_ROOT, "active", session_id, "main.json")
 
@@ -281,22 +281,55 @@ COMMAND_BREAKS = frozenset(
 NON_LITERAL_CHARS = frozenset("*?[]$`")
 
 
+def _unquoted_newlines_to_breaks(command: str) -> str:
+    out: list[str] = []
+    quote = ""
+    escaped = False
+    for char in command:
+        if escaped:
+            out.append(char)
+            escaped = False
+        elif char == "\\" and quote != "'":
+            out.append(char)
+            escaped = True
+        elif quote:
+            if char == quote:
+                quote = ""
+            out.append(char)
+        elif char in "'\"":
+            quote = char
+            out.append(char)
+        elif char == "\n":
+            out.append(" ; ")
+        else:
+            out.append(char)
+    return "".join(out)
+
+
+def _tokens(command: str) -> list[str]:
+    text = _unquoted_newlines_to_breaks(command.replace("\\\n", " "))
+    lexer = shlex.shlex(text, posix=True, punctuation_chars=";&|(){}<>")
+    lexer.whitespace_split = True
+    try:
+        return list(lexer)
+    except ValueError:
+        for operator in (";", "&", "|"):
+            text = text.replace(operator, f" {operator} ")
+        return text.split()  # unbalanced quotes: keep the gate closed on a plain split
+
+
 def _command_segments(command: str) -> list[list[str]]:
-    command = command.replace("\\\n", " ")
     segments: list[list[str]] = []
-    for line in command.splitlines():
-        lexer = shlex.shlex(line, posix=True, punctuation_chars=";&|(){}<>")
-        lexer.whitespace_split = True
-        current: list[str] = []
-        for token in lexer:
-            if token in COMMAND_BREAKS:
-                if current:
-                    segments.append(current)
-                    current = []
-            else:
-                current.append(token)
-        if current:
-            segments.append(current)
+    current: list[str] = []
+    for token in _tokens(command):
+        if token in COMMAND_BREAKS:
+            if current:
+                segments.append(current)
+                current = []
+        else:
+            current.append(token)
+    if current:
+        segments.append(current)
     return segments
 
 

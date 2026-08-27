@@ -29,7 +29,7 @@ Contract (claims are verbatim from the draft; each maps to the tests named test_
             `git commit` の literal pathspec を評価する。git は一度も起動しない (決裁 1)
     inv8    state の更新は同 dir の一時 file へ書いて os.replace で置換する。lock は使わない。
             置換後の main.json は常に有効な JSON dict (決裁 6)
-    inv9    session_id に `/` または `..` を含む payload は state path を持たない = 書かず、allow
+    inv9    session_id に `/` または `..` を含む、または `.` 単独の payload は state path を持たない = 書かず、allow
 
 - **C1 出力形と fail-open**
   入力: 空 stdin / 壊れた JSON / 非 dict payload / 想定外 `hook_event_name` / 内部例外を
@@ -112,7 +112,9 @@ Contract (claims are verbatim from the draft; each maps to the tests named test_
   規則 1 (handoff、D6): `check_uncommitted_at_handoff.writes_handoff_doc(command)` が真
   (heredoc / redirect / 別 process を問わず) なら `{handoff}` を要求。label は `handoff doc`。
   規則 2 (commit pathspec、決裁 1): command を改行と `;` `&&` `||` `|` `&` `(` `)` で segment に
-  分け (行継続 `\\` + 改行は 1 行に連結)、segment の先頭 token が `git` で、global option
+  分け (行継続 `\\` + 改行は 1 行に連結。引用符の内側の改行は区切りにしないので、複数行の `-m "…"` や
+  `-m "$(cat <<'EOF' … EOF)"` は 1 呼出のまま。lex に失敗する command — heredoc 本文の apostrophe 等で
+  引用符が閉じない — は引用符を無視した空白分割に落とし、素通りさせない)、segment の先頭 token が `git` で、global option
   (`-C <dir>` / `-c <k=v>` / `--<name>[=<v>]`) を読み飛ばした次の token が `commit` なら
   `git commit` 呼出とみなす (兄弟 hook deny_compound_git_commit と同じ受理集合)。その呼出に
   `--` があり、その後ろの
@@ -1097,6 +1099,33 @@ class GateTest(unittest.TestCase):
         ]
         self.assertEqual(found, [])
         self.allow(self.write_payload(self.rel("foo.py"), session=session))
+
+    # -- 再確認レビュー (最終巡) の所見からの契約訂正 (2026-08-27) ---------------------------
+    def test_c10_quoted_newlines_and_heredoc_bodies_are_still_gated(self) -> None:
+        """C10: 引用符内の改行と lex を壊す heredoc 本文でも、commit の pathspec は評価される。"""
+        self.seed([])
+        expected = {"writing-code", "writing-python"}
+        for command in (
+            'git commit -m "fix: title\n\nWhy: body" -- files/a.py',
+            "git commit -F - -- files/a.py <<'EOF'\nfix: it's broken\nEOF",
+            "git commit -m \"$(cat <<'EOF'\nfix: title\n\nWhy: body\nEOF\n)\" -- files/a.py",
+            'git -C /home/x/repo commit -q -m "subject" -m "body 1\nbody 2" -- files/a.py',
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(
+                    self.demanded(self.bash_payload(command), "commit-gate"), expected
+                )
+
+    def test_c11_dot_session_id_writes_nothing(self) -> None:
+        """inv9: `.` 単独の session_id は state dir の外に main.json を作らない。"""
+        self.allow(self.record_payload("writing-code", session="."), "record-skill")
+        found = [
+            os.path.join(directory, name)
+            for directory, _, names in os.walk(self.fx.tmp)
+            for name in names
+            if name == "main.json"
+        ]
+        self.assertEqual(found, [])
 
 
 if __name__ == "__main__":
