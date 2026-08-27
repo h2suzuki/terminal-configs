@@ -109,9 +109,11 @@ Exit Criteria:
   `when:` (prompt / stop / after-subagent) を新設し、`memory_routing_gate.py` が新規 entry の欠落 / 100 字超 / 否定形のみ
   (禁止語尾の手前に動作語なし) / `when:` 値域外を deny (既存 entry の再 Write は省略可) — 契約 test 15 件 + 変異 0/4、
   merge `7a47768`、配備先 gate と skill が IDENTICAL (2026-08-27)。parser の読取は実装 2 の契約へ
-- [ ] 実装 2 = Stop 時 surface の再導入: `check:` を持つ entry のみ、文言「抵触するなら修正してから完了。しなければ
+- [x] 実装 2 = Stop 時 surface の再導入: `check:` を持つ entry のみ、文言「抵触するなら修正してから完了。しなければ
   何も書かない」で surface する family を stop_checks 書き直しの契約に含める (旧文言の「確認せよ」は使わない)。
   あわせて entry に `when:` (prompt / stop / after-subagent) を設け、surface hook がそれで振り分ける (ユーザー提案 2026-08-27)
+  — 2026-08-27、stop_checks 書き直しの C16 family (`when:` に stop を含む entry だけ、固定文言 1 回) として配備、
+  配備先で実発火を確認 (merge `caf7a70`、IDENTICAL)
 - [x] 既存 entry の移行: 効いた 11 entry のうち現存 10 件 (org) に `check:` (44〜62 字の検査動作) と `when: prompt stop` を
   書いた — 2026-08-27、gate 通過 10/10・clone commit 10 件・push 済み (to push 0 / to pull 0、index org 72)。態度・文体だけの
   entry には書かない (Stop 対象外)
@@ -134,19 +136,21 @@ Exit Criteria:
   1 本 741 行に統合 (契約 C1〜C12・66 test・変異 0/4、実 corpus Bash 29,173 件で非 codex の deny 0)、merge `8ada67f`、
   配備先 IDENTICAL・旧 worktree gate 除去。レビューは初回 → fix → 再確認 → 契約訂正で再入場 → review → fix → 再確認で
   打ち止め、残る指摘は `drafts/reviews/delegation-gate/*-report.md` (bounded-risk 受入)
-- [ ] stop_checks (2,431 行) を書き直し配備した — 契約に done_state_ledger の Stop block 化 (完了語 +
-  commit / push / gate / E2E / merge の欠落で block) と「warn 系は当該 Stop の最終本文だけを走査」
-  を含める (turn 全文走査の再警告自走と数量の序数誤検出は 2026-08-26 に hotfix 済み `58149c2`。
-  書き直し契約はこの 2 挙動を test で固定して引き継ぐ)。wind-down family に「起動した background task −
-  完了通知 ≠ 0 なら block」を足す (handoff lifecycle block から 2026-08-27 に転記)
-- [ ] skill_reminder_gate (1,073 行) を書き直し配備した
+- [x] stop_checks (2,431 行) を書き直し配備した — 2026-08-27、1,077 行 (family 15、契約 C1〜C19・129 test・変異 0/4、
+  done_state_ledger の block 化・warn は最終本文だけ・background 未回収 block を含む)。初回納品は旧 hook の実 block 234 件を
+  continuation-claim 0/74 しか捕えず、旧 roster を契約に逐語で載せて訂正 → 61/74・meta-announce 13/15。レビューは初回 →
+  fix → 再確認 → 発注側 trivial fix で打ち止め、merge `caf7a70`、IDENTICAL。残る指摘は `drafts/reviews/stop-checks/*-report.md`
+- [x] skill_reminder_gate (1,073 行) を書き直し配備した — 2026-08-27、428 行 (契約 C1〜C11・inv1〜9・65 test・変異 0/4、
+  実 corpus Write/Edit 6,484 + Bash 30,236 件で旧 allow → 新 deny 0)。レビューは初回 (P0 3) → fix → 再確認 (P0 1) →
+  発注側 trivial fix で打ち止め、merge `d448ba7`、IDENTICAL。残る指摘は `drafts/reviews/skill-reminder/*-report.md`
 - [x] codex_order_lint (592 行) を書き直し配備した — 「機構追加」の字面で必須節を連鎖要求する判定 (2026-08-26 に
   2 回誤発火) を落とし、fix 発注 3 巡目以降に `## 処置の種別` (閉じた選択肢) を必須にする gate を足した。2026-08-27、
   557 行 (同居 test と --selftest 廃止)、契約 C1〜C17・36 test・変異 0/4・実 corpus 7 本の所見一致、merge `939fb54`、
   `/usr/local/bin` と fix 雛形が IDENTICAL。残る指摘は `drafts/reviews/order-lint-*-report.md`
-- [ ] stop_checks の契約に足す family 4 つ — Task 常時計画 (新規 prompt に応答する turn で最初の非 Task tool 呼び出し前に
+- [x] stop_checks の契約に足す family 4 つ — Task 常時計画 (新規 prompt に応答する turn で最初の非 Task tool 呼び出し前に
   Task upsert が無ければ block)、読まずに裁定 (subagent / workflow の結果を受けた turn で、最終本文が挙げた entry / path を開く
   tool 呼び出しが無ければ block)、Stop 時 surface (`check:` を持つ entry 限定)、「無駄」reminder の prompt ごと 1 回化
+  — 2026-08-27、C6 task-plan-first / C8 ruling-without-reading / C16 memory-reminder (latch は stdout に載った Stop だけ) として配備
 - [ ] 配備後 2 週間の実運用で誤 deny 0
 
 Work file: `last-session-handoff.md` (再開手順)、`docs/adversarial-review-methodology.md` (protocol)、
@@ -244,7 +248,8 @@ Exit Criteria:
   rescue に task で渡す経路を skill・policy §7/§8・雛形へ反映して配備 (同日、delegation gate の独立レビュー 3 巡で使用)
 - [ ] 検問実装への挑戦レビュー (U0 8 / U1 2、2026-08-22) の処置 — 検索コマンド block の決裁「書き直して
   シンプルに refactor した後に、対応を考える」と同扱い。U0 の 6 件は書き直し対象 3 script の契約 claim の
-  候補、U0-7 と U1-2 は廃止済み hook (`8b04b7b`) 宛、U1-1 は harness 側の情報が要る (bounded-risk 候補)
+  候補、U0-7 と U1-2 は廃止済み hook (`8b04b7b`) 宛、U1-1 は harness 側の情報が要る (bounded-risk 候補)。
+  2026-08-27: 書き直し 5 本が完了し、U0 の 6 件は各契約 test (delegation gate / order_lint / skill_reminder / stop_checks) に吸収
 - [x] (g) codex の直接起動を禁止する — deny 化・配備・live 実測 2 件 (2026-08-25 close)
 - [x] (i) 自作癖の抑制 — skill の数値境界は明文化済み。hook 側は廃止 (`8b04b7b`)、後継は Medium
   「随伴エージェント待ち」block の項目 1
@@ -252,10 +257,9 @@ Exit Criteria:
   (2026-08-25 close)
 - [ ] 判断待ちの Task 化を強制する hook family — 実装・受け入れ済み (`5323179`)、配備済み (2026-08-27 に IDENTICAL を実測)。実測が残
 - [ ] 決裁受領の記録強制を同 family に併合 — 実装済み (`5323179`)、配備済み。実測が残
-- [ ] 「無駄」keyword の memory 記録 reminder — Stop family として発注済み
-  (`drafts/gates/warn-family-order.md`)。2026-08-26 実測: 配備済みで発火するが、entry を書くまで
-  毎 Stop で再発火する (結論確定前に書けない turn では noise)。2026-08-27 決裁「書き直し契約でよい」→
-  prompt ごと 1 回の latch を stop_checks 書き直しの契約へ
+- [x] 「無駄」keyword の memory 記録 reminder — Stop family として発注済み (`drafts/gates/warn-family-order.md`)。2026-08-26 実測で
+  entry を書くまで毎 Stop 再発火 (noise) → 2026-08-27 決裁「書き直し契約でよい」→ 同日、stop_checks C16 第 2 規則 (prompt boundary の
+  identity で latch、stdout に載った Stop だけ書く) として配備 (merge `caf7a70`)
 - [ ] コミュニケーション規則の hook 強化 — CLAUDE.md は削らない (2026-08-21 決裁)。round 7 で
   実装済み、追加 2 項目 (過去参照語の warn / 判断依頼の書式 template) を同発注書で発注済み。
   実測・deploy が残
