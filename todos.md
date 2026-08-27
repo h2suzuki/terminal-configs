@@ -125,36 +125,6 @@ Exit Criteria:
 Work file: `last-session-handoff.md` (再開手順)、`docs/adversarial-review-methodology.md` (protocol)、
 `files/claude_managed-hooks/deny_command_patterns.test.py` (契約 test と変異器の実例)
 
-### 検索コマンドの誤 deny の解消
-
-起票: user 2026-08-23 (「これは対策が打てるなら、打ってよいよ」「検出器のぶっこわれは、今なおします」)
-
-Goal: companion の名前に言及しただけの読み取りコマンドが直接起動として弾かれる誤検出を、
-起動の取りこぼしを作らずに解消する。
-
-Exit Criteria:
-
-- [x] 回帰 filter を通した — round 3 は fail、脅威モデルで指摘を選別して決着 (2026-08-23、`fd6ff4b`)
-- [x] 残る 1 class (D2 = 一部の行だけ token 化に失敗すると素通し) の扱いをユーザーが決めた —
-  2026-08-23 決裁: 現状で merge・配備。実害は heredoc 形と行末継続記号の 2 形のみ
-- [x] 解析そのものの作り直しは却下済み (2026-08-23) — parser library 未導入・bash parser 借用は
-  任意コード実行の穴・原理的に決定不能。記録は git 履歴に残す (2026-08-27、block 削除で閉じる)
-- [x] 本線へ merge した — `a65da00`、push 済み
-- [x] 残り 2 形を塞ぐ — 2026-08-27 の書き直し gate が heredoc 本文の除去 (marker は引用符付き / backslash 前置も
-  可、終端は delimiter と完全一致の行) と行末継続記号の連結を契約 C2 として 66 test で固定し配備。旧記録:
-  heredoc 形は再 token 化で塞げると実測済み、行末継続記号は未検討。
-  塞げなければ相談する。2026-08-26 実測: 発注書を書く heredoc が「codex」で始まる行で 3 回
-  誤 deny (mention と execution の未区別)。2026-08-27 決裁: delegation gate の書き直し後に対応を考える
-  (現行 1,038 行への patch はしない)
-- [x] 配備し実地確認した — 2026-08-23 (hook 34 対 IDENTICAL、読み取り allow / 起動 deny を実測)
-- [x] 同型欠陥を class で掃引した — `skill_reminder_gate` の handoff 分岐を `writes_handoff_doc`
-  (書込語だけを列挙) へ差し替え (2026-08-24、`bcdea99`、配備済み)
-- [x] 同型欠陥がもう 1 件 — `cd` 検問が `cd() { return 1; }` の関数定義を移動と読む
-  (2026-08-24 実測)。2026-08-27 の書き直し gate は `cd()` / `pushd()` の定義を移動と読まない (契約 C10、配備版で
-  実測: 定義の後の起動は [route] deny、[same-root] にならない)
-
-Work file: `drafts/mention-guard/` (発注書 2 通と回帰レビュー 2 通)
-
 ### handoff の lifecycle 同期を hook で担保する
 
 起票: user 2026-08-23 (「handoff protocol / hook の強化が必要?」への回答として提案)
