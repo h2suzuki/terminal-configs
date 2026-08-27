@@ -42,7 +42,7 @@ NODE_VALUE_OPTIONS = frozenset(
 )
 SHELL_C_RE = re.compile(r"-[A-Za-z]*c[A-Za-z]*")
 HELP_FLAGS = frozenset({"--help", "-h", "--version", "-V"})
-HEREDOC_RE = re.compile(r"<<-?(?!<)\s*\\?(['\"]?)([^\s'\"<>]+)\1")
+HEREDOC_RE = re.compile(r"<<(-?)(?!<)\s*\\?(['\"]?)([^\s'\"<>]+)\2")
 SAFE_CLI = frozenset({"completion", "login", "logout", "mcp"})
 SAFE_SKILLS = frozenset(
     f"codex:{name}"
@@ -65,6 +65,8 @@ CORRECTIONS = dict.fromkeys(
 CORRECTIONS |= {
     "tree": "git worktree add で worktree を作り、単独の cd で移ってから --cwd <絶対 path> で起動してください。",
     "same-root": "発注前に単独の cd で対象 worktree へ移り、--cwd は絶対 path で書いてください。",
+    "isolation": "isolation を外し、手動 worktree へ単独の cd で移ってから発注してください。",
+    "workflow": "生成 step を Workflow の外に出し、codex-delegation skill を invoke して rescue に発注してください。",
 }
 ENDING = "この hook 自身は file を変更しません"
 
@@ -90,15 +92,18 @@ def _remove_heredoc_bodies(command: str) -> str:
     lines = command.splitlines(keepends=True)
     output: list[str] = []
     delimiter: str | None = None
+    strip_tabs = False
     for line in lines:
         if delimiter is not None:
-            if line.lstrip("\t").strip() == delimiter:
+            body_line = line.rstrip("\n")
+            if (body_line.lstrip("\t") if strip_tabs else body_line) == delimiter:
                 delimiter = None
             output.append("\n" if line.endswith("\n") else "")
             continue
         output.append(line)
         quoted: str | None = None
         marker_line: list[str] = []
+        outside: list[bool] = []
         for index, char in enumerate(line):
             if char in "'\"" and (index == 0 or line[index - 1] != "\\"):
                 quoted = None if quoted == char else char if quoted is None else quoted
@@ -106,9 +111,13 @@ def _remove_heredoc_bodies(command: str) -> str:
             if comment and (index == 0 or line[index - 1].isspace()):
                 break
             marker_line.append(char)
-        match = HEREDOC_RE.search("".join(marker_line))
+            outside.append(quoted is None)
+        marker_text = "".join(marker_line)
+        match = next(
+            (m for m in HEREDOC_RE.finditer(marker_text) if outside[m.start()]), None
+        )
         if match:
-            delimiter = match.group(2)
+            strip_tabs, delimiter = bool(match.group(1)), match.group(3)
     return "".join(output)
 
 
@@ -684,7 +693,7 @@ def _delegation_surface(payload: dict[str, object]) -> Result:
                 except OSError:
                     return Result()
         if isinstance(script, str) and re.search(
-            r"(?:agentType|subagent_type|subagentType)\s*:\s*['\"]codex:", script
+            r"(?:agentType|subagent_type|subagentType)['\"]?\s*:\s*['\"`]codex:", script
         ):
             return Result(
                 "workflow", "Workflow 内の Codex generation step は許可されません。"

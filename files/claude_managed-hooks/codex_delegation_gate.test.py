@@ -9,7 +9,8 @@ Contract (each claim maps to the tests named test_c<N>_*):
       "permissionDecisionReason": "codex-delegation-gate: [<id>] ..."}} with exit 0; the reason names the
       corrective action and ends with the sentence that the hook itself changes no file. The corrective
       sentence is rule-specific: [tree] names `git worktree add` and `--cwd`, [same-root] names the
-      standalone `cd` and an absolute `--cwd` (its violation sentence also names `env -C`). Fail-open (exit 0, no stdout, one stderr line) for
+      standalone `cd` and an absolute `--cwd` (its violation sentence also names `env -C`), [isolation]
+      names removing isolation, [workflow] names the codex-delegation skill. Fail-open (exit 0, no stdout, one stderr line) for
       unreadable payload, non-dict payload, non-PreToolUse events and any internal exception.
   C2  Launch enumeration is the single funnel every rule reads from: a launch is `node|nodejs <path ending in
       codex-companion.mjs> <sub> <args>` or `codex <sub> <args>` at the program position of a segment
@@ -37,7 +38,9 @@ Contract (each claim maps to the tests named test_c<N>_*):
       shell, `source` / `.`, alias and function bodies, `bash -s` and `env -S`. `command -v|-V name`
       looks a name up and is not a launch. `npx` / `bunx` / `uvx` are wrappers whose operand is the
       program (npx -p/--package/-c/--call take a value). A heredoc delimiter is any quoted or
-      backslash-prefixed word (`<<\EOF`, `<<'E.OF'`); `<<<` is a here-string, not a heredoc.
+      backslash-prefixed word (`<<\EOF`, `<<'E.OF'`); `<<<` is a here-string, not a heredoc. A `<<`
+      inside quotes is text, and a body ends only on a line equal to the delimiter (leading tabs are
+      stripped for `<<-` only).
       `bash -c -- <string>` skips the `--`.
   C3  [route] / [cli]: without agent_id every companion subcommand and every delegating codex CLI form
       (bare `codex`, exec, apply, resume, review, cloud ...) is denied; login / logout / mcp / completion /
@@ -78,7 +81,8 @@ Contract (each claim maps to the tests named test_c<N>_*):
       and is evaluated before the [tree] rule. A `cd()` function definition is not a cd. Outside a git
       repo, or when git cannot run, the check fails open with one stderr line.
   C11 [workflow]: a Workflow script (or the first 64 KB of scriptPath) whose agent spec names codex
-      through agentType / subagent_type / subagentType is denied regardless of the checkpoint. Shell
+      through agentType / subagent_type / subagentType (key optionally quoted, value in any quote
+      including backticks) is denied regardless of the checkpoint. Shell
       text, comments and string prose inside the script are not inspected (a subagent's own Bash and
       Skill calls are gated by this hook).
   C12 Commands without a codex launch produce no output at all (corpus replay: 0 denies).
@@ -1005,6 +1009,40 @@ class GateTest(unittest.TestCase):
     def test_c1_env_chdir_reason_names_env(self) -> None:
         reason = self.deny(self.rescue(f"env -C /tmp {NODE} task o.md"), "same-root")
         self.assertIn("env -C", reason)
+
+    # -- final recheck trivial fixes (orderer) -------------------------------------------------
+    def test_c2_heredoc_marker_inside_quotes_is_text(self) -> None:
+        self.deny(
+            self.bash(
+                f'git commit -m "docs: describe <<EOF handling" -- docs/x.md\n{NODE} task x'
+            ),
+            "route",
+        )
+        self.deny(self.bash("rg -n '<<EOF' docs/\ncodex exec x"), "cli")
+
+    def test_c2_heredoc_ends_only_on_the_exact_delimiter(self) -> None:
+        self.allow(self.bash("cat > d.md <<'EOF'\nline\nEOF \ncodex exec 'fix'\nEOF"))
+        self.allow(self.bash("cat > d.md <<'EOF'\nline\n  EOF\ncodex exec 'fix'\nEOF"))
+        self.deny(
+            self.bash("cat > d.md <<-'EOF'\nline\n\tEOF\ncodex exec 'fix'"), "cli"
+        )
+
+    def test_c11_workflow_quoted_keys_and_template_values(self) -> None:
+        self.fx.seed()
+        for script in (
+            'await agent("x", {"agentType": "codex:codex-rescue"})',
+            "await agent('x', {'subagent_type': 'codex:codex-rescue'})",
+            "await agent('x', {agentType: `codex:codex-rescue`})",
+        ):
+            self.deny(self.tool("Workflow", {"script": script}), "workflow")
+
+    def test_c1_workflow_and_isolation_name_a_correction(self) -> None:
+        self.fx.seed()
+        script = "await agent('x', {agentType: 'codex:codex-rescue'})"
+        reason = self.deny(self.tool("Workflow", {"script": script}), "workflow")
+        self.assertIn("codex-delegation skill", reason)
+        reason = self.deny(self.agent(isolation="worktree"), "isolation")
+        self.assertIn("isolation を外し", reason)
 
 
 if __name__ == "__main__":
