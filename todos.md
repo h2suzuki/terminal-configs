@@ -164,8 +164,10 @@ Exit Criteria:
 - [x] 同型の欠落が他に無いかを棚卸しした — 2026-08-27 実測: 雛形あり = 発注書 3 種・hook・skill・memory entry・
   handoff 節・todos block。雛形なしで毎回書いている = 契約 test (5 本)・変異器 (8 本)・subagent への発注文・
   Workflow script・docs の報告書 / 規定書。scaffold を足すなら契約 test + 変異器が候補 (書く頻度が最多)
-- [ ] 効果を実測した — 基準値は取得済み (2026-08-24: 発注書 144 件中 現行規約で所見ゼロ 12 件)。
-  比較対象は導入後に書いた発注書の往復回数
+- [x] 効果を実測した — 基準値は取得済み (2026-08-24: 発注書 144 件中 現行規約で所見ゼロ 12 件 = 8%)。
+  2026-08-27 再計測 (`drafts/corpus-tools/order_lint_rounds.py`、transcript の lint 呼出と結果を対応付け): 導入後の
+  発注書 37 本のうち初回 lint 所見ゼロ 24 本 (65%)、緑までの平均 lint 回数 1.20、未緑 7 本は lint 試験・review 雛形の
+  意図的な空欄・変数 path で発注には使っていない
 
 Work file: なし (本 block で自己完結)
 
