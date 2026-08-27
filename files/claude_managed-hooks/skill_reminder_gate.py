@@ -269,9 +269,15 @@ def _record_skill(payload: dict) -> None:
         observed_keys = set(state)
         state[skill] = {"ts": time.time(), "prompt_id": payload.get("prompt_id")}
         _write_state(path, state)
-        time.sleep(0.01)
-        latest = _load_state(path)
-        if isinstance(latest, dict) and observed_keys | {skill} <= set(latest):
+        wanted = observed_keys | {skill}
+        settled = True
+        for _ in range(2):
+            time.sleep(0.05)  # late concurrent writers land inside this window
+            latest = _load_state(path)
+            if not (isinstance(latest, dict) and wanted <= set(latest)):
+                settled = False
+                break
+        if settled:
             return
 
 
