@@ -25,8 +25,8 @@ Goal: 「指摘を直すたびに欠陥を作り込み、総合品質が上が�
 
 Exit Criteria:
 
-- [x] ユーザーが処遇を決めた — 2026-08-26 決裁: sentinel は本当に有効な最小限まで小さく
-  書き直す / 方法論も同じく最小限へ (1 ページ) / ab_probe は廃棄 / 直さない指摘は台帳に書かない
+- [x] ユーザーが処遇を決めた — 2026-08-26 決裁「sentinel は本当に有効な最小限まで小さく
+  書き直す / 方法論も同じく最小限へ (1 ページ) / ab_probe は廃棄 / 直さない指摘は台帳に書かない」
 - [x] ab_probe を廃棄した — 2026-08-26。`wt-abprobe` と branch を削除、発注書・報告書 31 file は
   `drafts/ab-probe-archive/` に退避
 - [x] sentinel を要件から書き直した — 2026-08-26 完了 (8,588 → 231 行、exit 14 種 → 7 種、契約 =
@@ -42,9 +42,9 @@ Exit Criteria:
   されることを E2E で実測
 - [ ] 実案件を §5.1 で回し、§5.6 の指標で判定した — ケース 1 = sentinel (変異 0/4・1 巡)、ケース 2 = todos 構造
   gate (再入場 1 回)、ケース 3 = delegation gate (2026-08-27: 変異 0/4、再入場 1 回、再確認の合成入力 P0 3 件は
-  bounded-risk 受入)、ケース 4 = order_lint (変異 0/4、3 巡 + trivial fix 2 件)。残り = ケース 5〜7 (stop_checks /
-  skill_reminder_gate) と、配備後 2 週間 (ケース 1・2 は 〜2026-09-09、3・4 は 〜2026-09-10) の実運用で用途内
-  P0 が 0 であること。外れたら loop approach を捨てる (Medium「方法論の実証」block は 2026-08-27 に本 block へ併合)
+  bounded-risk 受入)、ケース 4 = order_lint (変異 0/4、3 巡 + trivial fix 2 件)、ケース 5・6 = skill_reminder_gate /
+  stop_checks (2026-08-27: 変異 0/4、再確認 1 巡 + trivial fix で打ち止め)。残り = 配備後 2 週間 (1・2 は 〜2026-09-09、
+  3〜6 は 〜2026-09-10) の実運用で用途内 P0 が 0 であること。外れたら loop approach を捨てる
 
 Work file: `docs/adversarial-loop-meta-evaluation.md` (評価の正本)、
 `drafts/loop-exit-opinion-order-report.md` (第三者意見書・gitignore)
@@ -68,10 +68,10 @@ Exit Criteria:
   巻き戻し・E2E 済み)。近接重複の検出は corpus 計測で不採用 (dup pair と無関係 pair の score が重なり
   分離閾値なし)。2026-08-27 方向: 衛生 deny は `memory_routing_gate.py` (Write lint gate、revert した cap の
   元の場所) へ統合する。規則と数値は scope 再チェック後に挙動 1 行で承認を取ってから実装
-- [ ] 決定的に検出できる教訓 8 件を blocking gate へ昇格し entry を退役した — 2026-08-26 に 7 件を配備
+- [x] 決定的に検出できる教訓 8 件を blocking gate へ昇格し entry を退役した — 2026-08-26 に 7 件を配備
   (`deny_command_patterns.py` 5 規則・`deny_llm_call_in_hook.py`・`playwright_listener_gate.py`、
-  E2E で deny を実測、list 形式を覆う v2 も配備) し entry 10 件を退役。残り = done_state_ledger の Stop block 化
-  (stop_checks の書き直しで実装)
+  E2E で deny を実測、list 形式を覆う v2 も配備) し entry 10 件を退役。8 件目の done_state_ledger の Stop block 化は
+  2026-08-27 の stop_checks 書き直し (契約 C5、配備先 IDENTICAL) で閉じた
 - [x] 重複 cluster を統合した — 2026-08-26 に 3 組 8 件を org の新 entry 3 本へ統合 Write し旧 8 件を `--retire`
   (`2c85170`〜`908bab7`、push 済み、org 70 → 62 で disk と index が一致)。gate cover 済みの 3 件も同日退役
 - [x] 退役の他マシン伝播は SessionStart の pull が担う (実装済み)。通知の要否は 2026-08-27 決裁「認証系エラーだったら
@@ -137,8 +137,8 @@ Exit Criteria:
 - [x] 回帰 filter を通した — round 3 は fail、脅威モデルで指摘を選別して決着 (2026-08-23、`fd6ff4b`)
 - [x] 残る 1 class (D2 = 一部の行だけ token 化に失敗すると素通し) の扱いをユーザーが決めた —
   2026-08-23 決裁: 現状で merge・配備。実害は heredoc 形と行末継続記号の 2 形のみ
-- [ ] 解析そのものの作り直しは却下済み (2026-08-23) — parser library 未導入・bash parser 借用は
-  任意コード実行の穴・原理的に決定不能。記録のため残す
+- [x] 解析そのものの作り直しは却下済み (2026-08-23) — parser library 未導入・bash parser 借用は
+  任意コード実行の穴・原理的に決定不能。記録は git 履歴に残す (2026-08-27、block 削除で閉じる)
 - [x] 本線へ merge した — `a65da00`、push 済み
 - [x] 残り 2 形を塞ぐ — 2026-08-27 の書き直し gate が heredoc 本文の除去 (marker は引用符付き / backslash 前置も
   可、終端は delimiter と完全一致の行) と行末継続記号の連結を契約 C2 として 66 test で固定し配備。旧記録:
@@ -215,10 +215,10 @@ Exit Criteria:
   同等以上のレビューができることをどうやって担保するのかが重要」。担保 = 実測で rescue は review 系 subcommand を
   `task` に変換するため、plugin 同梱 template の姿勢・攻撃面・所見の基準を review 雛形に転記し、review 雛形の発注書を
   rescue に task で渡す経路を skill・policy §7/§8・雛形へ反映して配備 (同日、delegation gate の独立レビュー 3 巡で使用)
-- [ ] 検問実装への挑戦レビュー (U0 8 / U1 2、2026-08-22) の処置 — 検索コマンド block の決裁「書き直して
-  シンプルに refactor した後に、対応を考える」と同扱い。U0 の 6 件は書き直し対象 3 script の契約 claim の
-  候補、U0-7 と U1-2 は廃止済み hook (`8b04b7b`) 宛、U1-1 は harness 側の情報が要る (bounded-risk 候補)。
-  2026-08-27: 書き直し 5 本が完了し、U0 の 6 件は各契約 test (delegation gate / order_lint / skill_reminder / stop_checks) に吸収
+- [x] 検問実装への挑戦レビュー (U0 8 / U1 2、2026-08-22) の処置 — 検索コマンド block の決裁「書き直して
+  シンプルに refactor した後に、対応を考える」と同扱い。U0 の 6 件は 2026-08-27 の書き直し 5 本の契約 test に吸収、
+  U0-7 と U1-2 は廃止済み hook (`8b04b7b`) 宛、U1-1 (harness 側の情報が要る) は bounded-risk 受入で閉じる
+  (2026-08-27、異論なしの既定)
 - [x] (g) codex の直接起動を禁止する — deny 化・配備・live 実測 2 件 (2026-08-25 close)
 - [x] (i) 自作癖の抑制 — skill の数値境界は明文化済み。hook 側は廃止 (`8b04b7b`)、後継は Medium
   「随伴エージェント待ち」block の項目 1
@@ -261,8 +261,9 @@ Exit Criteria:
 - [ ] 注入 25 件の hunk 遡及 — 既存集約の回避が相関どまりのため。方策の採否で「捨てる」なら不要
 - [ ] 機械検査 3 案の実装 — 名前の実在照合 / 直す前後の判定くらべ / わざと壊すテスト。
   2 番目 (`claude_ab_probe`) は廃棄決定 (2026-08-26)。残り 2 案の要否は方策の採否で決める
-- [ ] 敵対的レビューの位置づけのずれを揃える — skill (高リスク時のみ) と方法論 §7.3 (毎巡) の
-  食い違い。方法論の 1 ページ化で解消する
+- [x] 敵対的レビューの位置づけのずれを揃える — skill (高リスク時のみ) と方法論 §7.3 (毎巡) の
+  食い違い。方法論の 1 ページ化で解消する — 2026-08-26 の 1 ページ化で §7.3 は消滅し、現行 6 項目 (初回レビューは
+  道具本体だけ・fix 1 回・再確認 1 回) は skill の「高リスク時のみ cross-model」と矛盾しない (2026-08-27 確認)
 
 Work file: `last-session-handoff.md` (再開手順)、`docs/injection-corpus-baseline.md`、
 `docs/injection-prevention-proposal.md`、`drafts/ruling61/` と `drafts/gates/` (gitignore)
