@@ -823,11 +823,57 @@ def _front_matter(path):
     return values
 
 
-def _memory_entries(root):
+def _normalize_origin(url):
+    """Same slug rule as the memory surface hook: github.com-<owner>-<repo>."""
+    text = url.strip()
+    head, _, tail = text.partition("://")
+    text = tail or head
+    first = text.split("/", 1)[0]
+    if "@" in first and ":" in first.split("@", 1)[1]:
+        text = text.replace(":", "/", 1)
+    first = text.split("/", 1)[0]
+    if "@" in first:
+        text = text.split("@", 1)[1]
+    host, _, path = text.partition("/")
+    text = (host.lower() + "/" + path).rstrip("/").removesuffix(".git")
+    return text.replace("/", "-").replace(":", "-")
+
+
+def _project_id(cwd):
+    if not isinstance(cwd, str) or not cwd:
+        return ""
+    git = os.path.join(cwd, ".git")
+    config = os.path.join(git, "config")
+    url = ""
+    try:
+        if os.path.isfile(git):
+            with open(git, encoding="utf-8") as stream:
+                gitdir = stream.read().partition("gitdir:")[2].strip()
+            if not os.path.isabs(gitdir):
+                gitdir = os.path.join(cwd, gitdir)
+            config = os.path.join(gitdir.split("/worktrees/")[0], "config")
+        with open(config, encoding="utf-8") as stream:
+            section = ""
+            for line in stream:
+                line = line.strip()
+                if line.startswith("["):
+                    section = line
+                elif section == '[remote "origin"]' and line.startswith("url"):
+                    url = line.partition("=")[2].strip()
+                    break
+    except OSError:
+        url = ""
+    return _normalize_origin(url) if url else cwd.replace("/", "-")
+
+
+def _memory_entries(root, project_id):
     selected = []
     if not os.path.isdir(root):
         return selected
-    for scope in ("org", "user", "project"):
+    scopes = ["org", "user"] + (
+        [os.path.join("project", project_id)] if project_id else []
+    )
+    for scope in scopes:
         base = os.path.join(root, scope)
         if not os.path.isdir(base):
             continue
@@ -892,12 +938,12 @@ def _record_waste(turn):
         return
 
 
-def _memory(turn):
+def _memory(payload, turn):
     root = os.environ.get("STOP_CHECKS_MEMORY_ROOT", DEFAULT_MEMORY_ROOT)
     if not os.path.isdir(root):
         return []
     lines = []
-    entries = _memory_entries(root)
+    entries = _memory_entries(root, _project_id(payload.get("cwd")))
     if entries:
         details = " ".join(f"{check} ({path})" for check, path in entries)
         lines.append(
@@ -992,7 +1038,7 @@ def _evaluate(payload, turn):
         blocks = []
         warnings = []
         blocks.extend(_safe_family(_self_report, turn, scan, False))
-        warnings.extend(_safe_family(_memory, turn))
+        warnings.extend(_safe_family(_memory, payload, turn))
         if _wind_down(payload):
             blocks.extend(_safe_family(_open_task_block, tasks))
             background_blocks, background_warnings = _safe_family(
@@ -1029,7 +1075,7 @@ def _evaluate(payload, turn):
         (_host_command, (normalized,)),
         (_claim_without_evidence, (turn, scan)),
         (_communication, (scan, turn["prompt_text"], tasks)),
-        (_memory, (turn,)),
+        (_memory, (payload, turn)),
     )
     for function, args in warn_calls:
         warnings.extend(_safe_family(function, *args))

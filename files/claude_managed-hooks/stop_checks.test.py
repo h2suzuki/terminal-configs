@@ -200,8 +200,10 @@ decision 型の陽性/陰性 (「決裁待ち」を含む open task で規則 3 
 ### C16 memory-reminder (context)
 
 入力: memory clone の root は環境変数 `STOP_CHECKS_MEMORY_ROOT`、未設定時の既定は
-`/var/lib/claude-rag-memory/claude-lessons-learned` (C19)。その配下 `{org,user,project}/**/*.md` の front matter を直接走査
-(他 hook を import しない)。`check:` 行を持ち、`when:` に `stop` を含む entry のみ対象 (現状 13 件 / `check:` 保有 17 件)。
+`/var/lib/claude-rag-memory/claude-lessons-learned` (C19)。その配下 `org/**`・`user/**` と、payload `cwd` の repo に対応する
+`project/<id>/**` (`id` = `.git/config` の origin URL を memory_surface と同じ規則で正規化した `github.com-<owner>-<repo>`、
+worktree は共通 dir の config を読む、origin が無ければ cwd の `/` → `-`) の `*.md` の front matter を直接走査 (他 hook を
+import しない)。他 project の entry は出さない。`check:` 行を持ち、`when:` に `stop` を含む entry のみ対象 (現状 13 件 / `check:` 保有 17 件)。
 出力: 選ばれた entry ごとに `check:` 本文と path を additionalContext に載せ、末尾に固定文言
 「抵触するなら修正してから完了。しなければ何も書かない」を 1 回だけ付ける。`when:` に `stop` が無い entry は出さない。
 同 family の第 2 規則: 直近 user prompt (harness 注入 prefix 除外後) に「無駄 / 浪費 / もったいない」があり、
@@ -1353,6 +1355,44 @@ class MemoryReminderTest(StopChecksTest):
             memory_root=os.path.join(self.fx.tmp, "absent"),
         )
         self.assertClean(proc)
+
+    def test_c16_only_the_current_project_scope_is_surfaced(self):
+        """Project entries of other repos never surface; the cwd fallback id selects this repo's dir."""
+        own = os.path.join(self.fx.memory, "project", self.fx.cwd.replace("/", "-"))
+        other = os.path.join(self.fx.memory, "project", "github.com-x-other")
+        for base, name in ((own, "mine"), (other, "theirs")):
+            os.makedirs(base, exist_ok=True)
+            with open(
+                os.path.join(base, name + ".md"), "w", encoding="utf-8"
+            ) as stream:
+                stream.write(
+                    f"---\nname: {name}\ncheck: {name} を確認せよ\nwhen: stop\n---\n"
+                )
+        self.fx.turn(say("報告します"))
+        body = warn_body(run_hook(self.fx, "調査を終えました。" + TAIL))
+        self.assertIn("mine を確認せよ", body)
+        self.assertNotIn("theirs を確認せよ", body)
+
+    def test_c16_project_id_comes_from_the_origin_url(self):
+        """A repo with an origin remote maps to github.com-<owner>-<repo> without running git."""
+        os.makedirs(os.path.join(self.fx.cwd, ".git"), exist_ok=True)
+        with open(
+            os.path.join(self.fx.cwd, ".git", "config"), "w", encoding="utf-8"
+        ) as stream:
+            stream.write(
+                '[core]\n\tbare = false\n[remote "origin"]\n\turl = git@github.com:alice/proj.git\n'
+            )
+        base = os.path.join(self.fx.memory, "project", "github.com-alice-proj")
+        os.makedirs(base, exist_ok=True)
+        with open(os.path.join(base, "own.md"), "w", encoding="utf-8") as stream:
+            stream.write(
+                "---\nname: own\ncheck: origin 由来の entry を確認せよ\nwhen: stop\n---\n"
+            )
+        self.fx.turn(say("報告します"))
+        self.assertIn(
+            "origin 由来の entry を確認せよ",
+            warn_body(run_hook(self.fx, "調査を終えました。" + TAIL)),
+        )
 
 
 class TurnMarkerTest(StopChecksTest):
