@@ -124,68 +124,6 @@ Exit Criteria:
 Work file: `last-session-handoff.md` (再開手順)、`docs/adversarial-review-methodology.md` (protocol)、
 `files/claude_managed-hooks/deny_command_patterns.test.py` (契約 test と変異器の実例)
 
-### 記憶から書かせない仕組み — 雛形 + 経由の強制 + 空欄設計
-
-起票: user 2026-08-23 (「まず todo に登録して、セッションリセット後に実装へ」)
-
-Goal: 記憶から生成して弾かれる類の成果物について、雛形を複製することが生成の第一手になる
-状態を作り、雛形を経由しない生成を止める。
-
-Exit Criteria:
-
-- [x] 発注書の雛形を用意した — 雛形 3 種、空欄は `未記入` sentinel で検査器の所見になる (2026-08-24)
-- [x] 実装した — `codex_order_lint --new` と `codex_order_scaffold.py` (2026-08-24、`58bb28d`、配備済み)
-- [x] 実装のリスク 2 件を運用で見る — 終わりの無い観測は持たない (2026-08-27 ユーザー「4 / 5 とか意味あるの？」)。
-  (a) 雛形を経由しない発注書は経路に関わらず `codex_order_lint` の必須節検査で止まる、(b) 導入後 37 本で紛れの報告なし
-- [x] 雛形を経由しないと生成できない形にした — 記憶からの Write は deny + 骨組み生成 (2026-08-24)
-- [x] 同型の欠落が他に無いかを棚卸しした — 2026-08-27 実測: 雛形あり = 発注書 3 種・hook・skill・memory entry・
-  handoff 節・todos block。雛形なしで毎回書いている = 契約 test (5 本)・変異器 (8 本)・subagent への発注文・
-  Workflow script・docs の報告書 / 規定書。scaffold を足すなら契約 test + 変異器が候補 (書く頻度が最多)
-- [x] 効果を実測した — 基準値は取得済み (2026-08-24: 発注書 144 件中 現行規約で所見ゼロ 12 件 = 8%)。
-  2026-08-27 再計測 (`drafts/corpus-tools/order_lint_rounds.py`、transcript の lint 呼出と結果を対応付け): 導入後の
-  発注書 37 本のうち初回 lint 所見ゼロ 24 本 (65%)、緑までの平均 lint 回数 1.20、未緑 7 本は lint 試験・review 雛形の
-  意図的な空欄・変数 path で発注には使っていない
-
-Work file: なし (本 block で自己完結)
-
-### 検問 gate 群の実装・受け入れ・配備
-
-起票: user 2026-08-21 (「強制が必要な事項 2 つ」の列挙)
-
-Goal: 車輪の再発明・無検問 loop・判断待ちの Task 化漏れを、約束でなく決定的 gate で禁止する。
-
-Exit Criteria:
-
-- [x] review 運用の gate 群を実装・smoke・deploy — (a)〜(f) + stateless 化 + warn は fix round 12
-  まで回して回帰 filter pass、main merge・deploy 済み (2026-08-22)。warn family の実測は下の統合項目へ
-  (誤爆 9 件と凍結判断は Medium「随伴エージェント待ち」block へ集約済み)
-- [x] `/codex:adversarial-review` は rescue 経路で代替 — 2026-08-27 決裁「rescue で代替でよい。発注書で
-  同等以上のレビューができることをどうやって担保するのかが重要」。担保 = 実測で rescue は review 系 subcommand を
-  `task` に変換するため、plugin 同梱 template の姿勢・攻撃面・所見の基準を review 雛形に転記し、review 雛形の発注書を
-  rescue に task で渡す経路を skill・policy §7/§8・雛形へ反映して配備 (同日、delegation gate の独立レビュー 3 巡で使用)
-- [x] 検問実装への挑戦レビュー (U0 8 / U1 2、2026-08-22) の処置 — 検索コマンド block の決裁「書き直して
-  シンプルに refactor した後に、対応を考える」と同扱い。U0 の 6 件は 2026-08-27 の書き直し 5 本の契約 test に吸収、
-  U0-7 と U1-2 は廃止済み hook (`8b04b7b`) 宛、U1-1 (harness 側の情報が要る) は bounded-risk 受入で閉じる
-  (2026-08-27、異論なしの既定)
-- [x] (g) codex の直接起動を禁止する — deny 化・配備・live 実測 2 件 (2026-08-25 close)
-- [x] (i) 自作癖の抑制 — skill の数値境界は明文化済み。hook 側は廃止 (`8b04b7b`)、後継は Medium
-  「随伴エージェント待ち」block の項目 1
-- [x] (h) codex-delegation skill と関連 memory entry を plugin-route 前提に改訂 — 配備済み
-  (2026-08-25 close)
-- [x] communication-lint 規則 3〜5 の live 発火記録 — 終わりの無い観測は持たない (2026-08-27 ユーザー「4 / 5 とか
-  意味あるの？」)。規則 1・2 は同日に観測、3〜5 は陽性未観測のまま閉じる (契約 test が各規則の陽性 1 例を固定している)
-- [x] 「無駄」keyword の memory 記録 reminder — Stop family として発注済み (`drafts/gates/warn-family-order.md`)。2026-08-26 実測で
-  entry を書くまで毎 Stop 再発火 (noise) → 2026-08-27 決裁「書き直し契約でよい」→ 同日、stop_checks C16 第 2 規則 (prompt boundary の
-  identity で latch、stdout に載った Stop だけ書く) として配備 (merge `caf7a70`)
-- [x] コミュニケーション規則の hook 強化 — CLAUDE.md は削らない (2026-08-21 決裁)。過去参照語の warn は
-  stop_checks C15 規則 5 として 2026-08-27 に配備。判断依頼の書式 template は成果物が無く (skills と
-  drafts/gates に不在)、規則 3〜5 が同目的を担うため作らない (2026-08-27、異論なしの既定)
-- [x] 発注書 lint の語彙過剰検出を直した — 語で引く 2 検査を無条件必須節へ移行 (2026-08-23、配備済み)
-- [x] 各 gate の canonical と deploy 先の diff -q 一致 — 2026-08-27 に managed hook 45 本すべて一致。
-  未観測 family (question-self-containment = 規則 5) は上の統合項目へ
-
-Work file: `drafts/gates/` (発注書・verdict・回帰レビュー報告書)
-
 ## Medium
 
 ### 改造時のバグ作り込みを減らす方策の検討
