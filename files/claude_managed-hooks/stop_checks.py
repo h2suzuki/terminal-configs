@@ -340,7 +340,9 @@ def _sentences(text):
 def _continuation_sentences(scan):
     result = []
     for sentence, line in _sentences(scan):
-        candidate = sentence.rstrip("。！？!?").strip()
+        candidate = re.sub(r"(?:\s|[（(][^（()）]*[)）]|[^\w])+$", "", sentence)
+        if not candidate:
+            candidate = re.sub(r"[^\w]+$", "", sentence)  # a fully bracketed sentence
         if not candidate.endswith(CONTINUATION_ENDINGS):
             continue
         if re.match(r"^\s*(?:[-*+]\s|\d+[.)]\s)", line) or "|" in line:
@@ -484,7 +486,7 @@ def _task_drift(turn, scan, tasks):
 def _path_tokens(text):
     pattern = (
         r"/var/lib/claude-rag-memory/[\w./-]+"
-        r"|(?:/|\.?\.?/)?[\w.-]+(?:/[\w.-]+)+\.[A-Za-z0-9]{1,6}"
+        r"|(?<![\w:@/.-])(?:/|\.{0,2}/)?[\w.-]+(?:/[\w.-]+)+\.[A-Za-z][A-Za-z0-9]{0,5}"
     )
     return list(dict.fromkeys(re.findall(pattern, text)))
 
@@ -496,7 +498,11 @@ def _ruling(turn, normalized):
     if not re.search(r"妥当|判断|裁定|評価|採用|却下", normalized):
         return []
     paths = _path_tokens(normalized)
-    unread = [path for path in paths if path not in turn["tool_paths"]]
+    unread = [
+        path
+        for path in paths
+        if not any(path in opened for opened in turn["tool_paths"])
+    ]
     if unread:
         return [
             _line(
@@ -686,6 +692,8 @@ def _offload(turn, normalized, scan):
     question_lines = []
     for line in scan.splitlines():
         stripped = line.strip().rstrip("。！!").strip()
+        if stripped.endswith("ください") and re.search(r"かは|かについては", stripped):
+            continue  # a topicalized report, not a question to the user
         if stripped.endswith(QUESTION_ENDINGS):
             question_lines.append(stripped)
     questions = "\n".join(question_lines)

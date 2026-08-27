@@ -60,6 +60,7 @@ test 方針: 同一文言を turn_text にだけ持つ payload で 0 件、final
 調整します / やります / 修正します / 削除します / 追加します / 作成します / 変更します / 反映します / 統合します / 置換します /
 コミットします / commit します / デプロイします / deploy します / 始めます / 報告します / 提示します / 検証します /
 直します / 自走を続け / 作業を続け (旧 hook が実 corpus 74 件を全て捕えた roster + 実 corpus の 5 語。「お願いします」は含まない)。
+文末の装飾 (括弧注記 `(約 10 分)`・全角括弧・三点リーダ・絵文字・記号) は剥がしてから語尾を当てる。
 出力: block。ただし次の 3 形式は block しない — (1) **実行中**: 同 turn に起動した background task の id を `final_text` の
 どこかで挙げている (当該文の外でよい)、(2) **完了**: 同 turn の tool 呼び出しに裏付けがある過去形、
 (3) **停止**: 「ここで停止」と「再開条件」を当該文と同じ行に持つ (`。` で文が切れていてもよい)。
@@ -104,7 +105,9 @@ test 方針: (c) の境界を 2 件 = pass / 3 件 = warn で固定し、Task st
 入力: turn 内に subagent 結果 (`Agent` / `Task` tool の呼び出し) または Workflow 結果
 (`<task-notification>` を含む user entry) が有り、`final_text` が
 entry path を挙げて裁定・評価を述べている。path token = backtick 内または裸の token で、`/var/lib/claude-rag-memory/` で
-始まるもの (拡張子不問)、または `/` を 1 つ以上含み拡張子 (`\.[A-Za-z0-9]{1,6}`) で終わるもの (`.md` に限らない、絶対 / repo 相対とも)。
+始まるもの (拡張子不問)、または `/` を 1 つ以上含み英字始まりの拡張子 (`\.[A-Za-z][A-Za-z0-9]{0,5}`) で終わるもの
+(`.md` に限らない、絶対 / repo 相対とも)。URL (`://` の後ろ)・package 指定 (`@` の後ろ)・数字始まりの拡張子 (`3.11/3.12`、`3/4.5`)
+は token にしない。`tool_paths` との一致は包含 (Read した絶対 path の中に本文の相対 path が文字列として現れれば開いたとみなす)。
 出力: 挙げた path のいずれも turn 内の `tool_paths` (Read/Grep/Glob の対象) に現れなければ block。
 出力文面は「開いていない path」を列挙する。path を挙げない本文、subagent 結果も Workflow 結果も無い turn は pass。
 test 方針: 同一 final_text に対し Read 有り = pass / 無し = block、path 3 件中 1 件だけ Read = block で列挙が 2 件、
@@ -161,7 +164,9 @@ test 方針: 5 規則それぞれの陽性 1 件と陰性 1 件 (計 10 case)。
 入力: `final_text` (fence 除去後。ただし host-command-format は fence の有無そのものを見るので fence 除去前の本文を使う)。
 - **block** (`offload-to-user`): (1) 順序質問 (「どちらを先に」「どの順で」)、(2) 二択確認 / routing (「A にしますか B にしますか」
   「どちらにしますか」「どちらがよいですか」)、(3) `!` prefix 実行の依頼 — (1)(2) は `?` / `？` / `ますか` / `ましょうか` / `ください` /
-  `でしょうか` で終わる行 (user への問い掛け) だけを対象にし、「自分で判断しました」のような平叙文は対象外。
+  `でしょうか` で終わる行 (user への問い掛け) だけを対象にし、「自分で判断しました」のような平叙文は対象外。「ください」で
+  終わる行でも、順序・二択の句が「〜かは」「〜かについては」で主題化された報告・案内文 (「どの順で実行したかは報告書を
+  確認してください」) は対象外。
   (2) は turn 内に `declare-and-proceed` skill の invoke があれば pass。
 - **warn** (`host-command-format`, family 15): host コマンドを user に手動実行させる文脈で、コマンドが独立した fenced block に
   なっていない (prose の inline code に混ざる)、または fenced でも path 引数が絶対 path でも `/` を含む repo root 起点の
@@ -1755,6 +1760,55 @@ class ReviewCorrectionTest(StopChecksTest):
         self.assertIn(
             "Context -", marker(run_hook(self.fx, "調査を終えました。" + TAIL))
         )
+
+
+class RecheckCorrectionTest(StopChecksTest):
+    """Contract corrections from the final recheck (2026-08-27): decorations, path matching, question lines."""
+
+    def test_c4_decorated_endings_still_block(self):
+        for text in (
+            "次に残りの family を検証します (約 10 分)。",
+            "次に残りの family を検証します（約 10 分）。",
+            "次に残りの family を検証します…",
+            "次に残りの family を検証します 🔧",
+            "次に実装します:",
+            "（この後 実装を進めます）",
+        ):
+            with self.subTest(text=text):
+                self.fx.turn(say("報告します"))
+                self.assertBlocks(run_hook(self.fx, text + TAIL), "continuation-claim")
+
+    def test_c8_relative_mention_of_an_absolutely_read_path_passes(self):
+        agent = call("Agent", subagent_type="general-purpose", prompt="調査")
+        report = tool_result("subagent report: 候補を 3 件見つけました")
+        absolute = self.fx.repo_file("drafts/report.md")
+        self.fx.turn(agent, report, read(absolute), say("読みました"))
+        text = "drafts/report.md の指摘は妥当と判断しました。" + TAIL
+        self.assertNotBlocked(run_hook(self.fx, text), "ruling-without-reading")
+
+    def test_c8_urls_versions_and_ratios_are_not_paths(self):
+        agent = call("Agent", subagent_type="general-purpose", prompt="調査")
+        report = tool_result("subagent report: 候補を 3 件見つけました")
+        for text in (
+            "subagent が挙げた https://docs.python.org/3/library/re.html の記述は妥当と判断しました。",
+            "python 3.11/3.12 の差は影響なしと判断しました。",
+            "比率は 3/4.5 で妥当と判断しました。",
+            "@anthropic-ai/sdk.js の採用は妥当と判断しました。",
+        ):
+            with self.subTest(text=text):
+                self.fx.turn(agent, report, say("読みました"))
+                self.assertNotBlocked(
+                    run_hook(self.fx, text + TAIL), "ruling-without-reading"
+                )
+
+    def test_c13_topicalized_order_phrases_in_requests_pass(self):
+        for text in (
+            "どの順で実行したかは報告書に書いてありますのでご確認ください。",
+            "どの順で実行するかは README を参照してください。",
+        ):
+            with self.subTest(text=text):
+                self.fx.turn(say("報告します"))
+                self.assertNotBlocked(run_hook(self.fx, text + TAIL), "offload-to-user")
 
 
 if __name__ == "__main__":
