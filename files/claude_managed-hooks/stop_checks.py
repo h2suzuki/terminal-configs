@@ -13,6 +13,7 @@ TURN_WINDOW_BYTES = 512 * 1024
 BACKGROUND_WINDOW_BYTES = 2 * 1024 * 1024
 LEDGER_MIN_EDITS = 3
 TASK_TOOLS = {"TaskCreate", "TaskUpdate", "TodoWrite"}
+SCHEMA_TOOLS = {"ToolSearch"}
 EVIDENCE_TOOLS = {"Read", "Grep", "Glob", "WebSearch", "WebFetch"}
 PERSISTENCE_WORDS = ("memory", "skills", "hooks", "CLAUDE.md", "SKILL.md")
 DECISION_WORDS = ("決裁", "裁定", "判断待ち", "承認待ち", "要確認")
@@ -324,13 +325,28 @@ def _decision_tasks(tasks):
     ]
 
 
-def _wind_down(payload):
+def _wind_down_signal(payload):
     session = payload.get("session_id")
     if not isinstance(session, str) or not session:
-        return False
+        return None
     home = os.environ.get("HOME", "")
-    path = os.path.join(home, ".claude", "hooks", "state", "wind_down_signal", session)
-    return os.path.isfile(path)
+    return os.path.join(home, ".claude", "hooks", "state", "wind_down_signal", session)
+
+
+def _wind_down(payload):
+    path = _wind_down_signal(payload)
+    if path is None:
+        return False
+    try:
+        with open(path, encoding="utf-8") as stream:
+            return stream.read().strip() == "1"
+    except OSError:
+        return False
+
+
+def _wind_down_declared(payload):
+    path = _wind_down_signal(payload)
+    return path is not None and os.path.isfile(path + ".sticky")
 
 
 def _sentences(text):
@@ -457,7 +473,12 @@ def _task_plan(turn):
     if len(names) <= 2 and not turn["edited_paths"]:
         return []
     first_work = next(
-        (index for index, name in enumerate(names) if not _task_tool(name)), None
+        (
+            index
+            for index, name in enumerate(names)
+            if not _task_tool(name) and name not in SCHEMA_TOOLS
+        ),
+        None,
     )
     if first_work is None:
         return []
@@ -1127,6 +1148,7 @@ def _evaluate(payload, turn):
         ) or ([], [])
         blocks.extend(background_blocks)
         warnings.extend(background_warnings)
+    if _wind_down_declared(payload):
         blocks.extend(_safe_family(_handoff, payload, turn, final_text))
     warn_calls = (
         (_host_command, (normalized,)),

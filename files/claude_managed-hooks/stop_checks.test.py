@@ -89,6 +89,7 @@ test 方針: 完了語 × 7 証跡種別 (commit / push / merge / gate / E2E / �
 
 入力: turn の先頭が prompt boundary (= 新規 prompt に応答する turn) で、turn 内に 1 つ以上の tool 呼び出しがある。
 出力: 最初の非 Task tool 呼び出しより前に `TaskCreate` / `TaskUpdate` / `TodoWrite` / mytask MCP の呼び出しが無ければ block。
+`ToolSearch` (deferred tool の schema 読込) は順序判定で tool に数えない — mytask の schema 読込が Task upsert に先行するため。
 次の turn は pass — tool 呼び出しが 0 件、**tool 呼び出しが 2 件以下かつ `edited_paths` が 0 件** (質問への即答を block しない)、
 prompt boundary から始まらない (継続 Stop)、Task tool が gate off の session
 (`~/.claude.json` の `cachedGrowthBookFeatures.tengu_vellum_ash`)。
@@ -118,15 +119,16 @@ test 方針: 同一 final_text に対し Read 有り = pass / 無し = block、p
 
 ### C9 wind-down-open-tasks (block)
 
-入力: wind-down 宣言済み session (`~/.claude/hooks/state/wind_down_signal/<session_id>` が存在)。
+入力: 直近の user prompt が wind-down の session (`~/.claude/hooks/state/wind_down_signal/<session_id>` の中身が `1`。
+UserPromptSubmit 側が毎 prompt `1` / `0` で上書きし、宣言の履歴は `<session_id>.sticky` に残す)。
 出力: Task store に open (status が `completed` / `cancelled` 以外) の task が 1 件以上あれば block し、
-その name を列挙する。state file が無い session、open が 0 件なら pass。
+その name を列挙する。state file が無い / 中身が `1` でない session、open が 0 件なら pass。
 `session_id` が無い / state dir が読めない場合は pass (fail-open)。
 test 方針: state file の有無 × open task の有無の 4 象限。
 
 ### C10 wind-down-background-unreaped (block)
 
-入力: wind-down 宣言済み session。transcript の**末尾 2 MB** (`BACKGROUND_WINDOW_BYTES = 2 * 1024 * 1024`。
+入力: C9 と同じ wind-down 信号 (中身 `1`)。transcript の**末尾 2 MB** (`BACKGROUND_WINDOW_BYTES = 2 * 1024 * 1024`。
 C2 の funnel は 128 KB のままで、この窓を使うのは C10 だけ) から次を数える —
 起動 = tool_result の本文が `Command running in background with ID: <id>` または
 `Workflow launched in background. Task ID: <id>` に一致した `<id>` の集合。
@@ -140,7 +142,8 @@ test 方針: 起動 2 / 通知 1 の合成 transcript で 1 件を列挙、起�
 
 ### C11 handoff-doc-without-marker (block)
 
-入力: wind-down 宣言済み session で、turn 内の `edited_paths` に handoff doc
+入力: wind-down 宣言済み session (`~/.claude/hooks/state/wind_down_signal/<session_id>.sticky` が存在 —
+宣言は session 内で不可逆で、後続 prompt が信号を `0` に戻しても残る) で、turn 内の `edited_paths` に handoff doc
 (basename が `handoff` を含む `.md`、または `docs/handoff/` 配下) がある。
 出力: `final_text` と当該 doc の本文のいずれにも full-sid marker (payload の `session_id` の全文字列) が無ければ block し、
 marker を欠く doc path を列挙する。短縮 sid や template の placeholder は marker と見なさない。
@@ -428,13 +431,15 @@ class Fixture:
         ) as stream:
             json.dump(task, stream, ensure_ascii=False)
 
-    def wind_down(self) -> None:
+    def wind_down(self, latest: bool = True) -> None:
+        """Mirror the UserPromptSubmit writer: latest-prompt flag plus a sticky declaration."""
         directory = os.path.join(
             self.home, ".claude", "hooks", "state", "wind_down_signal"
         )
         os.makedirs(directory, exist_ok=True)
         with open(os.path.join(directory, SESSION), "w", encoding="utf-8") as stream:
-            stream.write("wind-down\n")
+            stream.write("1" if latest else "0")
+        open(os.path.join(directory, SESSION + ".sticky"), "w").close()
 
     def gate_tasks_off(self) -> None:
         self.write_claude_json(
@@ -895,6 +900,21 @@ class TaskPlanFirstTest(StopChecksTest):
         self.fx.write([prompt(), *self.work()])
         self.assertBlocks(run_hook(self.fx, "編集しました。" + TAIL), "task-plan-first")
 
+    def test_c6_tool_search_before_the_task_upsert_passes(self):
+        """C6: loading the mytask schema is not work, so it may precede the upsert."""
+        schema = call("ToolSearch", query="select:mcp__mytask__TaskCreate")
+        self.fx.write(
+            [prompt(), schema, call("TaskCreate", subject="契約"), *self.work()]
+        )
+        self.assertNotBlocked(
+            run_hook(self.fx, "編集しました。" + TAIL), "task-plan-first"
+        )
+
+    def test_c6_tool_search_alone_does_not_count_as_an_upsert(self):
+        schema = call("ToolSearch", query="select:mcp__mytask__TaskCreate")
+        self.fx.write([prompt(), schema, *self.work()])
+        self.assertBlocks(run_hook(self.fx, "編集しました。" + TAIL), "task-plan-first")
+
     def test_c6_turn_without_tool_calls_passes(self):
         self.fx.write([prompt(), say("説明しました")])
         self.assertClean(run_hook(self.fx, "仕様を説明しました。" + TAIL))
@@ -1036,6 +1056,13 @@ class WindDownTest(StopChecksTest):
         proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
         self.assertNotBlocked(proc, "wind-down-open-tasks")
 
+    def test_c9_open_task_after_a_later_ordinary_prompt_passes(self):
+        """C9 follows the latest prompt: a resumed session may hold open tasks again."""
+        self.fx.wind_down(latest=False)
+        self.fx.native_task("契約 test を書く", status="in_progress")
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertNotBlocked(proc, "wind-down-open-tasks")
+
     def test_c9_open_task_without_wind_down_passes(self):
         self.fx.native_task("契約 test を書く", status="in_progress")
         proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
@@ -1075,6 +1102,12 @@ class WindDownTest(StopChecksTest):
     def test_c10_all_ids_notified_passes(self):
         self.fx.wind_down()
         self.launches(("bg-1", "bg-2"))
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertNotBlocked(proc, "wind-down-background-unreaped")
+
+    def test_c10_after_a_later_ordinary_prompt_passes(self):
+        self.fx.wind_down(latest=False)
+        self.launches(("bg-1",))
         proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
         self.assertNotBlocked(proc, "wind-down-background-unreaped")
 
@@ -1139,6 +1172,14 @@ class HandoffMarkerTest(StopChecksTest):
         proc = run_hook(self.fx, "handoff を書きました。" + TAIL)
         self.assertBlocks(proc, "handoff-doc-without-marker")
         self.assertIn("2026-08-27.md", proc.stderr)
+
+    def test_c11_declaration_outlives_a_later_ordinary_prompt(self):
+        """C11 keys on the sticky declaration, not on the latest-prompt flag."""
+        self.fx.wind_down(latest=False)
+        path = self.handoff(SESSION[:8])
+        self.fx.turn(edit(path), say("書きました"))
+        proc = run_hook(self.fx, "handoff を書きました。" + TAIL)
+        self.assertBlocks(proc, "handoff-doc-without-marker")
 
     def test_c11_marker_in_the_final_text_passes(self):
         """C11 accepts the marker on either side: the doc body or the final text."""
