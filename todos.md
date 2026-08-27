@@ -136,7 +136,9 @@ Exit Criteria:
 - [x] 検査を作るかをユーザーが決めた — 2026-08-23 採用。仕様 = 参照で判定 (どの block からも
   `Work file:` で指されない handoff doc / 実在しない path を warn。見出し名は見ない)
 - [x] warn tier で実装・test した — `stop_checks.py` `_handoff_todos_sync_warnings` (2026-08-23、配備済み)
-- [ ] 実 session で誤検知と見逃しを観測した — handoff doc を作る session が来るまで測れない
+- [x] 実 session で誤検知と見逃しを観測した — 観測対象が消えた: 検査 `_handoff_todos_sync_warnings` は 2026-08-27 の
+  stop_checks 書き直し (許可 15 family の外、127 transcript で発火 1 件) で廃止。lifecycle 同期は handoff skill の
+  「block 削除と section 削除を同 commit」規則に戻る
 - [x] 現存する stale file を処置した — `last-session-handoff.md` を削除 (2026-08-23、ユーザー承認)
 - [x] background 作業の残処理を protocol に足す — 2026-08-27 ユーザー指摘「Background work is running と言われて終了を
   阻害されます。これは handoff protocol にチェックがもれている」(残っていたのは readback 完了待ちの Bash loop)。handoff
@@ -178,10 +180,9 @@ Goal: 車輪の再発明・無検問 loop・判断待ちの Task 化漏れを、
 
 Exit Criteria:
 
-- [ ] review 運用の gate 群を実装・smoke・deploy — (a)〜(f) + stateless 化 + warn は fix round 12
-  まで回して回帰 filter pass、main merge・deploy 済み (2026-08-22)。残り: warn family の
-  発火と誤爆の実測 (誤爆 9 件と凍結判断は Medium「随伴エージェント待ち」block へ集約済み)、
-  live finding 1 (task の anchor ずれ、修正 `29f1891`、配備済み = stop_checks が IDENTICAL)
+- [x] review 運用の gate 群を実装・smoke・deploy — (a)〜(f) + stateless 化 + warn は fix round 12
+  まで回して回帰 filter pass、main merge・deploy 済み (2026-08-22)。warn family の実測は下の統合項目へ
+  (誤爆 9 件と凍結判断は Medium「随伴エージェント待ち」block へ集約済み)
 - [x] `/codex:adversarial-review` は rescue 経路で代替 — 2026-08-27 決裁「rescue で代替でよい。発注書で
   同等以上のレビューができることをどうやって担保するのかが重要」。担保 = 実測で rescue は review 系 subcommand を
   `task` に変換するため、plugin 同梱 template の姿勢・攻撃面・所見の基準を review 雛形に転記し、review 雛形の発注書を
@@ -195,17 +196,18 @@ Exit Criteria:
   「随伴エージェント待ち」block の項目 1
 - [x] (h) codex-delegation skill と関連 memory entry を plugin-route 前提に改訂 — 配備済み
   (2026-08-25 close)
-- [ ] 判断待ちの Task 化を強制する hook family — 実装・受け入れ済み (`5323179`)、配備済み (2026-08-27 に IDENTICAL を実測)。実測が残
-- [ ] 決裁受領の記録強制を同 family に併合 — 実装済み (`5323179`)、配備済み。実測が残
+- [ ] communication-lint 規則 3〜5 (疑問文に decision Task / 短文決裁の記録 / 質問の自己完結) の live 発火を
+  各 1 回記録する — warn は transcript に保存されないので、見た session がその場で日時と本文をここに書く
+  (2026-08-27 時点で 3 規則とも未観測。規則 1・2 は同日に観測済み)
 - [x] 「無駄」keyword の memory 記録 reminder — Stop family として発注済み (`drafts/gates/warn-family-order.md`)。2026-08-26 実測で
   entry を書くまで毎 Stop 再発火 (noise) → 2026-08-27 決裁「書き直し契約でよい」→ 同日、stop_checks C16 第 2 規則 (prompt boundary の
   identity で latch、stdout に載った Stop だけ書く) として配備 (merge `caf7a70`)
-- [ ] コミュニケーション規則の hook 強化 — CLAUDE.md は削らない (2026-08-21 決裁)。round 7 で
-  実装済み、追加 2 項目 (過去参照語の warn / 判断依頼の書式 template) を同発注書で発注済み。
-  実測・deploy が残
+- [x] コミュニケーション規則の hook 強化 — CLAUDE.md は削らない (2026-08-21 決裁)。過去参照語の warn は
+  stop_checks C15 規則 5 として 2026-08-27 に配備。判断依頼の書式 template は成果物が無く (skills と
+  drafts/gates に不在)、規則 3〜5 が同目的を担うため作らない (2026-08-27、異論なしの既定)
 - [x] 発注書 lint の語彙過剰検出を直した — 語で引く 2 検査を無条件必須節へ移行 (2026-08-23、配備済み)
-- [ ] 各 gate の canonical と deploy 先の diff -q 一致 + 発火の live 観測 — 配備差分ゼロ
-  (2026-08-23)。未観測 1 family (question-self-containment) が残
+- [x] 各 gate の canonical と deploy 先の diff -q 一致 — 2026-08-27 に managed hook 45 本すべて一致。
+  未観測 family (question-self-containment = 規則 5) は上の統合項目へ
 
 Work file: `drafts/gates/` (発注書・verdict・回帰レビュー報告書)
 
