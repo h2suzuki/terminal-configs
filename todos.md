@@ -89,37 +89,6 @@ Exit Criteria:
 Work file: `last-session-handoff.md` (再開手順)、`~/.claude/hooks/memory_surface.py` (surface 方針の実装)、
 `/var/lib/claude-rag-memory/memory_index.sqlite3` の `inject_log` (emit / mismatch の実測)
 
-### memory surface の有効性 — 効く advise と効かない advise を実測で分ける
-
-起票: user 2026-08-26 (「大多数の advise memory が効かなかったとして、有効な memory もゼロなのでしょうか？」
-「効く advise 効かない advise のカテゴリーを知りたい」)
-
-Goal: surface された教訓が行動を変えた event を transcript 実測で数え、効く / 効かない advise の型を分けて、
-Stop 時 surface (2026-08-26 に削除) の扱いを根拠つきで決める。
-
-Exit Criteria:
-
-- [x] 実測した — 2026-08-27、全 transcript の surface 1,459 件から 508 件を opus 25 agent が判定・16 agent が反証:
-  生存 17 件 (11 entry、全て Stop 時)、prompt 時 0、対照比 順守 +20 pt (Stop 時)、定型文のみ fable-5 85% / opus-5 17%。
-  効いた型 = 直前の出力に今すぐ当てられる検査動作を 1 つ指定する reminder (T1 / T2 / T3 / T6)、効かない型 = 態度・文体・否定形
-- [x] 報告を docs/ へ正本化した — `docs/memory-surface-efficacy.md` (2026-08-27、計測日・母数・執筆規準 6 点を含む)
-- [x] Stop 時 surface の処遇をユーザーが決めた — 2026-08-27 決裁「b 効いた型に限り文言を変えて再導入、memory writing の
-  フォーマットチェックで、効かない文面の混入を防止」
-- [x] 実装 1 = memory 書式 gate: entry frontmatter に `check:` (直前の出力に当てる検査動作 1 文・肯定形・100 字以内) と
-  `when:` (prompt / stop / after-subagent) を新設し、`memory_routing_gate.py` が新規 entry の欠落 / 100 字超 / 否定形のみ
-  (禁止語尾の手前に動作語なし) / `when:` 値域外を deny (既存 entry の再 Write は省略可) — 契約 test 15 件 + 変異 0/4、
-  merge `7a47768`、配備先 gate と skill が IDENTICAL (2026-08-27)。parser の読取は実装 2 の契約へ
-- [x] 実装 2 = Stop 時 surface の再導入: `check:` を持つ entry のみ、文言「抵触するなら修正してから完了。しなければ
-  何も書かない」で surface する family を stop_checks 書き直しの契約に含める (旧文言の「確認せよ」は使わない)。
-  あわせて entry に `when:` (prompt / stop / after-subagent) を設け、surface hook がそれで振り分ける (ユーザー提案 2026-08-27)
-  — 2026-08-27、stop_checks 書き直しの C16 family (`when:` に stop を含む entry だけ、固定文言 1 回) として配備、
-  配備先で実発火を確認 (merge `caf7a70`、IDENTICAL)
-- [x] 既存 entry の移行: 効いた 11 entry のうち現存 10 件 (org) に `check:` (44〜62 字の検査動作) と `when: prompt stop` を
-  書いた — 2026-08-27、gate 通過 10/10・clone commit 10 件・push 済み (to push 0 / to pull 0、index org 72)。態度・文体だけの
-  entry には書かない (Stop 対象外)
-
-Work file: `last-session-handoff.md` (再開手順)、`docs/memory-surface-efficacy.md` (報告の正本)、`drafts/corpus-tools/` (抽出・sampling・集計 script)
-
 ### 肥大化した hook と CLI を新 protocol で最小限へ書き直す
 
 起票: user 2026-08-26 (「敵対レビューで肥大化したスクリプトがあれば、すべて simplify した方がよい」)
