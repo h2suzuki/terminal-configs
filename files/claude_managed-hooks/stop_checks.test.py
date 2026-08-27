@@ -41,8 +41,8 @@ turn から取り出す値はこの 6 つだけで、全 family はここから�
 `tool_names` / `tool_paths` / `edited_paths` (Write/Edit の対象) / `bash_commands`。
 transcript が無い・壊れている・boundary が見つからない場合は turn 由来の 5 値 (`turn_text` / `tool_names` / `tool_paths` /
 `edited_paths` / `bash_commands`) を空にし、`final_text` は payload の `last_assistant_message` から取る。この空 turn では
-turn 証跡を要する family (C4・C5・C6・C7・C8・C11) は pass し、final_text だけで判定できる family (C12・C13・C14・C15) と
-state だけを見る family (C9・C10・C16・C17) は通常どおり評価する。
+turn との pairing を要する family (C4〜C8・C11・C12 規則 2・3・C13・C14・C15) は pass し、final_text だけで判定できる
+C12 規則 1・4・5 と、state だけを見る family (C9・C10・C16・C17) は通常どおり評価する。
 test 方針: `<task-notification>` を含む合成 transcript で turn 境界がそれを跨ぐことと、破損 JSONL 行が skip されることを assert。
 
 ### C3 warn の走査範囲 (K4 の 2 挙動を固定)
@@ -59,7 +59,7 @@ test 方針: 同一文言を turn_text にだけ持つ payload で 0 件、final
 継続します / 再開します / 進めます / 進みます / 続けます / 着手します / 実施します / 実装します / 取り掛かります / 対応します /
 調整します / やります / 修正します / 削除します / 追加します / 作成します / 変更します / 反映します / 統合します / 置換します /
 コミットします / commit します / デプロイします / deploy します / 始めます / 報告します / 提示します / 検証します /
-自走を続け / 作業を続け (旧 hook が実 corpus 74 件を全て捕えた roster + 実 corpus の 4 語。「お願いします」は含まない)。
+直します / 自走を続け / 作業を続け (旧 hook が実 corpus 74 件を全て捕えた roster + 実 corpus の 5 語。「お願いします」は含まない)。
 出力: block。ただし次の 3 形式は block しない — (1) **実行中**: 同 turn に起動した background task の id を `final_text` の
 どこかで挙げている (当該文の外でよい)、(2) **完了**: 同 turn の tool 呼び出しに裏付けがある過去形、
 (3) **停止**: 「ここで停止」と「再開条件」を当該文と同じ行に持つ (`。` で文が切れていてもよい)。
@@ -1121,7 +1121,7 @@ class SelfReportHonestyTest(StopChecksTest):
         self.assertNotBlocked(run_hook(self.fx, text), self.FAMILY)
 
     def test_c12_surprise_at_own_work_without_git_history(self):
-        text = "この構造は想定外でした。" + TAIL
+        text = "いつの間にか構造が変わっていました。" + TAIL
         self.fx.turn(say("整理しました"))
         self.assertBlocks(run_hook(self.fx, text), self.FAMILY)
         self.fx.turn(bash("git log --oneline -5"), say("確認しました"))
@@ -1142,7 +1142,7 @@ class SelfReportHonestyTest(StopChecksTest):
             "既存のパターンを踏襲しました。"
             "契約 test の family 構成を表にまとめ、各 claim の対応を確認し、"
             "変異器の seam も並べて整理し、証跡の種別まで数え上げました。"
-            "その上で誤りを直します。"
+            "その上で誤りを直しました。"
         )
         self.assertNotBlocked(run_hook(self.fx, far + TAIL), self.FAMILY)
 
@@ -1508,6 +1508,7 @@ class CorpusContinuationClaimTest(StopChecksTest):
         "始めます",
         "報告します",
         "提示します",
+        "直します",
     )
 
     def test_c4_corpus_forms_block(self):
