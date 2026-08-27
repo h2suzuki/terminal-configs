@@ -18,6 +18,7 @@ Contract (claims are verbatim from the draft; each maps to the tests named test_
             root は process 起動時の環境変数から読む。他の env は読まない
     own     この hook だけが上記 state を書く。file / git / transcript は一切書かない・読まない
             (例外: handoff doc 判定は sibling module check_uncommitted_at_handoff に委譲)
+            読み手は codex_delegation_gate (既定 root だけを読む)
     inv1    gate が deny するのは、required が非空 かつ state が読めて かつ missing が非空 のときだけ
     inv2    active 窓は「prompt_id 一致」または「now - ts <= 1800」の論理和 (D1)
     inv3    agent_id が非空なら常に allow (D3 の subagent 免除)
@@ -28,6 +29,7 @@ Contract (claims are verbatim from the draft; each maps to the tests named test_
             `git commit` の literal pathspec を評価する。git は一度も起動しない (決裁 1)
     inv8    state の更新は同 dir の一時 file へ書いて os.replace で置換する。lock は使わない。
             置換後の main.json は常に有効な JSON dict (決裁 6)
+    inv9    session_id に `/` または `..` を含む payload は state path を持たない = 書かず、allow
 
 - **C1 出力形と fail-open**
   入力: 空 stdin / 壊れた JSON / 非 dict payload / 想定外 `hook_event_name` / 内部例外を
@@ -60,7 +62,8 @@ Contract (claims are verbatim from the draft; each maps to the tests named test_
 - **C4 test file の上積み (決裁 5)**
   入力: **code kind の file** で、basename が `test_*.py` / `*_test.py` / `*.test.py` /
   `*.test.ts` / `*.spec.ts` / `*.spec.rb` のいずれか、または path が `/tests/` / `/test/` /
-  `/spec/` を含むもの。出力: 該当 kind の skill に `writing-tests` を加える。列挙は閉じており、
+  `/spec/` を含むもの。basename の比較は拡張子と同じく大小文字を無視する (`Foo.Test.PY` も
+  test file)。出力: 該当 kind の skill に `writing-tests` を加える。列挙は閉じており、
   `pkg/foo_test.go` は `{writing-code}` のみ。code kind でない file (`tests/notes.md` /
   `tests/todos.md`) には加えない。
   test 方針: `tests/foo.py` の deny 文面に writing-tests が含まれ、`tests/notes.md` は無出力。
@@ -99,12 +102,20 @@ Contract (claims are verbatim from the draft; each maps to the tests named test_
   成否によらず何も出さない (決裁 3)。
   test 方針: 成功 payload → gate が allow に変わる / 失敗 payload → deny のまま、を assert。
   並行 record-skill の後、state dir に残るのは `main.json` 1 本で、中身は有効な JSON dict。
+  並行 upsert の後も各 process が書いた key は全て残る (書込後に再読して自分の key と読取時点の
+  key 集合が残っているか検証し、崩れていれば再試行、上限 5 回。lock は使わない)。state が
+  corrupt (非 JSON / 非 dict / 不正 record) のときは `{}` から作り直して upsert する
+  (corrupt のまま session 終了まで gate を無効化しない)。
 
 - **C10 commit-gate = handoff + literal pathspec (D6、決裁 1)**
   入力: `tool_name` = Bash、`tool_input.command` (文字列)。
   規則 1 (handoff、D6): `check_uncommitted_at_handoff.writes_handoff_doc(command)` が真
   (heredoc / redirect / 別 process を問わず) なら `{handoff}` を要求。label は `handoff doc`。
-  規則 2 (commit pathspec、決裁 1): command 中の `git commit` 呼出に `--` があり、その後ろの
+  規則 2 (commit pathspec、決裁 1): command を改行と `;` `&&` `||` `|` `&` `(` `)` で segment に
+  分け (行継続 `\\` + 改行は 1 行に連結)、segment の先頭 token が `git` で、global option
+  (`-C <dir>` / `-c <k=v>` / `--<name>[=<v>]`) を読み飛ばした次の token が `commit` なら
+  `git commit` 呼出とみなす (兄弟 hook deny_compound_git_commit と同じ受理集合)。その呼出に
+  `--` があり、その後ろの
   token が literal pathspec (引用符を剥いた後に `*` `?` `[` `]` `$` `` ` `` を含まない) なら、
   各 token を C3 の分類表に掛けて要求 skill を union する。label は該当 token を出現順・重複
   除去して `, ` 連結した文字列 (cwd で絶対化しない、realpath しない)。
@@ -984,6 +995,108 @@ class GateTest(unittest.TestCase):
         self.deny(self.write_payload(self.rel("foo.py")))
         self.assertFalse(os.path.exists(self.fx.transcript))
         self.assertEqual(self.fx.git_calls(), [])
+
+    # -- 独立レビュー 1 巡目の所見からの契約訂正 (2026-08-27) -------------------------------
+    def test_c10_commit_on_a_later_line_is_still_gated(self) -> None:
+        """C10: 改行は command 境界。deny_compound_git_commit が改行区切りへ誘導する既定形。"""
+        self.seed([])
+        for command in (
+            "git add todos.md\ngit commit -m wip -- todos.md",
+            "git status\n  git commit -m wip -- todos.md",
+            "echo start\ngit commit -m wip -- todos.md",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(
+                    self.demanded(self.bash_payload(command), "commit-gate"),
+                    {"writing-todos"},
+                )
+
+    def test_c10_git_global_options_before_commit_are_gated(self) -> None:
+        """C10: avoid_cd が `git -C <repo>` へ誘導するので、global option 前置も呼出。"""
+        self.seed([])
+        hook_py = "files/claude_managed-hooks/g.py"
+        cases = {
+            "git -C /home/x/repo commit -m wip -- todos.md": {"writing-todos"},
+            "git --no-pager commit -m wip -- todos.md": {"writing-todos"},
+            "git -c user.name=x commit -m wip -- todos.md": {"writing-todos"},
+            f"git -C /home/x/repo commit -q -m wip -m body -- {hook_py}": {
+                "writing-code",
+                "writing-python",
+                "writing-skills",
+            },
+        }
+        for command, expected in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual(
+                    self.demanded(self.bash_payload(command), "commit-gate"), expected
+                )
+
+    def test_c9_concurrent_records_keep_every_key(self) -> None:
+        """C9: 並行 upsert の後も各 process の key が残る (再読で競合を検出して再試行)。"""
+        env = {
+            "PATH": self.fx.path,
+            "HOME": self.fx.home,
+            "GIT_CALL_LOG": self.fx.git_log,
+        }
+        skills = ("writing-code", "writing-python", "writing-bash", "writing-tests")
+        for _ in range(8):
+            self.fx.reset()
+            procs = [
+                subprocess.Popen(
+                    [sys.executable, HOOK, "record-skill"],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    env=env,
+                )
+                for _ in skills
+            ]
+            for proc, skill in zip(procs, skills, strict=True):
+                assert proc.stdin is not None
+                proc.stdin.write(json.dumps(self.record_payload(skill)))
+                proc.stdin.close()
+            for proc in procs:
+                self.assertEqual(proc.wait(timeout=60), 0)
+            with open(
+                os.path.join(self.fx.state_dir(), "main.json"), encoding="utf-8"
+            ) as handle:
+                state = json.load(handle)
+            self.assertEqual(set(state), set(skills), state)
+
+    def test_c9_corrupt_state_is_rebuilt_by_record(self) -> None:
+        """C9: corrupt state は record-skill が {} から作り直す (無音の恒久 fail-open を防ぐ)。"""
+        self.fx.write_state("{ broken")
+        self.allow(self.record_payload("writing-code"), "record-skill")
+        with open(
+            os.path.join(self.fx.state_dir(), "main.json"), encoding="utf-8"
+        ) as handle:
+            state = json.load(handle)
+        self.assertEqual(set(state), {"writing-code"})
+        self.assertEqual(
+            self.demanded(self.write_payload(self.rel("foo.py"))), {"writing-python"}
+        )
+
+    def test_c4_test_stem_ignores_case(self) -> None:
+        """C4: stem の比較も大小文字を無視する (`Foo.Test.PY` は test file)。"""
+        self.seed([])
+        self.assertEqual(
+            self.demanded(self.write_payload(self.rel("Foo.Test.PY"))),
+            {"writing-code", "writing-python", "writing-tests"},
+        )
+
+    def test_c11_session_id_with_separators_writes_nothing(self) -> None:
+        """inv9: session_id が path 分離子を含む payload は state を作らず allow。"""
+        session = "a/../../escaped"
+        self.allow(self.record_payload("writing-code", session=session), "record-skill")
+        found = [
+            os.path.join(directory, name)
+            for directory, _, names in os.walk(self.fx.tmp)
+            for name in names
+            if name == "main.json"
+        ]
+        self.assertEqual(found, [])
+        self.allow(self.write_payload(self.rel("foo.py"), session=session))
 
 
 if __name__ == "__main__":
