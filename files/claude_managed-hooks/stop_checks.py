@@ -1095,6 +1095,8 @@ def _emit(payload, turn, blocks, warnings):
             return 0
         sys.stderr.write("\n".join(blocks) + "\n")
         return 2
+    if payload.get("stop_hook_active"):
+        return 0  # a continuation Stop ends the turn: no warn, no marker
     if warnings:
         sys.stdout.write(json.dumps(_warn_json(warnings), ensure_ascii=False) + "\n")
         waste_prefix = "memory-reminder: prompt に無駄の指摘がある"

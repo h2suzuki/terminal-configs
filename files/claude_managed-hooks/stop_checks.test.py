@@ -28,6 +28,8 @@ test は `stop_checks.test.py` の `test_c<N>_*` に対応させる。
 `stop_hook_active` が真の Stop では block を warn へ降格し (advise-once)、行頭に
 `advise-once (block demoted to pass): ` を付けて exit 0 で返す。降格は pass 扱い (行は stderr、stdout は空、
 model には届かない — 同じ block を 2 度目の Stop で繰り返さないための出口であり、助言の配送ではない)。
+`stop_hook_active` が真の Stop では warn / context / turn-marker も出さない (harness は additionalContext を受けると
+model を再起動するので、継続 Stop で出し続けると無限に再起動する — 2026-08-27 に memory-reminder で実測)。
 payload が読めない / dict でない / 内部例外 — いずれも **fail-open** (exit 0 / stdout 空 / stderr 1 行)。
 test 方針: 3 出口それぞれを最小 payload で叩き、exit code と stdout/stderr の排他を assert。降格は同 payload の 2 回目で確認。
 
@@ -627,6 +629,13 @@ class ProtocolTest(StopChecksTest):
         self.assertBlocks(proc, "continuation-claim")
         self.assertIn("self-report-honesty", blocked(proc))
         self.assertGreaterEqual(len(block_lines(proc)), 2)
+
+    def test_c1_stop_hook_active_silences_warn_and_marker(self):
+        """C1: a continuation Stop emits nothing on stdout, or the harness restarts the model forever."""
+        self.fx.turn(say("調査しました"))
+        proc = run_hook(self.fx, "該当なしです。", stop_hook_active=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout, "", proc.stdout)
 
     def test_c1_stop_hook_active_demotes_block_to_advise_once(self):
         self.fx.turn(say("作業しました"))
