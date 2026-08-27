@@ -206,9 +206,13 @@ decision 型の陽性/陰性 (「決裁待ち」を含む open task で規則 3 
 `/var/lib/claude-rag-memory/claude-lessons-learned` (C19)。その配下 `org/**`・`user/**` と、payload `cwd` の repo に対応する
 `project/<id>/**` (`id` = `.git/config` の origin URL を memory_surface と同じ規則で正規化した `github.com-<owner>-<repo>`、
 worktree は共通 dir の config を読む、origin が無ければ cwd の `/` → `-`) の `*.md` の front matter を直接走査 (他 hook を
-import しない)。他 project の entry は出さない。`check:` 行を持ち、`when:` に `stop` を含む entry のみ対象 (現状 13 件 / `check:` 保有 17 件)。
-出力: 選ばれた entry ごとに `check:` 本文と path を additionalContext に載せ、末尾に固定文言
-「抵触するなら修正してから完了。しなければ何も書かない」を 1 回だけ付ける。`when:` に `stop` が無い entry は出さない。
+import しない)。他 project の entry は出さない。`check:` 行を持ち、`when:` に `stop` を含む entry のみ候補。候補のうち `keywords:` の語句 (`,` / `、` 区切り、小文字化) が
+当該 Stop の `final_text` (NFKC・小文字化) に含まれる entry だけを選び、一致語句数が最大の 1 件だけを出す (同数なら走査順の
+先頭)。同じ entry は 1 session に 2 回まで (latch `<transcript>.turns.memo` = path → 回数の JSON、書くのは行が stdout に
+載った Stop だけ)。一致が無ければ何も出さない — 無差別に全 entry を出す形は量で無視される (2026-08-27 に 12 件が毎 Stop
+出て実測)。
+出力: 選ばれた 1 件の `check:` 本文と path を additionalContext に載せ、末尾に固定文言
+「抵触するなら修正してから完了。しなければ何も書かない」を付ける。`when:` に `stop` が無い entry は出さない。
 同 family の第 2 規則: 直近 user prompt (harness 注入 prefix 除外後) に「無駄 / 浪費 / もったいない」があり、
 turn 内に persistence path への Write が無ければ 1 行を足す — **同一 prompt につき 1 回だけ** (K2(i))。
 第 2 規則の latch key は turn ではなく **prompt boundary の identity** (その user entry の `uuid`、無ければ `timestamp`)
@@ -446,14 +450,20 @@ class Fixture:
         ) as stream:
             json.dump(config, stream)
 
-    def memory_entry(self, name: str, check: str, when: str = "prompt stop") -> str:
+    def memory_entry(
+        self,
+        name: str,
+        check: str,
+        when: str = "prompt stop",
+        keywords: str = "調査, 契約",
+    ) -> str:
         path = os.path.join(self.memory, "org", name + ".md")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         body = (
             "---\n"
             f"name: {name}\n"
             "description: 契約 test の fixture entry\n"
-            "keywords: stop_checks 契約\n"
+            f"keywords: {keywords}\n"
             f"check: {check}\n"
             f"when: {when}\n"
             "---\n\n## 理由\n\nfixture\n"
@@ -1364,13 +1374,32 @@ class MemoryReminderTest(StopChecksTest):
         )
 
     def test_c16_closing_sentence_appears_once(self):
-        self.fx.memory_entry("alpha", "証跡を確認せよ")
-        self.fx.memory_entry("gamma", "台帳を確認せよ")
+        """Only the best keyword match surfaces, with the closing sentence once."""
+        self.fx.memory_entry("alpha", "証跡を確認せよ", keywords="調査, 証跡")
+        self.fx.memory_entry("gamma", "台帳を確認せよ", keywords="調査, 台帳")
         self.fx.turn(say("報告します"))
-        body = warn_body(run_hook(self.fx, "調査を終えました。" + TAIL))
+        body = warn_body(run_hook(self.fx, "証跡の調査を終えました。" + TAIL))
         self.assertIn("証跡を確認せよ", body)
-        self.assertIn("台帳を確認せよ", body)
+        self.assertNotIn("台帳を確認せよ", body)
         self.assertEqual(body.count(self.CLOSING), 1, body)
+
+    def test_c16_entry_without_a_keyword_hit_stays_silent(self):
+        self.fx.memory_entry("delta", "台帳を確認せよ", keywords="台帳")
+        self.fx.turn(say("報告します"))
+        proc = run_hook(self.fx, "調査を終えました。" + TAIL)
+        self.assertNotWarned(proc, self.FAMILY)
+
+    def test_c16_same_entry_surfaces_at_most_twice_per_session(self):
+        """The latch counts only Stops whose line reached stdout: a blocked Stop does not consume it."""
+        self.fx.memory_entry("alpha", "証跡を確認せよ")
+        self.fx.turn(say("報告します"))
+        self.assertBlocks(
+            run_hook(self.fx, "この後 調査を進めます。"), "continuation-claim"
+        )
+        text = "調査を終えました。" + TAIL
+        self.assertWarnsFamily(run_hook(self.fx, text), self.FAMILY)
+        self.assertWarnsFamily(run_hook(self.fx, text), self.FAMILY)
+        self.assertNotWarned(run_hook(self.fx, text), self.FAMILY)
 
     def test_c16_waste_keyword_line_appears_once_per_prompt(self):
         self.fx.write([prompt("この待ち時間は無駄では?"), say("報告します")])
@@ -1411,7 +1440,7 @@ class MemoryReminderTest(StopChecksTest):
                 os.path.join(base, name + ".md"), "w", encoding="utf-8"
             ) as stream:
                 stream.write(
-                    f"---\nname: {name}\ncheck: {name} を確認せよ\nwhen: stop\n---\n"
+                    f"---\nname: {name}\nkeywords: 調査\ncheck: {name} を確認せよ\nwhen: stop\n---\n"
                 )
         self.fx.turn(say("報告します"))
         body = warn_body(run_hook(self.fx, "調査を終えました。" + TAIL))
@@ -1431,7 +1460,7 @@ class MemoryReminderTest(StopChecksTest):
         os.makedirs(base, exist_ok=True)
         with open(os.path.join(base, "own.md"), "w", encoding="utf-8") as stream:
             stream.write(
-                "---\nname: own\ncheck: origin 由来の entry を確認せよ\nwhen: stop\n---\n"
+                "---\nname: own\nkeywords: 調査\ncheck: origin 由来の entry を確認せよ\nwhen: stop\n---\n"
             )
         self.fx.turn(say("報告します"))
         self.assertIn(
@@ -1816,7 +1845,9 @@ class ReviewCorrectionTest(StopChecksTest):
         self.fx.memory_entry("alpha", "証跡を確認せよ")
         broken = os.path.join(self.fx.memory, "org", "broken.md")
         with open(broken, "wb") as stream:
-            stream.write(b"---\nname: broken\ncheck: \xff\xfe check\nwhen: stop\n---\n")
+            stream.write(
+                b"---\nname: broken\nkeywords: \xe8\xaa\xbf\xe6\x9f\xbb\ncheck: \xff\xfe check\nwhen: stop\n---\n"
+            )
         self.fx.turn(say("報告します"))
         proc = run_hook(self.fx, "調査を終えました。" + TAIL)
         self.assertWarnsFamily(proc, "memory-reminder")

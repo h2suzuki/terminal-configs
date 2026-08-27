@@ -892,8 +892,50 @@ def _memory_entries(root, project_id):
                 check = fields.get("check", "")
                 when = fields.get("when", "")
                 if check and "stop" in when.lower():
-                    selected.append((check, path))
+                    selected.append((check, path, fields.get("keywords", "")))
     return selected
+
+
+def _keyword_hits(keywords, text):
+    phrases = [p.strip().lower() for p in re.split(r"[,、]", keywords) if p.strip()]
+    return sum(1 for phrase in phrases if phrase in text)
+
+
+def _memo_path(turn):
+    path = turn["transcript_path"]
+    if not path:
+        return ""
+    stem = path[: -len(".jsonl")] if path.endswith(".jsonl") else path
+    return stem + ".turns.memo"
+
+
+def _memo_counts(turn):
+    latch = _memo_path(turn)
+    counts = _load_json(latch) if latch else None
+    return counts if isinstance(counts, dict) else {}
+
+
+def _record_memo(turn, entry_path):
+    latch = _memo_path(turn)
+    if not latch:
+        return
+    try:
+        with open(latch, "a+", encoding="utf-8") as stream:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            stream.seek(0)
+            try:
+                counts = json.loads(stream.read() or "{}")
+            except ValueError:
+                counts = {}
+            if not isinstance(counts, dict):
+                counts = {}
+            counts[entry_path] = int(counts.get(entry_path, 0)) + 1
+            stream.seek(0)
+            stream.truncate()
+            json.dump(counts, stream, ensure_ascii=False)
+            stream.flush()
+    except (OSError, TypeError, ValueError):
+        return
 
 
 def _waste_line(turn):
@@ -949,12 +991,18 @@ def _memory(payload, turn):
         return []
     lines = []
     entries = _memory_entries(root, _project_id(payload.get("cwd")))
-    if entries:
-        details = " ".join(f"{check} ({path})" for check, path in entries)
+    text = unicodedata.normalize("NFKC", turn["final_text"]).lower()
+    counts = _memo_counts(turn)
+    best = None
+    for check, path, keywords in entries:
+        hits = _keyword_hits(keywords, text)
+        if hits and counts.get(path, 0) < 2 and (best is None or hits > best[0]):
+            best = (hits, check, path)
+    if best:
+        turn["memo_path"] = best[2]
         lines.append(
-            "memory-reminder: "
-            + details
-            + " 抵触するなら修正してから完了。しなければ何も書かない"
+            f"memory-reminder: {best[1]} ({best[2]})"
+            " 抵触するなら修正してから完了。しなければ何も書かない"
         )
     waste = _waste_line(turn)
     if waste:
@@ -1102,6 +1150,8 @@ def _emit(payload, turn, blocks, warnings):
         waste_prefix = "memory-reminder: prompt に無駄の指摘がある"
         if any(line.startswith(waste_prefix) for line in warnings):
             _record_waste(turn)
+        if turn.get("memo_path"):
+            _record_memo(turn, turn["memo_path"])
         return 0
     marker = _turn_marker(payload, turn)
     if marker:
