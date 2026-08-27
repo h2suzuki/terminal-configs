@@ -781,7 +781,11 @@ def _emoji_led(line):
     if not stripped:
         return False
     code = ord(stripped[0])
-    return 0x1F000 <= code <= 0x1FAFF or 0x2500 <= code <= 0x2BFF
+    return (
+        0x1F000 <= code <= 0x1FAFF
+        or 0x2300 <= code <= 0x23FF
+        or 0x2500 <= code <= 0x2BFF
+    )
 
 
 def _communication(scan, prompt_text, tasks):

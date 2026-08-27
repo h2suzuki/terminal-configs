@@ -189,7 +189,7 @@ test 方針: 4 種の検出語 × 根拠 tool 有無 = 8 case。全 case で exi
 ### C15 communication-lint (warn)
 
 入力: `final_text` (C3 の正規化・除去後) と直近の user prompt。次の 5 規則を 1 family で持つ。
-1. 最終非空行が絵文字始まりでも `?` / `？` 終端でもない。
+1. 最終非空行が絵文字始まりでも `?` / `？` 終端でもない。絵文字 = U+1F000〜1FAFF / U+2300〜23FF (⏸ ⌛ ⏳) / U+2500〜2BFF のいずれかで始まる行。
 2. 自己採番参照 (「候補 12」「選択肢 3」)。数量表現 (「候補 17 件」「案 3 つ」) は除外 (C3)。
 3. 最終行が疑問文なのに、Task store に open な decision 型 task が無い。
 4. 直近 user prompt が 20 字以下の短文決裁で、open な decision 型 task がある (記録漏れ)。
@@ -1351,6 +1351,15 @@ class CommunicationLintTest(StopChecksTest):
         self.assertNotWarned(
             run_hook(self.fx, "調査を終えました。" + TAIL), self.FAMILY
         )
+
+    def test_c15_technical_symbol_emoji_led_conclusion_passes(self):
+        """C15 rule 1: U+2300 block (⏸ U+23F8, ⌛ U+231B) counts as emoji-led."""
+        self.fx.turn(say("報告します"))
+        for lead in ("\u23f8\ufe0f", "\u231b"):
+            self.assertNotWarned(
+                run_hook(self.fx, "調査を終えました。\n\n" + lead + " 停止中。"),
+                self.FAMILY,
+            )
 
 
 class MemoryReminderTest(StopChecksTest):
