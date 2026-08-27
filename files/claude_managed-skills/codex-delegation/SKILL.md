@@ -38,7 +38,7 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
    - **`claude_lang_lint` を worktree diff に必須実行する**: `claude_lang_lint --repo <workspaceRoot>` が ASCII baseline file への CJK 追加を機械検出する（日本語が正の file は baseline 判定で自動除外、新規の意図的日本語 file は `--allow` で指定）。fail は fix round 行き。LLM レビューの注意力に依存しない決定的 gate
    - server を抱えた run では、codex 側の残存検査 (Rules の hang-proof 節) と別に、司令塔側でも workspaceRoot で scope した `pgrep -af <workspaceRoot>` を打ち、残存 process ゼロを確認する（二重の網）
    - 通過後は隔離 worktree 側で commit して本線へ取り込む
-7. **fix round**: 所見を番号付きで発注書または追記 file にまとめ、同一 thread の resume で発注する。発注側が既に直した箇所（trivial fix）は「re-add しない」と明記する
+7. **fix round**: 所見を番号付きで発注書または追記 file にまとめ、同一 thread の resume で発注する。発注側が既に直した箇所（trivial fix）は「re-add しない」と明記する。3 巡目以降の fix 発注書は `## 処置の種別` で閉じた選択肢（削除・縮小 / 契約の訂正 / 構造化 / bounded-risk 受入 / 廃棄）の 1 つを名乗る（`codex_order_lint` が要求、`--new fix` の雛形が節を置く）
 8. **セッション棚卸し**: 受け入れ・commit 完了後、state dir の job record 群（`jobs/*.json`）を読んで当該委譲の残存 running を確認し、残っていれば cancel をユーザーへ依頼して閉じる（/codex:cancel、または sentinel が印字する cancel コマンドをホスト側ターミナルで実行してもらう）。発注文の指示では防げない codex session 自体の放置（1 日 10h 級の滞留要因）を lifecycle 終端で回収する
 
 ## Rules

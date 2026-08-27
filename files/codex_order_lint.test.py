@@ -24,7 +24,8 @@ Contract (each claim maps to the tests named test_c<N>_*):
       No scope-reason, target or verdict-item requirement exists.
   C5  The seven required sections (スコープ / 成果物 / 作業量上限 / 実行してよい command /
       適用される既存裁定 / 出力言語規約 / 所要見積もり) each give `必須の節がない: ## {節}` when no
-      heading of level 2 or deeper starts with that name.
+      heading of level 2 or deeper starts with that name. A section body runs to the next heading of
+      the same or a shallower level, so `###` subheadings and their text belong to the body.
   C6  Report path: `[\w./-]*-report\.md` over the whole text -- zero matches is one finding, two or
       more distinct matches is `報告書 path が食い違う: {sorted / joined}`, exactly one feeds
       `report_path` in the metadata.
@@ -38,7 +39,7 @@ Contract (each claim maps to the tests named test_c<N>_*):
       commit-refusal phrase, and the literal `触らない` -- and the `## 実行してよい command` body
       must contain a fence opener.
   C11 fix contract: a document is a fix order when it carries a `# fix round N:` H1 or a
-      `## 修正方式` section. It needs exactly one `review-kind: none`, exactly one round H1, a
+      `## 修正方式` section (prefix match, so a note after the name is fine). It needs exactly one `review-kind: none`, exactly one round H1, a
       non-empty `## 前巡 verdict` from round 2 on, non-empty `## 2 方向分析` and `## 掃引`, and every
       `所見` line of `## 修正方式` naming 仕様縮小 / 削除 / 既存集約 / 機構追加. `## 全数列挙` and
       `## 依存閉包棚卸し` are not required, and naming 機構追加 pulls in no further section.
@@ -53,12 +54,13 @@ Contract (each claim maps to the tests named test_c<N>_*):
       order_document bool / review_kind str|null / round int|null / scope str|null /
       methods list[{finding: int|null, methods: list[str]}] / has_previous_verdict bool /
       report_path str|null / findings list[str]. The exit code still follows the findings.
-  C15 `--new plain|fix|review PATH` seeds from the codex-delegation template directory (deployed
-      copy first, repo-adjacent second; both ship the same three files) and prints
+  C15 `--new plain|fix|review PATH` seeds from the codex-delegation template directory (repo-adjacent
+      copy first, deployed copy second; both ship the same three files) and prints
       `{path}: {template} から作成した`. It fills `{stem}-report.md`, `{stem}-probe.txt`,
       `# {stem} 報告書` and the title `: {stem}`, and leaves every other `未記入` slot. `fix` numbers
-      the round as max(sibling rounds)+1 and drops `## 前巡 verdict` at round 1. An existing path
-      exits 3 without overwriting it.
+      the round as max(sibling rounds)+1, drops `## 前巡 verdict` at round 1 and `## 処置の種別` below
+      round 3. An existing path exits 3 without overwriting it; an unwritable path prints one reason
+      line on stdout and exits 2.
   C16 The retired judgements never come back: no finding may contain `機構追加には`, `逆行している`,
       `が欠番`, `終端 token` together with `書式例`, `target:`, `verdict 要件`, `scope-reason`,
       `裁定の採番`, `2 倍でない` or `none と本文` -- neither over the embedded corpus nor over
@@ -948,6 +950,69 @@ class OrderLintTest(unittest.TestCase):
                 self.check(text, expected)
         clean = [name for name, _, expected in CORPUS if not expected]
         self.assertEqual(clean, ["send-gate-order.md", "sentinel-r80-review-order.md"])
+
+    # -- independent review corrections (P0-1, P0-2, P1-1, P1-2, P1-3) ---------------------------
+    def test_c11_method_heading_may_carry_a_note(self) -> None:
+        noted = swap(fix_order(2, ""), "## 修正方式\n", "## 修正方式 (所見 1 件)\n")
+        self.check(noted, [])
+        self.check(swap(noted, "# fix round 2: 例", "# 発注書: 例"), [FIX_HEADER])
+
+    def test_c5_subheadings_belong_to_the_section_body(self) -> None:
+        self.check(
+            swap(
+                CONFORMING,
+                "## 適用される既存裁定 (これに反する指摘は不成立)\n",
+                "## 適用される既存裁定 (これに反する指摘は不成立)\n\n### 委譲裁定\n",
+            ),
+            [],
+        )
+        self.check(
+            swap(
+                CONFORMING,
+                "## 実行してよい command\n",
+                "## 実行してよい command\n\n### 読み取り系\n",
+            ),
+            [],
+        )
+        text = fix_order(3)
+        for heading, sub in (
+            ("## 前巡 verdict\n", "### verdict 本文\n"),
+            ("## 2 方向分析\n", "### 方向 1\n"),
+            ("## 掃引\n", "### 欠陥 class A\n"),
+            ("## 処置の種別\n", "### 判断\n"),
+        ):
+            self.check(swap(text, heading, f"{heading}\n{sub}"), [])
+
+    def test_c2_fences_hide_prohibitions(self) -> None:
+        text = swap(CONFORMING, "`fuser -k` /", "`fuser -x` /")
+        text = swap(text, "- commit もしない", "- 差分を残さない")
+        text = swap(text, "**触らない path**", "**読まない path**")
+        quoted = (
+            text
+            + "\n## 前巡の発注書 (引用)\n\n```\n**触らない path** は上記以外の全て。 "
+            "commit もしない。 `fuser -k` / `pkill` は禁止。\n```\n"
+        )
+        self.check(quoted, [NO_KILL, NO_COMMIT, NO_TOUCH])
+
+    def test_c15_new_reports_an_unwritable_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "missing", "x.md")
+            out = run("--new", "plain", path)
+        self.assertEqual(out.returncode, 2, out.stderr)
+        self.assertTrue(out.stdout.startswith(f"{path}: "), out.stdout)
+        self.assertEqual(out.stderr, "")
+
+    def test_c15_new_fix_seeds_the_treatment_from_round_3(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = [os.path.join(tmp, name) for name in ("a.md", "b.md", "c.md")]
+            for path in paths:
+                self.assertEqual(run("--new", "fix", path).returncode, 0)
+            texts = [read(path) for path in paths]
+            third = run(paths[2])
+        self.assertNotIn("## 処置の種別", texts[0])
+        self.assertNotIn("## 処置の種別", texts[1])
+        self.assertIn("## 処置の種別", texts[2])
+        self.assertNotIn("必須の節がない: ## 処置の種別", third.stdout)
 
 
 if __name__ == "__main__":

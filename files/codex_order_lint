@@ -46,15 +46,16 @@ TEMPLATE_KINDS = {
     "review": "template-review-order.md",
 }
 TEMPLATE_DIRS = (
-    "/etc/claude-code/skills/codex-delegation",
     os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "claude_managed-skills",
         "codex-delegation",
     ),
+    "/etc/claude-code/skills/codex-delegation",
 )
 
 HEADING_RE = re.compile(r"^#{2,}\s+(\S.*?)\s*$")
+LEVEL_TWO_END_RE = re.compile(r"^#{1,2}\s")
 FENCE_RE = re.compile(r"^\s*```")
 REPORT_PATH_RE = re.compile(r"[\w./-]*-report\.md")
 TOKEN_RE = re.compile(r"\b([A-Z][A-Z0-9_]{3,})\b")
@@ -129,13 +130,17 @@ def sections(lines: list[str]) -> list[tuple[str, int, int]]:
     """[(heading, first body line, end line)] for every heading outside a fence."""
     live = set(outside_fences(lines))
     marks = [
-        (i, m.group(1))
+        (i, m.group(1), len(line) - len(line.lstrip("#")))
         for i, line in enumerate(lines)
         if i in live and (m := HEADING_RE.match(line))
     ]
     return [
-        (name, i + 1, marks[k + 1][0] if k + 1 < len(marks) else len(lines))
-        for k, (i, name) in enumerate(marks)
+        (
+            name,
+            i + 1,
+            next((j for j, _n, d in marks[k + 1 :] if d <= depth), len(lines)),
+        )
+        for k, (i, name, depth) in enumerate(marks)
     ]
 
 
@@ -189,7 +194,7 @@ def level_two_body(
         (
             index
             for index in range(start, len(lines))
-            if index in live and HEADING_RE.match(lines[index])
+            if index in live and LEVEL_TWO_END_RE.match(lines[index])
         ),
         len(lines),
     )
@@ -255,7 +260,7 @@ def check_rulings(lines: list[str]) -> list[str]:
 
 
 def check_prohibitions(lines: list[str]) -> list[str]:
-    whole = "\n".join(lines)
+    whole = "\n".join(lines[index] for index in outside_fences(lines))
     stated = {
         NO_KILL: "fuser -k" in whole and "pkill" in whole,
         NO_COMMIT: bool(NO_COMMIT_RE.search(whole)),
@@ -286,7 +291,7 @@ def check_review_contract(lines: list[str]) -> list[str]:
 
 
 def fix_method_entries(lines: list[str]) -> list[str]:
-    method = level_two_body(lines, "修正方式")
+    method = level_two_body(lines, "修正方式", prefix=True)
     if method is None:
         return []
     return [
@@ -348,7 +353,7 @@ def check_treatment(lines: list[str]) -> list[str]:
 
 def check_fix_contract(lines: list[str], path: str) -> list[str]:
     rounds = fix_round_values(lines)
-    method = level_two_body(lines, "修正方式")
+    method = level_two_body(lines, "修正方式", prefix=True)
     if not rounds and method is None:
         return []
     findings: list[str] = []
@@ -477,6 +482,8 @@ def render_template(
         text = text.replace("fix round N:", f"fix round {round_number}:")
         if round_number == 1:
             text = drop_level2_section(text, "前巡 verdict")
+        if round_number < TREATMENT_MIN_ROUND:
+            text = drop_level2_section(text, "処置の種別")
     return text
 
 
@@ -499,6 +506,9 @@ def new_order(kind: str, path: str) -> int:
     except FileExistsError:
         print(f"{path}: 既に存在する")
         return 3
+    except OSError as error:
+        print(f"{path}: 書き出せない ({error})")
+        return 2
     print(f"{path}: {filename} から作成した")
     return 0
 
