@@ -102,8 +102,9 @@ Contract (claims are verbatim from the draft; each maps to the tests named test_
   成否によらず何も出さない (決裁 3)。
   test 方針: 成功 payload → gate が allow に変わる / 失敗 payload → deny のまま、を assert。
   並行 record-skill の後、state dir に残るのは `main.json` 1 本で、中身は有効な JSON dict。
-  並行 upsert の後も各 process が書いた key は全て残る (書込後に再読して自分の key と読取時点の
-  key 集合が残っているか検証し、崩れていれば再試行、上限 5 回。lock は使わない)。state が
+  並行 upsert の後も各 process が書いた key は全て残る (書込後 50 ms と 100 ms の 2 回再読して自分の
+  key と読取時点の key 集合が残っているか検証し、崩れていれば再試行、上限 5 回。lock は使わない。
+  検証の後に着地する遅い書込は検出できず、その場合は当該 skill の再 invoke で回復する = 受け入れた残余 risk)。state が
   corrupt (非 JSON / 非 dict / 不正 record) のときは `{}` から作り直して upsert する
   (corrupt のまま session 終了まで gate を無効化しない)。
 
