@@ -16,7 +16,7 @@ codegraph / codex が使える環境での役割分担 (managed CLAUDE.md「ツ�
 4. **委譲する時は `/codex:rescue <spec>`**: 定型で境界が狭い仕事は `--model gpt-5.6-luna` (Luna)、 曖昧・横断・高リスクは `--model gpt-5.6-sol` (Sol、 effort の上限は `xhigh`)。 長時間は `--background`、 進捗 `/codex:status`、 結果 `/codex:result`、 中断 `/codex:cancel`。 前回 run の継続は `--resume`、 仕切り直しは `--fresh`。 spec は Goal / Scope / Constraints / Done when / Return の 5 項目で書く。 5 項目に圧縮できず会話文脈の再掲が要る、 60 分超で 20–45 分の独立単位に分割できない、 `--fresh` の後も進展がない — のいずれかで `/codex:transfer` をユーザーに提案する (Claude は起動できない)。
 5. **委譲しない時の担い手**: Claude が直接処理する。 subagent-gate の 4 条件のいずれかを満たす時だけ subagent を使い、 機械的で境界が明確な作業は sonnet、 設計判断・レビュー・裁定を含む作業は opus。 effort は既定を継承し、 review / judgment 層だけ上げ、 機械的作業は下げる。
 6. **Claude がレビュー**: codex が返したコードを敵対的 / 受け入れレビューし、 バグ・仕様逸脱・副作用を検査する。 patch 反映も Claude が行う (実装でなくレビューの一部)。 回帰レビューは opus subagent (発注書のみ渡す・effort 高・実装と同族でよいが別 agent) を milestone (機能完成 / test 成功 / commit・PR 形成 / merge 前) で回し、 毎 edit 後には回さない。 実装・受け入れ・検証設計・認定を同一 agent が兼務しない (兼務は多巡 loop の再発条件)。
-7. **高リスク変更は cross-model 第二レビュー**: auth・認可・data-loss・migration・retry・idempotency・race・rollback・cache 整合性に触れる変更は規模不問で `/codex:adversarial-review` (Sol xhigh) を追加する。 ユーザー指示時も同様。 それ以外で codex の敵対レビューを既定にしない。
+7. **高リスク変更は cross-model 第二レビュー**: auth・認可・data-loss・migration・retry・idempotency・race・rollback・cache 整合性に触れる変更は規模不問で codex の第二レビューを追加する。 経路は review 雛形 (`codex_order_lint --new review`) の発注書を `/codex:rescue` に渡す task (`--model gpt-5.6-sol --effort xhigh`、 報告書のため `--write`、 code 変更は発注書で禁止) — `/codex:adversarial-review` command はユーザー起動専用で、 rescue subagent は review 系 subcommand を呼ばず task に変換する (2026-08-27 実測)。 雛形の「姿勢・攻撃面・所見の基準」節が plugin 同梱 template と同等の framing を担保する。 ユーザー指示時も同様。 それ以外で codex の敵対レビューを既定にしない。
 
 ## Rules
 
@@ -28,7 +28,7 @@ codegraph / codex が使える環境での役割分担 (managed CLAUDE.md「ツ�
 
 ## Output
 
-検索は codegraph の適切なツール、 境界超えの実装は `/codex:rescue` 委譲 → Claude レビュー、 境界内は Claude 直接か subagent、 高リスクは `/codex:adversarial-review` 追加、 milestone で opus subagent の回帰レビュー。
+検索は codegraph の適切なツール、 境界超えの実装は `/codex:rescue` 委譲 → Claude レビュー、 境界内は Claude 直接か subagent、 高リスクは review 雛形の発注書で `/codex:rescue` の task を追加、 milestone で opus subagent の回帰レビュー。
 
 ## Related
 

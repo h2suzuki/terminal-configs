@@ -190,7 +190,7 @@ def writes_handoff_doc(text: str) -> bool:
         return False
     if "<<" in text:  # heredoc の中身は読めない
         return True
-    # punctuation_chars=True は `<` `>` を切り出す (codex_worktree_gate の roster は redirect 非対象)。
+    # punctuation_chars=True は `<` `>` を切り出す (redirect は roster 照合の対象外)。
     lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     try:

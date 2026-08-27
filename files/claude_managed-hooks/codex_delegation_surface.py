@@ -60,7 +60,7 @@ DELEGATE_MSG = (
     "進捗 /codex:status、 結果 /codex:result、 中断 /codex:cancel、 前回 run の継続は "
     "--resume、 仕切り直しは --fresh)。 Claude は仕様明文化・レビュー・バグ出しを担い、 codex "
     "が返したコードを受入レビューします (auth / data-loss / race / migration 等の高リスクは"
-    "規模不問で /codex:adversarial-review の独立 cross-model 第二レビュー)。 発注書・worktree "
+    "規模不問で review 雛形の発注書を /codex:rescue に渡す独立 cross-model 第二レビュー)。 発注書・worktree "
     "隔離・走行監視・完了判定・fix round の lifecycle 規律は `codex-delegation` skill を "
     "invoke。 doc 編集・codex 利用不可時は self-implement で構いません。"
 )
@@ -70,8 +70,9 @@ REVIEW_MSG = (
     "レビューを回避)。 tool-role-delegation Process 6: コードを"
     "受入レビューし、 バグ・仕様逸脱・副作用を検査してください (patch 反映も"
     "レビューの一部)。 auth / data-loss / race / rollback 等の高リスク変更は "
-    "`/codex:adversarial-review` で codex の独立 cross-model 第二レビューを追加して"
-    "ください。 完了判定〜受入レビュー〜fix round の規律は `codex-delegation` skill を invoke。"
+    "review 雛形 (`codex_order_lint --new review`) の発注書を `/codex:rescue` に渡して "
+    "codex の独立 cross-model 第二レビューを追加してください。 完了判定〜受入レビュー〜"
+    "fix round の規律は `codex-delegation` skill を invoke。"
 )
 
 
