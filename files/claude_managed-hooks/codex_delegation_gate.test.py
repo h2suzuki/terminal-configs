@@ -38,9 +38,10 @@ Contract (each claim maps to the tests named test_c<N>_*):
       shell, `source` / `.`, alias and function bodies, `bash -s` and `env -S`. `command -v|-V name`
       looks a name up and is not a launch. `npx` / `bunx` / `uvx` are wrappers whose operand is the
       program (npx -p/--package/-c/--call take a value). A heredoc delimiter is any quoted or
-      backslash-prefixed word (`<<\EOF`, `<<'E.OF'`); `<<<` is a here-string, not a heredoc. A `<<`
-      inside quotes is text, and a body ends only on a line equal to the delimiter (leading tabs are
-      stripped for `<<-` only).
+      backslash-prefixed word (`<<\EOF`, `<<'E.OF'`); `<<<` is a here-string, not a heredoc. A marker
+      counts even inside quotes (so a `"$(cat <<'EOF' ... EOF)"` prompt is a body; a `<<` inside a plain
+      quoted string hides the following lines -- accepted), and a body ends only on a line equal to the
+      delimiter (leading tabs are stripped for `<<-` only).
       `bash -c -- <string>` skips the `--`.
   C3  [route] / [cli]: without agent_id every companion subcommand and every delegating codex CLI form
       (bare `codex`, exec, apply, resume, review, cloud ...) is denied; login / logout / mcp / completion /
@@ -1011,14 +1012,12 @@ class GateTest(unittest.TestCase):
         self.assertIn("env -C", reason)
 
     # -- final recheck trivial fixes (orderer) -------------------------------------------------
-    def test_c2_heredoc_marker_inside_quotes_is_text(self) -> None:
-        self.deny(
-            self.bash(
-                f'git commit -m "docs: describe <<EOF handling" -- docs/x.md\n{NODE} task x'
-            ),
-            "route",
+    def test_c2_heredoc_prompt_inside_substitution_is_a_body(self) -> None:
+        command = (
+            f"{NODE} task \"$(cat <<'EOF'\nread drafts/a.md and drafts/b.md\nEOF\n)\""
         )
-        self.deny(self.bash("rg -n '<<EOF' docs/\ncodex exec x"), "cli")
+        self.allow(self.rescue(command))
+        self.deny(self.bash(command), "route")
 
     def test_c2_heredoc_ends_only_on_the_exact_delimiter(self) -> None:
         self.allow(self.bash("cat > d.md <<'EOF'\nline\nEOF \ncodex exec 'fix'\nEOF"))

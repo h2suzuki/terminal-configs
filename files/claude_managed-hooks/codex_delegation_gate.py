@@ -103,7 +103,6 @@ def _remove_heredoc_bodies(command: str) -> str:
         output.append(line)
         quoted: str | None = None
         marker_line: list[str] = []
-        outside: list[bool] = []
         for index, char in enumerate(line):
             if char in "'\"" and (index == 0 or line[index - 1] != "\\"):
                 quoted = None if quoted == char else char if quoted is None else quoted
@@ -111,11 +110,7 @@ def _remove_heredoc_bodies(command: str) -> str:
             if comment and (index == 0 or line[index - 1].isspace()):
                 break
             marker_line.append(char)
-            outside.append(quoted is None)
-        marker_text = "".join(marker_line)
-        match = next(
-            (m for m in HEREDOC_RE.finditer(marker_text) if outside[m.start()]), None
-        )
+        match = HEREDOC_RE.search("".join(marker_line))
         if match:
             strip_tabs, delimiter = bool(match.group(1)), match.group(3)
     return "".join(output)
