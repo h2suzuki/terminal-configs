@@ -387,16 +387,15 @@ def _done_state(turn, scan):
     lower_commands = commands.lower()
     failures = []
     checks = (
-        (r"\bcommit\b", "git commit", "commit"),
-        (r"\bpush\b", "git push", "push"),
-        (r"\bmerge\b", "git merge", "merge"),
+        (r"\bcommit\b", r"\bgit\b(?:\s+-{1,2}\S+(?:[ =]\S+)?)*\s+commit\b", "commit"),
+        (r"\bpush\b", r"\bgit\b(?:\s+-{1,2}\S+(?:[ =]\S+)?)*\s+push\b", "push"),
+        (r"\bmerge\b", r"\bgit\b(?:\s+-{1,2}\S+(?:[ =]\S+)?)*\s+merge\b", "merge"),
     )
     gate_pattern = r"(?:\bruff\b|\bty\b|\btest\b|変異|\blint\b|\bselftest\b|\bgate\b)"
     for sentence in done_sentences:
         for pattern, evidence, label in checks:
-            if (
-                re.search(pattern, sentence, re.IGNORECASE)
-                and evidence not in lower_commands
+            if re.search(pattern, sentence, re.IGNORECASE) and not re.search(
+                evidence, commands, re.IGNORECASE
             ):
                 failures.append(label)
         gate = re.search(gate_pattern, sentence, re.IGNORECASE)

@@ -76,7 +76,7 @@ test 方針: 素の宣言で block、3 形式それぞれと条件提示・fence
 commit / gate / E2E 言及は数えない (「完了しました。lint は未実施です」は block しない)。gate 語は語境界で照合する
 (`ty` は `\bty\b`、`Priority` に当てない)。
 出力: 言及した種別の証跡が turn 内に無ければ block。証跡の対応は逐語で —
-commit/push/merge → `bash_commands` の `git commit` / `git push` / `git merge`、
+commit/push/merge → `bash_commands` の `git commit` / `git push` / `git merge` (`-C <dir>` / `-c <k=v>` / `--<opt>` の前置を許す)、
 gate/E2E → `bash_commands` に当該語 (大小文字無視) を含む command が 1 件以上、
 実行可能拡張子 (`.py .sh .mjs .js`) を `edited_paths` に持つなら同 turn の Bash でその path が実行されていること、
 UI 拡張子 (`.css .scss .tsx .jsx .vue .svelte .html`) を編集したなら screenshot tool の呼び出し。
@@ -784,6 +784,19 @@ class DoneStateLedgerTest(StopChecksTest):
     def test_c5_commit_claim_requires_a_commit_command(self):
         self.check("commit まで完了しました。", [bash("git commit -m x")], False)
         self.check("commit まで完了しました。", [bash("git status")], True)
+
+    def test_c5_git_global_options_still_count_as_evidence(self):
+        """C5: the evidence matcher accepts git global options before the subcommand."""
+        self.check(
+            "commit まで完了しました。",
+            [bash("git -C /repo commit -q -m x -- a.py")],
+            False,
+        )
+        self.check(
+            "push は完了です。",
+            [bash("git -C /repo --no-pager push origin main")],
+            False,
+        )
 
     def test_c5_push_and_merge_claims_require_the_matching_command(self):
         self.check("push は完了です。", [bash("git push origin main")], False)
