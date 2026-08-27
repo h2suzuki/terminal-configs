@@ -40,11 +40,11 @@ Exit Criteria:
 - [x] 台帳の再発防止 — `frozen_docs_gate.py` (HEAD に `凍結 (日付)` 行を持つ file の行数増加 commit を
   deny し、逃がし先 `drafts/journal/` を案内) を 2026-08-26 に配備、凍結 doc +1 行の commit が deny
   されることを E2E で実測
-- [ ] 実案件を §5.1 で回し、§5.6 の指標で判定した — ケース 1 = sentinel 書き直し (2026-08-26:
-  変異 0/4・1 巡で出荷・配備済み)、ケース 2 = todos 構造 gate (契約の訂正で再入場 1 回)。
-  残り = 配備後 2 週間 (〜2026-09-09) の実運用で用途内 P0 が 0 であること。外れたら loop
-  approach を捨てる。ケース 3〜7 = hook / CLI 5 本の書き直し (Medium「方法論の実証」block は
-  2026-08-27 決裁で本 block へ併合)
+- [ ] 実案件を §5.1 で回し、§5.6 の指標で判定した — ケース 1 = sentinel (変異 0/4・1 巡)、ケース 2 = todos 構造
+  gate (再入場 1 回)、ケース 3 = delegation gate (2026-08-27: 変異 0/4、再入場 1 回、再確認の合成入力 P0 3 件は
+  bounded-risk 受入)、ケース 4 = order_lint (変異 0/4、3 巡 + trivial fix 2 件)。残り = ケース 5〜7 (stop_checks /
+  skill_reminder_gate) と、配備後 2 週間 (ケース 1・2 は 〜2026-09-09、3・4 は 〜2026-09-10) の実運用で用途内
+  P0 が 0 であること。外れたら loop approach を捨てる (Medium「方法論の実証」block は 2026-08-27 に本 block へ併合)
 
 Work file: `docs/adversarial-loop-meta-evaluation.md` (評価の正本)、
 `drafts/loop-exit-opinion-order-report.md` (第三者意見書・gitignore)
@@ -80,11 +80,11 @@ Exit Criteria:
 - [x] 到達経路を測って回す機構を配備した (2026-08-26、aa3c1dd) — surface の (entry, session) 上限 2 回と
   `claude_memory_sync --reach` (30 日 emit 0 / ≥ 20 の列挙。初回: never 70 / hot 6)。30 日後に到達可能
   entry の未到達率が 43% → 25% 未満かで判定
-- [ ] 予告 entry 3 件 (`architecture_before_review` / `self_build_impulse` / `threat_model_in_review_order`) を
-  codex_order_lint の `## 処置の種別` gate へ昇格して退役した (gate は「肥大化した hook と CLI」block の
-  order_lint 書き直しに含める。`self_build_impulse` は 2026-08-26 に `feedback_self_build_over_delegation`
-  へ統合済みなので gate 着地時は部分 cover 注記に留める。retrieval で届かせる backtest は行わない —
-  発話証跡なし。gate 昇格合意 (2026-08-26 00:46「それなら良さそうです」) からの派生であり決裁ではない。要確認)
+- [x] 予告 entry 3 件 (`architecture_before_review` / `self_build_impulse` / `threat_model_in_review_order`) を
+  codex_order_lint の `## 処置の種別` gate へ昇格して退役した — 2026-08-27 に閉じた: gate 着地 (order_lint 配備) に
+  伴い 2 entry へ部分 cover 注記 (退役はしない — 構造の問い / うっかり基準の判断が固有)、review 雛形に `## 守る相手`
+  節を追加。`self_build_impulse` は 2026-08-26 に `feedback_self_build_over_delegation` へ統合済み。retrieval の
+  backtest は行わない (発話証跡なし)
 
 Work file: `last-session-handoff.md` (再開手順)、`~/.claude/hooks/memory_surface.py` (surface 方針の実装)、
 `/var/lib/claude-rag-memory/memory_index.sqlite3` の `inject_log` (emit / mismatch の実測)

@@ -262,7 +262,7 @@ Spolsky 2000 / Fowler strangler fig: 全面 rewrite への歯止め、seam を�
 | 台帳の逃がし先 + 凍結 gate | 完了・配備済み (`frozen_docs_gate.py`、HEAD の `凍結 (日付)` 行を持つ file の行数増加 commit を deny。fix round 1 回) |
 | memory: advisory surface の削除 | 完了・配備済み (2026-08-26、`11005b1`) |
 | memory: 予告 entry の lint 昇格・退役、重複 cluster の統合、衛生 gate | 決定的に検出できる 7 件を blocking gate (`deny_command_patterns` / `deny_llm_call_in_hook` / `playwright_listener_gate`) へ昇格して配備、entry 10 件を退役、露出回転 (session 上限 2) と `claude_memory_sync --reach` を配備 (2026-08-26)。残り = 衛生 gate (近接重複・org 上限 60)、cluster 統合、予告 entry 3 件の `## 処置の種別` gate 昇格 (todos.md が正本) |
-| 肥大化 script の書き直し (production 行: `stop_checks` 2,431 / `skill_reminder_gate` 1,073 / `codex_delegation_gate` 1,038 / `codex_worktree_gate` 1,035 / `codex_order_lint` 592) | 順序 (delegation・worktree gate → stop_checks → skill_reminder → order_lint) と scope (契約 test で deny 挙動を固定し実 corpus を通す最小実装) を合意。次の session で実施 |
+| 肥大化 script の書き直し (production 行: `stop_checks` 2,431 / `skill_reminder_gate` 1,073 / `codex_delegation_gate` 1,038 / `codex_worktree_gate` 1,035 / `codex_order_lint` 592) | 2026-08-27: delegation + worktree gate → 1 本 741 行 (66 test・変異 0/4、独立レビュー 3 巡で P0 → 契約の訂正で再入場 1 回 → 3 巡で打ち止め、合成入力の P0 3 件は bounded-risk 受入)、order_lint → 557 行 (36 test・変異 0/4、3 巡 + trivial fix 2 件)。両方配備済み。stop_checks / skill_reminder_gate は契約 test を執筆中 |
 
 作業台帳は `todos.md` の High 2 block (Exit Criteria) が正本。
 
