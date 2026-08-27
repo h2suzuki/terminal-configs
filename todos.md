@@ -130,15 +130,20 @@ Exit Criteria:
 - [x] 着手順と protocol を合意した (2026-08-26): codex_delegation_gate + codex_worktree_gate → stop_checks →
   skill_reminder_gate → codex_order_lint。契約 test は command 文字列で決まる分岐を実 corpus で、状態依存の
   分岐を合成 case で固定し、固定 4 変異 → codex 実装 → 独立レビュー 1 巡の同 protocol で受け入れる
-- [ ] codex_delegation_gate (production 1,038 行) と codex_worktree_gate (1,035 行) を書き直し配備した
+- [x] codex_delegation_gate (production 1,038 行) と codex_worktree_gate (1,035 行) を書き直し配備した — 2026-08-27、
+  1 本 741 行に統合 (契約 C1〜C12・66 test・変異 0/4、実 corpus Bash 29,173 件で非 codex の deny 0)、merge `8ada67f`、
+  配備先 IDENTICAL・旧 worktree gate 除去。レビューは初回 → fix → 再確認 → 契約訂正で再入場 → review → fix → 再確認で
+  打ち止め、残る指摘は `drafts/reviews/delegation-gate/*-report.md` (bounded-risk 受入)
 - [ ] stop_checks (2,431 行) を書き直し配備した — 契約に done_state_ledger の Stop block 化 (完了語 +
   commit / push / gate / E2E / merge の欠落で block) と「warn 系は当該 Stop の最終本文だけを走査」
   を含める (turn 全文走査の再警告自走と数量の序数誤検出は 2026-08-26 に hotfix 済み `58149c2`。
   書き直し契約はこの 2 挙動を test で固定して引き継ぐ)。wind-down family に「起動した background task −
   完了通知 ≠ 0 なら block」を足す (handoff lifecycle block から 2026-08-27 に転記)
-- [ ] skill_reminder_gate (1,073 行) と codex_order_lint (592 行) を書き直し配備した — order_lint は
-  「機構追加」の字面で必須節を連鎖要求する判定 (2026-08-26 に 2 回誤発火) を落とし、fix 発注 3 巡目以降に
-  `## 処置の種別` (閉じた選択肢) を必須にする gate を足す
+- [ ] skill_reminder_gate (1,073 行) を書き直し配備した
+- [x] codex_order_lint (592 行) を書き直し配備した — 「機構追加」の字面で必須節を連鎖要求する判定 (2026-08-26 に
+  2 回誤発火) を落とし、fix 発注 3 巡目以降に `## 処置の種別` (閉じた選択肢) を必須にする gate を足した。2026-08-27、
+  557 行 (同居 test と --selftest 廃止)、契約 C1〜C17・36 test・変異 0/4・実 corpus 7 本の所見一致、merge `939fb54`、
+  `/usr/local/bin` と fix 雛形が IDENTICAL。残る指摘は `drafts/reviews/order-lint-*-report.md`
 - [ ] stop_checks の契約に足す family 4 つ — Task 常時計画 (新規 prompt に応答する turn で最初の非 Task tool 呼び出し前に
   Task upsert が無ければ block)、読まずに裁定 (subagent / workflow の結果を受けた turn で、最終本文が挙げた entry / path を開く
   tool 呼び出しが無ければ block)、Stop 時 surface (`check:` を持つ entry 限定)、「無駄」reminder の prompt ごと 1 回化
@@ -162,15 +167,18 @@ Exit Criteria:
 - [ ] 解析そのものの作り直しは却下済み (2026-08-23) — parser library 未導入・bash parser 借用は
   任意コード実行の穴・原理的に決定不能。記録のため残す
 - [x] 本線へ merge した — `a65da00`、push 済み
-- [ ] 残り 2 形を塞ぐ — heredoc 形は再 token 化で塞げると実測済み、行末継続記号は未検討。
+- [x] 残り 2 形を塞ぐ — 2026-08-27 の書き直し gate が heredoc 本文の除去 (marker は引用符付き / backslash 前置も
+  可、終端は delimiter と完全一致の行) と行末継続記号の連結を契約 C2 として 66 test で固定し配備。旧記録:
+  heredoc 形は再 token 化で塞げると実測済み、行末継続記号は未検討。
   塞げなければ相談する。2026-08-26 実測: 発注書を書く heredoc が「codex」で始まる行で 3 回
   誤 deny (mention と execution の未区別)。2026-08-27 決裁: delegation gate の書き直し後に対応を考える
   (現行 1,038 行への patch はしない)
 - [x] 配備し実地確認した — 2026-08-23 (hook 34 対 IDENTICAL、読み取り allow / 起動 deny を実測)
 - [x] 同型欠陥を class で掃引した — `skill_reminder_gate` の handoff 分岐を `writes_handoff_doc`
   (書込語だけを列挙) へ差し替え (2026-08-24、`bcdea99`、配備済み)
-- [ ] 同型欠陥がもう 1 件 — `cd` 検問が `cd() { return 1; }` の関数定義を移動と読む
-  (2026-08-24 実測)。実害は小さい。「先頭の語で判定」が使えるかを見て費用対効果で判断
+- [x] 同型欠陥がもう 1 件 — `cd` 検問が `cd() { return 1; }` の関数定義を移動と読む
+  (2026-08-24 実測)。2026-08-27 の書き直し gate は `cd()` / `pushd()` の定義を移動と読まない (契約 C10、配備版で
+  実測: 定義の後の起動は [route] deny、[same-root] にならない)
 
 Work file: `drafts/mention-guard/` (発注書 2 通と回帰レビュー 2 通)
 
@@ -192,10 +200,12 @@ Exit Criteria:
 - [x] 正本の書き換え — 2026-08-27 に「worktree 内で起動」(`ca2f7e9`) と書いたが機構 (SessionEnd 時点の cwd の git root
   が鍵、#380) より強く、隣 session 経由のユーザー発言「使い物にならないルールは壊れている」で同日「発注前に単独 cd で
   移り終了まで留まる」へ再改訂 (`00df73e`、skill L25 / L79・policy §8)。配備先 `diff -q` IDENTICAL を同日実測
-- [ ] deny (鍵ずれの回避): 発注 session の git root ≠ `--cwd` の git root を deny — worktree gate 書き直しの
-  契約 claim として実装・配備した
-- [ ] 記録 + SessionEnd 回収 (取りこぼし): 発注 hook が session → `--cwd` を記録し、SessionEnd hook が
-  その worktree を掴む broker を停止要求 → SIGTERM → SIGKILL で回収した (`codex_broker_reap` に cwd filter)
+- [x] deny (鍵ずれの回避): 発注 session の git root ≠ `--cwd` の git root を deny — worktree gate 書き直しの
+  契約 claim として実装・配備した (2026-08-27、`codex_delegation_gate.py` の [same-root] rule = 契約 C10、配備先 IDENTICAL)
+- [x] 記録 + SessionEnd 回収 (取りこぼし): 発注 hook が session → `--cwd` を記録し、SessionEnd hook が
+  その worktree を掴む broker を停止要求 → SIGTERM → SIGKILL で回収した (`codex_broker_reap` に cwd filter) —
+  2026-08-27 に不要と判断して閉じる: [same-root] deny で鍵ずれ自体が起きず、残骸は SessionStart / worktree 回収時の
+  掃引が拾う (異論があれば復活させる)
 - [x] worktree 回収時 reap + 台帳: `codex_broker_sweep.py` (SessionStart と `git worktree remove|prune` の PostToolUse
   Bash で `codex_broker_reap --apply`、回収時のみ台帳 `~/.claude/hooks/state/codex_broker_sweep/ledger.jsonl` に追記) を
   契約 test 21 件 + 変異 6 体で固定し配備 (merge `3c56a03`、配備先 2 file IDENTICAL、host smoke exit 0 — 2026-08-27)
@@ -268,9 +278,10 @@ Exit Criteria:
   まで回して回帰 filter pass、main merge・deploy 済み (2026-08-22)。残り: warn family の
   発火と誤爆の実測 (誤爆 9 件と凍結判断は Medium「随伴エージェント待ち」block へ集約済み)、
   live finding 1 (task の anchor ずれ、修正 `29f1891`、配備済み = stop_checks が IDENTICAL)
-- [ ] `/codex:adversarial-review` は rescue 経路で代替 — 2026-08-27 決裁「rescue で代替でよい。発注書で
-  同等以上のレビューができることをどうやって担保するのかが重要」。担保 = rescue subagent から companion の
-  `adversarial-review` subcommand (plugin 同梱 template) を呼ぶ手順を skill に書き、gate が通すことを 1 回実測
+- [x] `/codex:adversarial-review` は rescue 経路で代替 — 2026-08-27 決裁「rescue で代替でよい。発注書で
+  同等以上のレビューができることをどうやって担保するのかが重要」。担保 = 実測で rescue は review 系 subcommand を
+  `task` に変換するため、plugin 同梱 template の姿勢・攻撃面・所見の基準を review 雛形に転記し、review 雛形の発注書を
+  rescue に task で渡す経路を skill・policy §7/§8・雛形へ反映して配備 (同日、delegation gate の独立レビュー 3 巡で使用)
 - [ ] 検問実装への挑戦レビュー (U0 8 / U1 2、2026-08-22) の処置 — 検索コマンド block の決裁「書き直して
   シンプルに refactor した後に、対応を考える」と同扱い。U0 の 6 件は書き直し対象 3 script の契約 claim の
   候補、U0-7 と U1-2 は廃止済み hook (`8b04b7b`) 宛、U1-1 は harness 側の情報が要る (bounded-risk 候補)
