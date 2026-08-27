@@ -124,30 +124,6 @@ Exit Criteria:
 Work file: `last-session-handoff.md` (再開手順)、`docs/adversarial-review-methodology.md` (protocol)、
 `files/claude_managed-hooks/deny_command_patterns.test.py` (契約 test と変異器の実例)
 
-### handoff の lifecycle 同期を hook で担保する
-
-起票: user 2026-08-23 (「handoff protocol / hook の強化が必要?」への回答として提案)
-
-Goal: todos.md の parent block が消えた handoff section が残り続ける class を、規約の文言でなく
-機械検査で止める。
-
-Exit Criteria:
-
-- [x] 検査を作るかをユーザーが決めた — 2026-08-23 採用。仕様 = 参照で判定 (どの block からも
-  `Work file:` で指されない handoff doc / 実在しない path を warn。見出し名は見ない)
-- [x] warn tier で実装・test した — `stop_checks.py` `_handoff_todos_sync_warnings` (2026-08-23、配備済み)
-- [x] 実 session で誤検知と見逃しを観測した — 観測対象が消えた: 検査 `_handoff_todos_sync_warnings` は 2026-08-27 の
-  stop_checks 書き直し (許可 15 family の外、127 transcript で発火 1 件) で廃止。lifecycle 同期は handoff skill の
-  「block 削除と section 削除を同 commit」規則に戻る
-- [x] 現存する stale file を処置した — `last-session-handoff.md` を削除 (2026-08-23、ユーザー承認)
-- [x] background 作業の残処理を protocol に足す — 2026-08-27 ユーザー指摘「Background work is running と言われて終了を
-  阻害されます。これは handoff protocol にチェックがもれている」(残っていたのは readback 完了待ちの Bash loop)。handoff
-  skill の Pre-handoff checks に step 4「Agent / Workflow / Monitor / run_in_background の残りを完了通知で確かめ、残れば
-  TaskStop」を追加 (`75486d5`、配備先 `diff -q` IDENTICAL を同日実測)。stop_checks 側の block 条件は「肥大化した hook と
-  CLI」block の stop_checks 項目へ契約 claim として転記済み
-
-Work file: なし (本 block で自己完結)
-
 ### 記憶から書かせない仕組み — 雛形 + 経由の強制 + 空欄設計
 
 起票: user 2026-08-23 (「まず todo に登録して、セッションリセット後に実装へ」)
