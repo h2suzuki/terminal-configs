@@ -22,9 +22,12 @@ ORDER_RE = re.compile(r"(?<![\w./-])([^\s'\";|&()]+\.md)(?![\w./-])")
 CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 SEPARATORS = frozenset({";", "&&", "||", "|", "&", "\n", "(", ")", "{", "}", "`", "$("})
 SHELL_KEYWORDS = frozenset("! do done elif else fi if then until while".split())
-WRAPPERS = frozenset("builtin command env exec nohup sudo time timeout xargs".split())
+WRAPPERS = frozenset(
+    "builtin bunx command env exec nohup npx sudo time timeout uvx xargs".split()
+)
 WRAPPER_VALUE_OPTIONS = {
     "env": frozenset("-u --unset -C --chdir".split()),
+    "npx": frozenset("-p --package -c --call".split()),
     "sudo": frozenset(
         "-u --user -g --group -C -D --chdir -h --host -p --prompt -r --role -t --type -T -U".split()
     ),
@@ -38,6 +41,8 @@ NODE_VALUE_OPTIONS = frozenset(
     "-r --require --import --loader --experimental-loader -C --conditions --input-type --env-file".split()
 )
 SHELL_C_RE = re.compile(r"-[A-Za-z]*c[A-Za-z]*")
+HELP_FLAGS = frozenset({"--help", "-h", "--version", "-V"})
+HEREDOC_RE = re.compile(r"<<-?(?!<)\s*\\?(['\"]?)([^\s'\"<>]+)\1")
 SAFE_CLI = frozenset({"completion", "login", "logout", "mcp"})
 SAFE_SKILLS = frozenset(
     f"codex:{name}"
@@ -45,7 +50,9 @@ SAFE_SKILLS = frozenset(
     "gpt-5-4-prompting result setup status".split()
 )
 ROOT_COMMANDS = frozenset({"task", "task-worker", "review", "adversarial-review"})
-VALUE_FLAGS = frozenset("--model -m --effort --cwd -C --prompt-file --resume".split())
+VALUE_FLAGS = frozenset(
+    "--model -m --effort --cwd -C --prompt-file --resume --config -c".split()
+)
 TASK_FLAGS = frozenset(
     "--model -m --effort --cwd -C --prompt-file --json --write --resume-last "
     "--resume --fresh --background".split()
@@ -99,12 +106,9 @@ def _remove_heredoc_bodies(command: str) -> str:
             if comment and (index == 0 or line[index - 1].isspace()):
                 break
             marker_line.append(char)
-        match = re.search(
-            r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?",
-            "".join(marker_line),
-        )
+        match = HEREDOC_RE.search("".join(marker_line))
         if match:
-            delimiter = match.group(1)
+            delimiter = match.group(2)
     return "".join(output)
 
 
@@ -263,6 +267,8 @@ def _peel(tokens: list[str]) -> tuple[int, frozenset[str], bool]:
                 continue
             if not item.startswith("-"):
                 break
+            if name in {"command", "builtin"} and item in {"-v", "-V"}:
+                return len(tokens), frozenset(assignments), changed_dir
             index += 1
             if name == "env" and item.split("=", 1)[0] in {"-C", "--chdir"}:
                 changed_dir = True
@@ -271,6 +277,15 @@ def _peel(tokens: list[str]) -> tuple[int, frozenset[str], bool]:
         if name == "timeout" and index < len(tokens):
             index += 1
     return index, frozenset(assignments), changed_dir
+
+
+def _help_requested(argv: tuple[str, ...]) -> bool:
+    positionals = 0
+    for token in argv:
+        if token in HELP_FLAGS:
+            return positionals <= 1
+        positionals += not token.startswith("-")
+    return False
 
 
 def _subcommand_index(argv: list[str]) -> int | None:
@@ -355,7 +370,10 @@ def enumerate_launches(command: str) -> list[Launch]:
                 if SHELL_C_RE.fullmatch(cleaned[position])
             ]
             if options:
-                launches.extend(enumerate_launches(cleaned[options[0] + 1]))
+                target = options[0] + 1
+                if cleaned[target] == "--" and target + 1 < len(cleaned):
+                    target += 1
+                launches.extend(enumerate_launches(cleaned[target]))
         elif program == "eval":
             launches.extend(enumerate_launches(" ".join(cleaned[index + 1 :])))
     return launches
@@ -559,7 +577,7 @@ def _check_same_root(launch: Launch, payload: dict[str, object]) -> Result:
     if launch.subcommand not in ROOT_COMMANDS:
         return Result()
     if launch.after_cd:
-        return Result("same-root", "launch 前の cd または pushd は許可されません。")
+        return Result("same-root", "launch 前の cd / pushd / env -C は許可されません。")
     payload_cwd = payload.get("cwd")
     if not isinstance(payload_cwd, str):
         return Result(warning="cwd を判定できないため fail-open しました")
@@ -598,9 +616,7 @@ def _check_launches(payload: dict[str, object], command: str) -> Result:
         elif launch.kind == "companion":
             return Result("route", "main agent から companion を直接起動できません。")
         if launch.kind == "cli" and "CODEX_DELEGATION_OK=1" not in launch.assignments:
-            if launch.subcommand not in SAFE_CLI and not any(
-                flag in launch.argv for flag in ("--help", "-h", "--version", "-V")
-            ):
+            if launch.subcommand not in SAFE_CLI and not _help_requested(launch.argv):
                 return Result("cli", "素の codex CLI による委譲は許可されません。")
         if launch.kind == "companion" and agent_id and not _skill_checkpoint(payload):
             return Result("skill", "codex-delegation checkpoint がありません。")

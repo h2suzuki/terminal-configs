@@ -9,7 +9,7 @@ Contract (each claim maps to the tests named test_c<N>_*):
       "permissionDecisionReason": "codex-delegation-gate: [<id>] ..."}} with exit 0; the reason names the
       corrective action and ends with the sentence that the hook itself changes no file. The corrective
       sentence is rule-specific: [tree] names `git worktree add` and `--cwd`, [same-root] names the
-      standalone `cd` and an absolute `--cwd`. Fail-open (exit 0, no stdout, one stderr line) for
+      standalone `cd` and an absolute `--cwd` (its violation sentence also names `env -C`). Fail-open (exit 0, no stdout, one stderr line) for
       unreadable payload, non-dict payload, non-PreToolUse events and any internal exception.
   C2  Launch enumeration is the single funnel every rule reads from: a launch is `node|nodejs <path ending in
       codex-companion.mjs> <sub> <args>` or `codex <sub> <args>` at the program position of a segment
@@ -29,15 +29,20 @@ Contract (each claim maps to the tests named test_c<N>_*):
       Node options that take a value (-r/--require, --import, --loader, --experimental-loader,
       -C/--conditions, --input-type, --env-file) consume it before the script is located. Wrapper
       options that take a value are consumed before the program (timeout -s/--signal/-k/--kill-after,
-      env -u/--unset/-S/--split-string, time -f/--format/-o/--output, xargs -I/-i/-L/-n/-P/-d/-a/-E/-s
+      env -u/--unset, time -f/--format/-o/--output, xargs -I/-i/-L/-n/-P/-d/-a/-E/-s
       and their long forms, sudo -u/-g/-C/-D/-h/-p/-r/-t/-T/-U and their long forms). A short option
       cluster of bash|sh|zsh that contains `c` (-lc, -ec, -cl) is a `-c`; `eval` of literal words is one
       more expansion level. Unquoted backslashes inside a program word are removed before comparison.
       Out of scope (allowed): program words built from variables or substitutions, text piped into a
-      shell, `source` / `.`, alias and function bodies, and `bash -s`.
+      shell, `source` / `.`, alias and function bodies, `bash -s` and `env -S`. `command -v|-V name`
+      looks a name up and is not a launch. `npx` / `bunx` / `uvx` are wrappers whose operand is the
+      program (npx -p/--package/-c/--call take a value). A heredoc delimiter is any quoted or
+      backslash-prefixed word (`<<\EOF`, `<<'E.OF'`); `<<<` is a here-string, not a heredoc.
+      `bash -c -- <string>` skips the `--`.
   C3  [route] / [cli]: without agent_id every companion subcommand and every delegating codex CLI form
       (bare `codex`, exec, apply, resume, review, cloud ...) is denied; login / logout / mcp / completion /
-      --version / --help pass. `CODEX_DELEGATION_OK=1` at the segment start passes the CLI only.
+      --version / --help pass when the flag comes before the second positional token; `--config` /
+      `-c` takes a value. `CODEX_DELEGATION_OK=1` at the segment start passes the CLI only.
       The Monitor tool is checked like Bash. With agent_id the launch passes when agent_type contains
       codex-rescue or is absent; any other agent_type is denied.
   C4  [skill]: delegation surfaces (Agent/Task whose subagent_type contains codex, Skill codex:* other than
@@ -957,6 +962,49 @@ class GateTest(unittest.TestCase):
             f"await agent(`run {NODE} task --write o.md`)",
         ):
             self.allow(self.tool("Workflow", {"script": script}))
+
+    # -- re-entry 1 review corrections (independent review findings) ----------------------------
+    def test_c2_command_v_is_a_lookup(self) -> None:
+        self.allow(self.bash("command -v codex"))
+        self.allow(self.bash("command -V codex >/dev/null 2>&1 || echo missing"))
+
+    def test_c2_package_runners_are_wrappers(self) -> None:
+        for command in (
+            "npx codex exec hi",
+            "npx @openai/codex exec hi",
+            "npx -p @openai/codex codex exec hi",
+            "bunx codex exec hi",
+            "uvx codex exec hi",
+        ):
+            self.deny(self.bash(command), "cli")
+        self.allow(self.bash("npx -p @openai/codex codex --version"))
+
+    def test_c2_heredoc_delimiter_forms(self) -> None:
+        self.allow(
+            self.bash("cat <<\\EOF > n.md\ncodex exec is the form to avoid\nEOF")
+        )
+        self.allow(self.bash("cat <<'1EOF'\ncodex exec x\n1EOF"))
+        self.allow(self.bash('cat <<< "codex exec hi"'))
+        self.deny(
+            self.bash("cat <<'E.OF' > n.md\nnotes\nE.OF\ncodex exec \"write it\""),
+            "cli",
+        )
+
+    def test_c2_double_dash_before_shell_string(self) -> None:
+        self.deny(self.bash("bash -c -- 'codex exec hi'"), "cli")
+
+    def test_c3_help_flags_count_only_before_positionals(self) -> None:
+        self.allow(self.bash("codex exec --help"))
+        self.allow(self.bash("codex --version"))
+        self.deny(self.bash("codex exec add -h flag support to the tool"), "cli")
+
+    def test_c3_config_value_is_not_the_subcommand(self) -> None:
+        self.allow(self.bash("codex --config sandbox=x login"))
+        self.allow(self.bash("codex -c a=b mcp list"))
+
+    def test_c1_env_chdir_reason_names_env(self) -> None:
+        reason = self.deny(self.rescue(f"env -C /tmp {NODE} task o.md"), "same-root")
+        self.assertIn("env -C", reason)
 
 
 if __name__ == "__main__":
