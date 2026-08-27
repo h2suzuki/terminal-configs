@@ -13,7 +13,7 @@
 ## 4-2. worktree 隔離
 
 - `codex-delegation/SKILL.md` — 実在
-- `files/claude_managed-hooks/codex_worktree_gate.py` — 実在
+- `files/claude_managed-hooks/codex_delegation_gate.py` — 実在 (2026-08-27 に worktree gate を統合: `[tree]` / `[same-root]`)
 
 ## 4-3. 監視規律
 

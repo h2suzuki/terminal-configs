@@ -33,7 +33,7 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
    - stall 判定（heartbeat 凍結 7 分超、詳細は Rules）:
      - 監視は background script 内で 170 秒 × 3 回等で poll し、exit 時に re-arm して約 5-8.5 分 cadence を保つ。単発待機は bash tool の timeout 上限 600 秒以内にする
 5. **走行中の並行作業規則**: 同一ツリーへの inline 編集をしない（moving-target）。同一 build dir を共有する build / test / lint を並行実行しない（ロック競合で双方が停滞）。別 path（例: backend 委譲中の frontend/、doc、発注書の次 round 準備）は並行してよい
-6. **受け入れレビュー**: 完了判定後に開始。gates 結果は codex の自己申告でなくログ file / 再実行で確認する。仕様の根拠行（契約・実データの key 文字列等）はコードと突き合わせ、判断が乗る主張は spot-check する。高リスク変更（auth / data-loss / race / rollback）は独立 cross-model レビューを追加する
+6. **受け入れレビュー**: 完了判定後に開始。gates 結果は codex の自己申告でなくログ file / 再実行で確認する。仕様の根拠行（契約・実データの key 文字列等）はコードと突き合わせ、判断が乗る主張は spot-check する。高リスク変更（auth / data-loss / race / rollback）は独立 cross-model レビューを追加する。経路は review 雛形（`codex_order_lint --new review`）の発注書を `/codex:rescue` に渡す task（報告書を書くため `--write`、code 変更は発注書で禁止、`--model gpt-5.6-sol --effort xhigh`）— `/codex:adversarial-review` command はユーザー起動専用で、rescue subagent は review 系 subcommand を呼ばず task に変換する（2026-08-27 実測）。雛形の「姿勢・攻撃面・所見の基準」節が plugin 同梱 template と同等の framing を担保する
    - **表層品質 pass を別回で行う**: 内容の正誤と別に、読者体験で diff を見る — 英語文書内の日本語文 / CLI 出力・log 文字列の言語 / comment 言語と file 規約の一致 / tone・命名の一貫性。抽象的な「自然に見えるか」だけでは素通しするため、観点を列挙してレビューする。cross-model レビューを発注する場合も本観点を発注書に含める
    - **`claude_lang_lint` を worktree diff に必須実行する**: `claude_lang_lint --repo <workspaceRoot>` が ASCII baseline file への CJK 追加を機械検出する（日本語が正の file は baseline 判定で自動除外、新規の意図的日本語 file は `--allow` で指定）。fail は fix round 行き。LLM レビューの注意力に依存しない決定的 gate
    - server を抱えた run では、codex 側の残存検査 (Rules の hang-proof 節) と別に、司令塔側でも workspaceRoot で scope した `pgrep -af <workspaceRoot>` を打ち、残存 process ゼロを確認する（二重の網）

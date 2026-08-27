@@ -111,7 +111,7 @@ effort は既定を継承し、review / judgment 層だけ上げ、機械的作�
 | 種類 | 担い手 | 時期 / 条件 |
 |---|---|---|
 | 回帰レビュー | opus subagent (発注書のみ渡す・effort 高・実装と同族でよい) | milestone (機能完成 / test 成功 / commit・PR 形成 / merge 前) で回す。毎 edit 後には回さない |
-| codex adversarial-review | Sol xhigh | ユーザー指示時、または §3 例外の高リスク領域に触れる時のみ |
+| codex 第二レビュー (review 雛形の発注書を rescue に task で渡す) | Sol xhigh | ユーザー指示時、または §3 例外の高リスク領域に触れる時のみ。`/codex:adversarial-review` command はユーザー起動専用 (rescue subagent は review 系 subcommand を呼ばず task に変換する、2026-08-27 実測) |
 | continuous review gate (codex:setup の stop-time review gate) | — | 無効のまま。有効化すると Claude / codex の長い loop が usage limit を消費する |
 
 - レビュー開始閾値: 3 file 以上・100 行以上・public API・永続状態・I/O・非同期・error handling の変更のいずれか
@@ -129,7 +129,7 @@ effort は既定を継承し、review / judgment 層だけ上げ、機械的作�
 | Claude が停滞し、別仮説が必要 | `rescue --fresh` |
 | 前回の codex 作業を継続 | `rescue --resume` |
 | 会話履歴そのものが必要 | transfer をユーザーに提案する (§9) |
-| 完成済み diff の独立確認 | `review` または `adversarial-review` (§7 の条件下) |
+| 完成済み diff の独立確認 | review 雛形の発注書で rescue に task (§7 の条件下) |
 
 ### background と監視
 
@@ -144,14 +144,13 @@ effort は既定を継承し、review / judgment 層だけ上げ、機械的作�
 
 ### 代表的な起動形式
 
-起動は codex:rescue skill 経由のみ (companion の直接起動は gate が deny)。review 系は rescue subagent から companion の subcommand を呼ぶ。
+起動は codex:rescue skill 経由のみ (companion の直接起動は gate が deny)。review 系も rescue の task で出す (rescue subagent は review 系 subcommand を呼ばず task に変換する — 2026-08-27 実測)。
 
 ```
 rescue --background --fresh --model gpt-5.6-luna --effort xhigh <bounded task>
 rescue --background --fresh --model gpt-5.6-sol --effort xhigh <complex task>
 rescue --background --resume <continue the latest codex task>
-review --background --base main
-adversarial-review --background --base main <specific risk focus>
+rescue --background --fresh --write --model gpt-5.6-sol --effort xhigh <review 雛形の発注書 path>
 ```
 
 ## 9. transfer
