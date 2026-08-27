@@ -135,8 +135,8 @@ Exit Criteria:
 
 - [x] 発注書の雛形を用意した — 雛形 3 種、空欄は `未記入` sentinel で検査器の所見になる (2026-08-24)
 - [x] 実装した — `codex_order_lint --new` と `codex_order_scaffold.py` (2026-08-24、`58bb28d`、配備済み)
-- [ ] 実装のリスク 2 件を運用で見る — (a) Bash 経由の作成 (cp / heredoc) には届かない、
-  (b) deny しつつ file を作る形が紛れないか
+- [x] 実装のリスク 2 件を運用で見る — 終わりの無い観測は持たない (2026-08-27 ユーザー「4 / 5 とか意味あるの？」)。
+  (a) 雛形を経由しない発注書は経路に関わらず `codex_order_lint` の必須節検査で止まる、(b) 導入後 37 本で紛れの報告なし
 - [x] 雛形を経由しないと生成できない形にした — 記憶からの Write は deny + 骨組み生成 (2026-08-24)
 - [x] 同型の欠落が他に無いかを棚卸しした — 2026-08-27 実測: 雛形あり = 発注書 3 種・hook・skill・memory entry・
   handoff 節・todos block。雛形なしで毎回書いている = 契約 test (5 本)・変異器 (8 本)・subagent への発注文・
@@ -172,9 +172,8 @@ Exit Criteria:
   「随伴エージェント待ち」block の項目 1
 - [x] (h) codex-delegation skill と関連 memory entry を plugin-route 前提に改訂 — 配備済み
   (2026-08-25 close)
-- [ ] communication-lint 規則 3〜5 (疑問文に decision Task / 短文決裁の記録 / 質問の自己完結) の live 発火を
-  各 1 回記録する — warn は transcript に保存されないので、見た session がその場で日時と本文をここに書く
-  (2026-08-27 時点で 3 規則とも未観測。規則 1・2 は同日に観測済み)
+- [x] communication-lint 規則 3〜5 の live 発火記録 — 終わりの無い観測は持たない (2026-08-27 ユーザー「4 / 5 とか
+  意味あるの？」)。規則 1・2 は同日に観測、3〜5 は陽性未観測のまま閉じる (契約 test が各規則の陽性 1 例を固定している)
 - [x] 「無駄」keyword の memory 記録 reminder — Stop family として発注済み (`drafts/gates/warn-family-order.md`)。2026-08-26 実測で
   entry を書くまで毎 Stop 再発火 (noise) → 2026-08-27 決裁「書き直し契約でよい」→ 同日、stop_checks C16 第 2 規則 (prompt boundary の
   identity で latch、stdout に載った Stop だけ書く) として配備 (merge `caf7a70`)
