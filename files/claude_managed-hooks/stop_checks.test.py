@@ -26,34 +26,43 @@ test は `stop_checks.test.py` の `test_c<N>_*` に対応させる。
 - **pass**: exit 0 / stdout は turn-marker (C17) のみ / stderr 空。
 
 `stop_hook_active` が真の Stop では block を warn へ降格し (advise-once)、行頭に
-`advise-once (block demoted to pass): ` を付けて exit 0 で返す。
+`advise-once (block demoted to pass): ` を付けて exit 0 で返す。降格は pass 扱い (行は stderr、stdout は空、
+model には届かない — 同じ block を 2 度目の Stop で繰り返さないための出口であり、助言の配送ではない)。
 payload が読めない / dict でない / 内部例外 — いずれも **fail-open** (exit 0 / stdout 空 / stderr 1 行)。
 test 方針: 3 出口それぞれを最小 payload で叩き、exit code と stdout/stderr の排他を assert。降格は同 payload の 2 回目で確認。
 
 ### C2 turn funnel (単一の抽出点)
 
-入力: `transcript_path` の JSONL。末尾から 128 KB を読み、直近の **prompt boundary** 1 個までを turn とする。
+入力: `transcript_path` の JSONL。末尾から 512 KB (`TURN_WINDOW_BYTES = 512 * 1024`) を読み、直近の **prompt boundary** 1 個までを turn とする。
 prompt boundary = `type == "user"` かつ `message.content` が str かつ、その先頭が
 `<task-notification>` / `<system-reminder>` / `<local-command` のいずれでもないもの。
 turn から取り出す値はこの 6 つだけで、全 family はここからしか読まない:
 `final_text` (payload の `last_assistant_message`、無ければ turn 最後の assistant text)、`turn_text` (turn 内 assistant text の連結)、
 `tool_names` / `tool_paths` / `edited_paths` (Write/Edit の対象) / `bash_commands`。
-transcript が無い・壊れている・boundary が見つからない場合は空 turn として全 family を pass させる。
+transcript が無い・壊れている・boundary が見つからない場合は turn 由来の 5 値 (`turn_text` / `tool_names` / `tool_paths` /
+`edited_paths` / `bash_commands`) を空にし、`final_text` は payload の `last_assistant_message` から取る。この空 turn では
+turn 証跡を要する family (C4・C5・C6・C7・C8・C11) は pass し、final_text だけで判定できる family (C12・C13・C14・C15) と
+state だけを見る family (C9・C10・C16・C17) は通常どおり評価する。
 test 方針: `<task-notification>` を含む合成 transcript で turn 境界がそれを跨ぐことと、破損 JSONL 行が skip されることを assert。
 
 ### C3 warn の走査範囲 (K4 の 2 挙動を固定)
 
 warn / context family は **当該 Stop の `final_text` だけ**を走査する (`turn_text` を見ない)。
-判定前に `final_text` を NFKC 正規化し、fenced block・inline code・引用行を落とす。
+判定前に `final_text` を NFKC 正規化し、fenced block・inline code (backtick 1 個以上で囲まれ改行を含まない区間)・引用行を落とす。
 - 過去 turn で既に直した文を再警告しない: turn 内に同じ文言が残っていても、final_text に無ければ warn は出ない。
 - 数量表現は序数参照ではない: 「候補 17 件」「案 3 つ」は `communication-lint` の自己採番に当たらず、「候補 12」は当たる。
 test 方針: 同一文言を turn_text にだけ持つ payload で 0 件、final_text に持つ payload で 1 件。数量/序数の 4 例を表駆動で assert。
 
 ### C4 continuation-claim (block)
 
-入力: `final_text` に未来形の遂行宣言 (「〜します」「これから〜する」等) がある。
-出力: block。ただし次の 3 形式は block しない — (1) **実行中**: 同 turn に起動した background task の id を本文が挙げている、
-(2) **完了**: 同 turn の tool 呼び出しに裏付けがある過去形、(3) **停止**: 「ここで停止」「再開条件」を同一行に持つ。
+入力: `final_text` に未来形の遂行宣言がある。遂行宣言 = 次の語尾のいずれかで終わる文 (文の切り出しは C5 と同じ):
+継続します / 再開します / 進めます / 進みます / 続けます / 着手します / 実施します / 実装します / 取り掛かります / 対応します /
+調整します / やります / 修正します / 削除します / 追加します / 作成します / 変更します / 反映します / 統合します / 置換します /
+コミットします / commit します / デプロイします / deploy します / 始めます / 報告します / 提示します / 検証します /
+自走を続け / 作業を続け (旧 hook が実 corpus 74 件を全て捕えた roster + 実 corpus の 4 語。「お願いします」は含まない)。
+出力: block。ただし次の 3 形式は block しない — (1) **実行中**: 同 turn に起動した background task の id を `final_text` の
+どこかで挙げている (当該文の外でよい)、(2) **完了**: 同 turn の tool 呼び出しに裏付けがある過去形、
+(3) **停止**: 「ここで停止」と「再開条件」を当該文と同じ行に持つ (`。` で文が切れていてもよい)。
 条件提示 (「必要なら〜します」「ご希望であれば」) と、fenced/表/箇条書き label も除外する。
 test 方針: 素の宣言で block、3 形式それぞれと条件提示・fence 内で pass。
 
@@ -62,6 +71,9 @@ test 方針: 素の宣言で block、3 形式それぞれと条件提示・fence
 入力: `final_text` に完了語 (「完了」「done」「終わりました」「済み」) があり、その文が commit / push / gate / E2E / merge の
 いずれかに言及している。**gate 言及** = その文が `ruff` / `ty` / `test` / `変異` / `lint` / `selftest` / `gate` のいずれかを含み、
 かつ同じ文に数値または `OK` を持つこと。**E2E 言及** = その文が `E2E` / `e2e` / `実機` / `live` / `実測` のいずれかを含むこと。
+文の切り出しは `。` `！` `？` `!` `?` と改行 (箇条書き・表の行は各 1 文)。判定は完了語を含む文にだけ掛け、別の文の
+commit / gate / E2E 言及は数えない (「完了しました。lint は未実施です」は block しない)。gate 語は語境界で照合する
+(`ty` は `\bty\b`、`Priority` に当てない)。
 出力: 言及した種別の証跡が turn 内に無ければ block。証跡の対応は逐語で —
 commit/push/merge → `bash_commands` の `git commit` / `git push` / `git merge`、
 gate/E2E → `bash_commands` に当該語 (大小文字無視) を含む command が 1 件以上、
@@ -91,7 +103,8 @@ test 方針: (c) の境界を 2 件 = pass / 3 件 = warn で固定し、Task st
 
 入力: turn 内に subagent 結果 (`Agent` / `Task` tool の呼び出し) または Workflow 結果
 (`<task-notification>` を含む user entry) が有り、`final_text` が
-entry path (`.md` token / `/var/lib/claude-rag-memory/...` / repo 相対 path) を挙げて裁定・評価を述べている。
+entry path を挙げて裁定・評価を述べている。path token = backtick 内または裸の token で、`/var/lib/claude-rag-memory/` で
+始まるもの (拡張子不問)、または `/` を 1 つ以上含み拡張子 (`\.[A-Za-z0-9]{1,6}`) で終わるもの (`.md` に限らない、絶対 / repo 相対とも)。
 出力: 挙げた path のいずれも turn 内の `tool_paths` (Read/Grep/Glob の対象) に現れなければ block。
 出力文面は「開いていない path」を列挙する。path を挙げない本文、subagent 結果も Workflow 結果も無い turn は pass。
 test 方針: 同一 final_text に対し Read 有り = pass / 無し = block、path 3 件中 1 件だけ Read = block で列挙が 2 件、
@@ -114,7 +127,8 @@ C2 の funnel は 128 KB のままで、この窓を使うのは C10 だけ) か
 完了通知 = user entry の文字列に `<task-notification>` があり、その中の `<task-id><id></task-id>` の `<id>` 集合。
 出力: 起動 − 完了通知 が空でなければ block し、未回収の id を列挙する。差が空なら pass。
 ただし窓が session 先頭に届いていないとき — transcript が窓より大きい、または起動を持たない完了通知 id がある (= 起動 id が窓の外)
-— は観測が不完全なので **block せず warn** とし、行に「窓外」を含める。窓外かつ差が空なら何も出さない。
+— は観測が不完全なので **block せず warn** とし、行に「窓外」を含める (差が空でなければ、transcript が窓より大きいだけの
+場合も warn する)。窓外かつ差が空なら何も出さない。
 test 方針: 起動 2 / 通知 1 の合成 transcript で 1 件を列挙、起動 2 / 通知 2 で pass、wind-down 未宣言で常に pass、
 起動を持たない通知で warn (「窓外」を含み exit 0)、窓内 1.5 MB の起動は block・窓外 3 MB の起動は非 block で上限値を挟む。
 
@@ -129,10 +143,13 @@ test 方針: full-sid 有り = pass / 先頭 8 文字だけ = block / doc 未編
 ### C12 self-report-honesty (block)
 
 入力: `final_text`。次の 5 規則をこの family 1 つで持つ。
-1. 不実施の meta-announce (「rule に従って〜しません」) → 常に block。
+1. 不実施の meta-announce → 常に block。語形は次の roster に限る (旧 hook の実証 roster + 実 corpus の「実行しません」):
+   省略(は)?しません / 省略(は)?控えます / 触りません / 触らないでおきます / (には|は)触れません / mock ?しません /
+   ダミー(は)?入れません / (再)?催促(は)?しません / 推測で.{0,10}書きません / 想像で.{0,10}埋めません / 実行しません /
+   判断(は)?保留します / (rule|scope) ?(に従って|通り).{0,20}(控えます|触れません)。
 2. 内省 phrase (「反省」「以後気をつけ」) があり、turn 内に persistence path
    (`memory` / `skills` / `hooks` / `CLAUDE.md`) への Write/Edit が無い → block。
-3. 自分の作業への驚き phrase (「いつの間に」「覚えがない」) があり、turn 内に `git log|show|diff` が無い → block。
+3. 自分の作業への驚き phrase (「いつの間に」「覚えがない」の 2 語に限る。「想定外」は対象の性質を述べる日常語なので対象外) があり、turn 内に `git log|show|diff` が無い → block。
 4. 自分の発話を「誤解を招く記述」等と婉曲評価 → block (設計対象の命名・label への同評価は除外)。
 5. 帰属ぼかし (「既存の」「reasonable default」) の 60 字近傍に誤り語がある → block。
 出力: 成立した規則ごとに 1 行、行頭は `self-report-honesty: `、続けて規則番号と検出語。
@@ -142,11 +159,14 @@ test 方針: 5 規則それぞれの陽性 1 件と陰性 1 件 (計 10 case)。
 ### C13 offload-to-user (block) と host-command-format (warn)
 
 入力: `final_text` (fence 除去後。ただし host-command-format は fence の有無そのものを見るので fence 除去前の本文を使う)。
-- **block** (`offload-to-user`): (1) 順序質問 (「どちらを先に」「どの順で」)、(2) 二択確認 / routing (「A にしますか B にしますか」)、
-  (3) `!` prefix 実行の依頼 — ただし (2) は turn 内に `declare-and-proceed` skill の invoke があれば pass。
+- **block** (`offload-to-user`): (1) 順序質問 (「どちらを先に」「どの順で」)、(2) 二択確認 / routing (「A にしますか B にしますか」
+  「どちらにしますか」「どちらがよいですか」)、(3) `!` prefix 実行の依頼 — (1)(2) は `?` / `？` / `ますか` / `ましょうか` / `ください` /
+  `でしょうか` で終わる行 (user への問い掛け) だけを対象にし、「自分で判断しました」のような平叙文は対象外。
+  (2) は turn 内に `declare-and-proceed` skill の invoke があれば pass。
 - **warn** (`host-command-format`, family 15): host コマンドを user に手動実行させる文脈で、コマンドが独立した fenced block に
   なっていない (prose の inline code に混ざる)、または fenced でも path 引数が絶対 path でも `/` を含む repo root 起点の
-  相対 path でもない裸の basename である。
+  相対 path でもない裸の basename である。inline command は同じ文字列が fence 内にも現れる場合だけ打ち消す
+  (無関係な fence があっても打ち消さない)。
 出力: severity が違うので family id を分ける。同一 family id が exit 2 側と exit 0 側の両方に出ることを禁じる。
 test 方針: 3 block 規則の陽性 / skill invoke による pass / 整形済み fence で warn 無し / 裸の basename を含む fence で warn。
 
@@ -182,7 +202,9 @@ decision 型の陽性/陰性 (「決裁待ち」を含む open task で規則 3 
 同 family の第 2 規則: 直近 user prompt (harness 注入 prefix 除外後) に「無駄 / 浪費 / もったいない」があり、
 turn 内に persistence path への Write が無ければ 1 行を足す — **同一 prompt につき 1 回だけ** (K2(i))。
 第 2 規則の latch key は turn ではなく **prompt boundary の identity** (その user entry の `uuid`、無ければ `timestamp`)
-で、latch file は `<transcript>.turns.waste`。clone が無い / 読めない / 空の場合は何も出さず pass (実 clone を読みに行かない)。
+で、latch file は `<transcript>.turns.waste`。latch を立てるのはその行が stdout に載った Stop (exit 0 の warn / context) だけで、
+block・降格の Stop では書かない。clone が無い / 読めない / 空の場合は何も出さず pass (実 clone を読みに行かない)。
+非 UTF-8 や front matter の壊れた entry は skip し、他の entry は出す。
 test 方針: `when: prompt` のみの entry が出ないこと、固定文言が entry 数によらず 1 回であること、
 同一 prompt の 2 回目の Stop で「無駄」行が消え、別 prompt の Stop では再び出ること。
 
@@ -191,12 +213,16 @@ test 方針: `when: prompt` のみの entry が出ないこと、固定文言が
 入力: block も warn / context も無い pass 時のみ。
 出力: `<transcript>.turns` の counter を 1 増やし、`"<count> <last_stop_epoch>"` の 1 行で書き戻す。
 stdout に `systemMessage` だけを持つ JSON を 1 行出す (`additionalContext` は付けない = model には不可視)。
-本文は 時刻 / `Turn #<count>` / Context / 経過秒。counter file が読めない場合は marker を出さず exit 0。
+本文は `<ISO 時刻> / Turn #<count> / Context <used>% / 経過 <秒> 秒`。`<used>` は
+`$XDG_CACHE_HOME/claude-tui-statusline/<session_id>.json` (既定 `$HOME/.cache/…`) の `stdin.context_window.used_percentage`
+(`stdin` は dict、JSON 文字列なら parse する)、経過の基点は同 file の `session_started_epoch`。cache が無い / 読めない場合は
+`Context -` とし、経過は前回 Stop の epoch (`.turns` の 2 列目) から数える。counter file が読めない場合は marker を出さず exit 0。
 test 方針: 連続 2 回の pass で `Turn #1` → `Turn #2`、warn が出た Stop では counter が動かないこと。
 
 ### C18 決定性と純度
 
 LLM 呼び出し無し。stdlib のみ (`json` `os` `re` `sys` `fcntl` `datetime` `unicodedata`)。
+hook file は実行 bit を持ち (`os.access(HOOK, os.X_OK)`)、shebang は `#!/usr/bin/env python3` (登録は bare path で起動する)。
 他 hook からの import 無し (`check_uncommitted_at_handoff` / `memory_surface` への依存を全廃)。
 子プロセス起動無し (`git` を呼ばない — `has_git_verify` は `bash_commands` の文字列から判定する)。
 同一 payload + 同一 transcript + 同一状態 file から常に同一 stdout/stderr/exit code。
@@ -544,7 +570,7 @@ class StopChecksTest(unittest.TestCase):
         if family:
             self.assertNotIn(family, blocked(proc), proc.stderr)
 
-    def assertWarns(self, proc: subprocess.CompletedProcess, family: str) -> None:
+    def assertWarnsFamily(self, proc: subprocess.CompletedProcess, family: str) -> None:
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stderr, "", "warn writes nothing to stderr")
         self.assertIn(family, warned(proc), proc.stdout)
@@ -638,7 +664,7 @@ class TurnFunnelTest(StopChecksTest):
                     ]
                 )
                 proc = run_hook(self.fx, "3 file を編集しました。" + TAIL)
-                self.assertWarns(proc, "task-ledger-drift")
+                self.assertWarnsFamily(proc, "task-ledger-drift")
 
     def test_c2_corrupt_jsonl_lines_are_skipped(self):
         self.fx.write(
@@ -672,7 +698,9 @@ class WarnScopeTest(StopChecksTest):
 
     def test_c3_wording_in_final_text_warns(self):
         self.fx.turn(say("調査しました"))
-        self.assertWarns(run_hook(self.fx, "該当なしです。"), "claim-without-evidence")
+        self.assertWarnsFamily(
+            run_hook(self.fx, "該当なしです。"), "claim-without-evidence"
+        )
 
     def test_c3_quantity_is_not_a_self_number_reference(self):
         cases = (
@@ -850,14 +878,14 @@ class TaskLedgerDriftTest(StopChecksTest):
                 edit(self.fx.repo_file("c.py")),
             ]
         )
-        self.assertWarns(
+        self.assertWarnsFamily(
             run_hook(self.fx, "編集しました。" + TAIL), "task-ledger-drift"
         )
 
     def test_c7_deferral_wording_warns(self):
         self.fx.turn(say("整理しました"))
         proc = run_hook(self.fx, "この件は別タスクに切り出します。" + TAIL)
-        self.assertWarns(proc, "task-ledger-drift")
+        self.assertWarnsFamily(proc, "task-ledger-drift")
 
     def test_c7_non_empty_task_store_passes(self):
         self.fx.native_task("契約 test を書く", status="completed")
@@ -1009,7 +1037,7 @@ class WindDownTest(StopChecksTest):
         self.fx.wind_down()
         self.launches(("bg-9",))
         proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
-        self.assertWarns(proc, "wind-down-background-unreaped")
+        self.assertWarnsFamily(proc, "wind-down-background-unreaped")
         self.assertIn("窓外", warn_body(proc))
 
     def test_c10_launch_inside_the_window_blocks(self):
@@ -1155,7 +1183,7 @@ class OffloadToUserTest(StopChecksTest):
     def test_c13_unfenced_host_command_warns(self):
         self.fx.turn(say("整理しました"))
         text = "お手元で `git push origin main` を実行してください。" + TAIL
-        self.assertWarns(run_hook(self.fx, text), self.WARN_FAMILY)
+        self.assertWarnsFamily(run_hook(self.fx, text), self.WARN_FAMILY)
 
     def test_c13_fenced_host_command_passes(self):
         self.fx.turn(say("整理しました"))
@@ -1172,7 +1200,7 @@ class OffloadToUserTest(StopChecksTest):
             "お手元のターミナルで実行してください。\n\n"
             "```bash\npython3 stop_checks.test.py\n```" + TAIL
         )
-        self.assertWarns(run_hook(self.fx, text), self.WARN_FAMILY)
+        self.assertWarnsFamily(run_hook(self.fx, text), self.WARN_FAMILY)
 
     def test_c13_block_and_warn_never_share_a_family_id(self):
         self.fx.turn(say("整理しました"))
@@ -1198,7 +1226,7 @@ class ClaimWithoutEvidenceTest(StopChecksTest):
         for claim in self.CLAIMS:
             with self.subTest(claim=claim):
                 self.fx.turn(say("報告します"))
-                self.assertWarns(run_hook(self.fx, claim + TAIL), self.FAMILY)
+                self.assertWarnsFamily(run_hook(self.fx, claim + TAIL), self.FAMILY)
 
     def test_c14_claims_with_an_evidence_tool_pass(self):
         for claim in self.CLAIMS:
@@ -1222,35 +1250,37 @@ class CommunicationLintTest(StopChecksTest):
 
     def test_c15_final_line_without_emoji_or_question_warns(self):
         self.fx.turn(say("報告します"))
-        self.assertWarns(run_hook(self.fx, "調査を終えました。"), self.FAMILY)
+        self.assertWarnsFamily(run_hook(self.fx, "調査を終えました。"), self.FAMILY)
 
     def test_c15_full_width_self_number_reference_warns(self):
         self.fx.turn(say("報告します"))
-        self.assertWarns(
+        self.assertWarnsFamily(
             run_hook(self.fx, "候補１２を採用しました。" + TAIL), self.FAMILY
         )
 
     def test_c15_question_without_an_open_decision_task_warns(self):
         self.fx.turn(say("報告します"))
-        self.assertWarns(run_hook(self.fx, "どの案を採るべきでしょうか？"), self.FAMILY)
+        self.assertWarnsFamily(
+            run_hook(self.fx, "どの案を採るべきでしょうか？"), self.FAMILY
+        )
 
     def test_c15_short_ruling_prompt_with_an_open_decision_task_warns(self):
         self.fx.native_task("決裁待ち: 変異器の形式", status="pending")
         self.fx.write([prompt("採用"), say("反映しました")])
-        self.assertWarns(run_hook(self.fx, "反映しました。" + TAIL), self.FAMILY)
+        self.assertWarnsFamily(run_hook(self.fx, "反映しました。" + TAIL), self.FAMILY)
 
     def test_c15_question_referring_to_an_earlier_turn_warns(self):
         self.fx.native_task("決裁待ち: 変異器の形式", status="pending")
         self.fx.turn(say("報告します"))
         text = "先ほどの案について、次はどこを見ればよいでしょうか？"
-        self.assertWarns(run_hook(self.fx, text), self.FAMILY)
+        self.assertWarnsFamily(run_hook(self.fx, text), self.FAMILY)
 
     def test_c15_decision_task_is_recognised_by_its_wording(self):
         """Decree 7: only 決裁 / 裁定 / 判断待ち / 承認待ち / 要確認 make a task a decision task."""
         question = "どの案を採るべきでしょうか？"
         self.fx.native_task("契約 test を書く", status="pending")
         self.fx.turn(say("報告します"))
-        self.assertWarns(run_hook(self.fx, question), self.FAMILY)
+        self.assertWarnsFamily(run_hook(self.fx, question), self.FAMILY)
         self.fx.native_task("変異器の形式を裁定する", status="pending")
         self.assertNotWarned(run_hook(self.fx, question), self.FAMILY)
 
@@ -1271,7 +1301,7 @@ class MemoryReminderTest(StopChecksTest):
         self.fx.memory_entry("alpha", "完了語の証跡が turn 内にあるか確認せよ")
         self.fx.turn(say("報告します"))
         proc = run_hook(self.fx, "調査を終えました。" + TAIL)
-        self.assertWarns(proc, self.FAMILY)
+        self.assertWarnsFamily(proc, self.FAMILY)
         self.assertIn("完了語の証跡が turn 内にあるか確認せよ", warn_body(proc))
 
     def test_c16_prompt_only_entry_is_not_surfaced(self):
@@ -1415,7 +1445,7 @@ class FixtureSubstitutionTest(StopChecksTest):
         self.fx.memory_entry("alpha", "証跡を確認せよ")
         self.fx.turn(say("報告します"))
         text = "調査を終えました。" + TAIL
-        self.assertWarns(run_hook(self.fx, text), "memory-reminder")
+        self.assertWarnsFamily(run_hook(self.fx, text), "memory-reminder")
         empty = os.path.join(self.fx.tmp, "empty-clone")
         os.makedirs(empty, exist_ok=True)
         proc = run_hook(self.fx, text, memory_root=empty)
@@ -1428,6 +1458,302 @@ class FixtureSubstitutionTest(StopChecksTest):
         self.fx.native_task("契約 test を書く", status="in_progress")
         proc = run_hook(self.fx, "調査を終えました。" + TAIL)
         self.assertBlocks(proc, "wind-down-open-tasks")
+
+
+class CorpusContinuationClaimTest(StopChecksTest):
+    """C4 (corpus correction): future forms the old hook blocked in 74 real turns must block.
+
+    The rewrite caught 0 of those 74 texts (drafts/replay-tools/replay_stop_fires.py, 2026-08-27),
+    so the contract now names the roster verbatim instead of giving two examples.
+    """
+
+    FAMILY = "continuation-claim"
+    CORPUS_BLOCKS = (
+        "分析の完了通知が届き次第、輸入計画の確定 → 輸入実装 → 資料の統合、と進めます。",
+        "compact 後は handoff の contingency どおり「裁定 8 点の要約提示」から再開します。",
+        "この session は Bun が入り次第 SvelteKit skeleton 置換に着手します。",
+        "それが済めば `/design-order` で稽古日程の mock 発注に進みます。",
+        "結果が出次第 triage し、ACCEPT なら land → 実機確認へ進みます。",
+        "ldfix の敵対レビューを走らせつつ、カレンダー High 案件の調査を並行で始めます。",
+        "受け入れ工程へ進み、完成画面でご報告します。",
+        "緑なら commit します。",
+        "残りの 2 件は次の turn で修正します。",
+        "配備が済んだら todos の項目を反映します。",
+    )
+    ROSTER = (
+        "継続します",
+        "再開します",
+        "進めます",
+        "進みます",
+        "続けます",
+        "着手します",
+        "実施します",
+        "実装します",
+        "取り掛かります",
+        "対応します",
+        "調整します",
+        "やります",
+        "修正します",
+        "削除します",
+        "追加します",
+        "作成します",
+        "変更します",
+        "反映します",
+        "統合します",
+        "置換します",
+        "コミットします",
+        "commit します",
+        "デプロイします",
+        "deploy します",
+        "始めます",
+        "報告します",
+        "提示します",
+    )
+
+    def test_c4_corpus_forms_block(self):
+        for text in self.CORPUS_BLOCKS:
+            with self.subTest(text=text):
+                self.fx.turn(say("整理しました"))
+                self.assertBlocks(run_hook(self.fx, text + TAIL), self.FAMILY)
+
+    def test_c4_roster_tail_blocks(self):
+        for tail in self.ROSTER:
+            with self.subTest(tail=tail):
+                self.fx.turn(say("整理しました"))
+                text = f"通知が届き次第、残りを{tail}。" + TAIL
+                self.assertBlocks(run_hook(self.fx, text), self.FAMILY)
+
+    def test_c4_polite_request_and_past_tense_pass(self):
+        """A request to the user and a tool-backed past tense are not future claims."""
+        for text in (
+            "配備は sudo cp をお願いします。",
+            "この設計で問題ないかご確認をお願いします。",
+            "全 test を再実行しました。",
+        ):
+            with self.subTest(text=text):
+                self.fx.turn(bash("python3 test.py"), say("実行しました"))
+                self.assertNotBlocked(run_hook(self.fx, text + TAIL), self.FAMILY)
+
+    def test_c4_list_and_table_labels_pass(self):
+        """A roster word inside a bullet or table row is a plan item, not a claim."""
+        self.fx.turn(say("整理しました"))
+        text = (
+            "計画:\n- 実装します\n| 手順 | 状態 |\n|---|---|\n| 反映します | 未 |"
+            + TAIL
+        )
+        self.assertNotBlocked(run_hook(self.fx, text), self.FAMILY)
+
+
+class CorpusMetaAnnounceTest(StopChecksTest):
+    """C12 rule 1 (corpus correction): non-action announcements the old hook blocked in 15 real turns."""
+
+    FAMILY = "self-report-honesty"
+    CORPUS_BLOCKS = (
+        "承認はそちらへお願いします（私は実行しません）。",
+        "こちらからは実行しません。",
+        "Task #9 に移しました (これ以上は催促しません)。",
+        "seed には触りません。",
+        "推測では書きません。",
+        "判断は保留します。",
+        "省略はしません。",
+    )
+
+    def test_c12_corpus_meta_announces_block(self):
+        for text in self.CORPUS_BLOCKS:
+            with self.subTest(text=text):
+                self.fx.turn(say("整理しました"))
+                self.assertBlocks(run_hook(self.fx, text + TAIL), self.FAMILY)
+
+    def test_c12_negated_fact_about_the_tool_passes(self):
+        """A statement about a tool's behaviour is not an announcement about the model's own inaction."""
+        self.fx.turn(say("整理しました"))
+        text = "この hook 自身は file を変更しません。" + TAIL
+        self.assertNotBlocked(run_hook(self.fx, text), self.FAMILY)
+
+
+class CorpusRoutingQuestionTest(StopChecksTest):
+    """C13 rule 2 (corpus correction): a closed choice handed to the user blocks without the skill."""
+
+    FAMILY = "offload-to-user"
+
+    def test_c13_which_one_question_blocks(self):
+        for text in (
+            "先に A の 10 件だけ適用して B は保留、という進め方でもよいです。どちらにしますか?",
+            "(A) 今すぐ始める、(B) 取り込みまで待つ、のどちらにしますか？",
+        ):
+            with self.subTest(text=text):
+                self.fx.turn(say("整理しました"))
+                self.assertBlocks(run_hook(self.fx, text), self.FAMILY)
+
+    def test_c13_which_one_question_after_the_skill_passes(self):
+        self.fx.turn(call("Skill", skill="declare-and-proceed"), say("整理しました"))
+        text = "(A) 今すぐ始める、(B) 取り込みまで待つ、のどちらにしますか？"
+        self.assertNotBlocked(run_hook(self.fx, text), self.FAMILY)
+
+
+class ReviewCorrectionTest(StopChecksTest):
+    """Contract corrections from the first independent review (2026-08-27), one test per finding."""
+
+    def test_c18_hook_is_executable(self):
+        self.assertTrue(os.access(HOOK, os.X_OK), HOOK)
+        with open(HOOK, encoding="utf-8") as stream:
+            self.assertEqual(stream.readline().rstrip(), "#!/usr/bin/env python3")
+
+    def test_c3_inline_code_is_stripped_before_block_and_warn(self):
+        self.fx.turn(say("作業しました"))
+        text = "検出語 `この後 実装を進めます` を regex に追加しました。" + TAIL
+        self.assertNotBlocked(run_hook(self.fx, text), "continuation-claim")
+        text = "`該当なし` という語を pattern に追加しました。" + TAIL
+        self.assertNotWarned(run_hook(self.fx, text), "claim-without-evidence")
+
+    def test_c5_mentions_in_other_sentences_do_not_count(self):
+        self.fx.turn(bash("git status"), say("報告します"))
+        for text in (
+            "レビュー報告書を 3 節にまとめ終わりました。lint は未実施のままです。",
+            "Priority の整理が完了しました。所見は 3 件です。",
+            "調査が完了しました。commit はまだ行っていません。",
+        ):
+            with self.subTest(text=text):
+                self.assertNotBlocked(
+                    run_hook(self.fx, text + TAIL), "done-state-ledger"
+                )
+
+    def test_c5_same_sentence_mention_still_blocks(self):
+        self.fx.turn(bash("git status"), say("報告します"))
+        proc = run_hook(self.fx, "ruff 0 件で lint まで完了しました。" + TAIL)
+        self.assertBlocks(proc, "done-state-ledger")
+
+    def test_c4_stop_declaration_across_a_period_passes(self):
+        self.fx.turn(say("報告します"))
+        text = "これから続きを進めますが、ここで停止します。再開条件は承認です。" + TAIL
+        self.assertNotBlocked(run_hook(self.fx, text), "continuation-claim")
+
+    def test_c4_background_id_in_another_sentence_passes(self):
+        self.fx.turn(
+            bash("python3 long.py"),
+            tool_result("Command running in background with ID: bg-77"),
+            say("起動しました"),
+        )
+        text = "この後 解析を進めます。background task の id は bg-77 です。" + TAIL
+        self.assertNotBlocked(run_hook(self.fx, text), "continuation-claim")
+
+    def test_c8_non_md_paths_are_tracked(self):
+        report = tool_result("subagent report: 候補を 3 件見つけました")
+        agent = call("Agent", subagent_type="general-purpose", prompt="調査")
+        for path in (
+            "files/claude_managed-hooks/stop_checks.py",
+            "/var/lib/claude-rag-memory/claude-lessons-learned/org/alpha",
+        ):
+            with self.subTest(path=path):
+                text = f"{path} の方針は妥当と判断しました。" + TAIL
+                self.fx.turn(agent, report, say("報告します"))
+                self.assertBlocks(run_hook(self.fx, text), "ruling-without-reading")
+                self.fx.turn(agent, report, read(path), say("報告します"))
+                self.assertNotBlocked(run_hook(self.fx, text), "ruling-without-reading")
+
+    def test_c16_waste_latch_survives_a_blocked_stop(self):
+        self.fx.write([prompt("この待ち時間は無駄では?"), say("報告します")])
+        self.assertBlocks(
+            run_hook(self.fx, "この後 実装を進めます。"), "continuation-claim"
+        )
+        self.assertIn("無駄", warn_body(run_hook(self.fx, "調査を終えました。" + TAIL)))
+
+    def test_c12_unexpected_input_wording_passes(self):
+        self.fx.turn(say("報告します"))
+        text = "想定外の入力で fail-open することを確認しました。" + TAIL
+        self.assertNotBlocked(run_hook(self.fx, text), "self-report-honesty")
+
+    def test_c13_declarative_self_decision_passes(self):
+        self.fx.turn(say("報告します"))
+        for text in (
+            "どちらを先に読むかは自分で判断しました。",
+            "実装するか調査するかは自分で決めて着手しました。",
+        ):
+            with self.subTest(text=text):
+                self.assertNotBlocked(run_hook(self.fx, text + TAIL), "offload-to-user")
+
+    def test_c13_inline_host_command_warns_despite_an_unrelated_fence(self):
+        self.fx.turn(say("報告します"))
+        text = (
+            "お手元で `git push origin main` を実行してください。\n\n```\n# 参考\nls\n```"
+            + TAIL
+        )
+        self.assertWarnsFamily(run_hook(self.fx, text), "host-command-format")
+
+    def test_c2_window_holds_a_200kb_tool_result(self):
+        self.fx.turn(
+            read(self.fx.repo_file("big.txt")),
+            tool_result("L" * 200_000),
+            say("読みました"),
+        )
+        self.assertBlocks(
+            run_hook(self.fx, "この後 実装を進めます。"), "continuation-claim"
+        )
+
+    def test_c2_final_text_and_state_families_survive_a_lost_boundary(self):
+        self.fx.wind_down()
+        self.fx.native_task("報告書を書く")
+        self.fx.turn(
+            read(self.fx.repo_file("big.txt")),
+            tool_result("L" * 600_000),
+            say("読みました"),
+        )
+        proc = run_hook(
+            self.fx, "seed には触りません。commit まで完了しました。" + TAIL
+        )
+        self.assertBlocks(proc, "self-report-honesty")
+        self.assertBlocks(proc, "wind-down-open-tasks")
+        self.assertNotIn("done-state-ledger", blocked(proc))
+
+    def test_c10_truncated_window_with_an_unreaped_launch_warns(self):
+        self.fx.wind_down()
+        filler = [say("x" * 900)] * 2_900
+        self.fx.write(
+            [
+                prompt(),
+                *filler,
+                bash("python3 long.py"),
+                tool_result("Command running in background with ID: bg-1"),
+                say("片付けました"),
+            ]
+        )
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertWarnsFamily(proc, "wind-down-background-unreaped")
+        self.assertIn("窓外", warn_body(proc))
+
+    def test_c16_non_utf8_entry_is_skipped(self):
+        self.fx.memory_entry("alpha", "証跡を確認せよ")
+        broken = os.path.join(self.fx.memory, "org", "broken.md")
+        with open(broken, "wb") as stream:
+            stream.write(b"---\nname: broken\ncheck: \xff\xfe check\nwhen: stop\n---\n")
+        self.fx.turn(say("報告します"))
+        proc = run_hook(self.fx, "調査を終えました。" + TAIL)
+        self.assertWarnsFamily(proc, "memory-reminder")
+        self.assertIn("証跡を確認せよ", warn_body(proc))
+
+    def test_c17_marker_reads_the_statusline_cache(self):
+        cache_dir = os.path.join(self.fx.cache, "claude-tui-statusline")
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(
+            os.path.join(cache_dir, SESSION + ".json"), "w", encoding="utf-8"
+        ) as stream:
+            json.dump(
+                {
+                    "stdin": {"context_window": {"used_percentage": 48}},
+                    "session_started_epoch": 1000,
+                },
+                stream,
+            )
+        self.fx.turn(say("報告します"))
+        self.assertIn(
+            "Context 48%", marker(run_hook(self.fx, "調査を終えました。" + TAIL))
+        )
+
+    def test_c17_marker_without_a_cache_shows_a_dash(self):
+        self.fx.turn(say("報告します"))
+        self.assertIn(
+            "Context -", marker(run_hook(self.fx, "調査を終えました。" + TAIL))
+        )
 
 
 if __name__ == "__main__":
