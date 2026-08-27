@@ -182,46 +182,6 @@ Exit Criteria:
 
 Work file: `drafts/mention-guard/` (発注書 2 通と回帰レビュー 2 通)
 
-### codex plugin の broker がセッション終了後も生き残る
-
-起票: user 2026-08-23 (別デバイスの調査結果を共有・「todo に記載して」)
-
-Goal: session 終了後も生き残り、削除済み worktree を掴んだまま蓄積する broker プロセスと
-その残骸を、鍵ずれの解消と状態駆動の回収の両輪で止める。
-
-原因は単一 = 鍵ずれ (登録 = `--cwd` の git root の hash、回収 = 終了時 cwd の hash の 1 点照会)。
-既製の回収機構は無い (2026-08-23 確定)。
-
-Exit Criteria:
-
-- [x] 方式をユーザーが決めた — 2026-08-27 決裁「書き換えるのとセットなら費用が小さく、推奨に変えます。
-  → それでお願いします」: 正本を書き換えたうえで下の 4 点を全部載せる。止血として同日
-  `codex_broker_reap --apply` で 11 本 (614 MB) を回収済み
-- [x] 正本の書き換え — 2026-08-27 に「worktree 内で起動」(`ca2f7e9`) と書いたが機構 (SessionEnd 時点の cwd の git root
-  が鍵、#380) より強く、隣 session 経由のユーザー発言「使い物にならないルールは壊れている」で同日「発注前に単独 cd で
-  移り終了まで留まる」へ再改訂 (`00df73e`、skill L25 / L79・policy §8)。配備先 `diff -q` IDENTICAL を同日実測
-- [x] deny (鍵ずれの回避): 発注 session の git root ≠ `--cwd` の git root を deny — worktree gate 書き直しの
-  契約 claim として実装・配備した (2026-08-27、`codex_delegation_gate.py` の [same-root] rule = 契約 C10、配備先 IDENTICAL)
-- [x] 記録 + SessionEnd 回収 (取りこぼし): 発注 hook が session → `--cwd` を記録し、SessionEnd hook が
-  その worktree を掴む broker を停止要求 → SIGTERM → SIGKILL で回収した (`codex_broker_reap` に cwd filter) —
-  2026-08-27 に不要と判断して閉じる: [same-root] deny で鍵ずれ自体が起きず、残骸は SessionStart / worktree 回収時の
-  掃引が拾う (異論があれば復活させる)
-- [x] worktree 回収時 reap + 台帳: `codex_broker_sweep.py` (SessionStart と `git worktree remove|prune` の PostToolUse
-  Bash で `codex_broker_reap --apply`、回収時のみ台帳 `~/.claude/hooks/state/codex_broker_sweep/ledger.jsonl` に追記) を
-  契約 test 21 件 + 変異 6 体で固定し配備 (merge `3c56a03`、配備先 2 file IDENTICAL、host smoke exit 0 — 2026-08-27)
-- [x] `codex_broker_reap` に起動中 broker の min-age guard を足した — 2026-08-27 の独立レビュー所見 (`cxc-*` dir 作成 →
-  `broker.pid` 書込の窓と `broker.json` の非 atomic 書込を stale と誤判定し、削除で永続漏れを作る) に対し、60 s 未満の
-  孤児 dir / 読めない・pid 未起動の記録を keep に倒す `guard_young` を selftest 4 件付きで実装 (`0a08044`)、
-  配備先 IDENTICAL・host selftest 9/9 OK を同日実測
-- [x] 対策 C (回収 tool): `files/codex_broker_reap` を実装・配備 (2026-08-23)。host 実測 =
-  reap 5 / keep 2 / stale 114、孤児 3 本も回収、停止要求だけで全件停止
-- [x] 対策 D (upstream 報告): #380 へコメント投稿 (2026-08-24、
-  `https://github.com/openai/codex-plugin-cc/issues/380#issuecomment-5388760433`)
-
-Work file: `last-session-handoff.md` (再開手順)、`files/codex_broker_reap` (host 実行・手順は `--help`)、
-`drafts/codex-broker-leak-upstream-report.md`、`drafts/broker-leak-repro.sh`、
-memory `feedback_codex_broker_outlives_session` (org)
-
 ### handoff の lifecycle 同期を hook で担保する
 
 起票: user 2026-08-23 (「handoff protocol / hook の強化が必要?」への回答として提案)
