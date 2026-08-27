@@ -3,8 +3,8 @@
 
 用途: codex へ委譲する直前の gate。 委譲規律が必須とする節 (スコープ / 成果物 /
 作業量上限 / 実行してよい command / 適用される既存裁定 / 出力言語規約 / 所要見積もり)
-の有無と、 巡を重ねると食い違う 5 点 (報告書 path・終端 token・見積もりと調査しきい値の
-倍率・裁定の採番・kill-by-port 禁止) を検査する。
+の有無と、 巡を重ねると食い違いやすい点 (報告書 path・終端 token・見積もりバンド・
+裁定の列挙・kill-by-port 禁止・fix round の重複) を検査する。
 
 雛形の生成も本 script が持つ。 規則の持ち主と骨組みの作り手を分けると、 必須節が増えたときに
 片方だけ古くなるため。 空欄は `未記入` で置き、 埋め忘れは check_slots が所見にする。
@@ -13,9 +13,8 @@ Usage:
   codex_order_lint ORDER.md [ORDER.md ...]
   codex_order_lint --metadata ORDER.md
   codex_order_lint --new plain|fix|review NEW_ORDER.md
-  codex_order_lint --selftest
 
-Exit: 0 clean / 1 findings / 2 usage error / 3 --new の書き出し先が既にある。
+Exit: 0 clean / 1 findings / 2 usage・読み取りエラー / 3 --new の書き出し先が既にある。
 """
 
 from __future__ import annotations
@@ -24,10 +23,7 @@ import argparse
 import json
 import os
 import re
-import shutil
 import sys
-import tempfile
-import unittest
 from typing import Any
 
 REQUIRED_SECTIONS = (
@@ -44,7 +40,6 @@ REQUIRED_SECTIONS = (
 SLOT = "未記入"
 SLOT_PREVIEW = 8
 
-# 生成器を規約の持ち主に同居させる。 別 binary にすると規則と骨組みが乖離する。
 TEMPLATE_KINDS = {
     "plain": "template-order.md",
     "fix": "template-fix-order.md",
@@ -69,37 +64,52 @@ ORDERED_RE = re.compile(r"^(\d+)\.\s")
 NO_COMMIT_RE = re.compile(r"(commit|コミット)\s*(も|は)?\s*(しない|禁止)")
 REVIEW_KIND_RE = re.compile(r"^review-kind:\s*(\S.*?)\s*$")
 SCOPE_RE = re.compile(r"^scope:\s*(\S.*?)\s*$")
-SCOPE_REASON_RE = re.compile(r"^scope-reason:\s*(\S.*?)\s*$")
-TARGET_RE = re.compile(r"^target:\s*(\S.*?)\s*$")
-REVIEW_WORD_RE = re.compile(r"敵対レビュー|adversarial", re.IGNORECASE)
-TARGET_VALUE_RE = re.compile(r"^[a-z0-9-]{1,40}$")
 FIX_HEADER_RE = re.compile(
     r"^#\s+fix round\s+([1-9][0-9]*)(?:\s*:|\s*$)", re.IGNORECASE
-)
-VERDICT_ITEMS = (
-    "指摘の振り分け",
-    "受入判定",
-    "構造判定",
-    "由来の帰属",
-    "上流要件への批評",
-    "概念診断",
 )
 NEGATED_DECLARATION_PATTERN = (
     r"\s*(?:なし|ゼロ|しない|はしない|をしない|ではない|"
     r"は本発注に含まれない|は含まれない|(?:は|を)?持たない|"
     r"(?:は|を)?作らない|(?:廃止)?済み)"
 )
-MECHANISM_DECLARED_RE = re.compile(rf"機構追加(?!{NEGATED_DECLARATION_PATTERN})")
 FIX_METHOD_RE = re.compile(
     rf"仕様縮小|削除|既存集約|機構追加(?!{NEGATED_DECLARATION_PATTERN})"
 )
 FINDING_LINE_RE = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+.*所見", re.IGNORECASE)
 FINDING_NUMBER_RE = re.compile(r"所見\s*([1-9][0-9]*)", re.IGNORECASE)
-STRUCTURAL_WARNING = "機構追加が 2 巡連続しています。構造再審を行ってください。"
-# 適用有無は書き手が節で宣言する。 語の出現で引くと普通の日本語に発火する (2026-08-23 実測)。
-INVENTORY_SECTIONS = (
-    ("全数列挙", "状態を持たないなら「該当なし」と書く"),
-    ("依存閉包棚卸し", "廃止・撤去を伴わないなら「該当なし」と書く"),
+
+KIND = "review-kind: adversarial|acceptance|none を行頭形式で 1 行指定せよ"
+NO_INVENTORY = "## 既製手段の棚卸し に検討した既製 command/skill と不使用理由を列挙せよ"
+NO_SCOPE = "scope: diff|artifact を行頭形式で 1 行指定せよ"
+NO_REPORT = "報告書 path (*-report.md) が 1 度も書かれていない"
+NO_TOKEN = "報告書の最終行に置く終端 token が指定されていない"
+NO_BAND = "見積もりバンド (N〜M 分) が無い"
+NO_THRESHOLD = "調査発動しきい値 (K 分) が無い"
+NO_RULING = "適用される既存裁定が 1 件も列挙されていない"
+NO_KILL = "kill-by-port (fuser -k / pkill) の禁止が書かれていない"
+NO_COMMIT = "commit しない旨が書かれていない"
+NO_TOUCH = "触らない path が明示されていない"
+NO_FENCE = "実行してよい command が code fence で列挙されていない"
+FIX_KIND = "fix 発注書は review-kind: none と fix round header を指定せよ"
+FIX_HEADER = "fix 発注書は # fix round N: の H1 header を 1 行指定せよ"
+FIX_PREVIOUS = "fix round 2 以上には必須の節がない: ## 前巡 verdict"
+FIX_TWOWAY = "fix 発注書に必須の節がない: ## 2 方向分析"
+FIX_METHOD_SECTION = "fix 発注書に必須の節がない: ## 修正方式"
+FIX_METHOD = "## 修正方式 で各所見に 仕様縮小 / 削除 / 既存集約 / 機構追加を列挙せよ"
+SWEEP = (
+    "## 掃引 に各所見の欠陥定義 1 行と、同欠陥の全 site を機械列挙する grep/AST command と結果、"
+    "または単一 site である根拠を記載せよ。指摘 site だけの修正による配り漏れと多巡消費を防ぐため"
+    "class 単位で掃引せよ"
+)
+TREATMENTS = ("削除・縮小", "契約の訂正", "構造化", "bounded-risk 受入", "廃棄")
+TREATMENT_MIN_ROUND = 3
+TREATMENT_MISSING = (
+    f"fix round {TREATMENT_MIN_ROUND} 以上には必須の節がない: ## 処置の種別 ("
+    + " / ".join(TREATMENTS)
+    + " の 1 つを名乗る)"
+)
+TREATMENT_CHOICE = (
+    "## 処置の種別 で " + " / ".join(TREATMENTS) + " のちょうど 1 つを名乗れ"
 )
 
 
@@ -155,91 +165,6 @@ def check_slots(lines: list[str]) -> list[str]:
     return [f"{SLOT} の slot が {len(marked)} 件残っている: {shown}{rest}"]
 
 
-def check_report_path(lines: list[str]) -> list[str]:
-    paths = {m.group(0) for line in lines for m in REPORT_PATH_RE.finditer(line)}
-    if not paths:
-        return ["報告書 path (*-report.md) が 1 度も書かれていない"]
-    if len(paths) > 1:
-        return [f"報告書 path が食い違う: {' / '.join(sorted(paths))}"]
-    return []
-
-
-def check_terminal_token(lines: list[str]) -> list[str]:
-    named = [
-        m.group(1)
-        for i in outside_fences(lines)
-        if "最終行" in lines[i]
-        for m in TOKEN_RE.finditer(lines[i])
-    ]
-    if not named:
-        return ["報告書の最終行に置く終端 token が指定されていない"]
-    # 書式例にも現れていなければ、 発注文だけの約束で終わっている。
-    if len(re.findall(rf"\b{re.escape(named[0])}\b", "\n".join(lines))) < 2:
-        return [f"終端 token {named[0]} が報告書の書式例に現れない"]
-    return []
-
-
-def check_estimate(lines: list[str]) -> list[str]:
-    whole = "\n".join(lines)
-    band, threshold = BAND_RE.search(whole), THRESHOLD_RE.search(whole)
-    if not band:
-        return ["見積もりバンド (N〜M 分) が無い"]
-    if not threshold:
-        return ["調査発動しきい値 (K 分) が無い"]
-    upper, fired = int(band.group(2)), int(threshold.group(1))
-    if fired != upper * 2:
-        return [f"調査発動しきい値 {fired} 分が見積もり上限 {upper} 分の 2 倍でない"]
-    return []
-
-
-def first_break(numbers: list[int]) -> str:
-    """The first item whose number is not its position, as `位置 N -> 記載 M`."""
-    return next(
-        (f"位置 {i} -> 記載 {n}" for i, n in enumerate(numbers, 1) if i != n),
-        "末尾",
-    )
-
-
-def check_rulings(section: list[str]) -> list[str]:
-    # 裁定が引用する fence 内の番号付き例を裁定に数えると、 採番検査が偽陽性になる。
-    live = [section[i] for i in outside_fences(section)]
-    numbers = [int(m.group(1)) for line in live if (m := ORDERED_RE.match(line))]
-    if not numbers:
-        return ["適用される既存裁定が 1 件も列挙されていない"]
-    if numbers != list(range(1, len(numbers) + 1)):
-        return [
-            f"裁定の採番が 1..{len(numbers)} の昇順でない "
-            f"(重複・欠番・並び違い: {first_break(numbers)})"
-        ]
-    return []
-
-
-def check_prohibitions(lines: list[str]) -> list[str]:
-    whole = "\n".join(lines)
-    stated = {
-        "kill-by-port (fuser -k / pkill) の禁止が書かれていない": "fuser -k" in whole
-        and "pkill" in whole,
-        "commit しない旨が書かれていない": bool(NO_COMMIT_RE.search(whole)),
-        "触らない path が明示されていない": "触らない" in whole,
-    }
-    return [message for message, said in stated.items() if not said]
-
-
-def check_command_fence(section: list[str]) -> list[str]:
-    if not any(FENCE_RE.match(line) for line in section):
-        return ["実行してよい command が code fence で列挙されていない"]
-    return []
-
-
-def metadata_values(lines: list[str], pattern: re.Pattern[str]) -> list[str]:
-    """行頭メタデータの値。 code fence 内の例は申告として扱わない。"""
-    return [
-        match.group(1)
-        for index in outside_fences(lines)
-        if (match := pattern.match(lines[index]))
-    ]
-
-
 def level_two_body(
     lines: list[str], heading: str, *, prefix: bool = False
 ) -> list[str] | None:
@@ -271,9 +196,18 @@ def level_two_body(
     return lines[start:end]
 
 
-def has_nonempty_section(lines: list[str], prefix: str) -> bool:
-    section = level_two_body(lines, prefix, prefix=True)
+def has_nonempty_section(lines: list[str], heading: str) -> bool:
+    section = level_two_body(lines, heading, prefix=True)
     return section is not None and any(line.strip() for line in section)
+
+
+def metadata_values(lines: list[str], pattern: re.Pattern[str]) -> list[str]:
+    """行頭メタデータの値。 code fence 内の例は申告として扱わない。"""
+    return [
+        match.group(1)
+        for index in outside_fences(lines)
+        if (match := pattern.match(lines[index]))
+    ]
 
 
 def fix_round_values(lines: list[str]) -> list[int]:
@@ -283,6 +217,72 @@ def fix_round_values(lines: list[str]) -> list[int]:
         for index in outside_fences(lines)
         if (match := FIX_HEADER_RE.match(lines[index]))
     ]
+
+
+def check_report_path(lines: list[str]) -> list[str]:
+    paths = {m.group(0) for line in lines for m in REPORT_PATH_RE.finditer(line)}
+    if not paths:
+        return [NO_REPORT]
+    if len(paths) > 1:
+        return [f"報告書 path が食い違う: {' / '.join(sorted(paths))}"]
+    return []
+
+
+def check_terminal_token(lines: list[str]) -> list[str]:
+    found = any(
+        TOKEN_RE.search(lines[index])
+        for index in outside_fences(lines)
+        if "最終行" in lines[index]
+    )
+    return [] if found else [NO_TOKEN]
+
+
+def check_estimate(lines: list[str]) -> list[str]:
+    whole = "\n".join(lines)
+    if not BAND_RE.search(whole):
+        return [NO_BAND]
+    if not THRESHOLD_RE.search(whole):
+        return [NO_THRESHOLD]
+    return []
+
+
+def check_rulings(lines: list[str]) -> list[str]:
+    """裁定節の本文 (fence 外) に番号付き item が 1 件以上あるか。"""
+    live = [lines[index] for index in outside_fences(lines)]
+    if any(ORDERED_RE.match(line) for line in live):
+        return []
+    return [NO_RULING]
+
+
+def check_prohibitions(lines: list[str]) -> list[str]:
+    whole = "\n".join(lines)
+    stated = {
+        NO_KILL: "fuser -k" in whole and "pkill" in whole,
+        NO_COMMIT: bool(NO_COMMIT_RE.search(whole)),
+        NO_TOUCH: "触らない" in whole,
+    }
+    return [message for message, said in stated.items() if not said]
+
+
+def check_command_fence(section: list[str]) -> list[str]:
+    if not any(FENCE_RE.match(line) for line in section):
+        return [NO_FENCE]
+    return []
+
+
+def check_review_contract(lines: list[str]) -> list[str]:
+    kinds = metadata_values(lines, REVIEW_KIND_RE)
+    if len(kinds) != 1 or kinds[0] not in {"adversarial", "acceptance", "none"}:
+        return [KIND]
+    if kinds[0] == "none":
+        return []
+    findings: list[str] = []
+    if not has_nonempty_section(lines, "既製手段の棚卸し"):
+        findings.append(NO_INVENTORY)
+    scopes = metadata_values(lines, SCOPE_RE)
+    if len(scopes) != 1 or scopes[0] not in {"diff", "artifact"}:
+        findings.append(NO_SCOPE)
+    return findings
 
 
 def fix_method_entries(lines: list[str]) -> list[str]:
@@ -296,154 +296,54 @@ def fix_method_entries(lines: list[str]) -> list[str]:
     ]
 
 
-def declared_fix_rounds(path: str) -> tuple[dict[int, list[str]], list[str]]:
-    """同じ directory の regular Markdown file にある fix round 宣言。"""
-    rounds: dict[int, list[str]] = {}
-    errors: list[str] = []
-    directory = os.path.dirname(os.path.abspath(path)) or os.curdir
-    try:
-        entries = sorted(os.scandir(directory), key=lambda entry: entry.name)
-    except OSError as error:
-        return rounds, [f"fix 発注書 directory を列挙できない ({error})"]
-    for entry in entries:
-        if not entry.name.endswith(".md") or not entry.is_file(follow_symlinks=True):
-            continue
-        try:
-            with open(entry.path, encoding="utf-8") as handle:
-                sibling_lines = handle.read().splitlines()
-        except (OSError, UnicodeDecodeError) as error:
-            errors.append(f"既存発注書 {entry.path} を読めない ({error})")
-            continue
-        for number in fix_round_values(sibling_lines):
-            rounds.setdefault(number, []).append(os.path.abspath(entry.path))
-    return rounds, errors
-
-
-def check_fix_round_sequence(path: str, current: int) -> list[str]:
-    if not path or not os.path.isfile(path):
-        return []
-    rounds, findings = declared_fix_rounds(path)
-    duplicates = [number for number, paths in rounds.items() if len(paths) != 1]
-    if duplicates:
-        findings.append(
-            "fix round が重複している: " + " / ".join(map(str, sorted(duplicates)))
-        )
-    missing = [number for number in range(1, current + 1) if number not in rounds]
-    if missing:
-        findings.append("fix round が欠番: " + " / ".join(map(str, missing)))
-    later = sorted(number for number in rounds if number > current)
-    if later:
-        findings.append(
-            f"fix round {current} は既存の後続巡 "
-            + " / ".join(map(str, later))
-            + " より逆行している"
-        )
-    return findings
-
-
 def fix_methods(lines: list[str]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for entry in fix_method_entries(lines):
         number = FINDING_NUMBER_RE.search(entry)
         methods = list(dict.fromkeys(FIX_METHOD_RE.findall(entry)))
         result.append(
-            {
-                "finding": int(number.group(1)) if number else None,
-                "methods": methods,
-            }
+            {"finding": int(number.group(1)) if number else None, "methods": methods}
         )
     return result
 
 
-def lint_metadata(text: str, path: str, findings: list[str]) -> dict[str, Any]:
-    lines = text.splitlines()
-    rounds = fix_round_values(lines)
-    kinds = metadata_values(lines, REVIEW_KIND_RE)
-    scopes = metadata_values(lines, SCOPE_RE)
-    report_paths = sorted(
-        {match.group(0) for line in lines for match in REPORT_PATH_RE.finditer(line)}
-    )
-    has_order_marker = bool(kinds) or any(
-        name.startswith(REQUIRED_SECTIONS) for name, _, _ in sections(lines)
-    )
-    return {
-        "path": os.path.abspath(path),
-        "order_document": has_order_marker,
-        "review_kind": kinds[0] if len(kinds) == 1 else None,
-        "round": rounds[0] if len(rounds) == 1 else None,
-        "scope": scopes[0] if len(scopes) == 1 else None,
-        "methods": fix_methods(lines),
-        "has_previous_verdict": level_two_body(lines, "前巡 verdict") is not None,
-        "report_path": report_paths[0] if len(report_paths) == 1 else None,
-        "findings": findings,
-    }
-
-
-def structural_warnings(text: str, path: str) -> list[str]:
-    lines = text.splitlines()
-    rounds = fix_round_values(lines)
-    current_entries = fix_method_entries(lines)
-    if len(rounds) != 1 or not any(
-        MECHANISM_DECLARED_RE.search(entry) for entry in current_entries
-    ):
-        return []
-    previous = rounds[0] - 1
-    if previous < 1 or not path or not os.path.isfile(path):
-        return []
-    declared, _ = declared_fix_rounds(path)
-    previous_paths = declared.get(previous, [])
-    if len(previous_paths) != 1:
-        return []
-    if not os.path.isfile(previous_paths[0]):
-        return []
+def declared_fix_rounds(path: str) -> dict[int, list[str]]:
+    """同じ directory の regular Markdown file にある fix round 宣言 (自分自身も含む)。"""
+    rounds: dict[int, list[str]] = {}
+    directory = os.path.dirname(os.path.abspath(path)) or os.curdir
     try:
-        with open(previous_paths[0], encoding="utf-8") as handle:
-            previous_entries = fix_method_entries(handle.read().splitlines())
-    except (OSError, UnicodeDecodeError):
+        entries = sorted(os.scandir(directory), key=lambda entry: entry.name)
+    except OSError:
+        return rounds
+    for entry in entries:
+        if not entry.name.endswith(".md") or not entry.is_file(follow_symlinks=True):
+            continue
+        try:
+            with open(entry.path, encoding="utf-8") as handle:
+                sibling_lines = handle.read().splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for number in fix_round_values(sibling_lines):
+            rounds.setdefault(number, []).append(os.path.abspath(entry.path))
+    return rounds
+
+
+def check_fix_round_duplicates(path: str) -> list[str]:
+    if not path or not os.path.isfile(path):
         return []
-    return (
-        [STRUCTURAL_WARNING]
-        if any(MECHANISM_DECLARED_RE.search(entry) for entry in previous_entries)
-        else []
-    )
+    rounds = declared_fix_rounds(path)
+    duplicates = sorted(number for number, paths in rounds.items() if len(paths) != 1)
+    if not duplicates:
+        return []
+    return ["fix round が重複している: " + " / ".join(map(str, duplicates))]
 
 
-def check_review_contract(lines: list[str]) -> list[str]:
-    kinds = metadata_values(lines, REVIEW_KIND_RE)
-    if len(kinds) != 1 or kinds[0] not in {"adversarial", "acceptance", "none"}:
-        return ["review-kind: adversarial|acceptance|none を行頭形式で 1 行指定せよ"]
-    kind = kinds[0]
-    findings: list[str] = []
-    live_text = "\n".join(lines[index] for index in outside_fences(lines))
-    if kind == "none" and REVIEW_WORD_RE.search(live_text):
-        findings.append(
-            "review-kind: none と本文の敵対レビュー / adversarial 指定が一致しない"
-        )
-    if kind == "none":
-        return findings
-    inventory = level_two_body(lines, "既製手段の棚卸し")
-    if inventory is None or not any(line.strip() for line in inventory):
-        findings.append(
-            "## 既製手段の棚卸し に検討した既製 command/skill と不使用理由を列挙せよ"
-        )
-    scopes = metadata_values(lines, SCOPE_RE)
-    if len(scopes) != 1 or scopes[0] not in {"diff", "artifact"}:
-        findings.append("scope: diff|artifact を行頭形式で 1 行指定せよ")
-    elif scopes[0] == "artifact":
-        reasons = metadata_values(lines, SCOPE_REASON_RE)
-        if len(reasons) != 1:
-            findings.append(
-                "scope: artifact には非空の scope-reason: を行頭形式で 1 行指定せよ"
-            )
-    targets = metadata_values(lines, TARGET_RE)
-    if len(targets) != 1 or not TARGET_VALUE_RE.fullmatch(targets[0]):
-        findings.append("target: <slug> を [a-z0-9-]{1,40} で 1 行指定せよ")
-    missing_verdict = [item for item in VERDICT_ITEMS if item not in live_text]
-    if missing_verdict:
-        findings.append(
-            "報告書の verdict 要件が不足している: " + " / ".join(missing_verdict)
-        )
-    return findings
+def check_treatment(lines: list[str]) -> list[str]:
+    if not has_nonempty_section(lines, "処置の種別"):
+        return [TREATMENT_MISSING]
+    text = "\n".join(level_two_body(lines, "処置の種別", prefix=True) or [])
+    named = [option for option in TREATMENTS if option in text]
+    return [] if len(named) == 1 else [TREATMENT_CHOICE]
 
 
 def check_fix_contract(lines: list[str], path: str) -> list[str]:
@@ -454,58 +354,31 @@ def check_fix_contract(lines: list[str], path: str) -> list[str]:
     findings: list[str] = []
     kinds = metadata_values(lines, REVIEW_KIND_RE)
     if len(kinds) != 1 or kinds[0] != "none":
-        findings.append("fix 発注書は review-kind: none と fix round header を指定せよ")
-    if len(rounds) != 1:
-        findings.append("fix 発注書は # fix round N: の H1 header を 1 行指定せよ")
+        findings.append(FIX_KIND)
+    current = rounds[0] if len(rounds) == 1 else None
+    if current is None:
+        findings.append(FIX_HEADER)
     else:
-        findings.extend(check_fix_round_sequence(path, rounds[0]))
-        if rounds[0] >= 2:
-            previous = level_two_body(lines, "前巡 verdict")
-            if previous is None or not any(line.strip() for line in previous):
-                findings.append("fix round 2 以上には必須の節がない: ## 前巡 verdict")
-    if kinds == ["none"] and not has_nonempty_section(lines, "2 方向分析"):
-        findings.append("fix 発注書に必須の節がない: ## 2 方向分析")
+        findings.extend(check_fix_round_duplicates(path))
+        if current >= 2 and not has_nonempty_section(lines, "前巡 verdict"):
+            findings.append(FIX_PREVIOUS)
+    if not has_nonempty_section(lines, "2 方向分析"):
+        findings.append(FIX_TWOWAY)
     if method is None:
-        findings.append("fix 発注書に必須の節がない: ## 修正方式")
+        findings.append(FIX_METHOD_SECTION)
     else:
-        live = [method[index] for index in outside_fences(method)]
         entries = fix_method_entries(lines)
-        if not entries or any(not FIX_METHOD_RE.search(line) for line in entries):
-            findings.append(
-                "## 修正方式 で各所見に 仕様縮小 / 削除 / 既存集約 / 機構追加を列挙せよ"
-            )
-        whole = "\n".join(live)
-        mechanism_declared = any(MECHANISM_DECLARED_RE.search(line) for line in live)
-        if mechanism_declared:
-            missing = [
-                word
-                for word in ("観測", "分岐", "資源", "failure mode", "test")
-                if word not in whole
-            ]
-            if missing:
-                findings.append(
-                    "機構追加には追加する観測 / 分岐 / 資源と各 failure mode + 対応 test を"
-                    "列挙せよ (不足: " + " / ".join(missing) + ")"
-                )
-            if not has_nonempty_section(lines, "既存保証の監査"):
-                findings.append("機構追加には必須の節がない: ## 既存保証の監査")
-    findings.extend(
-        f"fix 発注書に必須の節がない: ## {section} ({hint})"
-        for section, hint in INVENTORY_SECTIONS
-        if not has_nonempty_section(lines, section)
-    )
-    sweep = level_two_body(lines, "掃引")
-    if sweep is None or not any(line.strip() for line in sweep):
-        findings.append(
-            "## 掃引 に各所見の欠陥定義 1 行と、同欠陥の全 site を機械列挙する"
-            " grep/AST command と結果、または単一 site である根拠を記載せよ。"
-            "指摘 site だけの修正による配り漏れと多巡消費を防ぐため class 単位で掃引せよ"
-        )
+        if not entries or any(not FIX_METHOD_RE.search(entry) for entry in entries):
+            findings.append(FIX_METHOD)
+    if not has_nonempty_section(lines, "掃引"):
+        findings.append(SWEEP)
+    if current is not None and current >= TREATMENT_MIN_ROUND:
+        findings.extend(check_treatment(lines))
     return findings
 
 
 def lint(text: str, path: str = "") -> list[str]:
-    """Every convention breach in one order document."""
+    """Every convention breach in one order document, in a fixed order."""
     lines = text.splitlines()
     found = sections(lines)
     return [
@@ -522,576 +395,64 @@ def lint(text: str, path: str = "") -> list[str]:
     ]
 
 
-CONFORMING = """# 発注書: 例
-
-review-kind: none
-
-## 目的
-
-例である。
-
-## スコープ
-
-読んでよい path は `files/x` のみ。 **触らない path** は上記以外の全て。
-
-## 成果物
-
-- 報告書 1 file のみ: `drafts/example-report.md`
-- commit もしない
-
-## 作業量上限 (worst-case bound)
-
-- 読む file は 1 本のみ
-
-## 実行してよい command
-
-```
-python3 files/x --selftest
-```
-
-- `fuser -k` / `pkill` 等の kill-by-port は禁止
-
-## 適用される既存裁定 (これに反する指摘は不成立)
-
-1. **裁定 A**: 説明
-2. **裁定 B**: 説明
-
-## レビューの観点
-
-新規 material 指摘を探す。
-
-## verdict 要件
-
-1. 指摘の振り分け: 用途内欠陥 / 場外 / 境界に分類する。
-2. 受入判定: charter 水準への到達可否を示す。
-3. 構造判定: 積み上げ可 / 差し戻しを示す。
-4. 由来の帰属: 直前 fix 由来 / 既存在庫 / 新規 code に分類する。
-5. 上流要件への批評: charter・使い方への指摘を示し、無ければ「なし」とする。
-6. 概念診断: 欠けている・歪んでいる抽象を名指しし、無ければ「なし」とする。
-
-## 出力言語規約
-
-- 報告書 (`drafts/example-report.md`) は **日本語**で書く
-
-## 報告書の書式
-
-```markdown
-# 報告書
-
-REPORT_COMPLETE
-```
-
-- **報告書の最終行は `REPORT_COMPLETE` の 1 行で終える**
-
-## 所要見積もり
-
-- 見積もりバンド: **20〜30 分**
-- 調査発動しきい値: **60 分** (見積もりの 2 倍)
-"""
-
-
-class LintTest(unittest.TestCase):
-    def _fix_order(self, number: int, method: str = "既存集約") -> str:
-        text = CONFORMING.replace("# 発注書: 例", f"# fix round {number}: 例")
-        prefix = ""
-        if number >= 2:
-            prefix = "## 前巡 verdict\n\n前巡の判定を受けて class 是正する。\n\n"
-        detail = ""
-        audit = ""
-        if MECHANISM_DECLARED_RE.search(method):
-            detail = "。観測・分岐・資源と各 failure mode + 対応 test を列挙"
-            audit = (
-                "## 既存保証の監査\n\n"
-                "既存構造だけではこの検査を表現できない理由を確認する。\n\n"
-            )
-        return text.replace(
-            "## 目的",
-            f"{prefix}## 2 方向分析\n\n起源と防止を対にして確認する。\n\n"
-            f"## 修正方式\n\n- 所見 1: {method}{detail}\n\n{audit}"
-            "## 全数列挙\n\n全状態と遷移を列挙する。\n\n"
-            "## 依存閉包棚卸し\n\n依存語句と担保名を掃引する。\n\n"
-            "## 掃引\n\n欠陥定義と grep command による全 site を列挙する。\n\n"
-            "## 目的",
-        )
-
-    def test_a_conforming_order_document_has_no_findings(self):
-        self.assertEqual(lint(CONFORMING), [])
-
-    def test_a_missing_required_section_is_named(self):
-        broken = CONFORMING.replace("## 出力言語規約", "## 言語のはなし")
-        self.assertIn("必須の節がない: ## 出力言語規約", lint(broken))
-
-    def test_two_spellings_of_the_report_path_are_a_finding(self):
-        broken = CONFORMING.replace(
-            "報告書 (`drafts/example-report.md`)", "報告書 (`drafts/exampl-report.md`)"
-        )
-        self.assertTrue(any("食い違う" in f for f in lint(broken)))
-
-    def test_a_report_path_never_written_is_a_finding(self):
-        broken = CONFORMING.replace("-report.md", "-out.md")
-        self.assertIn("報告書 path (*-report.md) が 1 度も書かれていない", lint(broken))
-
-    def test_a_terminal_token_promised_but_absent_from_the_format_is_a_finding(self):
-        broken = CONFORMING.replace("\nREPORT_COMPLETE\n", "\n終わり\n")
-        self.assertIn(
-            "終端 token REPORT_COMPLETE が報告書の書式例に現れない", lint(broken)
-        )
-
-    def test_no_terminal_token_at_all_is_a_finding(self):
-        broken = CONFORMING.replace("報告書の最終行は", "報告書の締めは")
-        self.assertIn("報告書の最終行に置く終端 token が指定されていない", lint(broken))
-
-    def test_a_threshold_that_is_not_twice_the_band_is_a_finding(self):
-        broken = CONFORMING.replace(
-            "調査発動しきい値: **60 分**", "調査発動しきい値: **45 分**"
-        )
-        self.assertIn(
-            "調査発動しきい値 45 分が見積もり上限 30 分の 2 倍でない", lint(broken)
-        )
-
-    def test_a_missing_band_is_a_finding(self):
-        broken = CONFORMING.replace("見積もりバンド: **20〜30 分**", "だいたい 30 分")
-        self.assertIn("見積もりバンド (N〜M 分) が無い", lint(broken))
-
-    def test_a_ruling_out_of_sequence_is_a_finding(self):
-        broken = CONFORMING.replace("2. **裁定 B**", "9. **裁定 B**")
-        self.assertTrue(any("位置 2 -> 記載 9" in f for f in lint(broken)))
-
-    def test_an_empty_ruling_list_is_a_finding(self):
-        broken = CONFORMING.replace(
-            "1. **裁定 A**: 説明\n2. **裁定 B**: 説明", "無し。"
-        )
-        self.assertIn("適用される既存裁定が 1 件も列挙されていない", lint(broken))
-
-    def test_a_missing_kill_by_port_ban_is_a_finding(self):
-        broken = CONFORMING.replace(
-            "`fuser -k` / `pkill` 等の kill-by-port は禁止", "静かに"
-        )
-        self.assertIn(
-            "kill-by-port (fuser -k / pkill) の禁止が書かれていない", lint(broken)
-        )
-
-    def test_a_missing_no_commit_line_is_a_finding(self):
-        broken = CONFORMING.replace("- commit もしない\n", "")
-        self.assertIn("commit しない旨が書かれていない", lint(broken))
-
-    def test_a_missing_untouchable_path_line_is_a_finding(self):
-        broken = CONFORMING.replace("**触らない path** は上記以外の全て。", "以上。")
-        self.assertIn("触らない path が明示されていない", lint(broken))
-
-    def test_commands_listed_as_prose_are_a_finding(self):
-        broken = CONFORMING.replace(
-            "```\npython3 files/x --selftest\n```", "python3 files/x --selftest"
-        )
-        self.assertIn(
-            "実行してよい command が code fence で列挙されていない", lint(broken)
-        )
-
-    def test_a_numbered_example_quoted_inside_a_fence_is_not_a_ruling(self):
-        quoted = CONFORMING.replace(
-            "2. **裁定 B**: 説明",
-            "2. **裁定 B**: 説明\n\n```\n9. 引用した例\n```",
-        )
-        self.assertEqual(lint(quoted), [])
-
-    def test_headings_quoted_inside_a_fence_are_not_sections(self):
-        # 書式例の中の ## を節と数えると、 裁定 section の境界がずれる。
-        quoted = CONFORMING.replace(
-            "```markdown\n# 報告書\n", "```markdown\n# 報告書\n\n## 指摘一覧\n"
-        )
-        self.assertEqual(lint(quoted), [])
-
-    def test_a_numbered_list_in_a_later_section_is_not_counted_as_rulings(self):
-        extra = CONFORMING.replace(
-            "## レビューの観点\n\n新規 material 指摘を探す。",
-            "## レビューの観点\n\n1. 観点 A\n2. 観点 B\n3. 観点 C",
-        )
-        self.assertEqual(lint(extra), [])
-
-    def test_review_kind_is_required_and_must_match_review_words(self):
-        missing = CONFORMING.replace("review-kind: none\n", "")
-        self.assertTrue(any("review-kind:" in finding for finding in lint(missing)))
-        mismatched = CONFORMING.replace("例である。", "adversarial review を実施する。")
-        self.assertTrue(any("一致しない" in finding for finding in lint(mismatched)))
-
-    def test_review_requires_nonempty_level_two_inventory(self):
-        review = CONFORMING.replace("review-kind: none", "review-kind: adversarial")
-        self.assertTrue(
-            any("既製 command/skill" in finding for finding in lint(review))
-        )
-        level_three = review.replace(
-            "## 目的", "### 既製手段の棚卸し\n\n既製 skill は不使用。\n\n## 目的"
-        )
-        self.assertTrue(
-            any("既製 command/skill" in finding for finding in lint(level_three))
-        )
-
-    def test_diff_scope_and_target_complete_review_metadata(self):
-        review = CONFORMING.replace(
-            "review-kind: none",
-            "review-kind: acceptance\nscope: diff\ntarget: auth-fix\n\n"
-            "## 既製手段の棚卸し\n\n既製 review command は要件外のため不使用。",
-        )
-        self.assertEqual(lint(review), [])
-
-    def test_artifact_scope_requires_reason_and_target_slug_is_validated(self):
-        review = CONFORMING.replace(
-            "review-kind: none",
-            "review-kind: acceptance\nscope: artifact\ntarget: Bad_Target\n\n"
-            "## 既製手段の棚卸し\n\n既製 review command は要件外のため不使用。",
-        )
-        findings = lint(review)
-        self.assertTrue(any("scope-reason:" in finding for finding in findings))
-        self.assertTrue(any("[a-z0-9-]" in finding for finding in findings))
-        fixed = review.replace(
-            "scope: artifact\ntarget: Bad_Target",
-            "scope: artifact\nscope-reason: diff 外の設計文書を対象にする。\ntarget: design-doc",
-        )
-        self.assertEqual(lint(fixed), [])
-
-    def test_review_requires_all_six_verdict_items(self):
-        review = CONFORMING.replace(
-            "review-kind: none",
-            "review-kind: acceptance\nscope: diff\ntarget: auth-fix\n\n"
-            "## 既製手段の棚卸し\n\n既製 review command は要件外のため不使用。",
-        )
-        broken = review.replace("6. 概念診断", "6. 実装への意見")
-        self.assertTrue(any("概念診断" in finding for finding in lint(broken)))
-        self.assertEqual(lint(review), [])
-
-    def test_fix_header_requires_methods_for_each_finding(self):
-        fix = CONFORMING.replace("# 発注書: 例", "# fix round 1: 例")
-        self.assertEqual(lint(CONFORMING, "orders/example-fixes.md"), [])
-        missing = lint(fix, "orders/example.md")
-        self.assertIn("fix 発注書に必須の節がない: ## 修正方式", missing)
-        partial = fix.replace(
-            "## 目的",
-            "## 修正方式\n\n- 所見 1: 既存集約\n- 所見 2: 手直し\n\n## 目的",
-        )
-        self.assertTrue(any("各所見" in finding for finding in lint(partial, "x.md")))
-
-    def test_fix_mechanism_addition_requires_failure_design(self):
-        incomplete = CONFORMING.replace("# 発注書: 例", "# fix round 1: 例").replace(
-            "## 目的", "## 修正方式\n\n- 所見 1: 機構追加\n\n## 目的"
-        )
-        self.assertTrue(
-            any("failure mode" in finding for finding in lint(incomplete, "x.md"))
-        )
-        complete = incomplete.replace(
-            "- 所見 1: 機構追加",
-            "- 所見 1: 機構追加。観測・分岐・資源と各 failure mode + 対応 test を列挙。"
-            "\n\n## 2 方向分析\n\n起源と防止を対にして確認する。"
-            "\n\n## 既存保証の監査\n\n既存構造では表現できない理由を確認する。"
-            "\n\n## 全数列挙\n\n該当なし。\n\n## 依存閉包棚卸し\n\n該当なし。"
-            "\n\n## 掃引\n\n欠陥定義を置き、grep command で全 site を列挙した結果を記録する。",
-        )
-        self.assertEqual(lint(complete, "x.md"), [])
-        negated = CONFORMING.replace("# 発注書: 例", "# fix round 1: 例").replace(
-            "## 目的",
-            "## 修正方式\n\n- 所見 1: 既存集約 (機構追加なし)"
-            "\n\n## 2 方向分析\n\n起源と防止を対にして確認する。"
-            "\n\n## 全数列挙\n\n該当なし。\n\n## 依存閉包棚卸し\n\n該当なし。"
-            "\n\n## 掃引\n\n欠陥定義を置き、grep command で全 site を列挙した結果を記録する。"
-            "\n\n## 目的",
-        )
-        self.assertEqual(lint(negated, "x.md"), [])
-
-    def test_fix_requires_nonempty_two_direction_analysis_with_heading_suffix(self):
-        complete = self._fix_order(1).replace(
-            "## 2 方向分析", "## 2 方向分析 (origin and prevention)"
-        )
-        self.assertEqual(lint(complete, "x.md"), [])
-        for broken in (
-            complete.replace("起源と防止を対にして確認する。", ""),
-            complete.replace("## 2 方向分析", "### 2 方向分析"),
-            complete.replace("## 2 方向分析", "## 二方向分析"),
-        ):
-            with self.subTest(broken=broken):
-                self.assertTrue(
-                    any("## 2 方向分析" in finding for finding in lint(broken, "x.md"))
-                )
-
-    def test_mechanism_addition_requires_existing_guarantee_audit(self):
-        complete = self._fix_order(1, "機構追加").replace(
-            "## 既存保証の監査", "## 既存保証の監査 (reuse decision)"
-        )
-        self.assertEqual(lint(complete, "x.md"), [])
-        broken = complete.replace("## 既存保証の監査", "## 保証の監査")
-        self.assertTrue(any("既存保証の監査" in item for item in lint(broken, "x.md")))
-        empty = complete.replace(
-            "既存構造だけではこの検査を表現できない理由を確認する。", ""
-        )
-        self.assertTrue(any("既存保証の監査" in item for item in lint(empty, "x.md")))
-        for negation in (
-            "機構追加なし",
-            "機構追加ゼロ",
-            "機構追加しない",
-            "機構追加ではない",
-            "機構追加は本発注に含まれない",
-        ):
-            with self.subTest(negation=negation):
-                text = self._fix_order(1, f"既存集約 ({negation})")
-                self.assertFalse(any("既存保証の監査" in item for item in lint(text)))
-        outside_method = self._fix_order(1).replace(
-            "例である。", "機構追加を別文書で扱う。"
-        )
-        self.assertFalse(any("既存保証の監査" in item for item in lint(outside_method)))
-
-    INVENTORY_SECTIONS = ("全数列挙", "依存閉包棚卸し")
-
-    def test_inventory_sections_are_required_unconditionally(self):
-        """語の出現でなく節の有無で要求する — 節を落とせば語に関わらず違反。"""
-        for section in self.INVENTORY_SECTIONS:
-            with self.subTest(section=section):
-                dropped = self._fix_order(1).replace(f"## {section}", "## 無関係")
-                self.assertTrue(
-                    any(f"## {section}" in item for item in lint(dropped, "x.md"))
-                )
-
-    def test_inventory_sections_accept_not_applicable(self):
-        """適用有無の判断は書き手が宣言する — 「該当なし」で埋めれば通る。"""
-        text = self._fix_order(1)
-        for section in self.INVENTORY_SECTIONS:
-            text = re.sub(
-                rf"(## {section}[^\n]*\n\n)[^\n]+", r"\1該当なし。", text, count=1
-            )
-        self.assertEqual(lint(text, "x.md"), [])
-
-    def test_ordinary_japanese_changes_no_findings(self):
-        """普通の日本語が節を要求しない (2026-08-23 実測: 5 通中 4 通が踏んだ誤爆)。"""
-        baseline = self._fix_order(1)
-        for phrase in (
-            "空状態のまま",
-            "という状態になっている",
-            "廃止済みの経緯",
-            "latch",
-        ):
-            with self.subTest(phrase=phrase):
-                text = baseline.replace("例である。", f"{phrase}を説明する。")
-                self.assertEqual(lint(text, "x.md"), lint(baseline, "x.md"))
-
-    def test_all_declaration_patterns_share_negation_exclusions(self):
-        patterns = (MECHANISM_DECLARED_RE, FIX_METHOD_RE)
-        stems = ("機構追加", "機構追加")
-        suffixes = (
-            "なし",
-            "ゼロ",
-            "しない",
-            "はしない",
-            "をしない",
-            "ではない",
-            "は本発注に含まれない",
-            "は含まれない",
-            "持たない",
-            "作らない",
-            "廃止済み",
-        )
-        for pattern, stem in zip(patterns, stems, strict=True):
-            self.assertIn(NEGATED_DECLARATION_PATTERN, pattern.pattern)
-            for suffix in suffixes:
-                with self.subTest(pattern=pattern.pattern, suffix=suffix):
-                    self.assertIsNone(pattern.search(stem + suffix))
-
-    def test_negated_mechanism_declarations_do_not_require_audit(self):
-        for sentence in ("機構追加は本発注に含まれない。", "機構追加ゼロ。"):
-            with self.subTest(sentence=sentence):
-                text = self._fix_order(1).replace("例である。", sentence)
-                self.assertFalse(
-                    any("## 既存保証の監査" in item for item in lint(text, "x.md"))
-                )
-
-    def test_fix_requires_a_nonempty_sweep_section(self):
-        method = CONFORMING.replace("# 発注書: 例", "# fix round 1: 例").replace(
-            "## 目的", "## 修正方式\n\n- 所見 1: 既存集約\n\n## 目的"
-        )
-        missing = lint(method, "x.md")
-        self.assertTrue(any("## 掃引" in finding for finding in missing))
-        empty = method.replace("## 目的", "## 掃引\n\n## 目的")
-        self.assertTrue(any("## 掃引" in finding for finding in lint(empty, "x.md")))
-        complete = method.replace(
-            "## 目的",
-            "## 2 方向分析\n\n起源と防止を対にして確認する。\n\n"
-            "## 全数列挙\n\n該当なし。\n\n## 依存閉包棚卸し\n\n該当なし。\n\n"
-            "## 掃引\n\n欠陥定義と grep command による全 site の結果を記録する。\n\n## 目的",
-        )
-        self.assertEqual(lint(complete, "x.md"), [])
-
-    def test_fix_round_two_requires_previous_verdict(self):
-        broken = self._fix_order(2).replace(
-            "## 前巡 verdict\n\n前巡の判定を受けて class 是正する。\n\n", ""
-        )
-        self.assertTrue(any("前巡 verdict" in finding for finding in lint(broken)))
-
-    def test_fix_round_sequence_detects_gap_duplicate_and_backtracking(self):
-        directory = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, directory, True)
-        paths = []
-        for name, number in (("one.md", 1), ("three.md", 3), ("dup.md", 3)):
-            path = os.path.join(directory, name)
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write(self._fix_order(number))
-            paths.append(path)
-        findings = lint(self._fix_order(3), paths[1])
-        self.assertTrue(any("欠番" in finding for finding in findings))
-        self.assertTrue(any("重複" in finding for finding in findings))
-        findings = lint(self._fix_order(1), paths[0])
-        self.assertTrue(any("逆行" in finding for finding in findings))
-
-    def test_metadata_contains_the_single_parse_result(self):
-        text = self._fix_order(2, "削除 + 既存集約")
-        metadata = lint_metadata(text, "orders/two.md", lint(text))
-        self.assertEqual(metadata["review_kind"], "none")
-        self.assertEqual(metadata["round"], 2)
-        self.assertEqual(metadata["scope"], None)
-        self.assertEqual(metadata["methods"][0]["methods"], ["削除", "既存集約"])
-        self.assertTrue(metadata["has_previous_verdict"])
-
-    def test_two_consecutive_mechanism_additions_warn_without_changing_rc(self):
-        import io
-        from contextlib import redirect_stderr, redirect_stdout
-
-        directory = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, directory, True)
-        first = os.path.join(directory, "one.md")
-        second = os.path.join(directory, "two.md")
-        with open(first, "w", encoding="utf-8") as handle:
-            handle.write(self._fix_order(1, "機構追加"))
-        with open(second, "w", encoding="utf-8") as handle:
-            handle.write(self._fix_order(2, "機構追加"))
-        out, err = io.StringIO(), io.StringIO()
-        with redirect_stdout(out), redirect_stderr(err):
-            code = main(["--metadata", second])
-        self.assertEqual(code, 0)
-        self.assertEqual(json.loads(out.getvalue())["round"], 2)
-        self.assertIn(STRUCTURAL_WARNING, err.getvalue())
-
-    def test_mechanism_addition_negation_does_not_warn(self):
-        directory = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, directory, True)
-        first = os.path.join(directory, "one.md")
-        second = os.path.join(directory, "two.md")
-        with open(first, "w", encoding="utf-8") as handle:
-            handle.write(self._fix_order(1, "機構追加"))
-        current = self._fix_order(2, "既存集約 (機構追加なし)")
-        with open(second, "w", encoding="utf-8") as handle:
-            handle.write(current)
-        self.assertEqual(structural_warnings(current, second), [])
-
-    def test_special_file_is_rejected_before_open(self):
-        import io
-        from contextlib import redirect_stdout
-
-        directory = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, directory, True)
-        pipe = os.path.join(directory, "order.md")
-        link = os.path.join(directory, "linked.md")
-        os.mkfifo(pipe)
-        os.symlink(pipe, link)
-        out = io.StringIO()
-        with redirect_stdout(out):
-            code = main(["--metadata", link])
-        self.assertEqual(code, 2)
-        self.assertIn("regular file", out.getvalue())
-
-
-class TemplateTest(unittest.TestCase):
-    """雛形と --new: 埋めれば通り、埋め忘れは必ず所見になる。
-    出所 2026-08-24: 未記入のままの骨組みは所見 1 件しか返さず、空欄が検査に見えていなかった。"""
-
-    def _text(self, kind: str) -> str:
-        source = template_source(kind)
-        if source is None:
-            self.skipTest("雛形が配備先にも repo にも無い")
-        with open(source, encoding="utf-8") as handle:
-            return handle.read()
-
-    def _fill(self, text: str) -> str:
-        return (
-            text.replace("**未記入〜未記入 分**", "**20〜30 分**")
-            .replace("**未記入 分**", "**60 分**")
-            .replace("# fix round N:", "# fix round 1:")
-            .replace("scope: 未記入", "scope: diff")
-            .replace("target: 未記入", "target: example")
-            .replace("- 所見 1: 未記入", "- 所見 1: 既存集約")
-            .replace(SLOT, "x")
-        )
-
-    def test_slot_finding_names_the_count_and_lines(self):
-        self.assertEqual(
-            check_slots([SLOT, "ok", SLOT]),
-            [f"{SLOT} の slot が 2 件残っている: L1, L3"],
-        )
-        self.assertEqual(check_slots(["ok"]), [])
-
-    def test_every_template_reports_its_unfilled_slots_first(self):
-        for kind in TEMPLATE_KINDS:
-            with self.subTest(kind=kind):
-                findings = lint(self._text(kind))
-                self.assertTrue(findings[0].startswith(f"{SLOT} の slot が"))
-
-    def test_every_template_is_completable(self):
-        for kind in TEMPLATE_KINDS:
-            with self.subTest(kind=kind):
-                self.assertEqual(lint(self._fill(self._text(kind))), [])
-
-    def test_fix_template_round_header_stays_inert(self):
-        # 文字どおりの N は申告に数えない。 数えると実在の round 1 が「重複」で落ちる。
-        self.assertEqual(fix_round_values(self._text("fix").splitlines()), [])
-
-    def test_new_derives_from_the_path_and_refuses_to_clobber(self):
-        import io
-        from contextlib import redirect_stdout
-
-        self._text("plain")
-        directory = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, directory, True)
-        target = os.path.join(directory, "sample-order.md")
-        with redirect_stdout(io.StringIO()):
-            self.assertEqual(main(["--new", "plain", target]), 0)
-            with open(target, encoding="utf-8") as handle:
-                seeded = handle.read()
-            self.assertEqual(main(["--new", "plain", target]), 3)
-        self.assertIn("# 発注書: sample-order", seeded)
-        self.assertIn(os.path.join(directory, "sample-order-report.md"), seeded)
-
-    def test_new_fix_numbers_the_round_from_its_siblings(self):
-        import io
-        from contextlib import redirect_stdout
-
-        self._text("fix")
-        directory = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, directory, True)
-        with redirect_stdout(io.StringIO()):
-            main(["--new", "fix", os.path.join(directory, "first.md")])
-            main(["--new", "fix", os.path.join(directory, "second.md")])
-        with open(os.path.join(directory, "first.md"), encoding="utf-8") as handle:
-            first = handle.read()
-        with open(os.path.join(directory, "second.md"), encoding="utf-8") as handle:
-            second = handle.read()
-        self.assertIn("# fix round 1: first", first)
-        self.assertNotIn("前巡 verdict", first)  # 1 巡目に前巡は無い
-        self.assertIn("# fix round 2: second", second)
-        self.assertIn("前巡 verdict", second)
-
-
-def template_source(kind: str) -> str | None:
-    """雛形の実体。 配備先を先に見て、 repo から直接動かす場合は隣を見る。"""
-    name = TEMPLATE_KINDS[kind]
-    return next(
-        (
-            path
-            for directory in TEMPLATE_DIRS
-            if os.path.isfile(path := os.path.join(directory, name))
-        ),
-        None,
+def metadata_record(text: str, path: str, findings: list[str]) -> dict[str, Any]:
+    lines = text.splitlines()
+    rounds = fix_round_values(lines)
+    kinds = metadata_values(lines, REVIEW_KIND_RE)
+    scopes = metadata_values(lines, SCOPE_RE)
+    report_paths = sorted(
+        {match.group(0) for line in lines for match in REPORT_PATH_RE.finditer(line)}
     )
+    found = sections(lines)
+    has_order_marker = bool(kinds) or any(
+        name.startswith(REQUIRED_SECTIONS) for name, _, _ in found
+    )
+    return {
+        "path": os.path.abspath(path),
+        "order_document": has_order_marker,
+        "review_kind": kinds[0] if len(kinds) == 1 else None,
+        "round": rounds[0] if len(rounds) == 1 else None,
+        "scope": scopes[0] if len(scopes) == 1 else None,
+        "methods": fix_methods(lines),
+        "has_previous_verdict": has_nonempty_section(lines, "前巡 verdict"),
+        "report_path": report_paths[0] if len(report_paths) == 1 else None,
+        "findings": findings,
+    }
 
 
-def drop_section(text: str, heading: str) -> str:
+def read_order(path: str) -> tuple[str | None, str | None]:
+    """UTF-8 本文と、 exit 2 用の 1 行理由 (成功時は理由 None)。"""
+    reason = None
+    if not os.path.isfile(path):
+        reason = f"{path}: 通常 file ではない"
+    else:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                return handle.read(), None
+        except UnicodeDecodeError:
+            reason = f"{path}: UTF-8 として読めない"
+        except OSError as error:
+            reason = f"{path}: 読めない ({error})"
+    return None, reason
+
+
+def find_template(filename: str) -> tuple[str | None, str | None]:
+    for directory in TEMPLATE_DIRS:
+        candidate = os.path.join(directory, filename)
+        if not os.path.isfile(candidate):
+            continue
+        try:
+            with open(candidate, encoding="utf-8") as handle:
+                return handle.read(), None
+        except OSError as error:
+            return None, f"{candidate}: 読めない ({error})"
+    return None, f"{filename}: 雛形が見つからない"
+
+
+def drop_level2_section(text: str, heading: str) -> str:
     lines = text.splitlines(keepends=True)
-    start = next(
-        (i for i, line in enumerate(lines) if line.strip() == f"## {heading}"), None
-    )
+    marker = f"## {heading}"
+    start = next((i for i, line in enumerate(lines) if line.strip() == marker), None)
     if start is None:
         return text
     end = next(
@@ -1101,109 +462,86 @@ def drop_section(text: str, heading: str) -> str:
     return "".join(lines[:start] + lines[end:])
 
 
-def seed_order(kind: str, path: str) -> str:
-    """雛形を、 著者が選んだ path から決まる値だけ埋めた本文。"""
-    source = template_source(kind)
-    if source is None:
-        raise FileNotFoundError(TEMPLATE_KINDS[kind])
-    with open(source, encoding="utf-8") as handle:
-        text = handle.read()
-    stem = os.path.splitext(os.path.basename(path))[0]
-    directory = os.path.dirname(path)
-    text = text.replace(
-        f"{SLOT}-report.md", os.path.join(directory, f"{stem}-report.md")
+def render_template(
+    template: str, stem: str, directory: str, kind: str, round_number: int | None
+) -> str:
+    text = template.replace(
+        "未記入-report.md", os.path.join(directory, f"{stem}-report.md")
     )
     text = text.replace(
-        f"{SLOT}-probe.txt", os.path.join(directory, f"{stem}-probe.txt")
+        "未記入-probe.txt", os.path.join(directory, f"{stem}-probe.txt")
     )
-    text = text.replace(f"# {SLOT} 報告書", f"# {stem} 報告書")
-    if kind == "fix":
-        # 巡番号は検査器自身の申告集計から採る。 欠番・重複・逆行を作れない唯一の取り方。
-        rounds, _ = declared_fix_rounds(path)
-        number = max(rounds, default=0) + 1
-        text = text.replace("# fix round N:", f"# fix round {number}:")
-        if number == 1:
-            text = drop_section(text, "前巡 verdict")
-    return text.replace(f": {SLOT}\n", f": {stem}\n", 1)
+    text = text.replace("# 未記入 報告書", f"# {stem} 報告書")
+    text = text.replace(": 未記入", f": {stem}")
+    if kind == "fix" and round_number is not None:
+        text = text.replace("fix round N:", f"fix round {round_number}:")
+        if round_number == 1:
+            text = drop_level2_section(text, "前巡 verdict")
+    return text
 
 
-def write_new_order(kind: str, path: str) -> int:
-    if os.path.exists(path):
-        print(f"{path}: 既にあるので上書きしない")
-        return 3
-    try:
-        text = seed_order(kind, path)
-    except FileNotFoundError as error:
-        print(f"雛形が見つからない: {error}")
+def new_order(kind: str, path: str) -> int:
+    filename = TEMPLATE_KINDS[kind]
+    template, reason = find_template(filename)
+    if reason is not None or template is None:
+        print(reason)
         return 2
+    stem = os.path.splitext(os.path.basename(path))[0]
+    directory = os.path.dirname(os.path.abspath(path)) or os.curdir
+    round_number = None
+    if kind == "fix":
+        existing = declared_fix_rounds(path)
+        round_number = max(existing) + 1 if existing else 1
+    text = render_template(template, stem, directory, kind, round_number)
     try:
-        if directory := os.path.dirname(path):
-            os.makedirs(directory, exist_ok=True)
         with open(path, "x", encoding="utf-8") as handle:
             handle.write(text)
-    except OSError as error:
-        print(f"{path}: 書けない ({error.strerror})")
-        return 2
-    print(f"{path}: {TEMPLATE_KINDS[kind]} から作成した")
+    except FileExistsError:
+        print(f"{path}: 既に存在する")
+        return 3
+    print(f"{path}: {filename} から作成した")
     return 0
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="Lint a codex order document.")
-    parser.add_argument("paths", nargs="*", help="order documents to check")
-    parser.add_argument(
-        "--metadata", action="store_true", help="emit one JSON object per document"
-    )
-    parser.add_argument(
-        "--new",
-        choices=tuple(TEMPLATE_KINDS),
-        metavar="KIND",
-        help="雛形から骨組みを書き出す (plain|fix|review)",
-    )
-    parser.add_argument(
-        "--selftest", action="store_true", help="run the built-in tests"
-    )
-    args = parser.parse_args(argv)
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="codex_order_lint")
+    parser.add_argument("paths", nargs="*", metavar="ORDER.md")
+    parser.add_argument("--metadata", action="store_true")
+    parser.add_argument("--new", metavar="KIND", choices=tuple(TEMPLATE_KINDS))
+    return parser
 
-    if args.new:
-        if len(args.paths) != 1:
-            parser.error("--new は書き出す path を 1 つ取る")
-        return write_new_order(args.new, args.paths[0])
-    if args.selftest:
-        loaded = unittest.defaultTestLoader.loadTestsFromNames(
-            [f"{__name__}.LintTest", f"{__name__}.TemplateTest"]
-        )
-        return 0 if unittest.TextTestRunner().run(loaded).wasSuccessful() else 1
-    if not args.paths:
-        parser.error("give at least one order document, or --selftest")
 
+def lint_paths(paths: list[str], *, metadata: bool) -> int:
     total = 0
-    for path in args.paths:
-        if not os.path.isfile(path):
-            print(f"{path}: regular file でないため読めない")
-            return 2
-        try:
-            with open(path, encoding="utf-8") as handle:
-                text = handle.read()
-        except OSError as err:
-            print(f"{path}: 読めない ({err.strerror})")
-            return 2
-        except UnicodeDecodeError:
-            print(f"{path}: UTF-8 として読めない")
+    for path in paths:
+        text, reason = read_order(path)
+        if reason is not None or text is None:
+            print(reason)
             return 2
         findings = lint(text, path)
-        for warning in structural_warnings(text, path):
-            print(f"{path}: warning: {warning}", file=sys.stderr)
-        if args.metadata:
-            print(json.dumps(lint_metadata(text, path, findings), ensure_ascii=False))
+        total += len(findings)
+        if metadata:
+            record = metadata_record(text, path, findings)
+            print(json.dumps(record, ensure_ascii=False))
         else:
             for finding in findings:
                 print(f"{path}: {finding}")
-        total += len(findings)
-    if total and not args.metadata:
+    if not metadata and total:
         print(f"{total} 件の規約違反")
     return 1 if total else 0
 
 
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.new is not None:
+        if len(args.paths) != 1:
+            parser.error("--new KIND には ORDER.md を 1 つだけ指定する")
+        return new_order(args.new, args.paths[0])
+    if not args.paths:
+        parser.error("ORDER.md を 1 つ以上指定するか --new を使う")
+    return lint_paths(args.paths, metadata=args.metadata)
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())
