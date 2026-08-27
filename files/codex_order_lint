@@ -477,7 +477,7 @@ def render_template(
         "未記入-probe.txt", os.path.join(directory, f"{stem}-probe.txt")
     )
     text = text.replace("# 未記入 報告書", f"# {stem} 報告書")
-    text = text.replace(": 未記入", f": {stem}")
+    text = re.sub(r"^(# [^\n]*): 未記入$", rf"\1: {stem}", text, count=1, flags=re.M)
     if kind == "fix" and round_number is not None:
         text = text.replace("fix round N:", f"fix round {round_number}:")
         if round_number == 1:

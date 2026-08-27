@@ -59,8 +59,9 @@ Contract (each claim maps to the tests named test_c<N>_*):
       `{path}: {template} から作成した`. It fills `{stem}-report.md`, `{stem}-probe.txt`,
       `# {stem} 報告書` and the title `: {stem}`, and leaves every other `未記入` slot. `fix` numbers
       the round as max(sibling rounds)+1, drops `## 前巡 verdict` at round 1 and `## 処置の種別` below
-      round 3. An existing path exits 3 without overwriting it; an unwritable path prints one reason
-      line on stdout and exits 2.
+      round 3 (the seeded section body is the bare slot). Only the H1 title takes the stem; `key: 未記入`
+      lines elsewhere stay slots. An existing path exits 3 without overwriting it; an unwritable path
+      prints one reason line on stdout and exits 2.
   C16 The retired judgements never come back: no finding may contain `機構追加には`, `逆行している`,
       `が欠番`, `終端 token` together with `書式例`, `target:`, `verdict 要件`, `scope-reason`,
       `裁定の採番`, `2 倍でない` or `none と本文` -- neither over the embedded corpus nor over
@@ -1013,6 +1014,23 @@ class OrderLintTest(unittest.TestCase):
         self.assertNotIn("## 処置の種別", texts[1])
         self.assertIn("## 処置の種別", texts[2])
         self.assertNotIn("必須の節がない: ## 処置の種別", third.stdout)
+
+    def test_c15_new_fills_only_the_title_slot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "sample.md")
+            self.assertEqual(run("--new", "review", path).returncode, 0)
+            text = read(path)
+        self.assertIn(": sample\n", text.splitlines(keepends=True)[0])
+        self.assertIn("scope: 未記入", text)
+        self.assertNotIn(": sample\n", "".join(text.splitlines(keepends=True)[1:]))
+
+    def test_c15_new_fix_seeds_a_bare_treatment_slot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = [os.path.join(tmp, name) for name in ("a.md", "b.md", "c.md")]
+            for path in paths:
+                self.assertEqual(run("--new", "fix", path).returncode, 0)
+            text = read(paths[2])
+        self.assertIn("## 処置の種別\n\n未記入\n", text)
 
 
 if __name__ == "__main__":
