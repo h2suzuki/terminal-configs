@@ -19,7 +19,13 @@ DECISION_WORDS = ("決裁", "裁定", "判断待ち", "承認待ち", "要確認
 EXECUTABLE_SUFFIXES = (".py", ".sh", ".mjs", ".js")
 UI_SUFFIXES = (".css", ".scss", ".tsx", ".jsx", ".vue", ".svelte", ".html")
 DEFAULT_MEMORY_ROOT = "/var/lib/claude-rag-memory/claude-lessons-learned"
-PROMPT_PREFIXES = ("<task-notification>", "<system-reminder>", "<local-command")
+PROMPT_PREFIXES = (
+    "<task-notification>",
+    "<system-reminder>",
+    "<local-command",
+    "Skill /",
+    "Stop hook feedback",
+)
 CONTINUATION_ENDINGS = (
     "継続します",
     "再開します",

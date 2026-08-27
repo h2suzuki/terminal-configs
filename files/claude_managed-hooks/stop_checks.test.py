@@ -35,7 +35,8 @@ test 方針: 3 出口それぞれを最小 payload で叩き、exit code と std
 
 入力: `transcript_path` の JSONL。末尾から 512 KB (`TURN_WINDOW_BYTES = 512 * 1024`) を読み、直近の **prompt boundary** 1 個までを turn とする。
 prompt boundary = `type == "user"` かつ `message.content` が str かつ、その先頭が
-`<task-notification>` / `<system-reminder>` / `<local-command` のいずれでもないもの。
+`<task-notification>` / `<system-reminder>` / `<local-command` / `Skill /` (skill 再 invoke の注入) /
+`Stop hook feedback` (hook の block 文面の注入) のいずれでもないもの (harness が user 名義で注入する entry は境界にしない)。
 turn から取り出す値はこの 6 つだけで、全 family はここからしか読まない:
 `final_text` (payload の `last_assistant_message`、無ければ turn 最後の assistant text)、`turn_text` (turn 内 assistant text の連結)、
 `tool_names` / `tool_paths` / `edited_paths` (Write/Edit の対象) / `bash_commands`。
@@ -693,6 +694,28 @@ class TurnFunnelTest(StopChecksTest):
     def test_c2_turn_without_prompt_boundary_is_empty(self):
         self.fx.write([say("作業しました"), edit(self.fx.repo_file("d.py"))])
         self.assertClean(run_hook(self.fx, "この後 実装を進めます。"))
+
+    def test_c2_injected_skill_and_hook_feedback_entries_are_not_boundaries(self):
+        """Harness-injected user entries must not cut the turn: the Task update before them still counts."""
+        self.fx.enable_task_tools()
+        self.fx.write(
+            [
+                prompt(),
+                call("mcp__mytask__TaskUpdate", id="1", status="in_progress"),
+                injected(
+                    "Skill /writing-code was loaded earlier (see the invoked-skills reminder above)"
+                ),
+                edit(self.fx.repo_file("a.py")),
+                injected(
+                    "Stop hook feedback:\n[stop_checks.py]: continuation-claim: …"
+                ),
+                edit(self.fx.repo_file("b.py")),
+                say("直しました"),
+            ]
+        )
+        self.assertNotBlocked(
+            run_hook(self.fx, "2 file を直しました。" + TAIL), "task-plan-first"
+        )
 
 
 class WarnScopeTest(StopChecksTest):
