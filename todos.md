@@ -48,8 +48,9 @@ Exit Criteria:
 - [x] 反証の中身を記録した (2026-08-28) — 2 件とも契約 C2 / C8 自体の誤りで、契約から作った受け入れ
   test も固定 4 変異もその誤りを再現するだけ。hook 間の噛み合わせ (skill_reminder_gate が強制する
   invoke が偽境界を作る) は context 遮断の独立レビューにも原理的に見えない。実運用は 1 日で 2 件出した
-- [ ] §5.6 の事前宣言どおり loop approach を捨て、運転規約を「受け入れ test + 独立レビュー 1 回」へ
-  戻す — `docs/adversarial-review-methodology.md` (凍結・削除のみ許可) の巡と再入場の規定を削除する
+- [x] §5.6 の事前宣言どおり loop approach を捨て、運転規約を 5 項目へ戻した (2026-08-28 `f32cb7a`) —
+  巡と再入場の規定を削除 (23 → 19 行、削除のみ)。削除はすべて検知側で、回避 3 つ (契約を先に書く /
+  構造を先に決める / 触る量の上限) は無傷。項目 1 に「環境の実態を先に読む」を追加
 
 Work file: `docs/adversarial-loop-meta-evaluation.md` (評価の正本)、
 `drafts/loop-exit-opinion-order-report.md` (第三者意見書・gitignore)
