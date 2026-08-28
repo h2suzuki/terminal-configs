@@ -155,6 +155,9 @@ Exit Criteria:
   `Async agent launched successfully` (直近 8 transcript の 33 件すべて)
 - [ ] 完了通知だけが窓にある時に block が warn へ落ちる経路を塞ぐ — 通知側は subagent の
   task-id を拾うため `missing_launch` が立ち、 同じ窓の未回収 Bash まで警告へ格下げされる
+- [ ] 起動文字列が本文に現れただけの行を起動と数えない — 過去 transcript を走査した Bash の
+  出力に `Workflow launched in background. Task ID: wilz0xhwl` が載っただけで、 別 session の
+  その id を本 session の未回収として block した (2026-08-29 実測)
 - [ ] Monitor の起動形を実測し、 検出の要否を確定する (直近 8 transcript に起動例 0 件)
 - [ ] 契約 test を red-first で追加し、 変異で殺せることを確認する
 - [ ] handoff SKILL.md の Pre-handoff checks 4 に「待ち合わせる」を選択肢として明記する
