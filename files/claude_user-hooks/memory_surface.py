@@ -109,6 +109,9 @@ QUERY_EXCERPT_LEN = 200
 MAX_ENTRY_SIZE = 50_000  # skip absurdly large feedback files
 # タグ無し entry の既定 tag (タグ導入前の全 entry = opus-4.8 世代、 意図的 reset)
 MODELS_DEFAULT = "opus-4.8"
+# `when:` 欠落 entry の既定 route (memory_routing_gate と同契約)
+WHEN_DEFAULT = "prompt"
+WHEN_AFTER_SUBAGENT = "after-subagent"
 # 1m 等の context-window 表記だけを落とす。 中身を問わず bracket を捨てると、
 # 将来の別 variant (safety-eval 等) まで同じ model へ潰してしまう。
 CONTEXT_WINDOW_SUFFIX = re.compile(r"\[\d+[kmg]\]")
@@ -378,6 +381,30 @@ def _model_pred(con: sqlite3.Connection, project_id: str, model: str):
 
     def ok(file_path: str) -> bool:
         return model in tags.get(file_path, {MODELS_DEFAULT})
+
+    return ok
+
+
+def _entry_when(file_path: str) -> set[str]:
+    """`when:` の値集合。 欠落・空・読めない entry は既定 prompt (gate と同じ space 区切り契約)。"""
+    try:
+        with open(file_path, encoding="utf-8") as f:
+            text = f.read(MAX_ENTRY_SIZE)
+    except OSError:
+        return {WHEN_DEFAULT}
+    m = re.search(r"^when:[ \t]*(.+)$", text, flags=re.MULTILINE)
+    values = {t.lower() for t in m.group(1).split()} if m else set()
+    return values or {WHEN_DEFAULT}
+
+
+def _when_pred(when: str):
+    """Predicate: does this entry's when: set (default prompt) include `when`?"""
+    cache: dict[str, set[str]] = {}
+
+    def ok(file_path: str) -> bool:
+        if file_path not in cache:
+            cache[file_path] = _entry_when(file_path)
+        return when in cache[file_path]
 
     return ok
 
@@ -863,8 +890,9 @@ def _surface_core(
     now: float,
     max_emit: int,
     model: str | None = None,
+    when: str = WHEN_DEFAULT,
 ) -> list[tuple[str, str, float]]:
-    """Hybrid-retrieve → model-filter → floor-gate → throttle-dedup → record up to max_emit picks; shared by _memory_surface (UPS) and surface_for_text (Stop). Recording an inject row is what makes the per-(file,session) throttle suppress a repeat — incl. an entry already surfaced this turn at UPS — within THROTTLE_SECONDS. Would-be picks whose tags exclude model are logged kind='mismatch' (tag-propagation stats), then selection reruns on the matching subset so a muted top-1 can't shadow a valid lower candidate."""
+    """Hybrid-retrieve → when-route filter → model-filter → floor-gate → throttle-dedup → record up to max_emit picks; shared by _memory_surface (UPS) and surface_for_text (Stop). Recording an inject row is what makes the per-(file,session) throttle suppress a repeat — incl. an entry already surfaced this turn at UPS — within THROTTLE_SECONDS. Would-be picks whose tags exclude model are logged kind='mismatch' (tag-propagation stats), then selection reruns on the matching subset so a muted top-1 can't shadow a valid lower candidate."""
     query = _build_query(query_text)
     if query is None:
         return []
@@ -872,14 +900,20 @@ def _surface_core(
         rows = _bm_candidates(con, query, project_id)
     except sqlite3.Error:
         return []
-    picks = _hybrid_picks(con, query_text, project_id, rows)
+    when_ok = _when_pred(when)
+    rows = [r for r in rows if when_ok(r[0])]
+    picks = _hybrid_picks(con, query_text, project_id, rows, when_ok)
     if picks is None:
         picks = _bm25_picks(rows)
     if model is not None:
-        ok = _model_pred(con, project_id, model)
-        mismatches = [p for p in picks if not ok(p[0])]
+        model_ok = _model_pred(con, project_id, model)
+        mismatches = [p for p in picks if not model_ok(p[0])]
         if mismatches:
-            rows_ok = [r for r in rows if ok(r[0])]
+            rows_ok = [r for r in rows if model_ok(r[0])]
+
+            def ok(file_path: str) -> bool:
+                return when_ok(file_path) and model_ok(file_path)
+
             picks = _hybrid_picks(con, query_text, project_id, rows_ok, ok)
             if picks is None:
                 picks = _bm25_picks(rows_ok)
@@ -919,6 +953,7 @@ def surface_for_text(
     project_id: str,
     max_emit: int = 1,
     model: str | None = None,
+    when: str = WHEN_DEFAULT,
 ) -> list[tuple[str, str, float]]:
     """Importable retrieval for non-UPS callers (e.g. the Stop hook): up to max_emit throttle-deduped (file_path, reminder, score) picks, [] when the DB is unavailable so the caller fails open. `model` accepts a raw id (normalized here); None surfaces unfiltered."""
     if not query_text or not query_text.strip():
@@ -935,6 +970,7 @@ def surface_for_text(
             time.time(),
             max_emit,
             _normalize_model(model) if model else None,
+            when,
         )
     finally:
         con.close()
@@ -1122,6 +1158,8 @@ def _main_query() -> int:
         payload = json.loads(sys.stdin.read() or "{}")
     except Exception:
         return 0
+    if payload.get("hook_event_name") == "SubagentStop":
+        return _main_subagent(payload)
     try:
         marker = _turn_marker(payload)
     except Exception:
@@ -1152,6 +1190,33 @@ def _main_query() -> int:
     if out:
         sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
     return 0
+
+
+def _main_subagent(payload: dict) -> int:
+    """SubagentStop handler — after-subagent route の 1 件を plain text + exit 2 (asyncRewake) で親 agent へ渡す。 additionalContext は SubagentStop では親に届かないため使わない。"""
+    try:
+        text = payload.get("last_assistant_message") or ""
+        if not isinstance(text, str) or not text.strip():
+            return 0
+        cwd = payload.get("cwd") or os.getcwd()
+        picks = surface_for_text(
+            text,
+            payload.get("session_id") or "",
+            _encoded_project_id(cwd if isinstance(cwd, str) else os.getcwd()),
+            1,
+            _resolve_model(payload),
+            WHEN_AFTER_SUBAGENT,
+        )
+    except Exception:
+        return 0
+    if not picks:
+        return 0
+    file_path, reminder, _score = picks[0]
+    sys.stdout.write(
+        f"<memory-surface>\n{reminder or '(reminder 未設定)'} 詳細: {file_path}\n"
+        "</memory-surface>\n"
+    )
+    return 2
 
 
 def search_unfiltered(

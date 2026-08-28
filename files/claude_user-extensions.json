@@ -23,6 +23,9 @@
       { "hooks": [ { "type": "command", "command": "~/.claude/hooks/subagent_gate_suggest.py" } ] },
       { "hooks": [ { "type": "command", "command": "~/.claude/hooks/title_icon.py" } ] }
     ],
+    "SubagentStop": [
+      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/memory_surface.py", "asyncRewake": true } ] }
+    ],
     "PermissionRequest": [
       { "hooks": [ { "type": "command", "command": "~/.claude/hooks/title_icon.py" } ] }
     ],
