@@ -1836,6 +1836,21 @@ class MemoryCloneRootsTest(StopChecksTest):
         self.assertWarnsFamily(proc, self.FAMILY)
         self.assertIn("例外時の entry", warn_body(proc))
 
+    def test_c19_a_present_but_unreadable_config_scans_nothing(self):
+        """既定 layout を推測すると public clone を private として読む経路が開く。"""
+        state = os.path.join(self.fx.tmp, "unreadable-conf")
+        self.clone(
+            os.path.join(state, "claude-lessons-learned"), "alpha", "既定の entry"
+        )
+        os.makedirs(os.path.join(state, "clones.conf"), exist_ok=True)
+        env = self.cli("def load_clones():\n    raise OSError('unreadable')\n")
+        env["CLAUDE_MEMORY_ROOT"] = state
+        self.fx.turn(say("報告します"))
+        proc = run_hook(
+            self.fx, "調査を終えました。" + TAIL, memory_root="", env_extra=env
+        )
+        self.assertNotWarned(proc, self.FAMILY)
+
     def test_c19_a_missing_cli_falls_back_to_the_default_root(self):
         state = os.path.join(self.fx.tmp, "no-cli")
         self.clone(

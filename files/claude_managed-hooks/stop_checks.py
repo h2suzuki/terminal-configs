@@ -23,6 +23,7 @@ EXECUTABLE_SUFFIXES = (".py", ".sh", ".mjs", ".js")
 UI_SUFFIXES = (".css", ".scss", ".tsx", ".jsx", ".vue", ".svelte", ".html")
 MEMORY_STATE_ROOT = os.environ.get("CLAUDE_MEMORY_ROOT") or "/var/lib/claude-rag-memory"
 DEFAULT_MEMORY_ROOT = os.path.join(MEMORY_STATE_ROOT, "claude-lessons-learned")
+MEMORY_CLONES_CONF = os.path.join(MEMORY_STATE_ROOT, "clones.conf")
 MEMORY_SYNC_CLI = (
     os.environ.get("CLAUDE_MEMORY_SYNC_CLI") or "/usr/local/bin/claude_memory_sync"
 )
@@ -1018,22 +1019,28 @@ def _record_waste(turn):
 
 
 def _memory_roots():
-    """The single-valued test seam wins; without it, every configured clone."""
+    """The single-valued test seam wins; without it, every configured clone.
+
+    The default root stands in only while clones.conf is ABSENT. A config that
+    exists but cannot be read scans nothing: guessing the legacy layout is how
+    a public clone gets read as the private one elsewhere in this tooling.
+    """
     override = os.environ.get("STOP_CHECKS_MEMORY_ROOT")
     if override:
         return [override]
+    fallback = [] if os.path.lexists(MEMORY_CLONES_CONF) else [DEFAULT_MEMORY_ROOT]
     try:
         loader = importlib.machinery.SourceFileLoader(
             "claude_memory_sync", MEMORY_SYNC_CLI
         )
         spec = importlib.util.spec_from_loader("claude_memory_sync", loader)
         if spec is None:
-            return [DEFAULT_MEMORY_ROOT]
+            return fallback
         mod = importlib.util.module_from_spec(spec)
         loader.exec_module(mod)
-        return [c.path for c in mod.load_clones()] or [DEFAULT_MEMORY_ROOT]
+        return [c.path for c in mod.load_clones()] or fallback
     except Exception:
-        return [DEFAULT_MEMORY_ROOT]
+        return fallback
 
 
 def _memory(payload, turn):
