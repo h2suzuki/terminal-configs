@@ -37,8 +37,9 @@ test 方針: 3 出口それぞれを最小 payload で叩き、exit code と std
 
 入力: `transcript_path` の JSONL。末尾から 512 KB (`TURN_WINDOW_BYTES = 512 * 1024`) を読み、直近の **prompt boundary** 1 個までを turn とする。
 prompt boundary = `type == "user"` かつ `message.content` が str かつ、その先頭が
-`<task-notification>` / `<system-reminder>` / `<local-command` / `Skill /` (skill 再 invoke の注入) /
+`<task-notification>` / `<system-reminder>` / `<local-command` / `Skill /` / `(Re-invocation of /` (後 2 つは skill 再 invoke の注入) /
 `Stop hook feedback` (hook の block 文面の注入) のいずれでもないもの (harness が user 名義で注入する entry は境界にしない)。
+skill の初回 invoke は `message.content` が list なので、str 条件だけで境界から外れる。
 turn から取り出す値はこの 6 つだけで、全 family はここからしか読まない:
 `final_text` (payload の `last_assistant_message`、無ければ turn 最後の assistant text)、`turn_text` (turn 内 assistant text の連結)、
 `tool_names` / `tool_paths` / `edited_paths` (Write/Edit の対象) / `bash_commands`。
@@ -335,6 +336,24 @@ def injected(text: str) -> dict:
         "uuid": "inject-1",
         "timestamp": iso(-20),
         "message": {"role": "user", "content": text},
+    }
+
+
+def skill_preamble(name: str) -> dict:
+    """A skill's first invoke: text blocks, not a string, so C2's str check already excludes it."""
+    return {
+        "type": "user",
+        "uuid": "skill-1",
+        "timestamp": iso(-18),
+        "message": {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"Base directory for this skill: /home/u/.claude/skills/{name}\n\n# {name}\n",
+                }
+            ],
+        },
     }
 
 
@@ -739,6 +758,43 @@ class TurnFunnelTest(StopChecksTest):
         )
         self.assertNotBlocked(
             run_hook(self.fx, "2 file を直しました。" + TAIL), "task-plan-first"
+        )
+
+    def test_c2_skill_reinvocation_entries_are_not_boundaries(self):
+        """C2: skill-reminder-gate forces a skill re-invoke before commit, so its notice must not cut the turn."""
+        self.fx.enable_task_tools()
+        self.fx.write(
+            [
+                prompt(),
+                call("mcp__mytask__TaskUpdate", id="1", status="in_progress"),
+                injected(
+                    "(Re-invocation of /writing-todos — the skill instructions were "
+                    "previously loaded; the arguments or dynamic output below are new.)"
+                ),
+                edit(self.fx.repo_file("a.py")),
+                bash("git commit -m 'fix'"),
+                say("直しました"),
+            ]
+        )
+        self.assertNotBlocked(
+            run_hook(self.fx, "1 file を直しました。" + TAIL), "task-plan-first"
+        )
+
+    def test_c2_skill_preamble_blocks_are_not_boundaries(self):
+        """C2: a skill's first invoke arrives as list content, which is never a boundary whatever its text."""
+        self.fx.enable_task_tools()
+        self.fx.write(
+            [
+                prompt(),
+                call("mcp__mytask__TaskUpdate", id="1", status="in_progress"),
+                skill_preamble("writing-todos"),
+                edit(self.fx.repo_file("a.py")),
+                bash("git commit -m 'fix'"),
+                say("直しました"),
+            ]
+        )
+        self.assertNotBlocked(
+            run_hook(self.fx, "1 file を直しました。" + TAIL), "task-plan-first"
         )
 
 

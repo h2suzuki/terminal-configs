@@ -25,6 +25,7 @@ PROMPT_PREFIXES = (
     "<system-reminder>",
     "<local-command",
     "Skill /",
+    "(Re-invocation of /",
     "Stop hook feedback",
 )
 CONTINUATION_ENDINGS = (
