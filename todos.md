@@ -15,46 +15,6 @@ git 履歴 (`git log -p -- todos.md`) と Work file にあり、ここには書�
 
 ## High
 
-### 敵対的レビュー loop の出口 — メタ評価の決裁と実施
-
-起票: fable-5 2026-08-26 (ユーザー依頼「transcript を解析しメタ評価を行い、正しい方向を模索せよ」
-から派生)
-
-Goal: 「指摘を直すたびに欠陥を作り込み、総合品質が上がらない」loop を、停止条件と artifact の
-大きさを変えることで終わらせる。規則・巡数を足す選択肢は最初から持たない。
-
-Exit Criteria:
-
-- [x] ユーザーが処遇を決めた — 2026-08-26 決裁「sentinel は本当に有効な最小限まで小さく
-  書き直す / 方法論も同じく最小限へ (1 ページ) / ab_probe は廃棄 / 直さない指摘は台帳に書かない」
-- [x] ab_probe を廃棄した — 2026-08-26。`wt-abprobe` と branch を削除、発注書・報告書 31 file は
-  `drafts/ab-probe-archive/` に退避
-- [x] sentinel を要件から書き直した — 2026-08-26 完了 (8,588 → 231 行、exit 14 種 → 7 種、契約 =
-  `files/codex_task_sentinel.test.py` の 17 test、変異器 `files/codex_task_sentinel.mutants.py` で
-  0/4 生存、独立レビュー 1 巡 P0 なし、1 巡で終了、merge `8208fe0`)。配備 = base setup 後に
-  `/usr/local/bin` と skill が `diff -q` IDENTICAL、実 job record 2 件 (completed / cancelled) で
-  verdict done / failed を実測
-- [x] 方法論 doc を 6 項目 1 ページに置換し、台帳 3 本に凍結注記を入れた — 2026-08-26
-- [x] todos.md の構造 lint を決定的 gate にする — `todos_structure_gate.py` (block ≤ 40 行・項目 ≤ 6 行・
-  必須 key 3 つ) を 2026-08-26 に配備、41 行 block の commit が deny されることを E2E で実測
-- [x] 台帳の再発防止 — `frozen_docs_gate.py` (HEAD に `凍結 (日付)` 行を持つ file の行数増加 commit を
-  deny し、逃がし先 `drafts/journal/` を案内) を 2026-08-26 に配備、凍結 doc +1 行の commit が deny
-  されることを E2E で実測
-- [x] 実案件を §5.1 で回し、§5.6 の指標で判定した — ケース 1〜6 は全て変異 0/4 で出荷 (1 sentinel 1 巡、
-  2 todos 構造 gate と 3 delegation gate は再入場 1 回、4 order_lint 3 巡、5・6 skill_reminder_gate と
-  stop_checks は再確認 1 巡)。approach 全体の判定は 2026-08-28 に不成立で確定 — 配備翌日の実運用で
-  stop_checks に用途内 P0 が 2 件 (skill 再 invoke の偽境界 `97a8b0b`、引用された token での
-  has_workflow 誤検出 `0d8e562`)。2 週間の残りを待つ必要はなく、非ゼロの時点で反証は完了
-- [x] 反証の中身を記録した (2026-08-28) — 2 件とも契約 C2 / C8 自体の誤りで、契約から作った受け入れ
-  test も固定 4 変異もその誤りを再現するだけ。hook 間の噛み合わせ (skill_reminder_gate が強制する
-  invoke が偽境界を作る) は context 遮断の独立レビューにも原理的に見えない。実運用は 1 日で 2 件出した
-- [x] §5.6 の事前宣言どおり loop approach を捨て、運転規約を 5 項目へ戻した (2026-08-28 `f32cb7a`) —
-  巡と再入場の規定を削除 (23 → 19 行、削除のみ)。削除はすべて検知側で、回避 3 つ (契約を先に書く /
-  構造を先に決める / 触る量の上限) は無傷。項目 1 に「環境の実態を先に読む」を追加
-
-Work file: `docs/adversarial-loop-meta-evaluation.md` (評価の正本)、
-`drafts/loop-exit-opinion-order-report.md` (第三者意見書・gitignore)
-
 ### memory surface が予告 entry を届けられなかった機構を直す
 
 起票: fable-5 2026-08-26 (ユーザー指摘「memory surface の機構そのものの否定になっている」から派生)
