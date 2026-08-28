@@ -179,6 +179,10 @@ Exit Criteria:
 - [ ] 裁定前の材料の言い直し (subagent の所見だけで外部資料へ裁定を下さない) を entry 化
 - [ ] 要件と出荷の動詞照合 (要件の動詞と出荷物の動詞が一致するかを閉じる前に見る) を entry 化
 - [ ] 自分が回す loop の停止判断 を entry 化
+- [ ] 配備手順は正規手順を読んでから出す を entry 化 — 2026-08-29 に `sudo cp` と
+  `claude_user_settings inject` を並べた 6 行を自作した。 正規は base setup 1 本で、
+  規則は `last-session-handoff.md` (複数 file・hook 登録変更は base setup) と README
+  (末尾で `install_claude_extensions` まで走るので別途実行は不要) の両方に書いてあった
 - [ ] 4 件とも `when:` / `check:` を実装のある値だけで書く (Critical block の解決が前提)
 
 Work file: todos.md 冒頭の CAVEAT 2 件 (実測の出所)
