@@ -19,7 +19,9 @@ test は `stop_checks.test.py` の `test_c<N>_*` に対応させる。
 出力は次の 3 つだけ。
 
 - **block**: exit 2 / stdout 空 / stderr に blocking 行を `"\n".join` で 1 行 1 件。各行は `<family-id>: ` で始まり、
-  「何が観測されたか」「本文をどう直すか」をこの順で含む。複数 family が同時に成立したら全行を出す。
+  「何が観測されたか」「本文をどう直すか」「同種を本文全体で掃く指示」をこの順で含む。複数 family が同時に
+  成立したら全行を出す。指摘 1 件を直して同じ family を同 session で再発させる比率が 59% (transcript 134 本 /
+  401 block の実測) ゆえ、修復指示は指摘箇所でなく class を対象にする。
 - **warn / context**: exit 0 / stdout に 1 行の JSON
   `{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":<本文>},"systemMessage":<同じ本文>}`。
   本文は family 行を `"\n\n"` で連結。stderr は空。
@@ -643,6 +645,15 @@ class ProtocolTest(StopChecksTest):
         proc = run_hook(self.fx, "この後 stop_checks の実装を進めます。")
         self.assertBlocks(proc, "continuation-claim")
         self.assertTrue(block_lines(proc)[0].startswith("continuation-claim: "))
+
+    def test_c1_block_line_orders_observation_repair_and_class_sweep(self):
+        """C1: a repair aimed at the flagged spot alone leaves the class, where 59% of blocks recur."""
+        self.fx.turn(say("作業しました"))
+        proc = run_hook(self.fx, "この後 stop_checks の実装を進めます。")
+        observed, repair, sweep = block_lines(proc)[0].split(": ", 1)[1].split("。")
+        self.assertEqual(observed, "未来の遂行宣言を検出")
+        self.assertEqual(repair, "完了した作業だけを報告する")
+        self.assertEqual(sweep, "同種の箇所を本文全体で掃く")
 
     def test_c1_warn_uses_one_stdout_json_line_and_empty_stderr(self):
         self.fx.turn(say("報告します"))

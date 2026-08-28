@@ -252,7 +252,7 @@ def _normalized_text(final_text):
 
 
 def _line(message_id, observed, repair):
-    return f"{message_id}: {observed}。{repair}"
+    return f"{message_id}: {observed}。{repair}。同種の箇所を本文全体で掃く"
 
 
 def _safe_family(function, *args):
