@@ -939,7 +939,7 @@ def _memory_entries(root, project_id):
                 fields = _front_matter(path)
                 check = fields.get("check", "")
                 when = fields.get("when", "")
-                if check and "stop" in when.lower():
+                if check and "stop" in when.lower().split():
                     selected.append((check, path, fields.get("keywords", "")))
     return selected
 

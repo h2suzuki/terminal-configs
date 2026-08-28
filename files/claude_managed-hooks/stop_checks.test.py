@@ -216,7 +216,8 @@ decision 型の陽性/陰性 (「決裁待ち」を含む open task で規則 3 
 `/var/lib/claude-rag-memory/claude-lessons-learned` (C19)。その配下 `org/**`・`user/**` と、payload `cwd` の repo に対応する
 `project/<id>/**` (`id` = `.git/config` の origin URL を memory_surface と同じ規則で正規化した `github.com-<owner>-<repo>`、
 worktree は共通 dir の config を読む、origin が無ければ cwd の `/` → `-`) の `*.md` の front matter を直接走査 (他 hook を
-import しない)。他 project の entry は出さない。`check:` 行を持ち、`when:` に `stop` を含む entry のみ候補。候補のうち `keywords:` の語句 (`,` / `、` 区切り、小文字化) が
+import しない)。他 project の entry は出さない。`check:` 行を持ち、`when:` の値集合 (space 区切り、小文字化) が `stop` を
+含む entry のみ候補 — 部分一致では選ばない (`stopgap` は `stop` ではない)。候補のうち `keywords:` の語句 (`,` / `、` 区切り、小文字化) が
 当該 Stop の `final_text` (NFKC・小文字化) に含まれる entry だけを選び、一致語句数が最大の 1 件だけを出す (同数なら走査順の
 先頭)。同じ entry は 1 session に 2 回まで (latch `<transcript>.turns.memo` = path → 回数の JSON、書くのは行が stdout に
 載った Stop だけ)。一致が無ければ何も出さない — 無差別に全 entry を出す形は量で無視される (2026-08-27 に 12 件が毎 Stop
@@ -1637,6 +1638,15 @@ class MemoryReminderTest(StopChecksTest):
         body = warn_body(run_hook(self.fx, "調査を終えました。" + TAIL))
         self.assertIn("mine を確認せよ", body)
         self.assertNotIn("theirs を確認せよ", body)
+
+    def test_c16_when_is_matched_as_whole_tokens(self):
+        """`when:` selects on the value set, not on a substring: `stopgap` is not `stop`."""
+        self.fx.memory_entry("gapper", "部分一致 entry を確認せよ", when="stopgap")
+        self.fx.memory_entry("proper", "集合一致 entry を確認せよ", when="prompt stop")
+        self.fx.turn(say("報告します"))
+        body = warn_body(run_hook(self.fx, "調査を終えました。" + TAIL))
+        self.assertIn("集合一致 entry を確認せよ", body)
+        self.assertNotIn("部分一致 entry を確認せよ", body)
 
     def test_c16_project_id_comes_from_the_origin_url(self):
         """A repo with an origin remote maps to github.com-<owner>-<repo> without running git."""
