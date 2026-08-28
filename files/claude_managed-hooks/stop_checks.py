@@ -3,6 +3,8 @@
 
 import datetime
 import fcntl
+import importlib.machinery
+import importlib.util
 import json
 import os
 import re
@@ -19,7 +21,11 @@ PERSISTENCE_WORDS = ("memory", "skills", "hooks", "CLAUDE.md", "SKILL.md")
 DECISION_WORDS = ("決裁", "裁定", "判断待ち", "承認待ち", "要確認")
 EXECUTABLE_SUFFIXES = (".py", ".sh", ".mjs", ".js")
 UI_SUFFIXES = (".css", ".scss", ".tsx", ".jsx", ".vue", ".svelte", ".html")
-DEFAULT_MEMORY_ROOT = "/var/lib/claude-rag-memory/claude-lessons-learned"
+MEMORY_STATE_ROOT = os.environ.get("CLAUDE_MEMORY_ROOT") or "/var/lib/claude-rag-memory"
+DEFAULT_MEMORY_ROOT = os.path.join(MEMORY_STATE_ROOT, "claude-lessons-learned")
+MEMORY_SYNC_CLI = (
+    os.environ.get("CLAUDE_MEMORY_SYNC_CLI") or "/usr/local/bin/claude_memory_sync"
+)
 PROMPT_PREFIXES = (
     "<task-notification>",
     "<system-reminder>",
@@ -1011,12 +1017,32 @@ def _record_waste(turn):
         return
 
 
+def _memory_roots():
+    """The single-valued test seam wins; without it, every configured clone."""
+    override = os.environ.get("STOP_CHECKS_MEMORY_ROOT")
+    if override:
+        return [override]
+    try:
+        loader = importlib.machinery.SourceFileLoader(
+            "claude_memory_sync", MEMORY_SYNC_CLI
+        )
+        spec = importlib.util.spec_from_loader("claude_memory_sync", loader)
+        if spec is None:
+            return [DEFAULT_MEMORY_ROOT]
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+        return [c.path for c in mod.load_clones()] or [DEFAULT_MEMORY_ROOT]
+    except Exception:
+        return [DEFAULT_MEMORY_ROOT]
+
+
 def _memory(payload, turn):
-    root = os.environ.get("STOP_CHECKS_MEMORY_ROOT", DEFAULT_MEMORY_ROOT)
-    if not os.path.isdir(root):
+    roots = [r for r in _memory_roots() if os.path.isdir(r)]
+    if not roots:
         return []
     lines = []
-    entries = _memory_entries(root, _project_id(payload.get("cwd")))
+    project_id = _project_id(payload.get("cwd"))
+    entries = [e for root in roots for e in _memory_entries(root, project_id)]
     text = unicodedata.normalize("NFKC", turn["final_text"]).lower()
     counts = _memo_counts(turn)
     best = None

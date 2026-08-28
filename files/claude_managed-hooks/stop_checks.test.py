@@ -255,9 +255,11 @@ drop した 4 id が現れないことを assert し、`ast` で全 import が s
 ### C19 fixture substitution (状態 root の env 差し替え)
 
 黒箱 test の成立に必要なため、決裁 4 で契約本文の claim に取り込んだ。
-C16 の memory clone root は環境変数 `STOP_CHECKS_MEMORY_ROOT` で差し替えられる。未設定時の既定は
-`/var/lib/claude-rag-memory/claude-lessons-learned`。差し替え先が空 dir・不在でも C16 は pass する
-(実 clone を読みに行かない)。同様に C6 / C7 / C9 / C10 / C11 / C15 / C17 が読む状態 file
+C16 の memory clone root は環境変数 `STOP_CHECKS_MEMORY_ROOT` で差し替えられる。差し替え先が空 dir・
+不在でも C16 は pass する (実 clone を読みに行かない)。 未設定時は `claude_memory_sync.load_clones()`
+(path は `CLAUDE_MEMORY_SYNC_CLI`) が返す **全 clone** を走査し、 どの clone の entry も候補になる。
+`clones.conf` 不在・CLI 不在・CLI が旧版で `load_clones` を持たない・読込例外のいずれでも、 既定の
+`<CLAUDE_MEMORY_ROOT>/claude-lessons-learned` 単独へ落ちる (新 installer 未実行の機で挙動不変)。同様に C6 / C7 / C9 / C10 / C11 / C15 / C17 が読む状態 file
 (`~/.claude/tasks/`、`~/.claude/hooks/state/wind_down_signal/`、`~/.claude.json`、
 `~/.cache/claude-tui-statusline/`) は全て `$HOME` / `$XDG_CACHE_HOME` 起点で解決し、
 mytask store は `$CLAUDE_PROJECT_DIR` と payload の `cwd` 起点で解決する。
@@ -524,6 +526,7 @@ def run_hook(
     stop_hook_active: bool = False,
     raw: str | None = None,
     memory_root: str | None = None,
+    env_extra: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     payload: dict = {"cwd": fixture.cwd, "stop_hook_active": stop_hook_active}
     if session_id is not None:
@@ -537,12 +540,13 @@ def run_hook(
         "HOME": fixture.home,
         "XDG_CACHE_HOME": fixture.cache,
         "CLAUDE_PROJECT_DIR": fixture.cwd,
-        "STOP_CHECKS_MEMORY_ROOT": fixture.memory
-        if memory_root is None
-        else memory_root,
         "LANG": "C.UTF-8",
         "PYTHONIOENCODING": "utf-8",
     }
+    root = fixture.memory if memory_root is None else memory_root
+    if root:  # "" exercises the unset case, where load_clones() picks the roots
+        env["STOP_CHECKS_MEMORY_ROOT"] = root
+    env.update(env_extra or {})
     body = raw if raw is not None else json.dumps(payload, ensure_ascii=False)
     return subprocess.run(
         [sys.executable, HOOK],
@@ -1711,6 +1715,121 @@ class FixtureSubstitutionTest(StopChecksTest):
         self.fx.native_task("契約 test を書く", status="in_progress")
         proc = run_hook(self.fx, "調査を終えました。" + TAIL)
         self.assertBlocks(proc, "wind-down-open-tasks")
+
+
+class MemoryCloneRootsTest(StopChecksTest):
+    """C19: without the single-valued seam, C16 scans every clone load_clones() returns."""
+
+    FAMILY = "memory-reminder"
+    SYNC_CLI = os.path.join(
+        os.path.dirname(os.path.dirname(HOOK)), "claude_memory_sync"
+    )
+
+    def clone(self, root: str, name: str, check: str) -> str:
+        path = os.path.join(root, "org", name + ".md")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as stream:
+            stream.write(
+                "---\n"
+                f"name: {name}\n"
+                "description: 契約 test の fixture entry\n"
+                "keywords: 調査, 契約\n"
+                f"check: {check}\n"
+                "when: prompt stop\n"
+                "---\n\n## 理由\n\nfixture\n"
+            )
+        return path
+
+    def conf(self, *clones: str) -> str:
+        state = os.path.join(self.fx.tmp, "state")
+        os.makedirs(state, exist_ok=True)
+        with open(os.path.join(state, "clones.conf"), "w", encoding="utf-8") as stream:
+            for index, path in enumerate(clones):
+                kind = "private" if index == 0 else "public"
+                stream.write(f"{path} {kind} https://example.invalid/{index}.git\n")
+        return state
+
+    def env(self, state: str, cli: str | None = None) -> dict[str, str]:
+        return {
+            "CLAUDE_MEMORY_ROOT": state,
+            "CLAUDE_MEMORY_SYNC_CLI": self.SYNC_CLI if cli is None else cli,
+        }
+
+    def test_c19_the_single_valued_seam_wins_over_the_configured_clones(self):
+        other = os.path.join(self.fx.tmp, "other-clone")
+        self.clone(other, "beta", "設定側の entry")
+        self.fx.memory_entry("alpha", "seam 側の entry")
+        self.fx.turn(say("報告します"))
+        proc = run_hook(
+            self.fx, "調査を終えました。" + TAIL, env_extra=self.env(self.conf(other))
+        )
+        self.assertWarnsFamily(proc, self.FAMILY)
+        self.assertIn("seam 側の entry", warn_body(proc))
+        self.assertNotIn("設定側の entry", warn_body(proc))
+
+    def test_c19_an_entry_in_any_configured_clone_is_surfaced(self):
+        first = os.path.join(self.fx.tmp, "clone-a")
+        second = os.path.join(self.fx.tmp, "clone-b")
+        os.makedirs(os.path.join(first, "org"), exist_ok=True)
+        self.clone(second, "beta", "二つ目の clone の entry")
+        self.fx.turn(say("報告します"))
+        proc = run_hook(
+            self.fx,
+            "調査を終えました。" + TAIL,
+            memory_root="",
+            env_extra=self.env(self.conf(first, second)),
+        )
+        self.assertWarnsFamily(proc, self.FAMILY)
+        self.assertIn("二つ目の clone の entry", warn_body(proc))
+
+    def test_c19_an_absent_config_keeps_the_legacy_single_clone(self):
+        state = os.path.join(self.fx.tmp, "no-conf")
+        legacy = os.path.join(state, "claude-lessons-learned")
+        self.clone(legacy, "alpha", "既定 clone の entry")
+        self.fx.turn(say("報告します"))
+        proc = run_hook(
+            self.fx,
+            "調査を終えました。" + TAIL,
+            memory_root="",
+            env_extra=self.env(state),
+        )
+        self.assertWarnsFamily(proc, self.FAMILY)
+        self.assertIn("既定 clone の entry", warn_body(proc))
+
+    def test_c19_an_old_sync_cli_without_load_clones_falls_back(self):
+        state = os.path.join(self.fx.tmp, "old-cli")
+        legacy = os.path.join(state, "claude-lessons-learned")
+        self.clone(legacy, "alpha", "旧 CLI でも出る entry")
+        other = os.path.join(self.fx.tmp, "unreachable")
+        self.clone(other, "beta", "旧 CLI では出ない entry")
+        old = os.path.join(self.fx.tmp, "claude_memory_sync_old")
+        with open(old, "w", encoding="utf-8") as stream:
+            stream.write("PUBLIC = 'public'\n")  # pre-split build: no load_clones
+        self.conf(other)
+        self.fx.turn(say("報告します"))
+        proc = run_hook(
+            self.fx,
+            "調査を終えました。" + TAIL,
+            memory_root="",
+            env_extra=self.env(state, cli=old),
+        )
+        self.assertWarnsFamily(proc, self.FAMILY)
+        self.assertIn("旧 CLI でも出る entry", warn_body(proc))
+        self.assertNotIn("旧 CLI では出ない entry", warn_body(proc))
+
+    def test_c19_a_missing_sync_cli_does_not_raise(self):
+        state = os.path.join(self.fx.tmp, "no-cli")
+        legacy = os.path.join(state, "claude-lessons-learned")
+        self.clone(legacy, "alpha", "CLI 不在でも出る entry")
+        self.fx.turn(say("報告します"))
+        proc = run_hook(
+            self.fx,
+            "調査を終えました。" + TAIL,
+            memory_root="",
+            env_extra=self.env(state, cli=os.path.join(self.fx.tmp, "absent")),
+        )
+        self.assertWarnsFamily(proc, self.FAMILY)
+        self.assertIn("CLI 不在でも出る entry", warn_body(proc))
 
 
 class CorpusContinuationClaimTest(StopChecksTest):
