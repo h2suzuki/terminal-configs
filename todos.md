@@ -75,6 +75,61 @@ Work file: なし
 
 ## High
 
+### WSL2 で claude 実行中に Windows ホストを寝かせない
+
+起票: user 2026-08-28
+
+Goal: claude が動いている間 (idle 含む) Windows ホストがスリープせず、 数時間後にリモートで
+入れる。 抑止を掴んだまま残るプロセスを作らない。
+
+Exit Criteria:
+
+- [ ] owner session 方式で実装 — 共有 1 file に session_id / 最終実行時刻 / 戻り値を書き、
+  owner だけが 30 秒経過で powershell を叩く (ユーザー指示 2026-08-29)。 常駐・lease・boot id・
+  throttle marker は不要になるので削除する
+- [ ] 実機で確認 — 複数 session 下で powershell 発行が 1 つの session からのみ起きること、
+  idle session でも継続すること
+- [ ] 抑止が生存 session を越えて残らないことを確認する
+
+Work file: branch `wip/lessons-learned-split` に旧実装 (常駐 supervisor 方式) が退避済み。
+旧設計の実測 (statusline 描画間隔 最大 12 秒 / 一発叩き 0.30-0.61 秒) はそこの README にある
+
+### lessons-learned repo を public / private に分離する
+
+起票: user 2026-08-28
+
+Goal: 公開 repo に非公開の内容が出ない状態で、 教訓の公開版を持つ。 opt-in で
+public / private / both を選べる。
+
+Exit Criteria:
+
+- [ ] 公開 clone へは一切書かない — gate は無条件 deny、 dir は root 所有で非書き込み、
+  publish は root の migration コマンドのみ (ユーザー指示 2026-08-29 で設計を置換)
+- [ ] memory-routing の最初の書き込みは必ず private。 public 版は蒸留したものを移し private
+  から消す。 public のみの構成では新規 entry を書けない
+- [ ] 公開への昇格は PR merge 必須 (branch protection + filter を CI 検査 + subagent 観点レビュー)
+- [ ] GitHub 側の rename と public 版作成 — 公開対象の一覧を H.S. が見てから実行する
+- [ ] extra/lessons-learned.sh が mode と repo 名を引数で取り、 選択を gitignore file に保存する
+
+Work file: branch `wip/lessons-learned-split`。 出荷不可の理由 (漏洩 7 経路のうち 2 件が未閉塞)
+は `f03a801` の commit message にある。 置換後の設計では大半が削除対象
+
+### report-in-plain-words skill を仕上げる
+
+起票: user 2026-08-28
+
+Goal: 日常語で書く・報告する形を渡す skill が、 Stop の拒否から呼ばれて機能する。
+
+Exit Criteria:
+
+- [ ] 敵対レビューの残指摘を閉じる (自己採点を復活させている箇所、 反証済み対策の再掲、
+  発火経路の欠如)
+- [ ] Stop の拒否文が skill の形を手渡す経路を作る — skill 単体では発火できないため
+- [ ] 3,400 byte 以下に収める (同種 skill は 2,033 / 2,100 / 3,346 byte)
+
+Work file: branch `wip/lessons-learned-split` の
+`files/claude_managed-skills/report-in-plain-words/`
+
 ### memory surface が予告 entry を届けられなかった機構を直す
 
 起票: fable-5 2026-08-26 (ユーザー指摘「memory surface の機構そのものの否定になっている」から派生)
@@ -153,6 +208,27 @@ Work file: `last-session-handoff.md` (再開手順)、`docs/adversarial-review-m
 `files/claude_managed-hooks/deny_command_patterns.test.py` (契約 test と変異器の実例)
 
 ## Medium
+
+### 試行: 一次ソース確認の指示を codex と同じ形で置いてみる
+
+起票: opus-5 2026-08-29 (ユーザー許可「無駄かもしれないが、悪化はしないだろう。という想定
+の下で todo に登録してもよい」)
+
+Goal: 「調査前の推論」バグに対し、 codex で効いている形の指示を Claude 側でも試し、
+効いたかどうかを実測する。 効かなければ捨てる。
+
+前提 (ユーザー観測 2026-08-29): codex は AGENTS.md 相当に「必ず一次ソースにあたって裏付けを
+とれ」と書くと律儀に守る。 CLAUDE.md とは効きが違う。 このバグは fable でも起きるが codex では
+未観測。 hook 化は複数回試して未成功。
+
+Exit Criteria:
+
+- [ ] 置き場所を決める (CLAUDE.md 追加はユーザー承諾が要る。 skill / memory も候補)
+- [ ] 置く前に、 効いたと言える判定方法を先に決める — 「確かめずに書いた断定」の件数を
+  session ごとに数える形。 置いた後に基準を作らない
+- [ ] 一定期間後に件数を比較し、 変化が無ければ削除する (残すことを既定にしない)
+
+Work file: なし。 バグの記述は本 file 冒頭の CAVEAT 2 件
 
 ### 改造時のバグ作り込みを減らす方策の検討
 
