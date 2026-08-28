@@ -13,6 +13,26 @@ git 履歴 (`git log -p -- todos.md`) と Work file にあり、ここには書�
 
 ## Critical
 
+### memory entry の `when:` 振り分けが 3 値中 1 値しか動いていない
+
+起票: opus-5 2026-08-29 (ユーザー指摘「みっつとも hook で surface しないと、致命的なバグだぞ」)
+
+Goal: `when:` の prompt / stop / after-subagent すべてで surface hook が振り分ける
+(要件 `8c504f1`「surface hook がそれで振り分ける」)。 実装の無い値を正規の選択肢として
+案内しない。
+
+Exit Criteria:
+
+- [ ] prompt の振り分けを実装 — `memory_surface.py:_parse_entry` は `when:` を読まず全 entry を
+  対象にしている。 `when:` に prompt を含まない entry が prompt 時に出ないことを実測する
+- [ ] after-subagent の振り分けを実装 — 対応 hook が無い。 SubagentStop 配線先 2 本
+  (`codex_delegation_surface.py` / `voicevox_claude_alerts`) はいずれも memory を読まない
+- [ ] stop の判定を値の集合一致にする — `stop_checks.py:942` は `"stop" in when` の部分一致
+- [ ] 3 値それぞれに契約 test を red-first で追加し、変異で殺せることを確認する
+- [ ] 実装の無い値を gate が受理しない、 または skill が動く選択肢として案内しない状態にする
+
+Work file: なし。 経緯は `git log -p` の `8c504f1` / `2fb99ff` / `f91150f`
+
 ## High
 
 ### memory surface が予告 entry を届けられなかった機構を直す
