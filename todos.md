@@ -85,7 +85,9 @@ Exit Criteria:
   Task upsert が無ければ block)、読まずに裁定 (subagent / workflow の結果を受けた turn で、最終本文が挙げた entry / path を開く
   tool 呼び出しが無ければ block)、Stop 時 surface (`check:` を持つ entry 限定)、「無駄」reminder の prompt ごと 1 回化
   — 2026-08-27、C6 task-plan-first / C8 ruling-without-reading / C16 memory-reminder (latch は stdout に載った Stop だけ) として配備
-- [ ] 配備後 2 週間の実運用で誤 deny 0
+- [ ] 配備後 2 週間の実運用で誤 deny 0 — stop_checks で 2 件出た (2026-08-28、skill 再 invoke の偽境界と
+  引用 token での workflow gate 誤開放。`97a8b0b` / `0d8e562` で修正・配備済み)。残り 4 本は継続観測中
+  (〜2026-09-10)。stop_checks 分をこの条件の不成立とみなすかは要判断
 
 Work file: `last-session-handoff.md` (再開手順)、`docs/adversarial-review-methodology.md` (protocol)、
 `files/claude_managed-hooks/deny_command_patterns.test.py` (契約 test と変異器の実例)
