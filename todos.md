@@ -40,11 +40,16 @@ Exit Criteria:
 - [x] 台帳の再発防止 — `frozen_docs_gate.py` (HEAD に `凍結 (日付)` 行を持つ file の行数増加 commit を
   deny し、逃がし先 `drafts/journal/` を案内) を 2026-08-26 に配備、凍結 doc +1 行の commit が deny
   されることを E2E で実測
-- [ ] 実案件を §5.1 で回し、§5.6 の指標で判定した — ケース 1 = sentinel (変異 0/4・1 巡)、ケース 2 = todos 構造
-  gate (再入場 1 回)、ケース 3 = delegation gate (2026-08-27: 変異 0/4、再入場 1 回、再確認の合成入力 P0 3 件は
-  bounded-risk 受入)、ケース 4 = order_lint (変異 0/4、3 巡 + trivial fix 2 件)、ケース 5・6 = skill_reminder_gate /
-  stop_checks (2026-08-27: 変異 0/4、再確認 1 巡 + trivial fix で打ち止め)。残り = 配備後 2 週間 (1・2 は 〜2026-09-09、
-  3〜6 は 〜2026-09-10) の実運用で用途内 P0 が 0 であること。外れたら loop approach を捨てる
+- [x] 実案件を §5.1 で回し、§5.6 の指標で判定した — ケース 1〜6 は全て変異 0/4 で出荷 (1 sentinel 1 巡、
+  2 todos 構造 gate と 3 delegation gate は再入場 1 回、4 order_lint 3 巡、5・6 skill_reminder_gate と
+  stop_checks は再確認 1 巡)。approach 全体の判定は 2026-08-28 に不成立で確定 — 配備翌日の実運用で
+  stop_checks に用途内 P0 が 2 件 (skill 再 invoke の偽境界 `97a8b0b`、引用された token での
+  has_workflow 誤検出 `0d8e562`)。2 週間の残りを待つ必要はなく、非ゼロの時点で反証は完了
+- [x] 反証の中身を記録した (2026-08-28) — 2 件とも契約 C2 / C8 自体の誤りで、契約から作った受け入れ
+  test も固定 4 変異もその誤りを再現するだけ。hook 間の噛み合わせ (skill_reminder_gate が強制する
+  invoke が偽境界を作る) は context 遮断の独立レビューにも原理的に見えない。実運用は 1 日で 2 件出した
+- [ ] §5.6 の事前宣言どおり loop approach を捨て、運転規約を「受け入れ test + 独立レビュー 1 回」へ
+  戻す — `docs/adversarial-review-methodology.md` (凍結・削除のみ許可) の巡と再入場の規定を削除する
 
 Work file: `docs/adversarial-loop-meta-evaluation.md` (評価の正本)、
 `drafts/loop-exit-opinion-order-report.md` (第三者意見書・gitignore)
