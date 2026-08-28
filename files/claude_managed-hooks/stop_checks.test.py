@@ -258,10 +258,10 @@ drop した 4 id が現れないことを assert し、`ast` で全 import が s
 
 黒箱 test の成立に必要なため、決裁 4 で契約本文の claim に取り込んだ。
 C16 の memory clone root は環境変数 `STOP_CHECKS_MEMORY_ROOT` で差し替えられる。差し替え先が空 dir・
-不在でも C16 は pass する (実 clone を読みに行かない)。 未設定時は `claude_memory_sync.load_clones()`
-(path は `CLAUDE_MEMORY_SYNC_CLI`) が返す **全 clone** を走査し、 どの clone の entry も候補になる。
-`clones.conf` 不在・CLI 不在・CLI が旧版で `load_clones` を持たない・読込例外のいずれでも、 既定の
-`<CLAUDE_MEMORY_ROOT>/claude-lessons-learned` 単独へ落ちる (新 installer 未実行の機で挙動不変)。同様に C6 / C7 / C9 / C10 / C11 / C15 / C17 が読む状態 file
+不在でも C16 は pass する (実 clone を読みに行かない)。 未設定時は `CLAUDE_MEMORY_SYNC_CLI` の `load_clones()` が返す **全 clone** を走査し、 どの clone の
+entry も候補になる。 返りが空・CLI 不在・CLI が旧版で `load_clones` を持たない・読込例外のいずれでも、
+既定の `<CLAUDE_MEMORY_ROOT>/claude-lessons-learned` 単独へ落ちる (新 installer 未実行の機で挙動不変)。
+CLI は test 内で生成する stub で足りる (実 parser の契約は claude_memory_sync.clones.test.py が持つ)。同様に C6 / C7 / C9 / C10 / C11 / C15 / C17 が読む状態 file
 (`~/.claude/tasks/`、`~/.claude/hooks/state/wind_down_signal/`、`~/.claude.json`、
 `~/.cache/claude-tui-statusline/`) は全て `$HOME` / `$XDG_CACHE_HOME` 起点で解決し、
 mytask store は `$CLAUDE_PROJECT_DIR` と payload の `cwd` 起点で解決する。
@@ -1732,9 +1732,6 @@ class MemoryCloneRootsTest(StopChecksTest):
     """C19: without the single-valued seam, C16 scans every clone load_clones() returns."""
 
     FAMILY = "memory-reminder"
-    SYNC_CLI = os.path.join(
-        os.path.dirname(os.path.dirname(HOOK)), "claude_memory_sync"
-    )
 
     def clone(self, root: str, name: str, check: str) -> str:
         path = os.path.join(root, "org", name + ".md")
@@ -1751,20 +1748,21 @@ class MemoryCloneRootsTest(StopChecksTest):
             )
         return path
 
-    def conf(self, *clones: str) -> str:
-        state = os.path.join(self.fx.tmp, "state")
-        os.makedirs(state, exist_ok=True)
-        with open(os.path.join(state, "clones.conf"), "w", encoding="utf-8") as stream:
-            for index, path in enumerate(clones):
-                kind = "private" if index == 0 else "public"
-                stream.write(f"{path} {kind} https://example.invalid/{index}.git\n")
-        return state
+    def cli(self, body: str) -> dict[str, str]:
+        """A stand-in claude_memory_sync; the real parser has its own contract test."""
+        path = os.path.join(self.fx.tmp, "sync_cli_" + str(len(body)))
+        with open(path, "w", encoding="utf-8") as stream:
+            stream.write(body)
+        return {"CLAUDE_MEMORY_SYNC_CLI": path}
 
-    def env(self, state: str, cli: str | None = None) -> dict[str, str]:
-        return {
-            "CLAUDE_MEMORY_ROOT": state,
-            "CLAUDE_MEMORY_SYNC_CLI": self.SYNC_CLI if cli is None else cli,
-        }
+    def returning(self, *paths: str) -> dict[str, str]:
+        listed = ", ".join(f"C({path!r})" for path in paths)
+        return self.cli(
+            "from typing import NamedTuple\n"
+            "class C(NamedTuple):\n"
+            "    path: str\n"
+            f"def load_clones():\n    return [{listed}]\n"
+        )
 
     def test_c19_the_single_valued_seam_wins_over_the_configured_clones(self):
         other = os.path.join(self.fx.tmp, "other-clone")
@@ -1772,13 +1770,13 @@ class MemoryCloneRootsTest(StopChecksTest):
         self.fx.memory_entry("alpha", "seam 側の entry")
         self.fx.turn(say("報告します"))
         proc = run_hook(
-            self.fx, "調査を終えました。" + TAIL, env_extra=self.env(self.conf(other))
+            self.fx, "調査を終えました。" + TAIL, env_extra=self.returning(other)
         )
         self.assertWarnsFamily(proc, self.FAMILY)
         self.assertIn("seam 側の entry", warn_body(proc))
         self.assertNotIn("設定側の entry", warn_body(proc))
 
-    def test_c19_an_entry_in_any_configured_clone_is_surfaced(self):
+    def test_c19_an_entry_in_any_returned_clone_is_surfaced(self):
         first = os.path.join(self.fx.tmp, "clone-a")
         second = os.path.join(self.fx.tmp, "clone-b")
         os.makedirs(os.path.join(first, "org"), exist_ok=True)
@@ -1788,59 +1786,73 @@ class MemoryCloneRootsTest(StopChecksTest):
             self.fx,
             "調査を終えました。" + TAIL,
             memory_root="",
-            env_extra=self.env(self.conf(first, second)),
+            env_extra=self.returning(first, second),
         )
         self.assertWarnsFamily(proc, self.FAMILY)
         self.assertIn("二つ目の clone の entry", warn_body(proc))
 
-    def test_c19_an_absent_config_keeps_the_legacy_single_clone(self):
-        state = os.path.join(self.fx.tmp, "no-conf")
-        legacy = os.path.join(state, "claude-lessons-learned")
-        self.clone(legacy, "alpha", "既定 clone の entry")
+    def test_c19_an_empty_clone_list_falls_back_to_the_default_root(self):
+        state = os.path.join(self.fx.tmp, "empty-list")
+        self.clone(
+            os.path.join(state, "claude-lessons-learned"), "alpha", "既定の entry"
+        )
+        env = self.returning()
+        env["CLAUDE_MEMORY_ROOT"] = state
         self.fx.turn(say("報告します"))
         proc = run_hook(
-            self.fx,
-            "調査を終えました。" + TAIL,
-            memory_root="",
-            env_extra=self.env(state),
+            self.fx, "調査を終えました。" + TAIL, memory_root="", env_extra=env
         )
         self.assertWarnsFamily(proc, self.FAMILY)
-        self.assertIn("既定 clone の entry", warn_body(proc))
+        self.assertIn("既定の entry", warn_body(proc))
 
-    def test_c19_an_old_sync_cli_without_load_clones_falls_back(self):
+    def test_c19_a_cli_without_load_clones_falls_back_to_the_default_root(self):
         state = os.path.join(self.fx.tmp, "old-cli")
-        legacy = os.path.join(state, "claude-lessons-learned")
-        self.clone(legacy, "alpha", "旧 CLI でも出る entry")
+        self.clone(
+            os.path.join(state, "claude-lessons-learned"), "alpha", "旧 CLI の entry"
+        )
         other = os.path.join(self.fx.tmp, "unreachable")
         self.clone(other, "beta", "旧 CLI では出ない entry")
-        old = os.path.join(self.fx.tmp, "claude_memory_sync_old")
-        with open(old, "w", encoding="utf-8") as stream:
-            stream.write("PUBLIC = 'public'\n")  # pre-split build: no load_clones
-        self.conf(other)
+        env = self.cli("PUBLIC = 'public'\n")  # pre-split build: no load_clones
+        env["CLAUDE_MEMORY_ROOT"] = state
         self.fx.turn(say("報告します"))
         proc = run_hook(
-            self.fx,
-            "調査を終えました。" + TAIL,
-            memory_root="",
-            env_extra=self.env(state, cli=old),
+            self.fx, "調査を終えました。" + TAIL, memory_root="", env_extra=env
         )
         self.assertWarnsFamily(proc, self.FAMILY)
-        self.assertIn("旧 CLI でも出る entry", warn_body(proc))
+        self.assertIn("旧 CLI の entry", warn_body(proc))
         self.assertNotIn("旧 CLI では出ない entry", warn_body(proc))
 
-    def test_c19_a_missing_sync_cli_does_not_raise(self):
+    def test_c19_a_raising_cli_falls_back_to_the_default_root(self):
+        state = os.path.join(self.fx.tmp, "raising-cli")
+        self.clone(
+            os.path.join(state, "claude-lessons-learned"), "alpha", "例外時の entry"
+        )
+        env = self.cli("raise RuntimeError('boom')\n")
+        env["CLAUDE_MEMORY_ROOT"] = state
+        self.fx.turn(say("報告します"))
+        proc = run_hook(
+            self.fx, "調査を終えました。" + TAIL, memory_root="", env_extra=env
+        )
+        self.assertWarnsFamily(proc, self.FAMILY)
+        self.assertIn("例外時の entry", warn_body(proc))
+
+    def test_c19_a_missing_cli_falls_back_to_the_default_root(self):
         state = os.path.join(self.fx.tmp, "no-cli")
-        legacy = os.path.join(state, "claude-lessons-learned")
-        self.clone(legacy, "alpha", "CLI 不在でも出る entry")
+        self.clone(
+            os.path.join(state, "claude-lessons-learned"), "alpha", "CLI 不在の entry"
+        )
         self.fx.turn(say("報告します"))
         proc = run_hook(
             self.fx,
             "調査を終えました。" + TAIL,
             memory_root="",
-            env_extra=self.env(state, cli=os.path.join(self.fx.tmp, "absent")),
+            env_extra={
+                "CLAUDE_MEMORY_ROOT": state,
+                "CLAUDE_MEMORY_SYNC_CLI": os.path.join(self.fx.tmp, "absent"),
+            },
         )
         self.assertWarnsFamily(proc, self.FAMILY)
-        self.assertIn("CLI 不在でも出る entry", warn_body(proc))
+        self.assertIn("CLI 不在の entry", warn_body(proc))
 
 
 class CorpusContinuationClaimTest(StopChecksTest):
