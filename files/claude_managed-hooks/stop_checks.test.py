@@ -195,7 +195,10 @@ test 方針: 4 種の検出語 × 根拠 tool 有無 = 8 case。全 case で exi
 ### C15 communication-lint (warn)
 
 入力: `final_text` (C3 の正規化・除去後) と直近の user prompt。次の 5 規則を 1 family で持つ。
-1. 最終非空行が絵文字始まりでも `?` / `？` 終端でもない。絵文字 = U+1F000〜1FAFF / U+2300〜23FF (⏸ ⌛ ⏳) / U+2500〜2BFF のいずれかで始まる行。
+1. 最終非空行が絵文字始まりでない、または絵文字の直後に `[結論]` / `[質問]` が無い、またはその札が終端と食い違う。
+   絵文字 = U+1F000〜1FAFF / U+2300〜23FF (⏸ ⌛ ⏳) / U+2500〜2BFF のいずれかで始まる行。札の前に置けるのは
+   絵文字と空白だけ (仮名・漢字・英数が先に来たら札が無いものとして扱う)。`?` / `？` 終端の行は `[質問]`、
+   それ以外は `[結論]`。`[事実]` は文章中のどこにでも現れるので、この規則では見ない。
 2. 自己採番参照 (「候補 12」「選択肢 3」)。数量表現 (「候補 17 件」「案 3 つ」) は除外 (C3)。
 3. 最終行が疑問文なのに、Task store に open な decision 型 task が無い。
 4. 直近 user prompt が 20 字以下の短文決裁で、open な decision 型 task がある (記録漏れ)。
@@ -204,7 +207,8 @@ test 方針: 4 種の検出語 × 根拠 tool 有無 = 8 case。全 case で exi
 が「決裁」「裁定」「判断待ち」「承認待ち」「要確認」のいずれかを含むこと。他の語を含む task は decision 型ではない。
 出力: 成立した規則の文を 1 行に空白連結して warn。
 test 方針: 5 規則の陽性各 1 + 規則 2 の数量 3 例 + 絵文字始まりの正常終端で 0 件 +
-decision 型の陽性/陰性 (「決裁待ち」を含む open task で規則 3 が pass、含まない open task では warn)。
+decision 型の陽性/陰性 (「決裁待ち」を含む open task で規則 3 が pass、含まない open task では warn) +
+規則 1 の札 (欠落 / 食い違い 2 向き / 札の前に本文がある形 / `[事実]` は無関係)。
 
 ### C16 memory-reminder (context)
 
@@ -285,7 +289,7 @@ HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stop_checks.py"
 SESSION = "11111111-2222-3333-4444-555555555555"
 MODEL = "claude-opus-5"
 # A conclusion line that satisfies communication-lint rule 1 (emoji-led final line).
-TAIL = "\n\n\U0001f537 以上です。"
+TAIL = "\n\n\U0001f537 [結論] 以上です。"
 DEFAULT_PROMPT = "stop_checks の契約 test を書いてください"
 # §2.1: the only family ids the rewrite may emit.
 ALLOWED_FAMILIES = frozenset(
@@ -1479,12 +1483,50 @@ class CommunicationLintTest(StopChecksTest):
 
     def test_c15_decision_task_is_recognised_by_its_wording(self):
         """Decree 7: only 決裁 / 裁定 / 判断待ち / 承認待ち / 要確認 make a task a decision task."""
-        question = "どの案を採るべきでしょうか？"
+        question = "\U0001f537 [質問] どの案を採るべきでしょうか？"
         self.fx.native_task("契約 test を書く", status="pending")
         self.fx.turn(say("報告します"))
         self.assertWarnsFamily(run_hook(self.fx, question), self.FAMILY)
         self.fx.native_task("変異器の形式を裁定する", status="pending")
         self.assertNotWarned(run_hook(self.fx, question), self.FAMILY)
+
+    def test_c15_final_line_without_a_tag_warns(self):
+        """C15 rule 1: the emoji alone no longer says whether the turn concluded or asked."""
+        self.fx.turn(say("報告します"))
+        self.assertWarnsFamily(
+            run_hook(self.fx, "調査を終えました。\n\n\U0001f537 以上です。"),
+            self.FAMILY,
+        )
+
+    def test_c15_a_tag_that_contradicts_the_ending_warns(self):
+        self.fx.native_task("決裁待ち: 変異器の形式", status="pending")
+        self.fx.turn(say("報告します"))
+        for text in (
+            "\U0001f537 [結論] どの案を採るべきでしょうか？",
+            "\U0001f537 [質問] 調査を終えました。",
+        ):
+            self.assertWarnsFamily(run_hook(self.fx, text), self.FAMILY)
+
+    def test_c15_a_tag_after_the_prose_does_not_count(self):
+        """C15 rule 1: only the emoji and spacing may precede the tag."""
+        self.fx.turn(say("報告します"))
+        self.assertWarnsFamily(
+            run_hook(self.fx, "\U0001f537 調査を終えました [結論]。"), self.FAMILY
+        )
+
+    def test_c15_a_tagged_question_passes(self):
+        self.fx.native_task("決裁待ち: 変異器の形式", status="pending")
+        self.fx.turn(say("報告します"))
+        self.assertNotWarned(
+            run_hook(self.fx, "\U0001f537 [質問] どの案を採りますか?"), self.FAMILY
+        )
+
+    def test_c15_a_fact_label_is_not_a_final_line_tag(self):
+        """C15 rule 1: [事実] appears anywhere in the body, so rule 1 ignores it."""
+        self.fx.turn(say("報告します"))
+        self.assertWarnsFamily(
+            run_hook(self.fx, "\U0001f537 [事実] 調査を終えました。"), self.FAMILY
+        )
 
     def test_c15_emoji_led_conclusion_passes(self):
         self.fx.turn(say("報告します"))
@@ -1497,7 +1539,7 @@ class CommunicationLintTest(StopChecksTest):
         self.fx.turn(say("報告します"))
         for lead in ("\u23f8\ufe0f", "\u231b"):
             self.assertNotWarned(
-                run_hook(self.fx, "調査を終えました。\n\n" + lead + " 停止中。"),
+                run_hook(self.fx, "調査を終えました。\n\n" + lead + " [結論] 停止中。"),
                 self.FAMILY,
             )
 

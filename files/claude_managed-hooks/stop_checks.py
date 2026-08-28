@@ -805,16 +805,28 @@ def _claim_without_evidence(turn, scan):
     return []
 
 
-def _emoji_led(line):
-    stripped = line.lstrip()
-    if not stripped:
-        return False
-    code = ord(stripped[0])
+def _emoji_char(char):
+    code = ord(char)
     return (
         0x1F000 <= code <= 0x1FAFF
         or 0x2300 <= code <= 0x23FF
         or 0x2500 <= code <= 0x2BFF
+        or code in {0x200D, 0xFE0F}
     )
+
+
+def _emoji_led(line):
+    stripped = line.lstrip()
+    return bool(stripped) and _emoji_char(stripped[0])
+
+
+def _final_tag(line):
+    """Only the emoji and its spacing may stand before the tag."""
+    rest = line.lstrip()
+    while rest and (rest[0].isspace() or _emoji_char(rest[0])):
+        rest = rest[1:]
+    found = re.match(r"\[(結論|質問)\]", rest)
+    return found.group(1) if found else ""
 
 
 def _communication(scan, prompt_text, tasks):
@@ -824,8 +836,11 @@ def _communication(scan, prompt_text, tasks):
     final_line = lines[-1]
     reasons = []
     question = final_line.endswith(("?", "？"))
-    if not question and not _emoji_led(final_line):
-        reasons.append("最終行を絵文字始まりまたは疑問形にする")
+    expected = "質問" if question else "結論"
+    if not _emoji_led(final_line):
+        reasons.append("最終行を絵文字で始める")
+    elif _final_tag(final_line) != expected:
+        reasons.append(f"最終行の絵文字の直後に [{expected}] を書く")
     if re.search(r"(?:候補|選択肢)\s*[0-9]+(?![0-9]|\s*(?:件|つ))", scan):
         reasons.append("自己採番参照を解消する")
     decisions = _decision_tasks(tasks)
