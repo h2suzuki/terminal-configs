@@ -182,7 +182,7 @@ def _turn_funnel(payload):
     texts = []
     for entry in chosen:
         user_text = _user_text(entry)
-        if "<task-notification>" in user_text:
+        if "<task-notification>" in _strip_code_and_quotes(user_text):
             result["has_workflow"] = True
         message = entry.get("message")
         if isinstance(message, dict) and isinstance(message.get("model"), str):

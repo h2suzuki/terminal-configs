@@ -108,7 +108,7 @@ test 方針: (c) の境界を 2 件 = pass / 3 件 = warn で固定し、Task st
 ### C8 ruling-without-reading (block)
 
 入力: turn 内に subagent 結果 (`Agent` / `Task` tool の呼び出し) または Workflow 結果
-(`<task-notification>` を含む user entry) が有り、`final_text` が
+(`<task-notification>` を含む user entry。code fence / backtick 内の言及は notification ではないので数えない) が有り、`final_text` が
 entry path を挙げて裁定・評価を述べている。path token = backtick 内または裸の token で、`/var/lib/claude-rag-memory/` で
 始まるもの (拡張子不問)、または `/` を 1 つ以上含み英字始まりの拡張子 (`\.[A-Za-z][A-Za-z0-9]{0,5}`) で終わるもの
 (`.md` に限らない、絶対 / repo 相対とも)。URL (`://` の後ろ)・package 指定 (`@` の後ろ)・数字始まりの拡張子 (`3.11/3.12`、`3/4.5`)
@@ -1087,6 +1087,34 @@ class RulingWithoutReadingTest(StopChecksTest):
 
     def test_c8_turn_without_a_subagent_result_passes(self):
         self.fx.write([prompt(), say("整理しました")])
+        self.assertNotBlocked(
+            run_hook(self.fx, self.ONE + TAIL), "ruling-without-reading"
+        )
+
+    def test_c8_quoted_task_notification_is_not_a_workflow_result(self):
+        """C8: a peer quoting the hook's own source names the token; only a real notification counts."""
+        self.fx.write(
+            [
+                prompt(
+                    "PROMPT_PREFIXES を直してください。\n\n```python\n"
+                    'PROMPT_PREFIXES = ("<task-notification>", "<system-reminder>")\n'
+                    "```\n"
+                ),
+                say("整理しました"),
+            ]
+        )
+        self.assertNotBlocked(
+            run_hook(self.fx, self.ONE + TAIL), "ruling-without-reading"
+        )
+
+    def test_c8_inline_quoted_task_notification_is_not_a_workflow_result(self):
+        """C8: an inline-backticked mention is a mention; a real notification arrives unquoted."""
+        self.fx.write(
+            [
+                prompt("`<task-notification>` の扱いを教えてください。"),
+                say("整理しました"),
+            ]
+        )
         self.assertNotBlocked(
             run_hook(self.fx, self.ONE + TAIL), "ruling-without-reading"
         )
