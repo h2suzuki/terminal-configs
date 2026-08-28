@@ -60,6 +60,8 @@ Exit Criteria:
 - [ ] stop の判定を値の集合一致にする — `stop_checks.py:942` は `"stop" in when` の部分一致
 - [ ] 3 値それぞれに契約 test を red-first で追加し、変異で殺せることを確認する
 - [ ] 実装の無い値を gate が受理しない、 または skill が動く選択肢として案内しない状態にする
+- [ ] 本 block の文面を subagent の敵対的レビューに 1 回かける (CAVEAT 2 件は `d16bb63` で実施済み。
+  守る失敗モードは「自分のうっかり」と発注書に明記し、 攻撃者仮定を置かない)
 
 やらかしの経緯 (ユーザー指示により git 履歴でなくここに書く):
 
@@ -133,9 +135,50 @@ Exit Criteria:
   発火経路の欠如)
 - [ ] Stop の拒否文が skill の形を手渡す経路を作る — skill 単体では発火できないため
 - [ ] 3,400 byte 以下に収める (同種 skill は 2,033 / 2,100 / 3,346 byte)
+- [ ] (要相談) 仕上げるか材料から作り直すかを決める — 前 session で「show-me が実際に何をして
+  いるか + 再発回数の実測から出発して再設計する」指示が出ており、 上の 3 条件と両立しない
 
 Work file: branch `wip/lessons-learned-split` の
 `files/claude_managed-skills/report-in-plain-words/`
+
+### handoff の background 未回収検出が subagent を取りこぼす
+
+起票: opus-5 2026-08-29 (ユーザー指摘「バックグラウンドタスクの待ち合わせか停止が漏れている」)
+
+Goal: handoff 手順が挙げる 4 種類の background すべてで、 未回収のまま session を閉じられない。
+
+Exit Criteria:
+
+- [ ] Agent (subagent) の起動を検出する — `stop_checks.py:_background_sets` は tool_result が
+  str の時だけ走査し、 文言 roster も `Command running in background with ID:` と
+  `Workflow launched in background. Task ID:` の 2 種。 実際の subagent は list 形式で
+  `Async agent launched successfully` (直近 8 transcript の 33 件すべて)
+- [ ] 完了通知だけが窓にある時に block が warn へ落ちる経路を塞ぐ — 通知側は subagent の
+  task-id を拾うため `missing_launch` が立ち、 同じ窓の未回収 Bash まで警告へ格下げされる
+- [ ] Monitor の起動形を実測し、 検出の要否を確定する (直近 8 transcript に起動例 0 件)
+- [ ] 契約 test を red-first で追加し、 変異で殺せることを確認する
+- [ ] handoff SKILL.md の Pre-handoff checks 4 に「待ち合わせる」を選択肢として明記する
+  (現行は「TaskStop で止める」だけ)
+
+Work file: `files/claude_managed-hooks/stop_checks.py` の `_background` / `_background_sets`、
+`files/claude_managed-skills/handoff/SKILL.md` の Pre-handoff checks 4
+
+### 中断 session で出た教訓を memory entry にする
+
+起票: opus-5 2026-08-29 (前 session `ff720c04` の未完了項目を引き継ぎ)
+
+Goal: 2026-08-28〜29 の session で出た 4 つの教訓が、 同じ場面へ来た時に surface される形で
+保存されている。
+
+Exit Criteria:
+
+- [ ] 不在主張の証明 (「無い」と書く前に走査した空間を名指しする) を entry 化
+- [ ] 裁定前の材料の言い直し (subagent の所見だけで外部資料へ裁定を下さない) を entry 化
+- [ ] 要件と出荷の動詞照合 (要件の動詞と出荷物の動詞が一致するかを閉じる前に見る) を entry 化
+- [ ] 自分が回す loop の停止判断 を entry 化
+- [ ] 4 件とも `when:` / `check:` を実装のある値だけで書く (Critical block の解決が前提)
+
+Work file: todos.md 冒頭の CAVEAT 2 件 (実測の出所)
 
 ### memory surface が予告 entry を届けられなかった機構を直す
 
@@ -236,6 +279,20 @@ Exit Criteria:
 - [ ] 一定期間後に件数を比較し、 変化が無ければ削除する (残すことを既定にしない)
 
 Work file: なし。 バグの記述は本 file 冒頭の CAVEAT 2 件
+
+### (要相談) 「先に形を決めて材料を当てはめる」を止める機構
+
+起票: opus-5 2026-08-29 (前 session `ff720c04` の未完了項目を引き継ぎ)
+
+Goal: subagent の所見だけを根拠に外部資料へ裁定を下す経路を、 機構で捕まえるかどうかを決める。
+
+Exit Criteria:
+
+- [ ] (要相談) 作るかどうかをユーザーが決める — 旧設計は誤検出 3/3 で破棄済み。 先に
+  `stop_checks.py` の `_ruling` が実際にどの条件で発火しているかを実測してから設計する
+- [ ] 採る場合: 実 corpus で誤検出率を測ってから配備する
+
+Work file: `files/claude_managed-hooks/stop_checks.py` の `_ruling`
 
 ### 改造時のバグ作り込みを減らす方策の検討
 
