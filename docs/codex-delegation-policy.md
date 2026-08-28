@@ -5,7 +5,7 @@ codex (Claude Code 用 OpenAI Codex plugin) へ仕事を渡すか、渡すなら
 ## 1. 位置づけと出典
 
 - 出典: `drafts/claude_code_codex_delegation_guide_ja.pdf` (調査基準日 2026-08-20、plugin v1.0.6 基準) を、2026-08-27 のユーザー決裁 3 点 (非委譲時の担い手 §6 / レビューの担い手と時期 §7 / transfer の扱い §9) で修正したもの。時間・件数・行数は公式制限でなく初期運用値で、§11 の計測で補正する
-- 矛盾時の優先順位: `docs/codex-usage-donottouch.md` > pdf > 2026-08-25 決裁 (回帰レビューは opus subagent、codex 敵対レビューは指示時と高リスク時のみ、実装は codex 固定でない) > 現行の skill / hook 文言
+- 矛盾時の優先順位: pdf > 2026-08-25 決裁 (回帰レビューは opus subagent、codex 敵対レビューは指示時と高リスク時のみ、実装は codex 固定でない) > 現行の skill / hook 文言
 
 ## 2. 中核ルール
 
@@ -139,7 +139,7 @@ effort は既定を継承し、review / judgment 層だけ上げ、機械的作�
 
 ### 隔離
 
-- write を伴う委譲は repo の worktree 隔離が必須。発注前に単独の `cd` で worktree へ移って session 終了まで留まり、`--cwd` でも作業 dir を明示する (codex-delegation skill)。同一 checkout 内の領域分離では足りない (donottouch 4-2 が優先)
+- write を伴う委譲は repo の worktree 隔離が必須。発注前に単独の `cd` で worktree へ移って session 終了まで留まり、`--cwd` でも作業 dir を明示する (codex-delegation skill)。同一 checkout 内の領域分離では足りない
 - read-only の証拠収集・review は隔離不要。同一 file の同時編集・formatter・大規模置換・schema 生成は競合対象
 
 ### 代表的な起動形式
@@ -185,15 +185,3 @@ rescue --background --fresh --write --model gpt-5.6-sol --effort xhigh <review �
 | 再発注率 | 20% 以下 |
 
 下回る時はモデルを強くする前に、次の順で改善する: 委譲最小工数を 15 分 → 25 分 / scope を狭める / 完了条件の機械化 / write 委譲を減らす / 会話依存タスクは transfer。
-
-## 12. 反映先
-
-本書の文言を写す先。`docs/codex-usage-anchors.md` の anchor 文字列で当てる (行番号は使わない)。`drafts/codex-usage-unification.md` の発注クラス案 D1–D5 は採用せず、判定は §3 の 6 軸スコアで行う。
-
-| file | anchor 数 |
-|---|---|
-| `files/claude_managed-skills/tool-role-delegation/SKILL.md` | 7 |
-| `files/claude_managed-skills/codex-delegation/SKILL.md` | 1 |
-| `files/claude_managed-hooks/codex_delegation_surface.py` | 5 |
-
-凍結済みの履歴 doc (`docs/sentinel-convergence-log.md`) は反映先に含めない。

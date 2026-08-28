@@ -187,6 +187,6 @@ Docker をインストールし、SigNoz（オブザーバビリティ基盤）�
 
 ----
 
-音声まわりのトラブルシューティングは [`TROUBLE-SHOOTING.md`](TROUBLE-SHOOTING.md) を参照してください。
+音声まわりのトラブルシューティングは [`docs/TROUBLE-SHOOTING.md`](docs/TROUBLE-SHOOTING.md) を参照してください。
 
 [![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/h2suzuki/terminal-configs.git)

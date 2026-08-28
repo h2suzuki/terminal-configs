@@ -195,6 +195,6 @@ dashboard to visualize Claude Code's OTEL (OpenTelemetry) telemetry.
 
 ----
 
-For audio troubleshooting, see [`TROUBLE-SHOOTING.md`](TROUBLE-SHOOTING.md).
+For audio troubleshooting, see [`docs/TROUBLE-SHOOTING.md`](docs/TROUBLE-SHOOTING.md).
 
 [![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/h2suzuki/terminal-configs.git)

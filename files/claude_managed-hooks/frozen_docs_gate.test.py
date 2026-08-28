@@ -16,7 +16,7 @@ Contract (each claim maps to one test):
   C6  fail-open: not a git repo, path not in HEAD, path missing from the working tree, or unreadable
       payload → exit 0
   C7  the repository's own frozen docs (docs/*.md two directories above this file whose text carries the
-      marker; exactly four today) are denied when one line is appended and allowed when unchanged
+      marker; exactly two today) are denied when one line is appended and allowed when unchanged
 """
 
 from __future__ import annotations
@@ -184,8 +184,6 @@ class GateTest(unittest.TestCase):
             [
                 "adversarial-review-methodology.md",
                 "methodology-case-ledger.md",
-                "sentinel-convergence-log.md",
-                "sentinel-review-analysis.md",
             ],
         )
         for name, text in frozen.items():
