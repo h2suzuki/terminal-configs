@@ -1445,6 +1445,34 @@ class WindDownTest(StopChecksTest):
         proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
         self.assertBlocks(proc, "wind-down-background-unreaped")
 
+    def test_c10_one_notice_can_reap_several_ids(self):
+        """The stopped-tasks notice names every id it covers, not just the first."""
+        self.fx.wind_down()
+        self.fx.write(
+            [
+                prompt(),
+                bash("python3 long.py"),
+                tool_result(
+                    "Command running in background with ID: bg-1. Output is at /tmp/x"
+                ),
+                bash("python3 other.py"),
+                tool_result(
+                    "Command running in background with ID: bg-2. Output is at /tmp/y"
+                ),
+                {
+                    "type": "queue-operation",
+                    "operation": "enqueue",
+                    "timestamp": iso(-5),
+                    "content": "<task-notification>\n<task-id>bg-1</task-id>\n"
+                    "<task-id>bg-2</task-id>\n<status>stopped</status>\n</task-notification>",
+                },
+                say("片付けました"),
+            ]
+        )
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertNotBlocked(proc, "wind-down-background-unreaped")
+        self.assertNotIn("wind-down-background-unreaped", warn_body(proc))
+
     def test_c10_launch_beyond_the_window_does_not_block(self):
         """Decree 3: the 2 MB cap is an upper bound, and an unobserved launch never blocks."""
         self.fx.wind_down()

@@ -571,10 +571,10 @@ def _background_sets(path):
         for note in re.findall(
             r"<task-notification>(.*?)</task-notification>", text, flags=re.DOTALL
         ):
-            task_id = re.search(r"<task-id>([^<]+)</task-id>", note)
             # Monitor の進捗 event は同じ task-id を運ぶが stream は続いている
-            if task_id and "<event>" not in note:
-                notices.add(task_id.group(1))
+            if "<event>" not in note:
+                # 停止通知は覆う id を全部並べる (1 通知 = 1 id とは限らない)
+                notices.update(re.findall(r"<task-id>([^<]+)</task-id>", note))
         message = entry.get("message")
         if not isinstance(message, dict):
             continue
