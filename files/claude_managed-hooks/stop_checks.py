@@ -568,13 +568,13 @@ def _background_sets(path):
         queued = entry.get("content")
         if isinstance(queued, str):
             text += queued
-        notices.update(
-            re.findall(
-                r"<task-notification>.*?<task-id>([^<]+)</task-id>",
-                text,
-                flags=re.DOTALL,
-            )
-        )
+        for note in re.findall(
+            r"<task-notification>(.*?)</task-notification>", text, flags=re.DOTALL
+        ):
+            task_id = re.search(r"<task-id>([^<]+)</task-id>", note)
+            # Monitor の進捗 event は同じ task-id を運ぶが stream は続いている
+            if task_id and "<event>" not in note:
+                notices.add(task_id.group(1))
         message = entry.get("message")
         if not isinstance(message, dict):
             continue
@@ -595,7 +595,9 @@ def _background_sets(path):
                 continue
             # 起動行は本文の先頭に立つ。 途中に現れた同形の行は走査結果の写しで、起動ではない
             launch = re.match(
-                r"(?:Command running in background with ID:|Workflow launched in background\. Task ID:)\s*([\w-]+)",
+                r"(?:Command running in background with ID:"
+                r"|Workflow launched in background\. Task ID:"
+                r"|Monitor started \(task)\s*([\w-]+)",
                 body,
             )
             if launch:

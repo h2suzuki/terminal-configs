@@ -133,13 +133,14 @@ test 方針: state file の有無 × open task の有無の 4 象限。
 
 入力: C9 と同じ wind-down 信号 (中身 `1`)。transcript の**末尾 2 MB** (`BACKGROUND_WINDOW_BYTES = 2 * 1024 * 1024`。
 C2 の funnel は 128 KB のままで、この窓を使うのは C10 だけ) から次を数える —
-起動 = tool_result 本文の**先頭**が `Command running in background with ID: <id>` または
-`Workflow launched in background. Task ID: <id>` に一致した `<id>`、および本文の先頭が
+起動 = tool_result 本文の**先頭**が `Command running in background with ID: <id>` /
+`Workflow launched in background. Task ID: <id>` / `Monitor started (task <id>,` に一致した `<id>`、および本文の先頭が
 `Async agent launched successfully` の時の `agentId: <id>`。subagent の tool_result は文字列でなく block の配列で
 返るので text block を連結してから見る。`<id>` に `.` は含めない (実際の本文は `ID: <id>. Output is being written to:`
 と続く)。本文の途中に現れた同形の行は起動と数えない (過去 transcript を走査した出力が起動として数えられた実例がある)。
 完了通知 = user entry の文字列、または queue-operation entry の `content` に `<task-notification>` があり、
-その中の `<task-id><id></task-id>` の `<id>` 集合 (現行 CLI は後者の形で書く)。
+その中の `<task-id><id></task-id>` の `<id>` 集合 (現行 CLI は後者の形で書く)。ただし `<event>` を含む通知は
+Monitor の進捗であって完了ではないので数えない (同じ task-id を運ぶため、数えると走行中の Monitor が回収済に見える)。
 出力: 起動 − 完了通知 が空でなければ block し、未回収の id を列挙する。差が空なら pass。
 ただし窓が session 先頭に届いていないとき — transcript が窓より大きい、または起動を持たない完了通知 id がある (= 起動 id が窓の外)
 — は観測が不完全なので **block せず warn** とし、行に「窓外」を含める (差が空でなければ、transcript が窓より大きいだけの
@@ -148,6 +149,7 @@ test 方針: 起動 2 / 通知 1 の合成 transcript で 1 件を列挙、起�
 起動を持たない通知で warn (「窓外」を含み exit 0)、窓内 1.5 MB の起動は block・窓外 3 MB の起動は非 block で上限値を挟む。
 subagent は起動のみで block・通知付きで pass、通知済 subagent が同席しても未回収 bash は block のまま (warn へ落ちない)、
 本文の途中に起動行を引用した tool_result は非 block、実際の形 (`ID: <id>. Output is…` と queue-operation の通知) で pass。
+Monitor は起動のみで block・完了通知で pass・進捗 event だけでは block のまま。
 
 ### C11 handoff-doc-without-marker (block)
 
@@ -416,6 +418,17 @@ def queued_notice(task_id: str) -> dict:
         "timestamp": iso(-5),
         "content": f"<task-notification>\n<task-id>{task_id}</task-id>\n"
         "<status>completed</status>\n</task-notification>",
+    }
+
+
+def queued_event(task_id: str) -> dict:
+    """A Monitor progress event: same task-id, but the stream is still running."""
+    return {
+        "type": "queue-operation",
+        "operation": "enqueue",
+        "timestamp": iso(-5),
+        "content": f"<task-notification>\n<task-id>{task_id}</task-id>\n"
+        "<summary>Monitor event</summary>\n<event>probe event 1</event>\n</task-notification>",
     }
 
 
@@ -1395,6 +1408,42 @@ class WindDownTest(StopChecksTest):
         proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
         self.assertNotBlocked(proc, "wind-down-background-unreaped")
         self.assertNotIn("wind-down-background-unreaped", warn_body(proc))
+
+    def monitor(self, tail: list[dict]) -> None:
+        self.fx.write(
+            [
+                prompt(),
+                call("Monitor"),
+                tool_result(
+                    "Monitor started (task mon-1, timeout 60000ms). You will be "
+                    "notified on each event."
+                ),
+                *tail,
+                say("片付けました"),
+            ]
+        )
+
+    def test_c10_unreaped_monitor_blocks(self):
+        """A Monitor launch says `Monitor started (task <id>,` - neither of the other two forms."""
+        self.fx.wind_down()
+        self.monitor([])
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertBlocks(proc, "wind-down-background-unreaped")
+        self.assertIn("mon-1", proc.stderr)
+
+    def test_c10_finished_monitor_passes(self):
+        self.fx.wind_down()
+        self.monitor([queued_notice("mon-1")])
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertNotBlocked(proc, "wind-down-background-unreaped")
+        self.assertNotIn("wind-down-background-unreaped", warn_body(proc))
+
+    def test_c10_a_monitor_event_is_not_a_completion(self):
+        """Progress events carry the same task-id; only the stream ending reaps it."""
+        self.fx.wind_down()
+        self.monitor([queued_event("mon-1")])
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertBlocks(proc, "wind-down-background-unreaped")
 
     def test_c10_launch_beyond_the_window_does_not_block(self):
         """Decree 3: the 2 MB cap is an upper bound, and an unobserved launch never blocks."""
