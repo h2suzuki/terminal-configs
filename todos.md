@@ -150,19 +150,16 @@ Goal: handoff 手順が挙げる 4 種類の background すべてで、 未回�
 
 Exit Criteria:
 
-- [ ] Agent (subagent) の起動を検出する — `stop_checks.py:_background_sets` は tool_result が
-  str の時だけ走査し、 文言 roster も `Command running in background with ID:` と
-  `Workflow launched in background. Task ID:` の 2 種。 実際の subagent は list 形式で
-  `Async agent launched successfully` (直近 8 transcript の 33 件すべて)
-- [ ] 完了通知だけが窓にある時に block が warn へ落ちる経路を塞ぐ — 通知側は subagent の
-  task-id を拾うため `missing_launch` が立ち、 同じ窓の未回収 Bash まで警告へ格下げされる
-- [ ] 起動文字列が本文に現れただけの行を起動と数えない — 過去 transcript を走査した Bash の
-  出力に `Workflow launched in background. Task ID: wilz0xhwl` が載っただけで、 別 session の
-  その id を本 session の未回収として block した (2026-08-29 実測)
+- [x] Agent (subagent) の起動を検出する — text block を連結してから先頭を見る
+- [x] 完了通知だけが窓にある時に block が warn へ落ちる経路を塞ぐ — subagent の起動が読めた
+  結果、 通知だけが残る状態が消えた (決裁 3 の「窓外なら warn」はそのまま)
+- [x] 起動文字列が本文に現れただけの行を起動と数えない — 起動行を本文先頭に錨づけ
+- [x] id が完了通知と一致しない 2 件も直した — `ID: <id>. Output is…` の `.` を id に含めていた、
+  現行 CLI の通知は queue-operation entry の `content` にあり user entry を見ても無い
 - [ ] Monitor の起動形を実測し、 検出の要否を確定する (直近 8 transcript に起動例 0 件)
-- [ ] 契約 test を red-first で追加し、 変異で殺せることを確認する
-- [ ] handoff SKILL.md の Pre-handoff checks 4 に「待ち合わせる」を選択肢として明記する
-  (現行は「TaskStop で止める」だけ)
+- [x] 契約 test を red-first で追加した — 5 件、 旧実装で全部 red。 実 transcript 5 本の replay で
+  未回収 5/1/2/1/9 → 0/0/1/1/0 (残る 2 件は途中で切れた session)
+- [x] handoff SKILL.md の Pre-handoff checks 4 に「待ち合わせる」を選択肢として明記した
 
 Work file: `files/claude_managed-hooks/stop_checks.py` の `_background` / `_background_sets`、
 `files/claude_managed-skills/handoff/SKILL.md` の Pre-handoff checks 4
