@@ -3,11 +3,11 @@
 # Pseudo drop-in for the hooks in ~/.claude/settings.json (Claude Code has no
 # user settings.d).
 #
-#   Usage: claude_user_hooks install   --snippet <fragment.json|->   ("-" = stdin)
-#          claude_user_hooks uninstall --snippet <fragment.json|->
+#   Usage: claude_user_hooks install   --fragment <fragment.json|->   ("-" = stdin)
+#          claude_user_hooks uninstall --fragment <fragment.json|->
 #          claude_user_hooks show
 #
-# --snippet names the file to read; the file rewritten is always the invoking
+# --fragment names the file to read; the file rewritten is always the invoking
 # user's ~/.claude/settings.json.
 
 command -v jq >/dev/null || { echo "Cannot find jq"; exit 1; }
@@ -15,8 +15,8 @@ command -v jq >/dev/null || { echo "Cannot find jq"; exit 1; }
 usage()
 {
     NAME=$(basename "$0")
-    echo "Usage: $NAME install   --snippet <fragment.json|->   (\"-\" = stdin)"
-    echo "       $NAME uninstall --snippet <fragment.json|->"
+    echo "Usage: $NAME install   --fragment <fragment.json|->   (\"-\" = stdin)"
+    echo "       $NAME uninstall --fragment <fragment.json|->"
     echo "       $NAME show"
     exit 1
 }
@@ -44,15 +44,15 @@ case "$CMD" in
 esac
 
 if [ "$CMD" != show ]; then
-    if [ "$2" != "--snippet" ] || [ -z "$3" ]; then
+    if [ "$2" != "--fragment" ] || [ -z "$3" ]; then
         usage
     fi
-    SNIPPET="$3"
-    # "-" reads the snippet from stdin (the caller may not be able to read the path)
-    if [ "$SNIPPET" = "-" ]; then
-        SNIPPET=/dev/stdin
+    FRAGMENT="$3"
+    # "-" reads the fragment from stdin (the caller may not be able to read the path)
+    if [ "$FRAGMENT" = "-" ]; then
+        FRAGMENT=/dev/stdin
     else
-        [ -s "$SNIPPET" ] || { echo "Snippet not found: $SNIPPET"; exit 1; }
+        [ -s "$FRAGMENT" ] || { echo "Fragment not found: $FRAGMENT"; exit 1; }
     fi
 fi
 
@@ -83,6 +83,6 @@ fi
 TMP=$(mktemp "$TARGET.XXXXXX") || { echo "mktemp failed"; exit 1; }
 trap 'rm -f "$TMP"' EXIT
 
-jq --slurpfile frag "$SNIPPET" "$FILTER" "$TARGET" > "$TMP" || { echo "jq transform failed"; exit 1; }
+jq --slurpfile frag "$FRAGMENT" "$FILTER" "$TARGET" > "$TMP" || { echo "jq transform failed"; exit 1; }
 chmod --reference="$TARGET" "$TMP"
 mv "$TMP" "$TARGET"
