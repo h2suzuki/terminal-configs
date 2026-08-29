@@ -291,7 +291,7 @@ copy claude_user-settings.json                  /etc/claude-code/skel/settings.j
 
 copy_dir claude_user-skills                     /etc/claude-code/skel/skills/
 copy_dir claude_user-hooks                      /etc/claude-code/skel/hooks/
-copy claude_user-extensions.json                /etc/claude-code/skel/extensions.json   # To be injected by claude_user_settings
+copy claude_user-extensions.json                /etc/claude-code/skel/extensions.json   # To be installed by claude_user_hooks
 
 
 #  Codex configs; setup_user_environment installs CLI
@@ -336,7 +336,7 @@ fi
 copy nodejs_clean_installer         /usr/local/bin/nodejs_clean_installer
 copy setup_user_environment         /usr/local/bin/setup_user_environment
 copy install_claude_extensions      /usr/local/bin/install_claude_extensions
-copy claude_user_settings           /usr/local/bin/claude_user_settings
+copy claude_user_hooks              /usr/local/bin/claude_user_hooks
 copy claude_rag_memory_builder      /usr/local/bin/claude_rag_memory_builder
 copy claude_memory_sync             /usr/local/bin/claude_memory_sync
 copy claude_memory_surface_analyzer /usr/local/bin/claude_memory_surface_analyzer
@@ -349,7 +349,7 @@ copy codex_order_lint               /usr/local/bin/codex_order_lint
 copy codex_broker_reap              /usr/local/bin/codex_broker_reap
 
 # Remove the pre-rename commands so an upgraded host keeps one implementation
-run rm -f /usr/local/bin/claude_codex_watch /usr/local/bin/claude_memory_rag_builder
+run rm -f /usr/local/bin/claude_codex_watch /usr/local/bin/claude_memory_rag_builder /usr/local/bin/claude_user_settings
 
 # Initialize our RAG memory
 run claude_rag_memory_builder /var/lib/claude-rag-memory

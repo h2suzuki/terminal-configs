@@ -1,0 +1,88 @@
+#!/bin/bash
+
+# Pseudo drop-in for the hooks in ~/.claude/settings.json (Claude Code has no
+# user settings.d).
+#
+#   Usage: claude_user_hooks install   --snippet <fragment.json|->   ("-" = stdin)
+#          claude_user_hooks uninstall --snippet <fragment.json|->
+#          claude_user_hooks show
+#
+# --snippet names the file to read; the file rewritten is always the invoking
+# user's ~/.claude/settings.json.
+
+command -v jq >/dev/null || { echo "Cannot find jq"; exit 1; }
+
+usage()
+{
+    NAME=$(basename "$0")
+    echo "Usage: $NAME install   --snippet <fragment.json|->   (\"-\" = stdin)"
+    echo "       $NAME uninstall --snippet <fragment.json|->"
+    echo "       $NAME show"
+    exit 1
+}
+
+# install appends missing hooks (idempotent); uninstall deletes them and prunes empties
+CMD="$1"
+case "$CMD" in
+    install)
+        FILTER='($frag[0].hooks // {}) as $fh
+            | reduce ($fh | keys_unsorted[]) as $ev (.;
+                .hooks[$ev] = ((.hooks[$ev] // []) + ($fh[$ev] - (.hooks[$ev] // []))))'
+        ;;
+    uninstall)
+        FILTER='($frag[0].hooks // {}) as $fh
+            | reduce ($fh | keys_unsorted[]) as $ev (.;
+                .hooks[$ev] = ((.hooks[$ev] // []) - $fh[$ev])
+                | if (.hooks[$ev] | length) == 0 then del(.hooks[$ev]) else . end)
+            | if (.hooks // {} | length) == 0 then del(.hooks) else . end'
+        ;;
+    show)
+        [ -z "$2" ] || usage
+        ;;
+    *)
+        usage ;;
+esac
+
+if [ "$CMD" != show ]; then
+    if [ "$2" != "--snippet" ] || [ -z "$3" ]; then
+        usage
+    fi
+    SNIPPET="$3"
+    # "-" reads the snippet from stdin (the caller may not be able to read the path)
+    if [ "$SNIPPET" = "-" ]; then
+        SNIPPET=/dev/stdin
+    else
+        [ -s "$SNIPPET" ] || { echo "Snippet not found: $SNIPPET"; exit 1; }
+    fi
+fi
+
+TARGET="$HOME/.claude/settings.json"
+[ -s "$TARGET" ] || { echo "Target not found: $TARGET"; exit 1; }
+
+if [ "$CMD" = show ]; then
+    # OPTIONS carries per-hook keys beyond type/command (asyncRewake etc.) so an
+    # active flag is never invisible in the table
+    jq -r '
+      [ (.hooks // {}) | to_entries[] as $e
+        | $e.value[]? as $group
+        | ($group.matcher // "*") as $matcher
+        | $group.hooks[]? as $hook
+        | [ $e.key, $matcher, ($hook.command // $hook.type // ""),
+            ($hook | del(.type, .command) | to_entries | map("\(.key)=\(.value)") | join(" ")) ] ] as $body
+      | if ($body | length) == 0 then "(no hooks registered)"
+        else
+          ([["EVENT", "MATCHER", "COMMAND", "OPTIONS"]] + $body) as $rows
+          | ($rows | transpose | map(map(length) | max)) as $w
+          | ($rows[0:1] + [$w | map("-" * .)] + $rows[1:])
+          | map([range(0; 4) as $i | .[$i] + (" " * ($w[$i] - (.[$i] | length)))] | join("  ") | sub(" +$"; ""))
+          | .[]
+        end' "$TARGET"
+    exit
+fi
+
+TMP=$(mktemp "$TARGET.XXXXXX") || { echo "mktemp failed"; exit 1; }
+trap 'rm -f "$TMP"' EXIT
+
+jq --slurpfile frag "$SNIPPET" "$FILTER" "$TARGET" > "$TMP" || { echo "jq transform failed"; exit 1; }
+chmod --reference="$TARGET" "$TMP"
+mv "$TMP" "$TARGET"
