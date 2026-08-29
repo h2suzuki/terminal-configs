@@ -55,14 +55,13 @@ Exit Criteria:
 
 - [x] prompt の振り分けを実装 — route で BM25 側と dense 側を絞る (`ee6ecfa`)。 配備先で同一
   query・同一 model が prompt は none、 stop は verbatim_quote entry (2026-08-29 実測)
-- [x] after-subagent の振り分けを実装 — SubagentStop を同経路へ流し exit 2 で親へ渡す。 実機の
-  subagent 完了で emit 0 件だった `feedback_architecture_before_review` が届いた
-- [x] stop の判定を値の集合一致にする — `"stop" in when.lower().split()` (`35a1e25`)、配備先 IDENTICAL
+- [x] after-subagent の振り分けを実装 — exit 2 で親へ渡す。 実機の subagent 完了で
+  `feedback_architecture_before_review` が届いた (inject_log id=909、 通算 emit は 8 件)
+- [x] stop の判定を値の集合一致にする — `"stop" in when.lower().split()` (`35a1e25`、配備先に当該行あり)
 - [x] 3 値の契約 test を red-first で追加し変異で殺せることを確認 — memory_surface 9 test で
-  survivors 0/4、 stop_checks 160 test (旧実装が新 test を落とす red を観測)
+  survivors 0/4、 stop_checks は当時 160 test (旧実装が新 test を落とす red を観測)
 - [x] 実装の無い値を案内しない — gate と skill が挙げる 3 値すべてに振り分けが実装された
-- [ ] 本 block の文面を subagent の敵対的レビューに 1 回かける (CAVEAT 2 件は `d16bb63` で実施済み。
-  守る失敗モードは「自分のうっかり」と発注書に明記し、 攻撃者仮定を置かない)
+- [x] 本 block の文面を敵対的レビューにかけた — 指摘 7 件を実物で再確認して訂正
 
 やらかしの経緯 (ユーザー指示により git 履歴でなくここに書く):
 
@@ -71,15 +70,16 @@ Exit Criteria:
 `f91150f` が block ごと削除した。 その削除された本文自身が「`when:` に stop を含む entry だけ
 配備」と書いている。 **半分だと認める同じ文の中で、 完了として閉じた。**
 
-その結果 `feedback_architecture_before_review` が届かなかった。 「指摘が乾かず fix が機構を
-足し続けるならレビューを止め、 どの部品を削除できるか問え」という教訓で、 2026-08-29 の
-session で emit 21 件中 **0 件**。 止まらなかったレビューは 6 巡、 8,586,898 token、 49 agent
-を費やし、 対象だった clone 分離は今も未 commit。
+「レビューを止め、 どの部品を削除できるか問え」という教訓 (`feedback_architecture_before_review`)
+は、 失敗 session `ff720c04` で 1 度も出ていない (同 session の emit 23 件・mismatch 12 件のうち 0)。
+ただし当時この entry は `when: prompt after-subagent` で、 出荷済み hook は `when:` を読んでいない
+—— 候補から外れてはおらず、 届かなかったのは順位であって route の不在ではない。 同 session の
+workflow 合計は 8,586,898 token / 49 agent (レビュー以外の 2 本 2,461,161 / 19 agent を含む)。
 
 この bug を報告する過程でも 3 回誤った。 文字列 grep だけで「hook は存在しない」と断定し
-`SubagentStop` event の実在すら確認しなかった。 作業コピーだけ grep して「todos.md に記録
-なし」と報告したが、 履歴には 3 commit (うち 2 つが Close) あった。 自作コマンドが「出力なし
-= 一度も現れていない」を無条件に印字し、 3 件出た直後のその行をそのまま報告に写した。
+`SubagentStop` event の実在すら確認しなかった。 作業コピーだけ grep して「todos.md に記録なし」と
+報告したが、 `git log -S'when:' -- todos.md` では当時 5 commit (Close 3 件) あった。 自作コマンドが
+「出力なし = 一度も現れていない」を無条件に印字し、 3 件出た直後のその行をそのまま報告に写した。
 
 Work file: なし
 
