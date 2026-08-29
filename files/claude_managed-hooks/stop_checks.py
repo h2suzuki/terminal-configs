@@ -564,6 +564,10 @@ def _background_sets(path):
     notices = set()
     for entry in entries:
         text = _user_text(entry)
+        # 現行 CLI は完了通知を queue-operation entry の content に置く
+        queued = entry.get("content")
+        if isinstance(queued, str):
+            text += queued
         notices.update(
             re.findall(
                 r"<task-notification>.*?<task-id>([^<]+)</task-id>",
@@ -581,14 +585,25 @@ def _background_sets(path):
             if not isinstance(block, dict) or block.get("type") != "tool_result":
                 continue
             body = block.get("content")
+            if isinstance(body, list):  # subagent 起動は block 構造で返る
+                body = "".join(
+                    part.get("text", "")
+                    for part in body
+                    if isinstance(part, dict) and part.get("type") == "text"
+                )
             if not isinstance(body, str):
                 continue
-            launches.update(
-                re.findall(
-                    r"(?:Command running in background with ID:|Workflow launched in background\. Task ID:)\s*([\w.-]+)",
-                    body,
-                )
+            # 起動行は本文の先頭に立つ。 途中に現れた同形の行は走査結果の写しで、起動ではない
+            launch = re.match(
+                r"(?:Command running in background with ID:|Workflow launched in background\. Task ID:)\s*([\w-]+)",
+                body,
             )
+            if launch:
+                launches.add(launch.group(1))
+            elif body.startswith("Async agent launched successfully"):
+                agent = re.search(r"agentId:\s*([\w-]+)", body)
+                if agent:
+                    launches.add(agent.group(1))
     return launches, notices, truncated
 
 

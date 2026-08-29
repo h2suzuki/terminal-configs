@@ -133,15 +133,21 @@ test 方針: state file の有無 × open task の有無の 4 象限。
 
 入力: C9 と同じ wind-down 信号 (中身 `1`)。transcript の**末尾 2 MB** (`BACKGROUND_WINDOW_BYTES = 2 * 1024 * 1024`。
 C2 の funnel は 128 KB のままで、この窓を使うのは C10 だけ) から次を数える —
-起動 = tool_result の本文が `Command running in background with ID: <id>` または
-`Workflow launched in background. Task ID: <id>` に一致した `<id>` の集合。
-完了通知 = user entry の文字列に `<task-notification>` があり、その中の `<task-id><id></task-id>` の `<id>` 集合。
+起動 = tool_result 本文の**先頭**が `Command running in background with ID: <id>` または
+`Workflow launched in background. Task ID: <id>` に一致した `<id>`、および本文の先頭が
+`Async agent launched successfully` の時の `agentId: <id>`。subagent の tool_result は文字列でなく block の配列で
+返るので text block を連結してから見る。`<id>` に `.` は含めない (実際の本文は `ID: <id>. Output is being written to:`
+と続く)。本文の途中に現れた同形の行は起動と数えない (過去 transcript を走査した出力が起動として数えられた実例がある)。
+完了通知 = user entry の文字列、または queue-operation entry の `content` に `<task-notification>` があり、
+その中の `<task-id><id></task-id>` の `<id>` 集合 (現行 CLI は後者の形で書く)。
 出力: 起動 − 完了通知 が空でなければ block し、未回収の id を列挙する。差が空なら pass。
 ただし窓が session 先頭に届いていないとき — transcript が窓より大きい、または起動を持たない完了通知 id がある (= 起動 id が窓の外)
 — は観測が不完全なので **block せず warn** とし、行に「窓外」を含める (差が空でなければ、transcript が窓より大きいだけの
 場合も warn する)。窓外かつ差が空なら何も出さない。
 test 方針: 起動 2 / 通知 1 の合成 transcript で 1 件を列挙、起動 2 / 通知 2 で pass、wind-down 未宣言で常に pass、
 起動を持たない通知で warn (「窓外」を含み exit 0)、窓内 1.5 MB の起動は block・窓外 3 MB の起動は非 block で上限値を挟む。
+subagent は起動のみで block・通知付きで pass、通知済 subagent が同席しても未回収 bash は block のまま (warn へ落ちない)、
+本文の途中に起動行を引用した tool_result は非 block、実際の形 (`ID: <id>. Output is…` と queue-operation の通知) で pass。
 
 ### C11 handoff-doc-without-marker (block)
 
@@ -375,6 +381,41 @@ def tool_result(body: str) -> dict:
             "role": "user",
             "content": [{"type": "tool_result", "content": body}],
         },
+    }
+
+
+def agent_result(agent_id: str) -> dict:
+    """A subagent launch: the harness returns block-shaped content, not a string."""
+    return {
+        "type": "user",
+        "uuid": "result-agent",
+        "timestamp": iso(-10),
+        "message": {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Async agent launched successfully. (This tool "
+                            f"result is internal metadata)\nagentId: {agent_id}\n",
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+
+
+def queued_notice(task_id: str) -> dict:
+    """A completion notice in the shape the current CLI writes: a queue-operation entry."""
+    return {
+        "type": "queue-operation",
+        "operation": "enqueue",
+        "timestamp": iso(-5),
+        "content": f"<task-notification>\n<task-id>{task_id}</task-id>\n"
+        "<status>completed</status>\n</task-notification>",
     }
 
 
@@ -1245,6 +1286,115 @@ class WindDownTest(StopChecksTest):
         proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
         self.assertBlocks(proc, "wind-down-background-unreaped")
         self.assertIn("bg-1", proc.stderr)
+
+    def test_c10_unreaped_subagent_blocks(self):
+        """A subagent launch counts: its tool_result is block-shaped, not a string."""
+        self.fx.wind_down()
+        self.fx.write(
+            [
+                prompt(),
+                call("Agent"),
+                agent_result("a077697a5c235d55b"),
+                say("片付けました"),
+            ]
+        )
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertBlocks(proc, "wind-down-background-unreaped")
+
+    def test_c10_notified_subagent_passes(self):
+        self.fx.wind_down()
+        self.fx.write(
+            [
+                prompt(),
+                call("Agent"),
+                agent_result("a077697a5c235d55b"),
+                injected(
+                    "<task-notification><task-id>a077697a5c235d55b</task-id>"
+                    "<status>completed</status></task-notification>"
+                ),
+                say("片付けました"),
+            ]
+        )
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertNotBlocked(proc, "wind-down-background-unreaped")
+
+    def test_c10_a_notified_subagent_does_not_demote_an_unreaped_bash_id(self):
+        """A subagent whose launch is read no longer looks like a launch outside the window."""
+        self.fx.wind_down()
+        self.fx.write(
+            [
+                prompt(),
+                bash("python3 long.py"),
+                tool_result("Command running in background with ID: bg-1"),
+                call("Agent"),
+                agent_result("a077697a5c235d55b"),
+                injected(
+                    "<task-notification><task-id>a077697a5c235d55b</task-id>"
+                    "<status>completed</status></task-notification>"
+                ),
+                say("片付けました"),
+            ]
+        )
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertBlocks(proc, "wind-down-background-unreaped")
+        self.assertIn("bg-1", proc.stderr)
+
+    def test_c10_a_launch_line_quoted_mid_body_is_not_a_launch(self):
+        """Scanning old transcripts prints launch lines; printing one is not launching one."""
+        self.fx.wind_down()
+        self.fx.write(
+            [
+                prompt(),
+                bash("python3 scan_transcripts.py"),
+                tool_result(
+                    "1 | Workflow launched in background. Task ID: wilz0xhwl\n"
+                    "2 | Command running in background with ID: bg-77\n"
+                ),
+                say("片付けました"),
+            ]
+        )
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertNotBlocked(proc, "wind-down-background-unreaped")
+
+    def test_c10_bash_id_matches_its_notice_in_the_real_shape(self):
+        """The harness writes `ID: <id>. Output is being written to:` - the period ends the id."""
+        self.fx.wind_down()
+        self.fx.write(
+            [
+                prompt(),
+                bash("python3 long.py"),
+                tool_result(
+                    "Command running in background with ID: bn10268kd. "
+                    "Output is being written to: /tmp/claude-1000/x.output"
+                ),
+                injected(
+                    "<task-notification><task-id>bn10268kd</task-id>"
+                    "<status>completed</status></task-notification>"
+                ),
+                say("片付けました"),
+            ]
+        )
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertNotBlocked(proc, "wind-down-background-unreaped")
+        self.assertNotIn("wind-down-background-unreaped", warn_body(proc))
+
+    def test_c10_notice_in_the_queue_operation_shape_reaps(self):
+        """The current CLI files completion notices as queue-operation entries, not user entries."""
+        self.fx.wind_down()
+        self.fx.write(
+            [
+                prompt(),
+                bash("python3 long.py"),
+                tool_result(
+                    "Command running in background with ID: bn10268kd. Output is at /tmp/x"
+                ),
+                queued_notice("bn10268kd"),
+                say("片付けました"),
+            ]
+        )
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertNotBlocked(proc, "wind-down-background-unreaped")
+        self.assertNotIn("wind-down-background-unreaped", warn_body(proc))
 
     def test_c10_launch_beyond_the_window_does_not_block(self):
         """Decree 3: the 2 MB cap is an upper bound, and an unobserved launch never blocks."""
