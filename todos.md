@@ -22,13 +22,27 @@ CAVEAT: 調査前の推論 — 完了判断での再発 (同じバグの別場�
 `3b5d077` が「C16 family (`when:` に stop を含む entry だけ) として配備、 配備先で実発火を確認」
 と書いて閉じた。 出したものは振り分けそのもので、 欠陥は **3 値のうち 1 値しか作らなかった**こと。
 `when: after-subagent` の entry を 1 件置いて subagent を走らせれば済む確認をせず、 「stop だけ」と
-自分で書いた文のまま閉じた。 導入以降 surface は 0 回、 レビューの暴走を止めるはずの教訓が届かず、
-6 巡・858 万 token・49 agent を費やした。
+自分で書いた文のまま閉じた。 `when:` を置いた 2026-08-27 11:16 から 2026-08-29 まで surface は 0 回。
+レビューは 6 巡続いた (同 session の workflow 合計は 858 万 token・49 agent。 うち研究と実装の 2 本
+246 万 token・19 agent はレビューではない)。
 なお私は、 この CAVEAT を最初に書いたとき閉じた当の commit (`3b5d077`) を開かず、 別 commit を
 根拠に「出したのは gate の値域拒否で、 動詞が違う」と書いた。 偽である。 CAVEAT の中で
 CAVEAT の言うバグをやった。 敵対レビューが指摘し、 commit を開いて訂正した。
 緩和策: 走らせて出力を見ていないものを完了と書かない。 何を閉じたかは、 閉じた commit を開いて
 確かめる。
+
+CAVEAT: 要件の動詞と出荷物の動詞がずれたまま閉じた (2026-08-29、敵対レビューで訂正)
+要件 `8c504f1` は「surface hook がそれで振り分ける」。 出荷 `6451a19` が出したのは gate の値域拒否
+だけで、 振り分けは書かれていない。 `2fb99ff` が項目を Close し、 `f91150f` が block ごと削除した。
+その削除された本文自身が「`when:` に stop を含む entry だけ配備」と書いている — **半分だと認める
+同じ文の中で、 完了として閉じた。**
+実測 (2026-08-29): 失敗 session `ff720c04` の inject_log は emit 23 件・mismatch 12 件で、
+`feedback_architecture_before_review` は 0 件。 ただし当時この entry は `when: prompt after-subagent`
+で、 出荷済み hook は `when:` を読んでいない —— prompt の候補から外れてはおらず、 届かなかったのは
+順位であって route の不在ではない。「route が無いから届かなかった」は私が書いた誤った因果で、
+実測の前に因果まで書いた結果である。
+緩和策: 閉じる前に、 要件の動詞 (振り分ける / 拒否する / 記録する) と出荷物の動詞を並べて書く。
+原因を書くときは、 その原因が無ければ結果が変わったことを実測で示してから書く。
 
 CAVEAT: Court bug
 Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が失敗するバグが頻発。
@@ -42,46 +56,6 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 git 履歴 (`git log -p -- todos.md`) と Work file にあり、ここには書かない。
 
 ## Critical
-
-### memory entry の `when:` 振り分けが 3 値中 1 値しか動いていない
-
-起票: opus-5 2026-08-29 (ユーザー指摘「みっつとも hook で surface しないと、致命的なバグだぞ」)
-
-Goal: `when:` の prompt / stop / after-subagent すべてで surface hook が振り分ける
-(要件 `8c504f1`「surface hook がそれで振り分ける」)。 実装の無い値を正規の選択肢として
-案内しない。
-
-Exit Criteria:
-
-- [x] prompt の振り分けを実装 — route で BM25 側と dense 側を絞る (`ee6ecfa`)。 配備先で同一
-  query・同一 model が prompt は none、 stop は verbatim_quote entry (2026-08-29 実測)
-- [x] after-subagent の振り分けを実装 — exit 2 で親へ渡す。 実機の subagent 完了で
-  `feedback_architecture_before_review` が届いた (inject_log id=909、 通算 emit は 8 件)
-- [x] stop の判定を値の集合一致にする — `"stop" in when.lower().split()` (`35a1e25`、配備先に当該行あり)
-- [x] 3 値の契約 test を red-first で追加し変異で殺せることを確認 — memory_surface 9 test で
-  survivors 0/4、 stop_checks は当時 160 test (旧実装が新 test を落とす red を観測)
-- [x] 実装の無い値を案内しない — gate と skill が挙げる 3 値すべてに振り分けが実装された
-- [x] 本 block の文面を敵対的レビューにかけた — 指摘 7 件を実物で再確認して訂正
-
-やらかしの経緯 (ユーザー指示により git 履歴でなくここに書く):
-
-要件 `8c504f1` は「surface hook がそれで振り分ける」。 出荷 `6451a19` は gate が値域外を
-拒否するだけで、 振り分けは 3 値中 2 値ぶん一度も書かれていない。 `2fb99ff` が項目を Close し、
-`f91150f` が block ごと削除した。 その削除された本文自身が「`when:` に stop を含む entry だけ
-配備」と書いている。 **半分だと認める同じ文の中で、 完了として閉じた。**
-
-「レビューを止め、 どの部品を削除できるか問え」という教訓 (`feedback_architecture_before_review`)
-は、 失敗 session `ff720c04` で 1 度も出ていない (同 session の emit 23 件・mismatch 12 件のうち 0)。
-ただし当時この entry は `when: prompt after-subagent` で、 出荷済み hook は `when:` を読んでいない
-—— 候補から外れてはおらず、 届かなかったのは順位であって route の不在ではない。 同 session の
-workflow 合計は 8,586,898 token / 49 agent (レビュー以外の 2 本 2,461,161 / 19 agent を含む)。
-
-この bug を報告する過程でも 3 回誤った。 文字列 grep だけで「hook は存在しない」と断定し
-`SubagentStop` event の実在すら確認しなかった。 作業コピーだけ grep して「todos.md に記録なし」と
-報告したが、 `git log -S'when:' -- todos.md` では当時 5 commit (Close 3 件) あった。 自作コマンドが
-「出力なし = 一度も現れていない」を無条件に印字し、 3 件出た直後のその行をそのまま報告に写した。
-
-Work file: なし
 
 ## High
 
@@ -171,7 +145,7 @@ Work file: `files/claude_managed-hooks/stop_checks.py` の `_background` / `_bac
 
 起票: opus-5 2026-08-29 (前 session `ff720c04` の未完了項目を引き継ぎ)
 
-Goal: 2026-08-28〜29 の session で出た 4 つの教訓が、 同じ場面へ来た時に surface される形で
+Goal: 2026-08-28〜29 の session で出た 5 つの教訓が、 同じ場面へ来た時に surface される形で
 保存されている。
 
 Exit Criteria:
@@ -184,9 +158,9 @@ Exit Criteria:
   `claude_user_settings inject` を並べた 6 行を自作した。 正規は base setup 1 本で、
   規則は `last-session-handoff.md` (複数 file・hook 登録変更は base setup) と README
   (末尾で `install_claude_extensions` まで走るので別途実行は不要) の両方に書いてあった
-- [ ] 4 件とも `when:` / `check:` を実装のある値だけで書く (Critical block の解決が前提)
+- [ ] 5 件とも `when:` / `check:` を書く — 3 値とも振り分けが動くのでどれを選んでもよい
 
-Work file: todos.md 冒頭の CAVEAT 2 件 (実測の出所)
+Work file: todos.md 冒頭の CAVEAT 3 件 (実測の出所)
 
 ### memory surface が予告 entry を届けられなかった機構を直す
 
@@ -286,7 +260,7 @@ Exit Criteria:
   session ごとに数える形。 置いた後に基準を作らない
 - [ ] 一定期間後に件数を比較し、 変化が無ければ削除する (残すことを既定にしない)
 
-Work file: なし。 バグの記述は本 file 冒頭の CAVEAT 2 件
+Work file: なし。 バグの記述は本 file 冒頭の CAVEAT 3 件
 
 ### (要相談) 「先に形を決めて材料を当てはめる」を止める機構
 
