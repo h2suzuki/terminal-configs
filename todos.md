@@ -156,7 +156,10 @@ Exit Criteria:
 - [x] 起動文字列が本文に現れただけの行を起動と数えない — 起動行を本文先頭に錨づけ
 - [x] id が完了通知と一致しない 2 件も直した — `ID: <id>. Output is…` の `.` を id に含めていた、
   現行 CLI の通知は queue-operation entry の `content` にあり user entry を見ても無い
-- [ ] Monitor の起動形を実測し、 検出の要否を確定する (直近 8 transcript に起動例 0 件)
+- [x] Monitor の起動形を実測し、 検出の要否を確定した — 実際に 1 つ起動して確認。 `Monitor started
+  (task <id>,` は 3 形式のどれとも一致せず、 通知だけが残る同じ穴だった。 進捗 `<event>` は同じ
+  task-id を運ぶので完了と数えない
+- [ ] 配備する — `stop_checks.py` と handoff SKILL.md が配備先と差分あり (base setup)
 - [x] 契約 test を red-first で追加した — 5 件、 旧実装で全部 red。 実 transcript 5 本の replay で
   未回収 5/1/2/1/9 → 0/0/1/1/0 (残る 2 件は途中で切れた session)
 - [x] handoff SKILL.md の Pre-handoff checks 4 に「待ち合わせる」を選択肢として明記した
