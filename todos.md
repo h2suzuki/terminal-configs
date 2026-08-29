@@ -138,8 +138,8 @@ Exit Criteria:
   未回収 5/1/2/1/9 → 0/0/1/1/0 (残る 2 件は途中で切れた session)
 - [x] handoff SKILL.md の Pre-handoff checks 4 に「待ち合わせる」を選択肢として明記した
 
-Work file: `files/claude_managed-hooks/stop_checks.py` の `_background` / `_background_sets`、
-`files/claude_managed-skills/handoff/SKILL.md` の Pre-handoff checks 4
+Work file: `last-session-handoff.md` (再開手順)、`files/claude_managed-hooks/stop_checks.py` の
+`_background_sets`、`files/claude_managed-skills/handoff/SKILL.md` の Pre-handoff checks 4
 
 ### 中断 session で出た教訓を memory entry にする
 
