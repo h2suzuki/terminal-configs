@@ -116,32 +116,6 @@ Exit Criteria:
 Work file: branch `wip/lessons-learned-split` の
 `files/claude_managed-skills/report-in-plain-words/`
 
-### handoff の background 未回収検出が subagent を取りこぼす
-
-起票: opus-5 2026-08-29 (ユーザー指摘「バックグラウンドタスクの待ち合わせか停止が漏れている」)
-
-Goal: handoff 手順が挙げる 4 種類の background すべてで、 未回収のまま session を閉じられない。
-
-Exit Criteria:
-
-- [x] Agent (subagent) の起動を検出する — text block を連結してから先頭を見る
-- [x] 完了通知だけが窓にある時に block が warn へ落ちる経路を塞ぐ — subagent の起動が読めた
-  結果、 通知だけが残る状態が消えた (決裁 3 の「窓外なら warn」はそのまま)
-- [x] 起動文字列が本文に現れただけの行を起動と数えない — 起動行を本文先頭に錨づけ
-- [x] id が完了通知と一致しない 2 件も直した — `ID: <id>. Output is…` の `.` を id に含めていた、
-  現行 CLI の通知は queue-operation entry の `content` にあり user entry を見ても無い
-- [x] Monitor の起動形を実測し、 検出の要否を確定した — 実際に 1 つ起動して確認。 `Monitor started
-  (task <id>,` は 3 形式のどれとも一致せず、 通知だけが残る同じ穴だった。 進捗 `<event>` は同じ
-  task-id を運ぶので完了と数えない
-- [x] 配備した — base setup 実行後、 両 file とも配備先と IDENTICAL。 配備先の hook に対して
-  契約 test 170 件 green、 `managed-settings.d/extensions.json` に Stop hook として登録済み
-- [x] 契約 test を red-first で追加した — 5 件、 旧実装で全部 red。 実 transcript 5 本の replay で
-  未回収 5/1/2/1/9 → 0/0/1/1/0 (残る 2 件は途中で切れた session)
-- [x] handoff SKILL.md の Pre-handoff checks 4 に「待ち合わせる」を選択肢として明記した
-
-Work file: `last-session-handoff.md` (再開手順)、`files/claude_managed-hooks/stop_checks.py` の
-`_background_sets`、`files/claude_managed-skills/handoff/SKILL.md` の Pre-handoff checks 4
-
 ### 中断 session で出た教訓を memory entry にする
 
 起票: opus-5 2026-08-29 (前 session `ff720c04` の未完了項目を引き継ぎ)
