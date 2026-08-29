@@ -53,13 +53,14 @@ Goal: `when:` の prompt / stop / after-subagent すべてで surface hook が�
 
 Exit Criteria:
 
-- [ ] prompt の振り分けを実装 — `memory_surface.py:_parse_entry` は `when:` を読まず全 entry を
-  対象にしている。 `when:` に prompt を含まない entry が prompt 時に出ないことを実測する
-- [ ] after-subagent の振り分けを実装 — 対応 hook が無い。 SubagentStop 配線先 2 本
-  (`codex_delegation_surface.py` / `voicevox_claude_alerts`) はいずれも memory を読まない
-- [ ] stop の判定を値の集合一致にする — `stop_checks.py:942` は `"stop" in when` の部分一致
-- [ ] 3 値それぞれに契約 test を red-first で追加し、変異で殺せることを確認する
-- [ ] 実装の無い値を gate が受理しない、 または skill が動く選択肢として案内しない状態にする
+- [x] prompt の振り分けを実装 — route で BM25 側と dense 側を絞る (`ee6ecfa`)。 配備先で同一
+  query・同一 model が prompt は none、 stop は verbatim_quote entry (2026-08-29 実測)
+- [x] after-subagent の振り分けを実装 — SubagentStop を同経路へ流し exit 2 で親へ渡す。 実機の
+  subagent 完了で emit 0 件だった `feedback_architecture_before_review` が届いた
+- [x] stop の判定を値の集合一致にする — `"stop" in when.lower().split()` (`35a1e25`)、配備先 IDENTICAL
+- [x] 3 値の契約 test を red-first で追加し変異で殺せることを確認 — memory_surface 9 test で
+  survivors 0/4、 stop_checks 160 test (旧実装が新 test を落とす red を観測)
+- [x] 実装の無い値を案内しない — gate と skill が挙げる 3 値すべてに振り分けが実装された
 - [ ] 本 block の文面を subagent の敵対的レビューに 1 回かける (CAVEAT 2 件は `d16bb63` で実施済み。
   守る失敗モードは「自分のうっかり」と発注書に明記し、 攻撃者仮定を置かない)
 
