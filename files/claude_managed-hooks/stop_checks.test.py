@@ -1294,7 +1294,7 @@ class WindDownTest(StopChecksTest):
             [
                 prompt(),
                 call("Agent"),
-                agent_result("a077697a5c235d55b"),
+                agent_result("a1b2c3d4e5f60718a"),
                 say("片付けました"),
             ]
         )
@@ -1307,9 +1307,9 @@ class WindDownTest(StopChecksTest):
             [
                 prompt(),
                 call("Agent"),
-                agent_result("a077697a5c235d55b"),
+                agent_result("a1b2c3d4e5f60718a"),
                 injected(
-                    "<task-notification><task-id>a077697a5c235d55b</task-id>"
+                    "<task-notification><task-id>a1b2c3d4e5f60718a</task-id>"
                     "<status>completed</status></task-notification>"
                 ),
                 say("片付けました"),
@@ -1327,9 +1327,9 @@ class WindDownTest(StopChecksTest):
                 bash("python3 long.py"),
                 tool_result("Command running in background with ID: bg-1"),
                 call("Agent"),
-                agent_result("a077697a5c235d55b"),
+                agent_result("a1b2c3d4e5f60718a"),
                 injected(
-                    "<task-notification><task-id>a077697a5c235d55b</task-id>"
+                    "<task-notification><task-id>a1b2c3d4e5f60718a</task-id>"
                     "<status>completed</status></task-notification>"
                 ),
                 say("片付けました"),
