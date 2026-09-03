@@ -14,7 +14,6 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
-import json
 import os
 import sqlite3
 import sys
@@ -215,96 +214,6 @@ class WhenDispatchTest(unittest.TestCase):
         code, out = self._subagent([])
         self.assertEqual(code, 0)
         self.assertEqual(out, "")
-
-
-class PlanFirstNudgeTest(unittest.TestCase):
-    """model 限定の task-plan-first nudge, written by the ordering side first.
-
-    Contract (each claim maps to one test):
-      P1  Task store が空の prompt turn -> nudge が additionalContext に乗る
-      P2  nudge は systemMessage に乗らない (user の画面を汚さない model 限定 channel)
-      P3  未クローズ Task が 1 件でもあれば nudge は出ない (追跡中の session を nag しない)
-      P6  Task が全て completed / cancelled なら nudge は再び出る (0 件と同義)
-      P4  synthetic <task-notification> re-entry -> turn marker も nudge も無し
-      P5  drafts/tasks (mytask MCP) と ~/.claude/tasks (native) の両 store を数える
-    """
-
-    def _query(self, prompt: str, *, tasks=None, native=None) -> dict:
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        session = "s1"
-        if tasks is not None:
-            store = os.path.join(tmp.name, "drafts", "tasks")
-            os.makedirs(store)
-            with open(os.path.join(store, session + ".json"), "w") as f:
-                json.dump(tasks, f)
-        home = os.path.join(tmp.name, "home")
-        if native is not None:
-            store = os.path.join(home, ".claude", "tasks", session)
-            os.makedirs(store)
-            with open(os.path.join(store, "1.json"), "w") as f:
-                json.dump(native, f)
-        payload = {
-            "prompt": prompt,
-            "session_id": session,
-            "cwd": tmp.name,
-            "transcript_path": os.path.join(tmp.name, "t.jsonl"),
-        }
-        buf = io.StringIO()
-        with (
-            mock.patch.dict(os.environ, {"HOME": home}, clear=False),
-            mock.patch.object(ms, "DB_PATH", os.path.join(tmp.name, "idx.sqlite3")),
-            mock.patch.object(ms, "_memory_surface", lambda *a, **k: None),
-            mock.patch.object(ms, "_concern_inject", lambda *a, **k: None),
-            mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))),
-            contextlib.redirect_stdout(buf),
-        ):
-            self.assertEqual(ms._main_query(), 0)
-        out = buf.getvalue().strip()
-        return json.loads(out) if out else {}
-
-    def test_p1_nudge_rides_additional_context_when_no_task_exists(self) -> None:
-        out = self._query("hook を直してください")
-        self.assertIn(
-            ms.PLAN_FIRST_NUDGE, out["hookSpecificOutput"]["additionalContext"]
-        )
-
-    def test_p2_nudge_stays_out_of_system_message(self) -> None:
-        out = self._query("hook を直してください")
-        self.assertNotIn(ms.PLAN_FIRST_NUDGE, out.get("systemMessage", ""))
-
-    def test_p3_open_task_silences_the_nudge(self) -> None:
-        out = self._query(
-            "hook を直してください",
-            tasks=[{"content": "作業", "status": "in_progress"}],
-        )
-        self.assertNotIn(ms.PLAN_FIRST_NUDGE, json.dumps(out, ensure_ascii=False))
-
-    def test_p6_closed_tasks_do_not_silence_the_nudge(self) -> None:
-        for status in ("completed", "cancelled"):
-            with self.subTest(status=status):
-                out = self._query(
-                    "hook を直してください",
-                    tasks=[{"content": "作業", "status": status}],
-                )
-                self.assertIn(
-                    ms.PLAN_FIRST_NUDGE,
-                    out["hookSpecificOutput"]["additionalContext"],
-                )
-
-    def test_p4_synthetic_reentry_gets_no_nudge(self) -> None:
-        out = self._query("<task-notification>\n<task-id>x</task-id>")
-        self.assertNotIn(ms.PLAN_FIRST_NUDGE, json.dumps(out, ensure_ascii=False))
-
-    def test_p5_native_store_counts_too(self) -> None:
-        out = self._query(
-            "hook を直してください", native={"content": "作業", "status": "pending"}
-        )
-        self.assertNotIn(ms.PLAN_FIRST_NUDGE, json.dumps(out, ensure_ascii=False))
-        empty = self._query("hook を直してください", tasks=[])
-        self.assertIn(
-            ms.PLAN_FIRST_NUDGE, empty["hookSpecificOutput"]["additionalContext"]
-        )
 
 
 if __name__ == "__main__":

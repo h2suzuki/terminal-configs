@@ -829,56 +829,6 @@ def _counter_path(payload: dict) -> str | None:
     return os.path.join(cache, "claude-turn-counter", session_id + ".turns")
 
 
-PLAN_FIRST_NUDGE = (
-    "task-plan-first: この turn で作業 tool を使うなら、最初の tool より前に Task を "
-    "upsert せよ (Stop 側の gate は事後 block ゆえ手戻りになる)"
-)
-
-
-def _open_task_count(payload: dict) -> int:
-    """Count the session's unclosed Task records in both stores stop_checks reads (mytask MCP / native)."""
-    session = payload.get("session_id")
-    if not isinstance(session, str) or not session:
-        return 0
-    records: list = []
-    native = os.path.join(os.environ.get("HOME", ""), ".claude", "tasks", session)
-    try:
-        names = [n for n in os.listdir(native) if n.endswith(".json")]
-    except OSError:
-        names = []
-    for name in names:
-        records.extend(_task_json(os.path.join(native, name)))
-    for root in (os.environ.get("CLAUDE_PROJECT_DIR"), payload.get("cwd")):
-        if isinstance(root, str) and root:
-            records.extend(
-                _task_json(os.path.join(root, "drafts", "tasks", session + ".json"))
-            )
-    return sum(
-        1
-        for task in records
-        if str(task.get("status", "")).lower() not in {"completed", "cancelled"}
-    )
-
-
-def _task_json(path: str) -> list:
-    """Task records held in one store file — a bare list, a {tasks: [...]} wrapper, or a single record."""
-    try:
-        with open(path, encoding="utf-8") as f:
-            value = json.load(f)
-    except (OSError, ValueError):
-        return []
-    if isinstance(value, list):
-        return [item for item in value if isinstance(item, dict)]
-    if isinstance(value, dict):
-        nested = value.get("tasks")
-        return (
-            [item for item in nested if isinstance(item, dict)]
-            if isinstance(nested, list)
-            else [value]
-        )
-    return []
-
-
 def _turn_marker(payload: dict) -> str | None:
     # Skip synthetic re-entry prompts: a dynamic-workflow completion injects a
     # <task-notification> through the prompt path, which is not a real turn.
@@ -1227,11 +1177,7 @@ def _main_query() -> int:
     except Exception:
         concern = None
     out: dict = {}
-    try:
-        nudge = PLAN_FIRST_NUDGE if marker and not _open_task_count(payload) else None
-    except Exception:
-        nudge = None
-    ctx_parts = [p for p in (marker, nudge, additional, concern) if p]
+    ctx_parts = [p for p in (marker, additional, concern) if p]
     if ctx_parts:
         out["hookSpecificOutput"] = {
             "hookEventName": "UserPromptSubmit",
