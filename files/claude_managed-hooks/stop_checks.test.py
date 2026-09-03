@@ -246,7 +246,7 @@ test 方針: `when: prompt` のみの entry が出ないこと、固定文言が
 入力: block も warn / context も無い pass 時のみ。
 出力: `<transcript>.turns` の counter を 1 増やし、`"<count> <last_stop_epoch>"` の 1 行で書き戻す。
 stdout に `systemMessage` だけを持つ JSON を 1 行出す (`additionalContext` は付けない = model には不可視)。
-本文は `<ISO 時刻> / Turn #<count> / Context <used>% / 経過 <秒> 秒`。`<used>` は
+本文は `<ISO 時刻 (local timezone / offset 付き)> / Turn #<count> / Context <used>% / 経過 <秒> 秒`。`<used>` は
 `$XDG_CACHE_HOME/claude-tui-statusline/<session_id>.json` (既定 `$HOME/.cache/…`) の `stdin.context_window.used_percentage`
 (`stdin` は dict、JSON 文字列なら parse する)、経過の基点は同 file の `session_started_epoch`。cache が無い / 読めない場合は
 `Context -` とし、経過は前回 Stop の epoch (`.turns` の 2 列目) から数える。counter file が読めない場合は marker を出さず exit 0。
@@ -1914,6 +1914,11 @@ class TurnMarkerTest(StopChecksTest):
         self.assertIn("Turn #1", marker(run_hook(self.fx, self.CLEAN)))
         run_hook(self.fx, "該当なしです。")
         self.assertIn("Turn #2", marker(run_hook(self.fx, self.CLEAN)))
+
+    def test_c17_marker_stamp_is_local_time(self):
+        msg = marker(run_hook(self.fx, self.CLEAN, env_extra={"TZ": "Asia/Tokyo"}))
+        stamp = datetime.datetime.fromisoformat(msg.split(" / ")[0])
+        self.assertEqual(stamp.utcoffset(), datetime.timedelta(hours=9))
 
     def test_c17_marker_carries_no_additional_context(self):
         proc = run_hook(self.fx, self.CLEAN)

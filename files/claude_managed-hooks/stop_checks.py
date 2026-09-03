@@ -1156,7 +1156,7 @@ def _turn_marker(payload, turn):
         return ""
     context, started_epoch = _statusline(payload, previous_epoch)
     elapsed = max(0, now - started_epoch)
-    stamp = datetime.datetime.fromtimestamp(now, datetime.timezone.utc).isoformat()
+    stamp = datetime.datetime.fromtimestamp(now).astimezone().isoformat()
     return f"{stamp} / Turn #{count} / Context {context} / 経過 {elapsed} 秒"
 
 
