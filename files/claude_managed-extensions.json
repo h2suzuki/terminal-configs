@@ -110,7 +110,8 @@
     ],
     "UserPromptSubmit": [
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/check_uncommitted_at_handoff.py" } ] },
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/codex_delegation_surface.py" } ] }
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/codex_delegation_surface.py" } ] },
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/plan_first_nudge.py" } ] }
     ],
     "MessageDisplay": [
       { "hooks": [ { "type": "command", "command": "/usr/local/bin/claude_court_guard --hook" } ] }
