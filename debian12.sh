@@ -295,7 +295,13 @@ copy claude_user-extensions.json                /etc/claude-code/skel/extensions
 
 
 #  Codex configs; setup_user_environment installs CLI
-rm -rf /etc/codex/
+# Reset the managed tree but keep user drop-ins (rules/*)
+if [ -d /etc/codex/ ]; then
+    find /etc/codex -depth -mindepth 1 \
+        ! -path /etc/codex/rules \
+        ! -path '/etc/codex/rules/*' \
+        -delete
+fi
 copy codex_config.toml                          /etc/codex/config.toml
 
 
