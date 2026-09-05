@@ -172,41 +172,6 @@ Exit Criteria:
 Work file: `last-session-handoff.md` (再開手順)、`~/.claude/hooks/memory_surface.py` (surface 方針の実装)、
 `/var/lib/claude-rag-memory/memory_index.sqlite3` の `inject_log` (emit / mismatch の実測)
 
-### 肥大化した hook と CLI を新 protocol で最小限へ書き直す
-
-起票: user 2026-08-26 (「敵対レビューで肥大化したスクリプトがあれば、すべて simplify した方がよい」)
-
-Goal: 肥大化した 5 本を、契約 test で現行の deny 挙動を固定したうえで最小実装に置き換え、
-配備後も実 corpus で誤 deny 0 を保つ。
-
-Exit Criteria:
-
-- [x] 着手順と protocol を合意した (2026-08-26): codex_delegation_gate + codex_worktree_gate → stop_checks →
-  skill_reminder_gate → codex_order_lint。契約 test は command 文字列で決まる分岐を実 corpus で、状態依存の
-  分岐を合成 case で固定する
-- [x] codex_delegation_gate (production 1,038 行) と codex_worktree_gate (1,035 行) を書き直し配備した — 2026-08-27、
-  1 本 741 行に統合 (契約 C1〜C12・66 test、実 corpus Bash 29,173 件で非 codex の deny 0)、merge `8ada67f`、
-  配備先 IDENTICAL・旧 worktree gate 除去
-- [x] stop_checks (2,431 行) を書き直し配備した — 2026-08-27、1,077 行 (family 15、契約 C1〜C19・129 test、
-  done_state_ledger の block 化・warn は最終本文だけ・background 未回収 block を含む)。初回納品は旧 hook の実 block 234 件を
-  continuation-claim 0/74 しか捕えず、旧 roster を契約に逐語で載せて訂正 → 61/74・meta-announce 13/15、merge `caf7a70`、IDENTICAL
-- [x] skill_reminder_gate (1,073 行) を書き直し配備した — 2026-08-27、428 行 (契約 C1〜C11・inv1〜9・65 test、
-  実 corpus Write/Edit 6,484 + Bash 30,236 件で旧 allow → 新 deny 0)、merge `d448ba7`、IDENTICAL
-- [x] codex_order_lint (592 行) を書き直し配備した — 「機構追加」の字面で必須節を連鎖要求する判定 (2026-08-26 に
-  2 回誤発火) を落とし、fix 発注 3 巡目以降に `## 処置の種別` (閉じた選択肢) を必須にする gate を足した。2026-08-27、
-  557 行 (同居 test と --selftest 廃止)、契約 C1〜C17・36 test・実 corpus 7 本の所見一致、merge `939fb54`、
-  `/usr/local/bin` と fix 雛形が IDENTICAL
-- [x] stop_checks の契約に足す family 4 つ — Task 常時計画 (新規 prompt に応答する turn で最初の非 Task tool 呼び出し前に
-  Task upsert が無ければ block)、読まずに裁定 (subagent / workflow の結果を受けた turn で、最終本文が挙げた entry / path を開く
-  tool 呼び出しが無ければ block)、Stop 時 surface (`check:` を持つ entry 限定)、「無駄」reminder の prompt ごと 1 回化
-  — 2026-08-27、C6 task-plan-first / C8 ruling-without-reading / C16 memory-reminder (latch は stdout に載った Stop だけ) として配備
-- [ ] 配備後 2 週間の実運用で誤 deny 0 — stop_checks で 2 件出た (2026-08-28、skill 再 invoke の偽境界と
-  引用 token での workflow gate 誤開放。`97a8b0b` / `0d8e562` で修正・配備済み)。残り 4 本は継続観測中
-  (〜2026-09-10)。stop_checks 分をこの条件の不成立とみなすかは要判断
-
-Work file: `last-session-handoff.md` (再開手順)、
-`files/claude_managed-hooks/deny_command_patterns.test.py` (契約 test の実例)
-
 ## Medium
 
 ### 試行: 一次ソース確認の指示を codex と同じ形で置いてみる
