@@ -23,15 +23,13 @@ CAVEAT: 調査前の推論 — 完了判断での再発 (同じバグの別場�
 と書いて閉じた。 出したものは振り分けそのもので、 欠陥は **3 値のうち 1 値しか作らなかった**こと。
 `when: after-subagent` の entry を 1 件置いて subagent を走らせれば済む確認をせず、 「stop だけ」と
 自分で書いた文のまま閉じた。 `when:` を置いた 2026-08-27 11:16 から 2026-08-29 まで surface は 0 回。
-レビューは 6 巡続いた (同 session の workflow 合計は 858 万 token・49 agent。 うち研究と実装の 2 本
-246 万 token・19 agent はレビューではない)。
 なお私は、 この CAVEAT を最初に書いたとき閉じた当の commit (`3b5d077`) を開かず、 別 commit を
 根拠に「出したのは gate の値域拒否で、 動詞が違う」と書いた。 偽である。 CAVEAT の中で
-CAVEAT の言うバグをやった。 敵対レビューが指摘し、 commit を開いて訂正した。
+CAVEAT の言うバグをやった。 指摘を受けて commit を開いて訂正した。
 緩和策: 走らせて出力を見ていないものを完了と書かない。 何を閉じたかは、 閉じた commit を開いて
 確かめる。
 
-CAVEAT: 要件の動詞と出荷物の動詞がずれたまま閉じた (2026-08-29、敵対レビューで訂正)
+CAVEAT: 要件の動詞と出荷物の動詞がずれたまま閉じた (2026-08-29 訂正)
 要件 `8c504f1` は「surface hook がそれで振り分ける」。 出荷 `6451a19` が出したのは gate の値域拒否
 だけで、 振り分けは書かれていない。 `2fb99ff` が項目を Close し、 `f91150f` が block ごと削除した。
 その削除された本文自身が「`when:` に stop を含む entry だけ配備」と書いている — **半分だと認める
@@ -106,8 +104,6 @@ Goal: 日常語で書く・報告する形を渡す skill が、 Stop の拒否�
 
 Exit Criteria:
 
-- [ ] 敵対レビューの残指摘を閉じる (自己採点を復活させている箇所、 反証済み対策の再掲、
-  発火経路の欠如)
 - [ ] Stop の拒否文が skill の形を手渡す経路を作る — skill 単体では発火できないため
 - [ ] 3,400 byte 以下に収める (同種 skill は 2,033 / 2,100 / 3,346 byte)
 - [ ] (要相談) 仕上げるか材料から作り直すかを決める — 前 session で「show-me が実際に何をして
@@ -180,29 +176,26 @@ Work file: `last-session-handoff.md` (再開手順)、`~/.claude/hooks/memory_su
 
 起票: user 2026-08-26 (「敵対レビューで肥大化したスクリプトがあれば、すべて simplify した方がよい」)
 
-Goal: 敵対レビューで膨らんだ 5 本を、契約 test で現行の deny 挙動を固定したうえで最小実装に置き換え、
+Goal: 肥大化した 5 本を、契約 test で現行の deny 挙動を固定したうえで最小実装に置き換え、
 配備後も実 corpus で誤 deny 0 を保つ。
 
 Exit Criteria:
 
 - [x] 着手順と protocol を合意した (2026-08-26): codex_delegation_gate + codex_worktree_gate → stop_checks →
   skill_reminder_gate → codex_order_lint。契約 test は command 文字列で決まる分岐を実 corpus で、状態依存の
-  分岐を合成 case で固定し、固定 4 変異 → codex 実装 → 独立レビュー 1 巡の同 protocol で受け入れる
+  分岐を合成 case で固定する
 - [x] codex_delegation_gate (production 1,038 行) と codex_worktree_gate (1,035 行) を書き直し配備した — 2026-08-27、
-  1 本 741 行に統合 (契約 C1〜C12・66 test・変異 0/4、実 corpus Bash 29,173 件で非 codex の deny 0)、merge `8ada67f`、
-  配備先 IDENTICAL・旧 worktree gate 除去。レビューは初回 → fix → 再確認 → 契約訂正で再入場 → review → fix → 再確認で
-  打ち止め、残る指摘は bounded-risk として受入 (報告書は 2026-09-06 に削除)
-- [x] stop_checks (2,431 行) を書き直し配備した — 2026-08-27、1,077 行 (family 15、契約 C1〜C19・129 test・変異 0/4、
+  1 本 741 行に統合 (契約 C1〜C12・66 test、実 corpus Bash 29,173 件で非 codex の deny 0)、merge `8ada67f`、
+  配備先 IDENTICAL・旧 worktree gate 除去
+- [x] stop_checks (2,431 行) を書き直し配備した — 2026-08-27、1,077 行 (family 15、契約 C1〜C19・129 test、
   done_state_ledger の block 化・warn は最終本文だけ・background 未回収 block を含む)。初回納品は旧 hook の実 block 234 件を
-  continuation-claim 0/74 しか捕えず、旧 roster を契約に逐語で載せて訂正 → 61/74・meta-announce 13/15。レビューは初回 →
-  fix → 再確認 → 発注側 trivial fix で打ち止め、merge `caf7a70`、IDENTICAL。残る指摘は受入 (報告書は 2026-09-06 に削除)
-- [x] skill_reminder_gate (1,073 行) を書き直し配備した — 2026-08-27、428 行 (契約 C1〜C11・inv1〜9・65 test・変異 0/4、
-  実 corpus Write/Edit 6,484 + Bash 30,236 件で旧 allow → 新 deny 0)。レビューは初回 (P0 3) → fix → 再確認 (P0 1) →
-  発注側 trivial fix で打ち止め、merge `d448ba7`、IDENTICAL。残る指摘は受入 (報告書は 2026-09-06 に削除)
+  continuation-claim 0/74 しか捕えず、旧 roster を契約に逐語で載せて訂正 → 61/74・meta-announce 13/15、merge `caf7a70`、IDENTICAL
+- [x] skill_reminder_gate (1,073 行) を書き直し配備した — 2026-08-27、428 行 (契約 C1〜C11・inv1〜9・65 test、
+  実 corpus Write/Edit 6,484 + Bash 30,236 件で旧 allow → 新 deny 0)、merge `d448ba7`、IDENTICAL
 - [x] codex_order_lint (592 行) を書き直し配備した — 「機構追加」の字面で必須節を連鎖要求する判定 (2026-08-26 に
   2 回誤発火) を落とし、fix 発注 3 巡目以降に `## 処置の種別` (閉じた選択肢) を必須にする gate を足した。2026-08-27、
-  557 行 (同居 test と --selftest 廃止)、契約 C1〜C17・36 test・変異 0/4・実 corpus 7 本の所見一致、merge `939fb54`、
-  `/usr/local/bin` と fix 雛形が IDENTICAL。残る指摘は受入 (報告書は 2026-09-06 に削除)
+  557 行 (同居 test と --selftest 廃止)、契約 C1〜C17・36 test・実 corpus 7 本の所見一致、merge `939fb54`、
+  `/usr/local/bin` と fix 雛形が IDENTICAL
 - [x] stop_checks の契約に足す family 4 つ — Task 常時計画 (新規 prompt に応答する turn で最初の非 Task tool 呼び出し前に
   Task upsert が無ければ block)、読まずに裁定 (subagent / workflow の結果を受けた turn で、最終本文が挙げた entry / path を開く
   tool 呼び出しが無ければ block)、Stop 時 surface (`check:` を持つ entry 限定)、「無駄」reminder の prompt ごと 1 回化
@@ -211,8 +204,8 @@ Exit Criteria:
   引用 token での workflow gate 誤開放。`97a8b0b` / `0d8e562` で修正・配備済み)。残り 4 本は継続観測中
   (〜2026-09-10)。stop_checks 分をこの条件の不成立とみなすかは要判断
 
-Work file: `last-session-handoff.md` (再開手順)、`codex-delegation` skill の受け入れ規約、
-`files/claude_managed-hooks/deny_command_patterns.test.py` (契約 test と変異器の実例)
+Work file: `last-session-handoff.md` (再開手順)、
+`files/claude_managed-hooks/deny_command_patterns.test.py` (契約 test の実例)
 
 ## Medium
 
