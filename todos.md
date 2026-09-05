@@ -191,18 +191,18 @@ Exit Criteria:
 - [x] codex_delegation_gate (production 1,038 行) と codex_worktree_gate (1,035 行) を書き直し配備した — 2026-08-27、
   1 本 741 行に統合 (契約 C1〜C12・66 test・変異 0/4、実 corpus Bash 29,173 件で非 codex の deny 0)、merge `8ada67f`、
   配備先 IDENTICAL・旧 worktree gate 除去。レビューは初回 → fix → 再確認 → 契約訂正で再入場 → review → fix → 再確認で
-  打ち止め、残る指摘は `drafts/reviews/delegation-gate/*-report.md` (bounded-risk 受入)
+  打ち止め、残る指摘は bounded-risk として受入 (報告書は 2026-09-06 に削除)
 - [x] stop_checks (2,431 行) を書き直し配備した — 2026-08-27、1,077 行 (family 15、契約 C1〜C19・129 test・変異 0/4、
   done_state_ledger の block 化・warn は最終本文だけ・background 未回収 block を含む)。初回納品は旧 hook の実 block 234 件を
   continuation-claim 0/74 しか捕えず、旧 roster を契約に逐語で載せて訂正 → 61/74・meta-announce 13/15。レビューは初回 →
-  fix → 再確認 → 発注側 trivial fix で打ち止め、merge `caf7a70`、IDENTICAL。残る指摘は `drafts/reviews/stop-checks/*-report.md`
+  fix → 再確認 → 発注側 trivial fix で打ち止め、merge `caf7a70`、IDENTICAL。残る指摘は受入 (報告書は 2026-09-06 に削除)
 - [x] skill_reminder_gate (1,073 行) を書き直し配備した — 2026-08-27、428 行 (契約 C1〜C11・inv1〜9・65 test・変異 0/4、
   実 corpus Write/Edit 6,484 + Bash 30,236 件で旧 allow → 新 deny 0)。レビューは初回 (P0 3) → fix → 再確認 (P0 1) →
-  発注側 trivial fix で打ち止め、merge `d448ba7`、IDENTICAL。残る指摘は `drafts/reviews/skill-reminder/*-report.md`
+  発注側 trivial fix で打ち止め、merge `d448ba7`、IDENTICAL。残る指摘は受入 (報告書は 2026-09-06 に削除)
 - [x] codex_order_lint (592 行) を書き直し配備した — 「機構追加」の字面で必須節を連鎖要求する判定 (2026-08-26 に
   2 回誤発火) を落とし、fix 発注 3 巡目以降に `## 処置の種別` (閉じた選択肢) を必須にする gate を足した。2026-08-27、
   557 行 (同居 test と --selftest 廃止)、契約 C1〜C17・36 test・変異 0/4・実 corpus 7 本の所見一致、merge `939fb54`、
-  `/usr/local/bin` と fix 雛形が IDENTICAL。残る指摘は `drafts/reviews/order-lint-*-report.md`
+  `/usr/local/bin` と fix 雛形が IDENTICAL。残る指摘は受入 (報告書は 2026-09-06 に削除)
 - [x] stop_checks の契約に足す family 4 つ — Task 常時計画 (新規 prompt に応答する turn で最初の非 Task tool 呼び出し前に
   Task upsert が無ければ block)、読まずに裁定 (subagent / workflow の結果を受けた turn で、最終本文が挙げた entry / path を開く
   tool 呼び出しが無ければ block)、Stop 時 surface (`check:` を持つ entry 限定)、「無駄」reminder の prompt ごと 1 回化
@@ -268,9 +268,9 @@ Goal: 品質ゲートで「捕まえる」だけでなく、改造時の注入�
 
 Exit Criteria:
 
-- [x] 注入 corpus を起源 class 別に集計した基礎表を作る — `docs/injection-corpus-baseline.md`
+- [x] 注入 corpus を起源 class 別に集計した基礎表を作る — 基礎表 doc は 2026-09-06 に削除
   (2026-08-25: 11 巡 25 件、決定的 gates の捕獲 0 件)
-- [x] 発生率を下げる候補方策を提案した — `docs/injection-prevention-proposal.md` (2026-08-26、7 件)
+- [x] 発生率を下げる候補方策を提案した — 方策案 doc は 2026-09-06 に削除 (2026-08-26、7 件)
 - [ ] どの方策を採るかをユーザーが決める — 推奨案 (契約コード化 / 削除第一 / 変異生存数) への
   2026-08-26 の発話「方策は微妙。作り込まないは、回避であって、検知ではないことが、何度言っても
   理解されないのが遺憾。セッションリセット後に取り組む」。回避 (触る量を減らす) と検知 (作り込んだ
@@ -283,8 +283,8 @@ Exit Criteria:
   食い違い。方法論の 1 ページ化で解消する — 2026-08-26 の 1 ページ化で §7.3 は消滅し、現行 6 項目 (初回レビューは
   道具本体だけ・fix 1 回・再確認 1 回) は skill の「高リスク時のみ cross-model」と矛盾しない (2026-08-27 確認)
 
-Work file: `last-session-handoff.md` (再開手順)、`docs/injection-corpus-baseline.md`、
-`docs/injection-prevention-proposal.md`、`drafts/ruling61/` と `drafts/gates/` (gitignore)
+Work file: `last-session-handoff.md` (再開手順)。基礎表と方策案の 2 doc は 2026-09-06 に削除、
+解凍する時は git 履歴から戻す
 
 ### 随伴エージェント待ち — モデル判定へ回す案件 (凍結)
 
@@ -313,4 +313,4 @@ Exit Criteria:
   状態になった — それまで作業しない
 - [ ] (再開後) 4 件それぞれについて、モデルへ渡す単位と判定の出力形を決め、誤爆率を実測する
 
-Work file: `docs/injection-corpus-baseline.md` (項目 3・4 の件数の出所)
+Work file: 件数の出所だった基礎表 doc は 2026-09-06 に削除、必要なら git 履歴から戻す

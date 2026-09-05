@@ -1,10 +1,9 @@
 # 方法論の実証 — ケース台帳
 
-凍結 (2026-08-26): 追記しない。評価は `docs/adversarial-loop-meta-evaluation.md`。
+凍結 (2026-08-26): 追記しない。評価は git 履歴。
 
 小さい道具を新規に作り、敵対レビューが 5 巡以内で収束するかを実測する台帳。
-方法論の正本は `docs/adversarial-review-methodology.md`、集計の前提は
-`docs/injection-corpus-baseline.md`。
+方法論の正本は `docs/adversarial-review-methodology.md`。集計の前提は git 履歴。
 
 成功基準 (2026-08-21 ユーザー指定): **新ツールの敵対レビューは規模にもよるが最大 5 巡以内で
 収束する**。未合意で残っているのは「material 残ゼロの定義」と「token 量」の 2 つ。
