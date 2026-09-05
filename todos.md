@@ -211,7 +211,7 @@ Exit Criteria:
   引用 token での workflow gate 誤開放。`97a8b0b` / `0d8e562` で修正・配備済み)。残り 4 本は継続観測中
   (〜2026-09-10)。stop_checks 分をこの条件の不成立とみなすかは要判断
 
-Work file: `last-session-handoff.md` (再開手順)、`docs/adversarial-review-methodology.md` (protocol)、
+Work file: `last-session-handoff.md` (再開手順)、`codex-delegation` skill の受け入れ規約、
 `files/claude_managed-hooks/deny_command_patterns.test.py` (契約 test と変異器の実例)
 
 ## Medium

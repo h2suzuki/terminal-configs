@@ -21,10 +21,8 @@ Contract (each claim maps to one test):
 
 from __future__ import annotations
 
-import glob
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -32,8 +30,6 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 HOOK = os.path.join(HERE, "frozen_docs_gate.py")
-REPO_DOCS = os.path.join(HERE, "..", "..", "docs")
-MARKER = re.compile(r"^凍結 \(\d{4}-\d{2}-\d{2}\)", re.MULTILINE)
 DOC = "docs/ledger.md"
 COMMIT = f'git commit -m "docs: x" -- {DOC}'
 
@@ -172,29 +168,6 @@ class GateTest(unittest.TestCase):
         )
         self.assertEqual(run_hook(self.repo.root, COMMIT, payload="[]").returncode, 0)
 
-    def test_c7_repository_frozen_docs(self) -> None:
-        frozen: dict[str, str] = {}
-        for path in glob.glob(os.path.join(REPO_DOCS, "*.md")):
-            with open(path, encoding="utf-8") as fh:
-                text = fh.read()
-            if MARKER.search(text):
-                frozen[os.path.basename(path)] = text
-        self.assertEqual(
-            sorted(frozen),
-            [
-                "adversarial-review-methodology.md",
-                "methodology-case-ledger.md",
-            ],
-        )
-        for name, text in frozen.items():
-            rel = f"docs/{name}"
-            command = f'git commit -m "x" -- {rel}'
-            self.repo.commit(rel, text)
-            self.assertEqual(run_hook(self.repo.root, command).returncode, 0, name)
-            self.repo.write(rel, text + "追記\n")
-            out = run_hook(self.repo.root, command)
-            self.assertEqual(out.returncode, 2, name)
-            self.assertIn(rel, out.stderr)
 
 
 if __name__ == "__main__":

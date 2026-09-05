@@ -88,6 +88,16 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
 - **subagent 経由の委譲 (rescue 系の調査 task 含む) でも独立 monitor を張る**: subagent が「task を background へ移した。完了時に通知される」と報告したら、その報告を通知経路として信頼せず、その場で job id または成果物 / output path への独立 monitor（sentinel / until-loop）を張る。subagent が先に終了すると、その配下で background 化した task の完了通知は親 session に届かない（孤児化 — 調査 task の完了が 1.5 時間気づかれなかった実例 2026-08-13。結果は output file の直接確認で回収できた）
 - **server を抱える run は hang-proof な実行レシピで発注する**: 長命 server（vite / dev server 等）を含む run の発注文には次の 3 点を必須で含める。(1) hang しうる step（テスト・probe）は `timeout <上限>` で有限化する — trap は crash 用で hang には無力、timeout が exit を保証し exit が trap を発火させる 2 段構え。(2) server 起動直後に `trap 'kill "$PID" 2>/dev/null' EXIT INT TERM` を張る（kill は起動 PID 個別。pkill / fuser / port 指定 kill は禁止のまま）。(3) run 終了後、worktree path で scope した `pgrep -af "$PWD"` の残存検査を行い、残存 PID を個別 kill してから完了報告する — task の完了条件に含める。cleanup trap が書かれていても hang した probe が EXIT への到達を阻み、session 放置と重なって vite を抱えた sandbox tree が 1 日以上滞留した（4 tree・port 5278-5282 占有の実測 2026-08-06）
 
+### 受け入れ規約 — LLM に作らせた道具をどう受け取るか
+
+[バグ回避] = 作り込みを起こさない手順、[バグ検知] = 起きた後に捕まえる機構。
+
+- **実装前に発注側が契約を書く**: [バグ回避] 目的・用途内外・入出力と exit・不変条件・所有点を 10〜30 行で書き、書けなければ発注しない。環境の実態を先に測り、次に既存の正本を読む（順序が逆だと、実データの形を数えずに書いた契約から P0 が出る）。[バグ検知] 受け入れ test と固定 4 変異（不正入力の置換 / 境界の反転 / 出力 marker・counter の増減 / 正規化の除去）を発注側が用意して渡す — 変異器を実装者に書かせると、列挙から漏れた行が最初から変異対象にならない
+- **構造を先に決める**: [バグ回避] 不変量が複数 site に配られる、または状態 × 遷移を列挙できないなら、funnel か enumerator を先に作るか用途を縮小する。局所 patch は発注しない
+- **レビューは read-only の品質推定**: [バグ検知] 道具本体だけを渡し（発注書・過去の指摘・裁定は見せない）、correctness と要件に効く指摘だけを求める。finding は class でまとめ、処置は 仕様縮小 → 削除 → 既存 primitive への集約の順。新機構は fix でなく別発注
+- **触る量を減らす**: [バグ回避] fix diff ≤ 100 行、発注書 ≤ 60 行、レビュー単位 ≤ 400 行。自己申告と test 本数は証拠にしない
+- **採否は用途内 P0 と変異の生存数で決める**: [バグ検知] 生存 0/4 が受け入れ条件。緑と指摘総数は補助。直さない指摘は転記しない — reviewer の報告書がそのまま記録
+
 ## Related
 
 - `tool-role-delegation` — 作業を codex へ「routing する」判断はこちら。本 skill は routing 後の lifecycle 規律
