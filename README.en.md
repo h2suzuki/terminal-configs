@@ -150,7 +150,7 @@ effective configuration with `/status` and `/permissions` after starting Codex.
 - `sandbox_mode = "workspace-write"`: allows writes in the workspace and temporary directories.
 - `approval_policy = "never"`: operations outside the boundary without an explicit allow rule fail without an approval prompt.
 - `network_access = true`: allows network access for sandboxed commands.
-- `writable_roots = []`: grants no additional access across worktrees; start in the target worktree.
+- `writable_roots = ["~/worktrees"]`: allows writes throughout the running user's worktree directory.
 
 Use `~/worktrees/<repo>/<name>` for manual worktrees with both Claude Code and Codex.
 For `<name>`, prefer the branch name or a GitHub issue identifier such as `issue-123`.
@@ -164,15 +164,16 @@ the target repository in a host terminal (replace `myrepo` and `task-1`):
 ```bash
 mkdir -p "$HOME/worktrees/myrepo"
 git worktree add -b task-1 "$HOME/worktrees/myrepo/task-1"
-cd "$HOME/worktrees/myrepo/task-1"
 codex
-# To hand the task to Claude Code, start claude from this directory too.
+# Tell this session to work in ~/worktrees/myrepo/task-1.
 ```
 
-Claude Code already allows `~/worktrees` through `sandbox.filesystem.allowWrite`.
-Codex can edit ordinary files when started in the target worktree; it does not need
-write access to the entire parent directory. Initial trust confirmation is separate
-from sandbox write permissions; review the target before accepting it.
+Claude Code allows all of `~/worktrees` through `sandbox.filesystem.allowWrite`,
+and Codex through `sandbox_workspace_write.writable_roots`. Both can create and edit
+worktrees from a session started in the original repository, without restarting
+inside the target worktree. Configuration changes apply to new Codex sessions after
+installation. Initial trust confirmation is separate from sandbox write permissions;
+review the target before accepting it.
 
 Codex's `workspace-write` protects `.git` and its resolved target, `.agents`, and
 `.codex`. Both OS setup scripts install `files/codex_sandbox_exclusions.rules`

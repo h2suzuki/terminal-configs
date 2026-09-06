@@ -150,7 +150,7 @@ Codex CLI は `setup_user_environment` で導入し、両 OS のセットアッ�
 - `sandbox_mode = "workspace-write"`: 作業ディレクトリと一時領域への書き込みを許可。
 - `approval_policy = "never"`: 承認を求めず、明示的な許可ルールもない範囲外の操作は失敗します。
 - `network_access = true`: sandbox 内のコマンドのネットワークアクセスを許可。
-- `writable_roots = []`: 全 worktree への追加許可は付けず、対象 worktree で起動します。
+- `writable_roots = ["~/worktrees"]`: 起動ユーザーの worktree 保存先全体への書き込みを許可します。
 
 Claude Code と Codex の手動 worktree は `~/worktrees/<repo>/<name>` に統一します。
 `<name>` はブランチ名、または GitHub issue 番号に対応する `issue-123` などを推奨します。
@@ -163,13 +163,14 @@ worktree を使い、並行して編集する別タスクには別の worktree �
 ```bash
 mkdir -p "$HOME/worktrees/myrepo"
 git worktree add -b task-1 "$HOME/worktrees/myrepo/task-1"
-cd "$HOME/worktrees/myrepo/task-1"
 codex
-# Claude Code で引き継ぐ場合も、このディレクトリから claude を起動
+# このセッションで ~/worktrees/myrepo/task-1 を作業対象に指定
 ```
 
-Claude Code は既存の `sandbox.filesystem.allowWrite` で `~/worktrees` を許可しています。
-Codex は対象 worktree を cwd にすれば通常の編集が可能で、親ディレクトリ全体の許可は不要です。
+Claude Code は `sandbox.filesystem.allowWrite`、Codex は `sandbox_workspace_write.writable_roots`
+で `~/worktrees` 全体を許可します。両方とも元のリポジトリで起動したセッションから
+worktree を作成・編集でき、対象 worktree に移動して起動し直す必要はありません。
+設定の変更は配置後に新しく起動する Codex セッションから適用されます。
 初回の trust 確認は sandbox の書き込み許可とは別なので、対象を確認して応答してください。
 
 Codex の `workspace-write` では `.git` とその参照先、`.agents`、`.codex` が保護されます。

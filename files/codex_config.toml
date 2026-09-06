@@ -6,9 +6,10 @@ approval_policy = "never"
 
 [sandbox_workspace_write]
 network_access = true
-# Start in ~/worktrees/<repo>/<name> (the shared Claude Code / Codex layout).
+# Use ~/worktrees/<repo>/<name> (the shared Claude Code / Codex layout).
 # Recommended <name>: branch name or issue-<number>; naming is not enforced.
-# The selected workspace is writable automatically; do not grant all sibling worktrees access.
-writable_roots = []
+# Allow worktree creation and editing from a session started in the main repository.
+# Codex expands ~ to the home directory of the user running it.
+writable_roots = ["~/worktrees"]
 # Explicit command exceptions are installed separately in
 # rules/terminal-configs-sandbox-exclusions.rules (see README for the mapping).
