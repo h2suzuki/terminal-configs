@@ -1,7 +1,14 @@
-# terminal-configs managed system config for codex CLI -> /etc/codex/config.toml
+# terminal-configs system defaults for codex CLI -> /etc/codex/config.toml
+# User/project config and CLI options can override these defaults; this is not requirements.toml.
 # Write-capable non-interactive defaults: /codex:rescue network + interactive codex TUI (no approval prompts).
 sandbox_mode = "workspace-write"
 approval_policy = "never"
 
 [sandbox_workspace_write]
 network_access = true
+# Start in ~/worktrees/<repo>/<name> (the shared Claude Code / Codex layout).
+# Recommended <name>: branch name or issue-<number>; naming is not enforced.
+# The selected workspace is writable automatically; do not grant all sibling worktrees access.
+writable_roots = []
+# Explicit command exceptions are installed separately in
+# rules/terminal-configs-sandbox-exclusions.rules (see README for the mapping).

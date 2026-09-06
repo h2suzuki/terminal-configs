@@ -140,6 +140,76 @@ Claude Code に「信頼を高めるための仕組み」と外部ツール連�
 codex プラグインは `!codex login` で認証し、`/codex:setup` で疎通確認、`/reload-plugins` で現セッションへ反映します。
 
 
+### 9. Codex と共通 worktree
+
+Codex CLI は `setup_user_environment` で導入し、両 OS のセットアップで
+`files/codex_config.toml` を `/etc/codex/config.toml` に配置します。
+これは上書き可能なシステム既定値です。ユーザー設定・プロジェクト設定・起動オプションが
+優先されるため、起動後に `/status` と `/permissions` で実効設定を確認してください。
+
+- `sandbox_mode = "workspace-write"`: 作業ディレクトリと一時領域への書き込みを許可。
+- `approval_policy = "never"`: 承認を求めず、明示的な許可ルールもない範囲外の操作は失敗します。
+- `network_access = true`: sandbox 内のコマンドのネットワークアクセスを許可。
+- `writable_roots = []`: 全 worktree への追加許可は付けず、対象 worktree で起動します。
+
+Claude Code と Codex の手動 worktree は `~/worktrees/<repo>/<name>` に統一します。
+`<name>` はブランチ名、または GitHub issue 番号に対応する `issue-123` などを推奨します。
+これは命名の推奨であり、強制・自動検証はしません。ブランチ名の `/` をそのまま使う場合は、
+`feature/foo` → `~/worktrees/<repo>/feature/foo` のように階層になります。
+ユーザーセットアップで `~/worktrees` を作成します。同じタスクを引き継ぐ場合は同じ
+worktree を使い、並行して編集する別タスクには別の worktree を割り当てます。
+以下はホストのターミナルで、対象リポジトリから実行する例です（`myrepo` と `task-1` は置換）。
+
+```bash
+mkdir -p "$HOME/worktrees/myrepo"
+git worktree add -b task-1 "$HOME/worktrees/myrepo/task-1"
+cd "$HOME/worktrees/myrepo/task-1"
+codex
+# Claude Code で引き継ぐ場合も、このディレクトリから claude を起動
+```
+
+Claude Code は既存の `sandbox.filesystem.allowWrite` で `~/worktrees` を許可しています。
+Codex は対象 worktree を cwd にすれば通常の編集が可能で、親ディレクトリ全体の許可は不要です。
+初回の trust 確認は sandbox の書き込み許可とは別なので、対象を確認して応答してください。
+
+Codex の `workspace-write` では `.git` とその参照先、`.agents`、`.codex` が保護されます。
+共通のコマンド除外は、両 OS のセットアップで `files/codex_sandbox_exclusions.rules` を
+`/etc/codex/rules/terminal-configs-sandbox-exclusions.rules` に配置します。
+`prefix_rule` の `decision = "allow"` に一致するコマンドは承認なしで sandbox 外で実行されます。
+Claude Code の共通 `excludedCommands` を個別に確認した対応は以下のとおりです。
+
+| Claude 側の除外 | Codex 側の対応・理由 |
+|---|---|
+| `git *` | `git` を許可。Git 管理領域への書き込み・ホスト認証。 |
+| `gh *` | `gh` を許可。GitHub 認証・ユーザー設定へのアクセス。 |
+| `claude_memory_sync *` | 同名 CLI を許可。共有 memory clone と index を workspace 外で更新。Codex から共有メモリを操作する場合にも必要。 |
+| `docker *` | `docker` を許可。ホストの Docker daemon への接続。 |
+| `codex *` | `codex` を許可。子 CLI が自身の sandbox とユーザー状態を管理。 |
+| `node *codex-companion.mjs*` | 共通ルールには移さない。prefix rule は引数内の glob に非対応。必要な環境で `node` と companion の絶対パスを指定する個別ルールを登録する。`node` 全体は許可しない。 |
+| `codex_broker_reap*` | 実在する `codex_broker_reap` のみ許可。ホストのプロセス表を見ないと稼働中 broker を誤判定する。名前の前方一致は移さない。 |
+| `agent-browser *` | `agent-browser` を許可。ホストのブラウザ・セッション・開発サーバーへのアクセス。 |
+| `claude --bg *` | `claude --bg` のみ許可。自身の sandbox を持つ Claude のバックグラウンド起動。 |
+| `claude agents *` | `claude agents` のみ許可。ホストの Claude セッション情報へのアクセス。 |
+
+これは実行権限の設定であり、委譲や外部変更を自動で指示するものではありません。
+除外コマンドの子プロセス（Git hooks など）もホスト権限で動作し、Docker はホストへの
+広いアクセスを持ちます。子 Codex / Claude の sandbox 設定は子側の設定・起動引数に従います。
+通常のコマンドは引き続き sandbox 内で動作します。Claude Code の認証情報読み取り拒否は
+このルールでは再現していません。
+
+プロジェクト固有の除外は org policy に含めず、各プロジェクトで管理する drop-in、
+または各プロジェクトの `.claude` / `.codex` に設定します。
+Claude の drop-in は共通 Codex ルールへ自動変換しません。
+
+ルールは Codex の再起動後に読み込まれます。コマンドは裸名で呼び出してください。
+複雑なシェルのラッパーはルールに一致しない場合があり、別の `prompt` / `forbidden`
+ルールや管理制約がある場合は、そちらの制限が優先されます。
+
+仕様: [Codex 設定](https://learn.chatgpt.com/docs/config-file/config-reference)、
+[sandbox と保護パス](https://learn.chatgpt.com/docs/agent-approvals-security#protected-paths-in-writable-roots)、
+[sandbox 外実行ルール](https://learn.chatgpt.com/docs/agent-configuration/rules)。
+
+
 ## 追加セットアップの内容
 
 ### A. 音声通知（`extra/voicevox.sh`）

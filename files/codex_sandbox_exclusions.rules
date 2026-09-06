@@ -1,0 +1,88 @@
+# System rule -> /etc/codex/rules/terminal-configs-sandbox-exclusions.rules
+# Reviewed mapping of claude_managed-settings.json sandbox.excludedCommands.
+# Matching commands and their children run with host permissions.
+# Prefix tokens are literals, NOT Claude command globs.
+# node *codex-companion.mjs* is intentionally omitted: configure an exact script
+# path locally if needed; never replace it with an unrestricted ["node"] rule.
+# Host/project-specific Claude drop-ins are not automatically imported.
+prefix_rule(
+    pattern = ["git"],
+    decision = "allow",
+    justification = "Allow Git outside the sandbox, matching the shared Claude Code policy.",
+    match = [
+        "git status",
+        "git add README.md",
+        "git commit -m example",
+        "git -C /tmp/example status",
+        "git worktree add /tmp/example-worktree -b issue-123",
+    ],
+    not_match = [
+        "gh pr list",
+        "python3 script.py",
+        "git-lfs version",
+    ],
+)
+
+prefix_rule(
+    pattern = ["gh"],
+    decision = "allow",
+    justification = "Use host GitHub authentication and configuration.",
+    match = ["gh pr view 123", "gh issue list"],
+    not_match = ["gh-other status"],
+)
+
+prefix_rule(
+    pattern = ["claude_memory_sync"],
+    decision = "allow",
+    justification = "Synchronize the shared memory clone and index outside the workspace.",
+    match = ["claude_memory_sync --pull", "claude_memory_sync --status"],
+    not_match = ["claude_memory_sync_other --pull"],
+)
+
+prefix_rule(
+    pattern = ["docker"],
+    decision = "allow",
+    justification = "Access the host Docker daemon, matching the Claude Code exclusion.",
+    match = ["docker ps", "docker compose up -d"],
+    not_match = ["docker-other ps"],
+)
+
+prefix_rule(
+    pattern = ["codex"],
+    decision = "allow",
+    justification = "Let the child Codex CLI manage its own sandbox and user state.",
+    match = ["codex --version", "codex exec example"],
+    not_match = ["codex-other exec example"],
+)
+
+prefix_rule(
+    pattern = ["codex_broker_reap"],
+    decision = "allow",
+    justification = "Inspect host broker processes accurately and clean up their state.",
+    match = ["codex_broker_reap", "codex_broker_reap --apply"],
+    not_match = ["codex_broker_reap_other --apply"],
+)
+
+prefix_rule(
+    pattern = ["agent-browser"],
+    decision = "allow",
+    justification = "Access host browser processes, sessions, and local development servers.",
+    match = ["agent-browser snapshot", "agent-browser open http://localhost:3000"],
+    not_match = ["agent-browser-other snapshot"],
+)
+
+prefix_rule(
+    pattern = ["claude", "--bg"],
+    decision = "allow",
+    justification = "Launch background Claude sessions with their own sandbox and user state.",
+    match = ["claude --bg -p example"],
+    not_match = ["claude -p example", "claude --version"],
+)
+
+prefix_rule(
+    pattern = ["claude", "agents"],
+    decision = "allow",
+    justification = "Access the host Claude session registry.",
+    match = ["claude agents --json"],
+    not_match = ["claude -p example", "claude agents-other"],
+)

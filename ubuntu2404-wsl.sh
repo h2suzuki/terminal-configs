@@ -326,6 +326,7 @@ if [ -d /etc/codex/ ]; then
         -delete
 fi
 copy codex_config.toml                          /etc/codex/config.toml
+copy codex_sandbox_exclusions.rules             /etc/codex/rules/terminal-configs-sandbox-exclusions.rules
 
 
 # Antigravity CLI

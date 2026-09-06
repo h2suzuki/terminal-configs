@@ -137,5 +137,10 @@ run npm install -g @anthropic-ai/sandbox-runtime
 # Codex CLI (https://github.com/openai/codex, needs Node.js 18+)
 run npm install -g @openai/codex
 
+# Shared worktree parent for Claude Code and Codex; each task uses <repo>/<name>.
+# Recommended <name>: branch name or issue-<number>; naming is not enforced.
+# Keep existing worktrees and permissions intact on repeated setup runs.
+mkdir -p -- "$HOME/worktrees" || exit 1
+
 
 # END

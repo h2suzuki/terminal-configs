@@ -140,6 +140,77 @@ After authenticating, check the connections with `/mcp` and `/doctor`.
 The codex plugin is authenticated with `!codex login`, verified with `/codex:setup`, and applied to the current session with `/reload-plugins`.
 
 
+### 9. Codex and Shared Worktrees
+
+`setup_user_environment` installs Codex CLI. Both OS setup scripts install
+`files/codex_config.toml` at `/etc/codex/config.toml`. These are overridable system
+defaults: user/project configuration and CLI options take precedence. Check the
+effective configuration with `/status` and `/permissions` after starting Codex.
+
+- `sandbox_mode = "workspace-write"`: allows writes in the workspace and temporary directories.
+- `approval_policy = "never"`: operations outside the boundary without an explicit allow rule fail without an approval prompt.
+- `network_access = true`: allows network access for sandboxed commands.
+- `writable_roots = []`: grants no additional access across worktrees; start in the target worktree.
+
+Use `~/worktrees/<repo>/<name>` for manual worktrees with both Claude Code and Codex.
+For `<name>`, prefer the branch name or a GitHub issue identifier such as `issue-123`.
+This is a recommendation, not an enforced or automatically validated naming rule.
+Keeping `/` in a branch name creates nested directories: `feature/foo` becomes
+`~/worktrees/<repo>/feature/foo`.
+User setup creates `~/worktrees`. Use the same worktree when handing a task between
+tools, and separate worktrees for tasks edited in parallel. Run this example from
+the target repository in a host terminal (replace `myrepo` and `task-1`):
+
+```bash
+mkdir -p "$HOME/worktrees/myrepo"
+git worktree add -b task-1 "$HOME/worktrees/myrepo/task-1"
+cd "$HOME/worktrees/myrepo/task-1"
+codex
+# To hand the task to Claude Code, start claude from this directory too.
+```
+
+Claude Code already allows `~/worktrees` through `sandbox.filesystem.allowWrite`.
+Codex can edit ordinary files when started in the target worktree; it does not need
+write access to the entire parent directory. Initial trust confirmation is separate
+from sandbox write permissions; review the target before accepting it.
+
+Codex's `workspace-write` protects `.git` and its resolved target, `.agents`, and
+`.codex`. Both OS setup scripts install `files/codex_sandbox_exclusions.rules`
+at `/etc/codex/rules/terminal-configs-sandbox-exclusions.rules`. Commands matching
+an `allow` prefix rule run outside the sandbox without prompting. The shared Claude
+Code exclusions are mapped individually:
+
+| Claude exclusion | Codex mapping and rationale |
+|---|---|
+| `git *` | Allow `git`: Git metadata writes and host authentication. |
+| `gh *` | Allow `gh`: GitHub authentication and user configuration. |
+| `claude_memory_sync *` | Allow the named CLI: shared memory clone/index writes outside the workspace, also needed when Codex operates shared memory. |
+| `docker *` | Allow `docker`: access to the host Docker daemon. |
+| `codex *` | Allow `codex`: the child CLI manages its own sandbox and user state. |
+| `node *codex-companion.mjs*` | Omit from shared rules: prefix rules cannot match argument globs. Configure `node` plus the companion's exact absolute path locally if needed; do not allow all of `node`. |
+| `codex_broker_reap*` | Allow only the actual `codex_broker_reap` executable: requires the host process table to avoid misidentifying active brokers. Do not copy the executable-name wildcard. |
+| `agent-browser *` | Allow `agent-browser`: host browsers, sessions, and development servers. |
+| `claude --bg *` | Allow only `claude --bg`: background Claude sessions with their own sandbox. |
+| `claude agents *` | Allow only `claude agents`: access to the host Claude session registry. |
+
+These permissions do not themselves instruct delegation or external changes.
+Excluded commands' children (including Git hooks) also run with host permissions;
+Docker provides broad host access. Child Codex/Claude sandbox behavior depends on
+the child's configuration and launch arguments. Other commands remain sandboxed.
+These rules do not reproduce Claude Code's credential read restrictions.
+
+Project-specific exclusions belong in project-managed drop-ins or each project's
+`.claude` / `.codex` configuration, not org policy. Claude drop-ins are not
+automatically converted into shared Codex rules.
+
+Restart Codex to load the rules. Invoke commands by bare name; complex shell wrappers
+may not match. Other `prompt` / `forbidden` rules or managed constraints take precedence.
+
+References: [Codex configuration](https://learn.chatgpt.com/docs/config-file/config-reference),
+[sandbox protected paths](https://learn.chatgpt.com/docs/agent-approvals-security#protected-paths-in-writable-roots),
+[rules for commands outside the sandbox](https://learn.chatgpt.com/docs/agent-configuration/rules).
+
+
 ## What the Optional Add-ons Do
 
 ### A. Voice notifications (`extra/voicevox.sh`)
