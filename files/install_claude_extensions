@@ -95,8 +95,8 @@ popd >/dev/null
 # Initialize the RAG memory for this user
 run install --mode 0755 --directory ~/.claude/hooks/state
 
-# Clone the canonical memory repo (soft-fail: without working gh auth the
-# memory feature stays closed until this script is re-run)
+# Clone the canonical memory repo (soft-fail: it is private to its owner, so
+# everyone else installs normally with the memory feature left off)
 MEMORY_REPO=/var/lib/claude-rag-memory/claude-lessons-learned
 MEMORY_ROOT="$(dirname "$MEMORY_REPO")"
 command -v flock >/dev/null 2>&1 || { echo "flock not found"; exit 1; }
@@ -132,7 +132,8 @@ fi
             run chmod 0755 "$MEMORY_REPO"
         else
             rm -rf "$MEMORY_REPO"
-            echo -e "${COLOR_RED}memory repo clone failed — run 'gh auth login' then re-run this script${COLOR_CLEAR}\n"
+            echo -e "${COLOR_YELLOW}memory clone skipped: no access to the private entry repo. The rest of the install is unaffected — only the memory feature stays off.${COLOR_CLEAR}"
+            echo -e "${COLOR_YELLOW}If you own that repo, run 'gh auth login' and re-run this script.${COLOR_CLEAR}\n"
         fi
     fi
 ) 9< "$MEMORY_ROOT" || exit 1

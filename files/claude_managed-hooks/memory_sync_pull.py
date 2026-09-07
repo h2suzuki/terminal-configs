@@ -4,8 +4,8 @@
 clone ok  -> unless git's own FETCH_HEAD is fresher than PULL_THROTTLE, spawn
              a detached `claude_memory_sync --pull` and return immediately, so
              the session never waits on the network (pull lands ~1-3s later).
-clone gone -> tell the user + model that memory is closed until
-             install_claude_extensions is re-run.
+clone gone -> tell the user + model that memory is closed, and that this is the
+             normal state without access to the owner-private entry repo.
 Always exits 0 (fail-open): a hook bug must never break session start.
 """
 
@@ -24,8 +24,9 @@ SYNC_LOG = REPO_DIR + ".sync.log"
 AUTH_MARKER = os.path.join(REPO_DIR, ".git", "auth-failure")
 PULL_THROTTLE = 900
 CLOSED_MSG = (
-    "memory-sync: 共有 memory clone が不在/破損です。 install_claude_extensions "
-    "を再実行すると復旧します (それまで surface は既存 index のみ・entry 書込は閉塞)。"
+    "memory-sync: 共有 memory clone がありません (entry repo は owner 専用の private "
+    "repo なので、 権限が無い環境ではこれが正常な状態です)。 surface は既存 index のみ・"
+    "entry 書込は閉塞。 owner なら install_claude_extensions の再実行で復旧します。"
 )
 
 
