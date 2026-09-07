@@ -42,7 +42,8 @@ except Exception:
 
 NUDGE = (
     "task-plan-first: この turn で作業 tool を使うなら、最初の tool より前に Task を "
-    "upsert せよ (Stop 側の gate は事後 block ゆえ手戻りになる)"
+    "upsert せよ (Stop 側の gate は事後 block ゆえ手戻りになる)。 Task tool の schema が "
+    "未読込なら ToolSearch だけを単独で撃て — 同 block に作業 tool を並べると違反になる"
 )
 SYNTHETIC_PREFIX = "<task-notification>"
 
