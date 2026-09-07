@@ -21,6 +21,11 @@
 `install_claude_extensions`（Claude Code の hooks・skills・共有 memory clone のユーザー側インストール）まで
 行います。別途実行する必要はありません。
 
+共有 memory clone の取得元はメンテナ個人の private リポジトリです。アクセス権が無い環境ではこの clone だけが
+スキップされ、セットアップは中断せず最後まで完走します。無効になるのは memory 機能だけで、hooks・skills・
+MCP・CLI はすべて通常どおり導入されます。リポジトリの owner 本人で clone に失敗した場合は、`gh auth login`
+の後に `install_claude_extensions` を再実行してください。
+
 ### 追加セットアップ（opt-in）
 
 基本セットアップの後、必要に応じて `extra/` 配下のスクリプトを root で実行します。

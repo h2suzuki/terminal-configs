@@ -21,6 +21,11 @@ The script ends by running `setup_user_environment` as the login user, which in 
 `install_claude_extensions` (the per-user install of Claude Code hooks, skills and the shared memory
 clone). There is no separate step to run.
 
+The shared memory clone comes from a repository private to the maintainer. Without access to it, that
+one clone is skipped and the setup still runs to completion: only the memory feature is left off,
+while the hooks, skills, MCP servers and CLIs all install as usual. If you own that repository and the
+clone still fails, run `gh auth login` and re-run `install_claude_extensions`.
+
 ### Optional add-ons (opt-in)
 
 After the base setup, run the scripts under `extra/` as root as needed.
