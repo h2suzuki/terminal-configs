@@ -207,7 +207,8 @@ Exit Criteria:
 - [x] 判定方法を先に決めた (2026-09-10、 配備前) — `claude_unverified_claims` が transcript を走査し、 turn 内で
   最初の tool 呼び出しより前の本文にある断定文を session ごとに数える (決定的、 定義は CLI の --help)。
   baseline 2026-09-10: 本機の transcript 3 本 / 断定 0 / 未確認 0 — 母数が無いので比較は蓄積後
-- [ ] hook と CLI を配備する — base setup 再実行 (sandbox から /etc と /usr/local/bin へ書けず未配備 2026-09-10)
+- [x] hook と CLI を配備した — 2026-09-10 07:26 の base setup 再実行で配備先が source と IDENTICAL (cmp)、
+  managed-settings.d の extensions.json に登録済みで、 同日 07:59 の prompt から実発火を確認
 - [ ] 2026-10-10 に `claude_unverified_claims --since 2026-09-10` を実行し、 未確認断定の件数と比率を記録して
   baseline と比較する。 変化が無ければ hook を extensions.json から外して削除する (残すことを既定にしない)
 
