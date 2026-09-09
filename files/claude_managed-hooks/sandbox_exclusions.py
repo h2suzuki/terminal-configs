@@ -14,6 +14,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 import tempfile
 import unittest
 
@@ -160,6 +161,14 @@ def roster_once(payload: dict, patterns: list[str]) -> str:
 def bare_form(pattern: str) -> str:
     """Render a pattern as the bare leading form that actually reaches the host."""
     return pattern.split("*", 1)[0].strip() or pattern
+
+
+def glob_match(value: str, pattern: str) -> bool:
+    """Match a Claude excludedCommands star glob with full-string anchors."""
+    translated = re.escape(pattern).replace(r"\*", ".*")
+    if translated.endswith(r"\ .*") and pattern.count("*") == 1:
+        translated = translated[:-4] + r"(\ .*)?"
+    return re.fullmatch(translated, value, re.DOTALL) is not None
 
 
 def roster_text(patterns: list[str]) -> str:

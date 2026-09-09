@@ -35,6 +35,7 @@ from sandbox_exclusions import (
     bare_form,
     claim_once,
     credential_paths,
+    glob_match,
     load_patterns,
     roster_text,
     sandbox_restricts_commands,
@@ -68,21 +69,13 @@ def _strip_heredoc(m: re.Match) -> str:
     return "_" + m.group(2)
 
 
-def _glob_match(value: str, pattern: str) -> bool:
-    """Match a Claude excludedCommands star glob with full-string anchors."""
-    translated = re.escape(pattern).replace(r"\*", ".*")
-    if translated.endswith(r"\ .*") and pattern.count("*") == 1:
-        translated = translated[:-4] + r"(\ .*)?"
-    return re.fullmatch(translated, value, re.DOTALL) is not None
-
-
 def _wrapped_command(tokens: list[str], patterns: list[str]) -> str:
     """Return the excluded command a wrapper runs, past the wrapper's own options."""
     for position, token in enumerate(tokens):
         if token.startswith("-") or ASSIGNMENT.match(token) or "/" in token:
             continue
         candidate = " ".join(tokens[position:])
-        if any(_glob_match(candidate, pattern) for pattern in patterns):
+        if any(glob_match(candidate, pattern) for pattern in patterns):
             return candidate
     return ""
 
@@ -112,7 +105,7 @@ def _classify(cmd: str, patterns: list[str]) -> tuple[str, str, str]:
                     warning = "warn", nested, basename
             continue
         normalized = " ".join([basename, *tokens[1:]])
-        if not any(_glob_match(normalized, pattern) for pattern in patterns):
+        if not any(glob_match(normalized, pattern) for pattern in patterns):
             continue
         if "/" in program:
             return "block", normalized, "path prefix"
