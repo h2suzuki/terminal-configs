@@ -172,23 +172,6 @@ Exit Criteria:
 Work file: `last-session-handoff.md` (再開手順)、`~/.claude/hooks/memory_surface.py` (surface 方針の実装)、
 `/var/lib/claude-rag-memory/memory_index.sqlite3` の `inject_log` (emit / mismatch の実測)
 
-### root session で root_dir_guard の報告経路を実地確認する
-
-起票: fable-5 2026-09-10 (H.S. 依頼「root 実行時に / 直下へ一時ファイルを落とす問題を直せ」から派生)
-
-Goal: root で動く Claude Code session で、 host 実行の Bash が / 直下に entry を作った時に
-`root_dir_guard.py` の事後層が systemMessage と decision:block で報告する。
-
-Exit Criteria:
-
-- [ ] root session (配備済みの managed hooks が効く環境) で / 直下に entry を 1 つ作る command
-  を流し、 画面に `root-dir-guard: / 直下に新しい entry: ...` が出て Claude が報告することを
-  確認する。 uid 1000 の session では / に書けないため未確認 (2026-09-10)
-- [ ] 確認で作った entry を H.S. の指示で消す (hook は移動も削除もしない設計)
-
-Work file: `last-session-handoff.md` の同名 section (手順と contingency)。 hook 本体は
-`files/claude_managed-hooks/root_dir_guard.py`、 test は同 dir の `root_dir_guard.test.py`
-
 ## Medium
 
 ### 試行: 一次ソース確認の指示を codex と同じ形で置いてみる
