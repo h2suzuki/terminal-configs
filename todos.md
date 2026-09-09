@@ -75,6 +75,9 @@ Exit Criteria:
 
 Work file: branch `wip/lessons-learned-split` に旧実装 (常駐 supervisor 方式) が退避済み。
 旧設計の実測 (statusline 描画間隔 最大 12 秒 / 一発叩き 0.30-0.61 秒) はそこの README にある
+Deferred: 2026-09-10 ユーザー指示 — 上記 branch はこのマシンの local / origin に無く [事実]、 別マシンにある
+想定で保留。 別マシンにも無いと判明したらここで作り直す。 本機の実測 2026-09-10: powershell 一発叩き (SetThreadExecutionState を
+-EncodedCommand で渡す) 1.5-1.75 秒、 statusLine の refreshInterval 10 秒は配備済み (idle でも描画される)
 
 ### lessons-learned repo を public / private に分離する
 
@@ -95,6 +98,8 @@ Exit Criteria:
 
 Work file: branch `wip/lessons-learned-split`。 出荷不可の理由 (漏洩 7 経路のうち 2 件が未閉塞)
 は `f03a801` の commit message にある。 置換後の設計では大半が削除対象
+Deferred: 2026-09-10 ユーザー指示 — 上記 branch はこのマシンの local / origin に無く [事実]、 別マシンにある
+想定で保留。 別マシンにも無いと判明したらここで作り直す
 
 ### report-in-plain-words skill を仕上げる
 
@@ -111,6 +116,8 @@ Exit Criteria:
 
 Work file: branch `wip/lessons-learned-split` の
 `files/claude_managed-skills/report-in-plain-words/`
+Deferred: 2026-09-10 ユーザー指示 — 上記 branch はこのマシンの local / origin に無く [事実]、 別マシンにある
+想定で保留。 別マシンにも無いと判明したらここで作り直す
 
 ### 中断 session で出た教訓を memory entry にする
 
