@@ -128,17 +128,22 @@ Goal: 2026-08-28〜29 の session で出た 5 つの教訓が、 同じ場面へ
 
 Exit Criteria:
 
-- [ ] 不在主張の証明 (「無い」と書く前に走査した空間を名指しする) を entry 化
-- [ ] 裁定前の材料の言い直し (subagent の所見だけで外部資料へ裁定を下さない) を entry 化
-- [ ] 要件と出荷の動詞照合 (要件の動詞と出荷物の動詞が一致するかを閉じる前に見る) を entry 化
-- [ ] 自分が回す loop の停止判断 を entry 化
-- [ ] 配備手順は正規手順を読んでから出す を entry 化 — 2026-08-29 に `sudo cp` と
-  `claude_user_settings inject` を並べた 6 行を自作した。 正規は base setup 1 本で、
-  規則は `last-session-handoff.md` (複数 file・hook 登録変更は base setup) と README
-  (末尾で `install_claude_extensions` まで走るので別途実行は不要) の両方に書いてあった
-- [ ] 5 件とも `when:` / `check:` を書く — 3 値とも振り分けが動くのでどれを選んでもよい
+- [x] 不在主張の証明 (「無い」と書く前に走査した空間を名指しする) を entry 化 — 2026-08-29 に opus-5 が
+  `org/feedback_grep_before_reading_search_space.md` へ書き込み済み (origin/main。 reminder に「走査した空間 …
+  を名指しで書け」、 check / when あり) を 2026-09-10 に確認
+- [x] 裁定前の材料の言い直し (subagent の所見だけで外部資料へ裁定を下さない) を entry 化 —
+  `org/feedback_restate_material_before_ruling.md` (2026-09-10、 clone commit 2297f2b)
+- [x] 要件と出荷の動詞照合 (要件の動詞と出荷物の動詞が一致するかを閉じる前に見る) を entry 化 —
+  `org/feedback_match_requirement_verb_before_closing.md` (2026-09-10、 cb25b0b)
+- [ ] 自分が回す loop の停止判断 を entry 化 — Deferred 2026-09-10: 出所 session `ff720c04` の transcript が
+  本機に無く [事実]、 題名以上の内容を復元できない。 別マシンの transcript で内容を確かめてから書く。 敵対レビュー
+  loop の停止 (3 巡) は origin/main の `org/feedback_adversarial_review_loop_failed.md` が既に持つ
+- [x] 配備手順は正規手順を読んでから出す を entry 化 — `org/feedback_deploy_steps_from_canonical_procedure.md`
+  (2026-09-10、 3a7068b)。 事例は 2026-08-29 の 6 行自作 (正規は base setup 1 本)
+- [ ] 5 件とも `when:` / `check:` を書く — 4 / 5 済み (上の 4 entry は両方あり)。 残りは loop 停止判断の entry
 
-Work file: todos.md 冒頭の CAVEAT 3 件 (実測の出所)
+Work file: todos.md 冒頭の CAVEAT 3 件 (実測の出所)。 新 entry 3 件は本機 clone の local commit のみで push は
+pending — clone の pull が `user/` dir 作成の権限で失敗しており (2026-09-10 sync.log)、 owner 実行の pull が要る
 
 ### memory surface が予告 entry を届けられなかった機構を直す
 
@@ -195,10 +200,14 @@ Goal: 「調査前の推論」バグに対し、 codex で効いている形の�
 
 Exit Criteria:
 
-- [ ] 置き場所を決める (CLAUDE.md 追加はユーザー承諾が要る。 skill / memory も候補)
-- [ ] 置く前に、 効いたと言える判定方法を先に決める — 「確かめずに書いた断定」の件数を
-  session ごとに数える形。 置いた後に基準を作らない
-- [ ] 一定期間後に件数を比較し、 変化が無ければ削除する (残すことを既定にしない)
+- [x] 置き場所を決めた (2026-09-10) — UserPromptSubmit hook `primary_source_nudge.py` が毎 prompt に 1 行
+  inject する (AGENTS.md と同じ常時提示、 CLAUDE.md は不変更、 撤去は extensions.json の 1 行削除)
+- [x] 判定方法を先に決めた (2026-09-10、 配備前) — `claude_unverified_claims` が transcript を走査し、 turn 内で
+  最初の tool 呼び出しより前の本文にある断定文を session ごとに数える (決定的、 定義は CLI の --help)。
+  baseline 2026-09-10: 本機の transcript 3 本 / 断定 0 / 未確認 0 — 母数が無いので比較は蓄積後
+- [ ] hook と CLI を配備する — base setup 再実行 (sandbox から /etc と /usr/local/bin へ書けず未配備 2026-09-10)
+- [ ] 2026-10-10 に `claude_unverified_claims --since 2026-09-10` を実行し、 未確認断定の件数と比率を記録して
+  baseline と比較する。 変化が無ければ hook を extensions.json から外して削除する (残すことを既定にしない)
 
 Work file: なし。 バグの記述は本 file 冒頭の CAVEAT 3 件
 
