@@ -347,6 +347,7 @@ copy claude_user_hooks              /usr/local/bin/claude_user_hooks
 copy claude_rag_memory_builder      /usr/local/bin/claude_rag_memory_builder
 copy claude_memory_sync             /usr/local/bin/claude_memory_sync
 copy claude_memory_surface_analyzer /usr/local/bin/claude_memory_surface_analyzer
+copy claude_unverified_claims       /usr/local/bin/claude_unverified_claims
 copy toolbox_bigquery_mcp           /usr/local/bin/toolbox_bigquery_mcp
 copy claude_court_guard             /usr/local/bin/claude_court_guard
 copy claude_mytask_mcp              /usr/local/bin/claude_mytask_mcp

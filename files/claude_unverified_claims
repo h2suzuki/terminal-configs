@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+"""Count assertions Claude wrote before investigating, per session transcript.
+
+Measurement for the primary-source trial (`primary_source_nudge.py`): the failure
+being measured is a claim written before any tool call in the same turn, so the
+metric is deterministic and needs no LLM.
+
+Definition (deterministic):
+  D1  transcripts are `~/.claude/projects/*/*.jsonl`, one JSON record per line;
+      a session = one such file, its start = the first record's `timestamp`
+  D2  a turn starts at a human prompt and ends at the next human prompt
+  D3  a human prompt is a `type == "user"` record that is not `isMeta` / not
+      `isSidechain`, whose `message.content` is a string or holds a `text` block
+      (a `tool_result` block makes it a tool return, not a prompt), and whose
+      text does not open with harness plumbing — `<local-command-*>` (slash
+      command echo / stdout) or `<task-notification>` (synthetic re-entry).
+      A `<command-name>` record IS a turn start: the user typed that slash
+      command, and a `/goal`-driven session has no other prompt record
+  D4  inside a turn, an assistant `text` block is "pre-investigation" while no
+      `tool_use` block has appeared earlier in that same turn (`thinking` blocks
+      are neither text nor investigation)
+  D5  text is split into sentences on `。` and newlines; fenced code blocks are
+      dropped, as are sentences carrying `[推測]` / `[推論]` (self-labelled
+      inference is not an assertion). A sentence is an "assertion" when it
+      matches ASSERTION_RE
+  D6  per session: assertions total, unverified (= assertions in
+      pre-investigation blocks), ratio = unverified / assertions
+
+Exit:
+  0: scan completed. 1: the transcript directory is unreadable.
+Per-file read / decode failures are reported on stderr and the scan continues.
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import os
+import re
+import sys
+from datetime import datetime
+
+HOME = os.path.expanduser("~")
+PROJECTS_DIR = os.path.join(HOME, ".claude", "projects")
+
+# D3: harness-generated `user` records that are not something a human typed
+# (`<command-name>` is deliberately absent — the user typed that slash command).
+PLUMBING_PREFIXES = ("<local-command-", "<task-notification>")
+HEDGE_MARKERS = ("[推測]", "[推論]")
+FENCE_RE = re.compile(r"```.*?(?:```|\Z)", re.DOTALL)
+ASSERTION_RE = re.compile(
+    r"(無い|存在しない|ありません|該当なし|になっています?|されていません?"
+    r"|していません?|できません|不可能|非対応|未対応|問題ありません|正しい"
+    r"|一致し(てい)?ます)"
+)
+
+
+def _blocks(record: dict) -> list[dict]:
+    content = record.get("message", {}).get("content")
+    if isinstance(content, list):
+        return [b for b in content if isinstance(b, dict)]
+    return []
+
+
+def _prompt_text(record: dict) -> str | None:
+    """D3: the human-typed text of a user record, or None when it is not one."""
+    if record.get("isMeta") or record.get("isSidechain"):
+        return None
+    content = record.get("message", {}).get("content")
+    if isinstance(content, str):
+        text = content
+    else:
+        blocks = _blocks(record)
+        if any(b.get("type") == "tool_result" for b in blocks):
+            return None
+        text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+    stripped = text.lstrip()
+    if not stripped or stripped.startswith(PLUMBING_PREFIXES):
+        return None
+    return text
+
+
+def sentences(text: str) -> list[str]:
+    """D5: fenced code dropped, split on `。` and newlines, hedged lines removed."""
+    plain = FENCE_RE.sub(" ", text)
+    parts = (s.strip() for chunk in plain.split("\n") for s in chunk.split("。"))
+    return [s for s in parts if s and not any(h in s for h in HEDGE_MARKERS)]
+
+
+def count_assertions(text: str) -> int:
+    return sum(1 for s in sentences(text) if ASSERTION_RE.search(s))
+
+
+def scan_session(path: str) -> dict | None:
+    """D1-D6 over one transcript; None when the file yields no usable record."""
+    start = None
+    assertions = unverified = 0
+    in_turn = investigated = False
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for lineno, line in enumerate(fh, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError as exc:
+                print(
+                    f"{path}:{lineno}: skipped unparsable record: {exc}",
+                    file=sys.stderr,
+                )
+                continue
+            if not isinstance(record, dict):
+                continue
+            if start is None and isinstance(record.get("timestamp"), str):
+                start = record["timestamp"]
+            kind = record.get("type")
+            if kind == "user" and _prompt_text(record) is not None:
+                in_turn, investigated = True, False
+            elif kind == "assistant" and in_turn:
+                for block in _blocks(record):
+                    if block.get("type") == "tool_use":
+                        investigated = True
+                    elif block.get("type") == "text":
+                        found = count_assertions(block.get("text") or "")
+                        assertions += found
+                        if not investigated:
+                            unverified += found
+    if start is None:
+        return None
+    return {
+        "session": os.path.basename(path)[: -len(".jsonl")],
+        "project": os.path.basename(os.path.dirname(path)),
+        "start": start,
+        "assertions": assertions,
+        "unverified": unverified,
+    }
+
+
+def collect(projects_dir: str, project: str | None, since: str | None) -> list[dict]:
+    pattern = os.path.join(projects_dir, project or "*", "*.jsonl")
+    rows = []
+    for path in sorted(glob.glob(pattern)):
+        try:
+            row = scan_session(path)
+        except OSError as exc:
+            print(f"{path}: unreadable: {exc}", file=sys.stderr)
+            continue
+        if row is None:
+            print(f"{path}: no timestamped record; skipped", file=sys.stderr)
+            continue
+        if since and row["start"][:10] < since:
+            continue
+        rows.append(row)
+    return sorted(rows, key=lambda r: (r["start"], r["session"]))
+
+
+def ratio(row: dict) -> float:
+    return row["unverified"] / row["assertions"] if row["assertions"] else 0.0
+
+
+def render(rows: list[dict], totals: list[dict]) -> str:
+    width = max([len(r["project"]) for r in rows], default=7)
+    lines = [
+        f"{'session':8}  {'start':10}  {'project':{width}}  "
+        f"{'assert':>6}  {'unverif':>7}  {'ratio':>5}"
+    ]
+    for r in rows:
+        lines.append(
+            f"{r['session'][:8]:8}  {r['start'][:10]:10}  {r['project']:{width}}  "
+            f"{r['assertions']:6d}  {r['unverified']:7d}  {ratio(r):5.2f}"
+        )
+    total = {
+        "assertions": sum(r["assertions"] for r in totals),
+        "unverified": sum(r["unverified"] for r in totals),
+    }
+    lines.append(
+        f"{'TOTAL':8}  {len(totals):<10d}  {'sessions':{width}}  "
+        f"{total['assertions']:6d}  {total['unverified']:7d}  {ratio(total):5.2f}"
+    )
+    return "\n".join(lines)
+
+
+def valid_date(value: str) -> str:
+    datetime.strptime(value, "%Y-%m-%d")
+    return value
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Count assertions written with no preceding tool call in the same turn, "
+            "per Claude Code session transcript."
+        ),
+        epilog=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--since", type=valid_date, help="keep sessions starting on or after YYYY-MM-DD"
+    )
+    parser.add_argument(
+        "--project", help="projects subdir name (default: all projects)"
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="emit per-session records as JSON"
+    )
+    parser.add_argument(
+        "--top",
+        type=int,
+        metavar="N",
+        help="render only the N sessions with the most unverified assertions "
+        "(the TOTAL line still covers every scanned session)",
+    )
+    parser.add_argument("--projects-dir", default=PROJECTS_DIR, help=argparse.SUPPRESS)
+    args = parser.parse_args(argv)
+
+    if not os.path.isdir(args.projects_dir):
+        print(f"{args.projects_dir}: not a readable directory", file=sys.stderr)
+        return 1
+    rows = collect(args.projects_dir, args.project, args.since)
+    shown = rows
+    if args.top is not None:
+        ranked = sorted(rows, key=lambda r: (-r["unverified"], -r["assertions"]))
+        keep = {r["session"] for r in ranked[: max(args.top, 0)]}
+        shown = [r for r in rows if r["session"] in keep]
+    if args.json:
+        payload = [dict(r, ratio=round(ratio(r), 4)) for r in shown]
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(render(shown, rows) if rows else "no sessions matched")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
