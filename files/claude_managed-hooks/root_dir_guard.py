@@ -5,13 +5,14 @@ Root-directory litter guard for Bash.
 A Bash call that matches sandbox.excludedCommands runs on the host, where
 TMPDIR is unset, so `$TMPDIR/x` expands to `/x` and a root session litters
 `/` in silence. PreToolUse denies that form outright and snapshots the root
-directory listing; PostToolUse / PostToolUseFailure diff the snapshot, move
-anything new into the quarantine dir and report it, so the litter never
-stays in `/` and is never silent.
+directory listing; PostToolUse / PostToolUseFailure diff the snapshot and
+report anything new to both Claude and the user. The hook never creates,
+moves or deletes anything outside its own snapshot files.
 
 Exit:
-  0: pass (fail-open on any unexpected error)
-  2: denied (PreToolUse) or litter quarantined (PostToolUse / PostToolUseFailure)
+  0: pass, or a litter report via decision:block + systemMessage
+  2: denied (PreToolUse)
+Always exits 0 on any unexpected error (fail-open).
 """
 
 from __future__ import annotations
@@ -19,7 +20,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import sys
 import time
 
@@ -31,8 +31,8 @@ STATE_DIR = os.environ.get("ROOT_DIR_GUARD_STATE_DIR") or os.path.join(
 )
 SNAPSHOT_TTL = 3600
 SEGMENT_CAP = 10000  # Claude Code matches a longer command as one segment
-SAFE_VAR = "$CLAUDE_TMPDIR"
-TMP_VARS = "TMPDIR|TMP|TEMP|TEMPDIR"
+SAFE_VAR = "CLAUDE_TMPDIR"
+SANDBOX_VARS = ("TMPDIR", "TMP", "TEMP", "TEMPDIR")
 
 HEREDOC = re.compile(
     r"<<-?\s*(['\"]?)(\w+)\1([^\n]*)\n[\s\S]*?^[ \t]*\2\b", re.MULTILINE
@@ -52,10 +52,6 @@ TIMEOUT_FLAG = re.compile(
 )
 TIMEOUT_VALUED = frozenset({"--kill-after", "--signal", "-k", "-s"})
 DURATION = re.compile(r"^\d+(?:\.\d+)?[smhd]?$")
-TMP_ASSIGNED = re.compile(rf"(?:^|[\s;&|])(?:export\s+)?(?:{TMP_VARS})=")
-TMP_REFERENCE = re.compile(
-    rf"\$(?P<bare>{TMP_VARS})\b|\$\{{(?P<braced>{TMP_VARS})\b(?!:?[-=?])"
-)
 
 
 def _statements(cmd: str) -> list[str]:
@@ -157,21 +153,24 @@ def host_run(cmd: str, patterns: list[str]) -> str:
     return ""
 
 
-def tmp_reference(cmd: str) -> str:
-    """Return the sandbox-only temp variable the command expands, or empty."""
+def hazard_vars() -> tuple[str, ...]:
+    """Variables that expand to nothing on the host: sandbox-only ones, plus an unset CLAUDE_TMPDIR."""
+    return SANDBOX_VARS if os.environ.get(SAFE_VAR) else (*SANDBOX_VARS, SAFE_VAR)
+
+
+def var_reference(cmd: str, names: tuple[str, ...]) -> str:
+    """Return the first named variable the shell would expand, or empty."""
     scanned = HEREDOC.sub(lambda m: "_" + m.group(3) if m.group(1) else m.group(0), cmd)
     scanned = QUOTED.sub(lambda m: m.group(0) if m.group(0)[0] == '"' else "_", scanned)
-    if TMP_ASSIGNED.search(scanned):
-        return ""
-    found = TMP_REFERENCE.search(scanned)
-    return f"${found.group('bare') or found.group('braced')}" if found else ""
+    found = re.search(rf"\$\{{?(?P<name>{'|'.join(names)})\b", scanned)
+    return f"${found.group('name')}" if found else ""
 
 
 # 文面は意図的に冗長: deny 理由 + 展開の仕組み + 次に取る行動を 1 度で読ませる。
 def _deny_reason(
     cmd: str, tool_input: dict, patterns: list[str], restricted: bool
 ) -> str:
-    ref = tmp_reference(cmd)
+    ref = var_reference(cmd, hazard_vars())
     if not ref:
         return ""
     if tool_input.get("dangerouslyDisableSandbox") is True:
@@ -189,14 +188,19 @@ def _deny_reason(
         if not host:
             return ""
         where = f"除外コマンド `{host}` を含むため、 呼び出し全体が sandbox の外 (host) で実行されます"
+    if ref == f"${SAFE_VAR}":
+        why = f"この環境では `{ref}` が設定されていないため"
+        safe = "絶対 path (例: `/var/tmp/<name>`)"
+    else:
+        why = f"`{ref}` は sandbox の中でしか設定されないため、 host 側では"
+        safe = f"`${SAFE_VAR}` (host / sandbox の両方で同じ session tmp dir を指します)"
     return (
         f"root-dir-guard: この Bash 呼び出しは{where}。\n"
-        f"host 側では TMPDIR が設定されていないため `{ref}` は空文字に展開され、 "
-        f"`{ref}/x` は `/x` になります。 root で動く session では / 直下にファイルが作られ、 "
-        "一般ユーザーでは Permission denied で失敗します。\n"
-        f"Retry: 一時ファイルの path は `{ref}` ではなく `{SAFE_VAR}` を使ってください "
-        "(host / sandbox の両方で同じ session tmp dir を指します)。 あるいは、 一時ファイルを"
-        "作る segment と除外コマンドの segment を別々の Bash 呼び出しに分けてください。 "
+        f"{why} `{ref}` は空文字に展開され、 `{ref}/x` は `/x` になります。 root で動く "
+        "session では / 直下にファイルが作られ、 一般ユーザーでは Permission denied で失敗します。\n"
+        f"Retry: 一時ファイルの path は `{ref}` ではなく {safe} を使ってください。 "
+        "あるいは、 一時ファイルを作る segment と除外コマンドの segment を別々の Bash 呼び出しに"
+        "分けてください。 この規則に例外はありません (default 値付きの展開や事前代入も deny)。 "
         "hook 自身はファイルを変更していません。\n"
     )
 
@@ -233,57 +237,37 @@ def _take_snapshot(payload: dict) -> None:
         pass
 
 
-def _quarantine(payload: dict) -> tuple[list[str], list[str], str]:
-    """Move root entries missing from the snapshot; return moved, failed, destination."""
-    key = _key(payload)
-    path = _snapshot_path(key)
+def _new_root_entries(payload: dict) -> list[str]:
+    """Return root entries absent from this call's snapshot; the snapshot is consumed."""
+    path = _snapshot_path(_key(payload))
     try:
         with open(path, encoding="utf-8") as f:
             before = set(json.load(f))
         os.unlink(path)
     except (OSError, ValueError, TypeError):
-        return [], [], ""
-    new = sorted(set(os.listdir(ROOT_DIR)) - before)
-    if not new:
-        return [], [], ""
-    dest = os.path.join(
-        STATE_DIR, "quarantine", f"{time.strftime('%Y%m%d-%H%M%S')}-{key}"
-    )
-    moved: list[str] = []
-    failed: list[str] = []
-    for name in new:
-        src = os.path.join(ROOT_DIR, name)
-        try:
-            os.makedirs(dest, exist_ok=True)
-            shutil.move(src, os.path.join(dest, name))
-            moved.append(src)
-        except OSError:
-            failed.append(src)
-    return moved, failed, dest
-
-
-# 文面は意図的に冗長: 何が起きたか + どこへ動かしたか + 次の行動 + 報告義務を 1 度で読ませる。
-def _litter_report(moved: list[str], failed: list[str], dest: str) -> str:
-    lines = [
-        f"root-dir-guard: この Bash 呼び出しの後で {ROOT_DIR} 直下に新しい entry が現れました: "
-        + ", ".join(moved + failed)
+        return []
+    return [
+        os.path.join(ROOT_DIR, n) for n in sorted(set(os.listdir(ROOT_DIR)) - before)
     ]
-    if moved:
-        lines.append(
-            f"{len(moved)} 件を `{dest}` へ移動しました (削除はしていません。 内容が要るなら"
-            "そこから読めます)。"
-        )
-    if failed:
-        lines.append(
-            "移動できなかった entry: " + ", ".join(failed) + " (手で退避が必要です)。"
-        )
-    lines.append(
-        "典型的な原因は host 実行 (除外コマンドを含む呼び出し、 または sandbox 無効) で "
-        "空の変数が `/` に展開されることです ($TMPDIR 等)。 次の呼び出しでは "
-        f"`{SAFE_VAR}` か絶対 path を使ってください。 この出来事は必ずユーザーに報告してください "
-        "(黙って続行しない)。"
+
+
+# 文面は意図的に冗長: 何が起きたか + 原因 + 報告義務 + hook は動かしていない旨を 1 度で読ませる。
+def _litter_report(entries: list[str]) -> dict:
+    listed = ", ".join(entries)
+    reason = (
+        f"root-dir-guard: この Bash 呼び出しの後で {ROOT_DIR} 直下に新しい entry が現れました: "
+        f"{listed}\n典型的な原因は host 実行 (除外コマンドを含む呼び出し、 または sandbox 無効) で "
+        "空の変数が `/` に展開されることです ($TMPDIR 等)。\n"
+        "作業を続ける前に、 この entry と原因の command をユーザーへ報告してください "
+        "(黙って続行しない)。 消す・戻すはユーザーの指示に従い、 勝手に削除や移動をしないでください。 "
+        f"次の呼び出しでは `${SAFE_VAR}` か絶対 path を使ってください。 "
+        "hook 自身は entry を移動も削除もしていません。"
     )
-    return "\n".join(lines) + "\n"
+    return {
+        "decision": "block",
+        "reason": reason,
+        "systemMessage": f"root-dir-guard: {ROOT_DIR} 直下に新しい entry: {listed}",
+    }
 
 
 def _run(
@@ -306,10 +290,11 @@ def _run(
         _take_snapshot(payload)
         return 0
     if event in ("PostToolUse", "PostToolUseFailure"):
-        moved, failed, dest = _quarantine(payload)
-        if moved or failed:
-            sys.stderr.write(_litter_report(moved, failed, dest))
-            return 2
+        entries = _new_root_entries(payload)
+        if entries:
+            sys.stdout.write(
+                json.dumps(_litter_report(entries), ensure_ascii=False) + "\n"
+            )
     return 0
 
 

@@ -5,20 +5,24 @@ Contract (each claim maps to one test):
   C1  host-run detection mirrors Claude Code's excludedCommands match: a top-level statement (split on
       `&&` / `||` / `;` / `|` / `&` / newline, redirections ignored) matches a pattern once its leading
       assignments and wrappers (timeout N / time / nice / stdbuf / nohup / command / builtin / noglob)
-      are stripped; compound statements (if / while / for / case / subshell / brace group / `!`), command
-      substitution, quoted text, comment lines, path-prefixed and `sudo` / `env` forms, and a `PATH=` /
-      `LD_*` / `DYLD_*` assignment prefix do not match; over 10000 chars only the leading form counts
-  C2  PreToolUse(Bash): a host-run command referencing $TMPDIR / ${TMPDIR} / $TMP / $TEMP / $TEMPDIR is
-      denied — exit 2, stderr names the excluded command, the variable and `$CLAUDE_TMPDIR`
-  C3  `${TMPDIR:-x}` / `${TMPDIR-x}` / `${TMPDIR:=x}` / `${TMPDIR:?}`, a single-quoted mention, a
-      quoted-delimiter heredoc body, and a command that assigns TMPDIR itself are allowed
-  C4  a sandbox-run command referencing $TMPDIR, and a host-run command without the reference, are allowed
+      are stripped and a quoted head is unquoted; compound statements (if / while / for / case /
+      subshell / brace group / `!`), command substitution, quoted text, comment lines, path-prefixed and
+      `sudo` / `env` forms, and a `PATH=` / `LD_*` / `DYLD_*` assignment prefix do not match; over 10000
+      chars only the leading form counts
+  C2  PreToolUse(Bash): a host-run command that expands $TMPDIR / ${TMPDIR} / $TMP / $TEMP / $TEMPDIR in
+      any form (default-valued expansion and a preceding assignment included) is denied — exit 2, stderr
+      names the excluded command, the variable and `$CLAUDE_TMPDIR`
+  C3  a single-quoted mention, a quoted-delimiter heredoc body, $CLAUDE_TMPDIR while it is set, and a
+      command without any reference are allowed; while CLAUDE_TMPDIR is unset in the hook's environment a
+      $CLAUDE_TMPDIR reference is denied and an absolute path is recommended instead
+  C4  a sandbox-run command referencing $TMPDIR is allowed
   C5  `dangerouslyDisableSandbox: true` counts as host-run; when the sandbox does not restrict commands
       every command is host-run, but the deny applies only while TMPDIR is empty in the hook's environment
   C6  PreToolUse(Bash) snapshots the root directory listing per tool_use_id (session_id fallback) for every
       allowed call and purges snapshots older than one hour
   C7  PostToolUse / PostToolUseFailure (Bash): entries in the root directory absent from the snapshot are
-      moved into the quarantine dir and reported on stderr with exit 2; the snapshot is removed
+      reported (exit 0, JSON with decision block + reason + systemMessage naming each entry) and left in
+      place; nothing is created outside the state dir; the snapshot is removed
   C8  PostToolUse with nothing new, or with no snapshot, exits 0 silently (snapshot removed if present)
   C9  fail-open: non-Bash tool, non-dict payload, unwritable state dir → exit 0 silent
   C10 the hook file is executable and works end to end through stdin / exit code
@@ -118,18 +122,21 @@ DENY = (
     "git commit -F $TEMP/msg",
     "git commit -F $TEMPDIR/msg",
     'git commit -m "use $TMPDIR"',
-)
-ALLOW = (
     "git commit -F ${TMPDIR:-/tmp}/msg",
     "git commit -F ${TMPDIR-/tmp}/msg",
     "git commit -F ${TMPDIR:=/tmp}/msg",
     "git commit -F ${TMPDIR:?}/msg",
-    "git commit -m 'use $TMPDIR'",
-    "git commit -F - <<'EOF'\nuse $TMPDIR\nEOF",
     "TMPDIR=$CLAUDE_TMPDIR git commit -F $TMPDIR/msg",
     "export TMPDIR=/var/tmp; git commit -F $TMPDIR/msg",
+    "git commit -F - <<EOF\nuse $TMPDIR\nEOF",
+)
+ALLOW = (
+    "git commit -m 'use $TMPDIR'",
+    "git commit -F - <<'EOF'\nuse $TMPDIR\nEOF",
     "git commit -F $CLAUDE_TMPDIR/msg",
     "git status",
+    "git commit -m TMPDIR",
+    "git commit -F $TMPDIRX/msg",
 )
 
 
@@ -169,6 +176,9 @@ class GuardTest(unittest.TestCase):
             patch = mock.patch.object(guard, name, value)
             patch.start()
             self.addCleanup(patch.stop)
+        env = mock.patch.dict(os.environ, {"CLAUDE_TMPDIR": "/tmp/claude-1000"})
+        env.start()
+        self.addCleanup(env.stop)
 
     @staticmethod
     def run_hook(payload, restricted=True, env=None):
@@ -190,24 +200,34 @@ class GuardTest(unittest.TestCase):
         self.assertEqual(guard.host_run(filler + "git push", PATTERNS), "")
         self.assertTrue(guard.host_run("git push; " + filler, PATTERNS))
 
-    def test_c2_denies_host_run_tmpdir_reference(self):
+    def test_c2_denies_every_host_run_tmpdir_expansion(self):
         for cmd in DENY:
             rc, out, err = self.run_hook(pre(cmd))
             self.assertEqual((rc, out), (2, ""), cmd)
             self.assertIn("$CLAUDE_TMPDIR", err, cmd)
             self.assertIn("host", err, cmd)
+            self.assertIn("例外はありません", err, cmd)
         rc, _, err = self.run_hook(pre(DENY[0]))
         self.assertIn("gh issue create", err)
         self.assertIn("$TMPDIR", err)
         self.assertFalse(os.path.exists(self.snapshot()))
 
-    def test_c3_allows_defaulted_quoted_and_self_assigned_forms(self):
+    def test_c3_allows_non_expanding_forms_and_guards_an_unset_claude_tmpdir(self):
         for cmd in ALLOW:
             self.assertEqual(self.run_hook(pre(cmd)), (0, "", ""), cmd)
+        unset = {"CLAUDE_TMPDIR": ""}
+        rc, out, err = self.run_hook(pre("git commit -F $CLAUDE_TMPDIR/msg"), env=unset)
+        self.assertEqual((rc, out), (2, ""))
+        self.assertIn("設定されていない", err)
+        self.assertIn("絶対 path", err)
+        self.assertNotIn("`$CLAUDE_TMPDIR` (host", err)
 
-    def test_c4_allows_sandbox_run_reference_and_plain_host_run(self):
+    def test_c4_allows_sandbox_run_reference(self):
         self.assertEqual(self.run_hook(pre("cp x $TMPDIR/x.bak")), (0, "", ""))
-        self.assertEqual(self.run_hook(pre("git status")), (0, "", ""))
+        self.assertEqual(
+            self.run_hook(pre("for f in a; do git add $f; done; cp x $TMPDIR/y")),
+            (0, "", ""),
+        )
 
     def test_c5_disabled_sandbox_paths(self):
         payload = pre("cp x $TMPDIR/x.bak")
@@ -244,32 +264,40 @@ class GuardTest(unittest.TestCase):
         with open(os.path.join(self.root, "AG.bak"), "w") as f:
             f.write("backup")
         os.makedirs(os.path.join(self.root, "relocate"))
-        with open(os.path.join(self.root, "relocate", "a.md"), "w") as f:
-            f.write("doc")
 
-    def test_c7_quarantines_and_reports_new_root_entries(self):
+    def _tree(self, top):
+        return sorted(
+            os.path.relpath(os.path.join(d, n), top)
+            for d, dirs, files in os.walk(top)
+            for n in dirs + files
+        )
+
+    def test_c7_reports_new_root_entries_without_touching_them(self):
         for event in ("PostToolUse", "PostToolUseFailure"):
             with self.subTest(event=event):
                 self.assertEqual(self.run_hook(pre("git status")), (0, "", ""))
                 self._litter()
+                before = self._tree(self.tmp.name)
                 rc, out, err = self.run_hook(post(event))
-                self.assertEqual((rc, out), (2, ""))
+                self.assertEqual((rc, err), (0, ""))
+                report = json.loads(out)
+                self.assertEqual(report["decision"], "block")
                 for name in ("AG.bak", "relocate"):
-                    self.assertIn(os.path.join(self.root, name), err)
-                    self.assertFalse(os.path.exists(os.path.join(self.root, name)))
-                self.assertIn("$CLAUDE_TMPDIR", err)
-                self.assertIn("ユーザーに報告", err)
-                self.assertFalse(os.path.exists(self.snapshot()))
-                moved = []
-                for dirpath, _, files in os.walk(
-                    os.path.join(self.state, "quarantine")
-                ):
-                    moved.extend(os.path.join(dirpath, f) for f in files)
-                names = sorted(os.path.basename(p) for p in moved)
-                self.assertEqual(names, ["AG.bak", "a.md"])
-                self.assertTrue(any(p in err for p in (os.path.dirname(moved[0]),)))
-                for path in moved:
-                    os.remove(path)
+                    path = os.path.join(self.root, name)
+                    self.assertIn(path, report["reason"])
+                    self.assertIn(path, report["systemMessage"])
+                    self.assertTrue(os.path.exists(path))
+                self.assertIn("ユーザーへ報告", report["reason"])
+                self.assertIn("$CLAUDE_TMPDIR", report["reason"])
+                self.assertIn("移動も削除もしていません", report["reason"])
+                after = self._tree(self.tmp.name)
+                self.assertEqual(
+                    sorted(set(before) - set(after)), ["state/snap-toolu_1.json"]
+                )
+                self.assertEqual(set(after) - set(before), set())
+                for name in ("AG.bak", "relocate"):
+                    path = os.path.join(self.root, name)
+                    (os.rmdir if os.path.isdir(path) else os.remove)(path)
 
     def test_c8_silent_when_nothing_new_or_no_snapshot(self):
         self.assertEqual(self.run_hook(post()), (0, "", ""))
@@ -289,7 +317,6 @@ class GuardTest(unittest.TestCase):
         read["tool_name"] = "Read"
         self._litter()
         self.assertEqual(self.run_hook(read), (0, "", ""))
-        self.assertTrue(os.path.exists(os.path.join(self.root, "AG.bak")))
         with mock.patch.object(guard, "STATE_DIR", os.path.join(self.root, "init")):
             self.assertEqual(self.run_hook(pre("git status")), (0, "", ""))
             self.assertEqual(self.run_hook(pre(DENY[0]))[0], 2)
@@ -327,9 +354,11 @@ class GuardTest(unittest.TestCase):
         self.assertTrue(os.path.exists(self.snapshot()))
         self._litter()
         found = call(post())
-        self.assertEqual(found.returncode, 2, found.stderr)
-        self.assertIn(os.path.join(self.root, "AG.bak"), found.stderr)
-        self.assertFalse(os.path.exists(os.path.join(self.root, "AG.bak")))
+        self.assertEqual((found.returncode, found.stderr), (0, ""), found.stderr)
+        self.assertIn(
+            os.path.join(self.root, "AG.bak"), json.loads(found.stdout)["systemMessage"]
+        )
+        self.assertTrue(os.path.exists(os.path.join(self.root, "AG.bak")))
 
 
 if __name__ == "__main__":
