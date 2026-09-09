@@ -156,6 +156,9 @@ effective configuration with `/status` and `/permissions` after starting Codex.
 - `approval_policy = "never"`: operations outside the boundary without an explicit allow rule fail without an approval prompt.
 - `network_access = true`: allows network access for sandboxed commands.
 - `writable_roots = ["~/worktrees"]`: allows writes throughout the running user's worktree directory.
+- `[tui] status_line`: the items shown in the TUI status line, in order: model, run state,
+  working directory, branch, context usage, weekly limit, input/output token counts, task progress.
+- `[tui] status_line_use_colors = true`: colorizes the status line.
 
 Use `~/worktrees/<repo>/<name>` for manual worktrees with both Claude Code and Codex.
 For `<name>`, prefer the branch name or a GitHub issue identifier such as `issue-123`.

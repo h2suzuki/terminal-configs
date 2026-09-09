@@ -156,6 +156,9 @@ Codex CLI は `setup_user_environment` で導入し、両 OS のセットアッ�
 - `approval_policy = "never"`: 承認を求めず、明示的な許可ルールもない範囲外の操作は失敗します。
 - `network_access = true`: sandbox 内のコマンドのネットワークアクセスを許可。
 - `writable_roots = ["~/worktrees"]`: 起動ユーザーの worktree 保存先全体への書き込みを許可します。
+- `[tui] status_line`: TUI のステータス行に表示する項目と順序。モデル・実行状態・作業ディレクトリ・
+  ブランチ・コンテキスト使用量・週次上限・入出力トークン数・タスク進捗を並べます。
+- `[tui] status_line_use_colors = true`: ステータス行に色を付けます。
 
 Claude Code と Codex の手動 worktree は `~/worktrees/<repo>/<name>` に統一します。
 `<name>` はブランチ名、または GitHub issue 番号に対応する `issue-123` などを推奨します。
