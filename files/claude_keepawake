@@ -1,0 +1,68 @@
+#!/bin/bash
+# claude_keepawake <session_id> — keep the Windows host awake while a Claude
+# session lives (WSL2 only). The statusline calls this on every render.
+#
+# One shared state file elects an owner session. Only the owner resets the
+# Windows idle timer, every INTERVAL seconds, with a one-shot
+# SetThreadExecutionState(ES_SYSTEM_REQUIRED) — no ES_CONTINUOUS, so nothing
+# outlives the call and no process stays resident. Any other session takes
+# over once the owner has been silent for TAKEOVER seconds (exited or idle).
+#
+# State: ${XDG_CACHE_HOME:-~/.cache}/claude-keepawake/state  (owner= last= rc=)
+#   last = epoch of the latest fire, rc = powershell exit status (pending while running)
+# The caller returns at once; the fire runs detached (`--fire`, internal).
+
+set -o pipefail
+
+INTERVAL=30
+TAKEOVER=90
+# shellcheck disable=SC2016  # the backticks are PowerShell escapes and must stay literal
+PS_SNIPPET='Add-Type -Namespace W -Name K -MemberDefinition "[DllImport(`"kernel32.dll`")] public static extern uint SetThreadExecutionState(uint f);"; [W.K]::SetThreadExecutionState(1)'
+
+dir="${XDG_CACHE_HOME:-$HOME/.cache}/claude-keepawake"
+state="$dir/state"
+
+write_state() {
+    # $1 session  $2 epoch  $3 rc — atomic replace so readers never see a torn file
+    local tmp
+    tmp="$(mktemp "$dir/.state.XXXXXX")" || return
+    printf 'owner=%s\nlast=%s\nrc=%s\n' "$1" "$2" "$3" > "$tmp" && mv -f "$tmp" "$state"
+}
+
+if [ "$1" = --fire ]; then
+    session="$2" now="$3"
+    # -EncodedCommand sidesteps the quote mangling of WSL interop argv
+    enc="$(iconv -f UTF-8 -t UTF-16LE <<< "$PS_SNIPPET" | base64 -w0)"
+    timeout 20 powershell.exe -NoProfile -NonInteractive -EncodedCommand "$enc" >/dev/null 2>&1
+    write_state "$session" "$now" "$?"
+    exit 0
+fi
+
+session="$1"
+[ -n "$session" ] || exit 0
+grep -Fqs WSL "${KEEPAWAKE_PROC_VERSION:-/proc/version}" || exit 0
+command -v powershell.exe >/dev/null 2>&1 || exit 0
+command -v setsid >/dev/null 2>&1 || exit 0
+
+owner='' last=0
+if [ -r "$state" ]; then
+    while IFS='=' read -r key value; do
+        case "$key" in
+            owner) owner="$value" ;;
+            last)  last="$value" ;;
+        esac
+    done < "$state"
+fi
+case "$last" in ''|*[!0-9]*) last=0 ;; esac
+
+printf -v now '%(%s)T' -1
+age=$(( now - last ))
+if [ "$owner" = "$session" ]; then
+    (( age >= INTERVAL )) || exit 0
+else
+    (( age >= TAKEOVER )) || exit 0
+fi
+
+mkdir -p "$dir"
+write_state "$session" "$now" pending
+setsid -f "$0" --fire "$session" "$now" </dev/null >/dev/null 2>&1

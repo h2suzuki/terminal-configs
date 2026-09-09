@@ -68,6 +68,8 @@ if [ -n "$_cur_session" ]; then
         fi
     fi
     unset _cache_file _now_iso _started
+    # WSL2 only (deployed by the WSL installer): keeps the Windows host awake while sessions live
+    command -v claude_keepawake >/dev/null 2>&1 && claude_keepawake "$_cur_session"
 fi
 unset _cache_dir _cur_session
 
