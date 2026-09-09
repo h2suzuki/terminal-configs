@@ -66,18 +66,18 @@ Goal: claude が動いている間 (idle 含む) Windows ホストがスリー�
 
 Exit Criteria:
 
-- [ ] owner session 方式で実装 — 共有 1 file に session_id / 最終実行時刻 / 戻り値を書き、
-  owner だけが 30 秒経過で powershell を叩く (ユーザー指示 2026-08-29)。 常駐・lease・boot id・
-  throttle marker は不要になるので削除する
-- [ ] 実機で確認 — 複数 session 下で powershell 発行が 1 つの session からのみ起きること、
-  idle session でも継続すること
-- [ ] 抑止が生存 session を越えて残らないことを確認する
+- [x] owner session 方式で実装 (2026-09-10、 commit `keepawake:`) — `claude_keepawake` を statusline が毎描画呼び、
+  共有 1 file (owner / last / rc) の owner だけが 30 秒ごとに one-shot の SetThreadExecutionState を detached で叩く。
+  90 秒沈黙で他 session が引き継ぐ。 常駐・lease・boot id・throttle marker は main に無く削除対象なし
+  [事実: files/ に keepawake / powershell の既存参照 0 件]
+- [ ] 実機で確認 — sandbox 検証済み: smoke 9/9 (2 session id で発火 1 回・引き継ぎ・rc 記録)、 実 powershell rc=0
+  1.3 秒、 statusline 往復 55 ms。 残り: base setup 再実行で配備後、 TUI を 2 つ開いて
+  `~/.cache/claude-keepawake/state` の owner が 1 つで last が 30 秒刻みに進むこと、 idle 側でも進むことを見る
+- [x] 抑止が生存 session を越えて残らない — ES_CONTINUOUS 無しの one-shot (smoke が decode して確認) で、
+  発火 process は rc を書いて終了する (実測 1.3 秒)。 最後の session が閉じれば 90 秒以内に発火が止まる
 
-Work file: branch `wip/lessons-learned-split` に旧実装 (常駐 supervisor 方式) が退避済み。
-旧設計の実測 (statusline 描画間隔 最大 12 秒 / 一発叩き 0.30-0.61 秒) はそこの README にある
-Deferred: 2026-09-10 ユーザー指示 — 上記 branch はこのマシンの local / origin に無く [事実]、 別マシンにある
-想定で保留。 別マシンにも無いと判明したらここで作り直す。 本機の実測 2026-09-10: powershell 一発叩き (SetThreadExecutionState を
--EncodedCommand で渡す) 1.5-1.75 秒、 statusLine の refreshInterval 10 秒は配備済み (idle でも描画される)
+Work file: `files/claude_keepawake` / `files/claude_keepawake.smoke.sh`。 旧実装 (常駐 supervisor 方式) は branch
+`wip/lessons-learned-split` (本機に無い) にあるが、 新実装は依存しない
 
 ### lessons-learned repo を public / private に分離する
 
@@ -116,6 +116,8 @@ Exit Criteria:
 
 Work file: branch `wip/lessons-learned-split` の
 `files/claude_managed-skills/report-in-plain-words/`
+再設計の材料 (2026-09-10 実測): 「show-me」は main の stop_checks の family 名に無い [事実: grep 0 件]。 本機の
+transcript 3 本に Stop hook の block は 0 件で、 再発回数は本機では測れない
 Deferred: 2026-09-10 ユーザー指示 — 上記 branch はこのマシンの local / origin に無く [事実]、 別マシンにある
 想定で保留。 別マシンにも無いと判明したらここで作り直す
 
@@ -224,6 +226,8 @@ Exit Criteria:
 - [ ] 採る場合: 実 corpus で誤検出率を測ってから配備する
 
 Work file: `files/claude_managed-hooks/stop_checks.py` の `_ruling`
+実測 (2026-09-10): `_ruling` は「turn 内に Agent/Task 呼び出しがある」かつ「本文に 妥当|判断|裁定|評価|採用|却下」
+かつ「本文の path が同 turn で未 open」の 3 条件で発火する。 本機の transcript 3 本では発火 0 件
 
 ### 随伴エージェント待ち — モデル判定へ回す案件 (凍結)
 
