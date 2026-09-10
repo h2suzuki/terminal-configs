@@ -73,8 +73,9 @@ Exit Criteria:
 - [x] 実機で確認 (2026-09-10 10:45〜10:48、 再デプロイ後) — state を 5 秒ごとに 150 秒記録: 発火 6 回が全て 30 秒間隔、
   owner は本 session の 1 つだけ、 rc=0 が 30/30。 owner が新しい間に別 session id で呼んでも state は不変 (mtime 一致)。
   `--fire` / powershell.exe の残留 process なし (pgrep)
-- [ ] idle の TUI (turn 無し) でも last が進むことを見る — 次の prompt の冒頭 tool で state の last の age を測り、
-  30 秒以内なら閉じる (refreshInterval 10 秒の timer 描画が根拠になる)
+- [x] idle の TUI でも継続する (2026-09-10) — 前 turn 終了 10:48:40 から次 prompt 10:50:42 まで turn 無し。 次 turn の
+  最初の tool (10:50:55) で state は last=10:50:54 / rc=pending。 発火は age ≥ 30 秒でしか起きない (script の条件) ので
+  直前の発火は 10:50:24 以前、 つまり idle 区間の中で発火していた
 - [x] 抑止が生存 session を越えて残らない — ES_CONTINUOUS 無しの one-shot (smoke が decode して確認) で、
   発火 process は rc を書いて終了する (実測 1.3 秒)。 最後の session が閉じれば 90 秒以内に発火が止まる
 
