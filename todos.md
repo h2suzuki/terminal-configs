@@ -57,31 +57,6 @@ git 履歴 (`git log -p -- todos.md`) と Work file にあり、ここには書�
 
 ## High
 
-### WSL2 で claude 実行中に Windows ホストを寝かせない
-
-起票: user 2026-08-28
-
-Goal: claude が動いている間 (idle 含む) Windows ホストがスリープせず、 数時間後にリモートで
-入れる。 抑止を掴んだまま残るプロセスを作らない。
-
-Exit Criteria:
-
-- [x] owner session 方式で実装 (2026-09-10、 commit `keepawake:`) — `claude_keepawake` を statusline が毎描画呼び、
-  共有 1 file (owner / last / rc) の owner だけが 30 秒ごとに one-shot の SetThreadExecutionState を detached で叩く。
-  90 秒沈黙で他 session が引き継ぐ。 常駐・lease・boot id・throttle marker は main に無く削除対象なし
-  [事実: files/ に keepawake / powershell の既存参照 0 件]
-- [x] 実機で確認 (2026-09-10 10:45〜10:48、 再デプロイ後) — state を 5 秒ごとに 150 秒記録: 発火 6 回が全て 30 秒間隔、
-  owner は本 session の 1 つだけ、 rc=0 が 30/30。 owner が新しい間に別 session id で呼んでも state は不変 (mtime 一致)。
-  `--fire` / powershell.exe の残留 process なし (pgrep)
-- [x] idle の TUI でも継続する (2026-09-10) — 前 turn 終了 10:48:40 から次 prompt 10:50:42 まで turn 無し。 次 turn の
-  最初の tool (10:50:55) で state は last=10:50:54 / rc=pending。 発火は age ≥ 30 秒でしか起きない (script の条件) ので
-  直前の発火は 10:50:24 以前、 つまり idle 区間の中で発火していた
-- [x] 抑止が生存 session を越えて残らない — ES_CONTINUOUS 無しの one-shot (smoke が decode して確認) で、
-  発火 process は rc を書いて終了する (実測 1.3 秒)。 最後の session が閉じれば 90 秒以内に発火が止まる
-
-Work file: `files/claude_keepawake` / `files/claude_keepawake.smoke.sh`。 旧実装 (常駐 supervisor 方式) は branch
-`wip/lessons-learned-split` (本機に無い) にあるが、 新実装は依存しない
-
 ### lessons-learned repo を public / private に分離する
 
 起票: user 2026-08-28
