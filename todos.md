@@ -70,9 +70,11 @@ Exit Criteria:
   共有 1 file (owner / last / rc) の owner だけが 30 秒ごとに one-shot の SetThreadExecutionState を detached で叩く。
   90 秒沈黙で他 session が引き継ぐ。 常駐・lease・boot id・throttle marker は main に無く削除対象なし
   [事実: files/ に keepawake / powershell の既存参照 0 件]
-- [ ] 実機で確認 — sandbox 検証済み: smoke 9/9 (2 session id で発火 1 回・引き継ぎ・rc 記録)、 実 powershell rc=0
-  1.3 秒、 statusline 往復 55 ms。 残り: base setup 再実行で配備後、 TUI を 2 つ開いて
-  `~/.cache/claude-keepawake/state` の owner が 1 つで last が 30 秒刻みに進むこと、 idle 側でも進むことを見る
+- [x] 実機で確認 (2026-09-10 10:45〜10:48、 再デプロイ後) — state を 5 秒ごとに 150 秒記録: 発火 6 回が全て 30 秒間隔、
+  owner は本 session の 1 つだけ、 rc=0 が 30/30。 owner が新しい間に別 session id で呼んでも state は不変 (mtime 一致)。
+  `--fire` / powershell.exe の残留 process なし (pgrep)
+- [ ] idle の TUI (turn 無し) でも last が進むことを見る — 次の prompt の冒頭 tool で state の last の age を測り、
+  30 秒以内なら閉じる (refreshInterval 10 秒の timer 描画が根拠になる)
 - [x] 抑止が生存 session を越えて残らない — ES_CONTINUOUS 無しの one-shot (smoke が decode して確認) で、
   発火 process は rc を書いて終了する (実測 1.3 秒)。 最後の session が閉じれば 90 秒以内に発火が止まる
 
