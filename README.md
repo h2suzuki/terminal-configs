@@ -194,6 +194,7 @@ Claude Code の共通 `excludedCommands` を個別に確認した対応は以下
 | `claude_memory_sync *` | 同名 CLI を許可。共有 memory clone と index を workspace 外で更新。Codex から共有メモリを操作する場合にも必要。 |
 | `docker *` | `docker` を許可。ホストの Docker daemon への接続。 |
 | `codex *` | `codex` を許可。子 CLI が自身の sandbox とユーザー状態を管理。 |
+| `agent_coord *` | `agent_coord` を許可。host 側の台帳 daemon に接続し、worktree 作成などの Git 操作を host 権限で行う。 |
 | `node *codex-companion.mjs*` | 共通ルールには移さない。prefix rule は引数内の glob に非対応。必要な環境で `node` と companion の絶対パスを指定する個別ルールを登録する。`node` 全体は許可しない。 |
 | `codex_broker_reap*` | 実在する `codex_broker_reap` のみ許可。ホストのプロセス表を見ないと稼働中 broker を誤判定する。名前の前方一致は移さない。 |
 | `agent-browser *` | `agent-browser` を許可。ホストのブラウザ・セッション・開発サーバーへのアクセス。 |
@@ -217,6 +218,25 @@ Claude の drop-in は共通 Codex ルールへ自動変換しません。
 仕様: [Codex 設定](https://learn.chatgpt.com/docs/config-file/config-reference)、
 [sandbox と保護パス](https://learn.chatgpt.com/docs/agent-approvals-security#protected-paths-in-writable-roots)、
 [sandbox 外実行ルール](https://learn.chatgpt.com/docs/agent-configuration/rules)。
+
+
+### 10. Agent 間協調（`agent_coord`）
+
+`agent_coord` は、同じ OS ユーザーで動く Claude Code / Codex などの agent session を横断して
+調整する、ホスト単位の CLI + daemon + MCP アダプタです。session 一覧、project/repo/all scope の
+メッセージング、排他的な resource lock、worktree の所有権を 1 つの ledger（SQLite,
+`~/.local/state/agent_coord/`）に集約します。CLI 本体は基本セットアップで `/usr/local/bin/` に
+配置済みですが、Claude Code から MCP・hooks として使うにはプラグインの導入が別途必要です。
+
+    $ claude plugin marketplace add <このリポジトリのパス>
+    $ claude plugin install agent-coord@terminal-configs
+
+導入すると hooks が session 参加・未読通知・claim した worktree 外での編集拒否を自動で行い、
+MCP 経由で send/catchup/acquire/worktree などの tool が使えます。人間が状況を見るだけなら
+`agent_coord status` / `agent_coord watch` で足ります（LLM 不要）。
+
+Codex 側は `files/codex_config.toml`（配置先 `/etc/codex/config.toml`）に既定で
+`[mcp_servers.agent_coord]`（`command = "agent_coord"`, `args = ["mcp"]`）が入っており、追加設定は不要です。
 
 
 ## 追加セットアップの内容
