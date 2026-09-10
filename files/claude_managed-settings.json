@@ -42,7 +42,8 @@
       "codex_broker_reap*",
       "agent-browser *",
       "claude --bg *",
-      "claude agents *"
+      "claude agents *",
+      "agent_coord *"
     ],
     "filesystem": {
       "allowWrite": ["~/.claude/plugins/data", "/var/lib/claude-rag-memory", "~/worktrees"],

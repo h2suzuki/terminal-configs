@@ -1,0 +1,13 @@
+{
+  "name": "terminal-configs",
+  "owner": { "name": "terminal-configs" },
+  "metadata": { "description": "Plugins shipped with terminal-configs.", "version": "0.1.0" },
+  "plugins": [
+    {
+      "name": "agent-coord",
+      "description": "Session ledger for agents on this host: scoped messaging, resource locks, worktree ownership.",
+      "version": "0.1.0",
+      "source": "./files/claude_plugin-agent-coord"
+    }
+  ]
+}

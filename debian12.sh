@@ -351,6 +351,7 @@ copy claude_unverified_claims       /usr/local/bin/claude_unverified_claims
 copy toolbox_bigquery_mcp           /usr/local/bin/toolbox_bigquery_mcp
 copy claude_court_guard             /usr/local/bin/claude_court_guard
 copy claude_mytask_mcp              /usr/local/bin/claude_mytask_mcp
+copy agent_coord                    /usr/local/bin/agent_coord
 copy claude_lang_lint               /usr/local/bin/claude_lang_lint
 copy codex_task_sentinel            /usr/local/bin/codex_task_sentinel
 copy codex_order_lint               /usr/local/bin/codex_order_lint

@@ -86,3 +86,11 @@ prefix_rule(
     match = ["claude agents --json"],
     not_match = ["claude -p example", "claude agents-other"],
 )
+
+prefix_rule(
+    pattern = ["agent_coord"],
+    decision = "allow",
+    justification = "Reach the host session ledger daemon and run its guarded Git worktree operations.",
+    match = ["agent_coord status", "agent_coord send hello --to project"],
+    not_match = ["agent_coord_other status"],
+)

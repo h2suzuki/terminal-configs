@@ -14,6 +14,11 @@ writable_roots = ["~/worktrees"]
 # Explicit command exceptions are installed separately in
 # rules/terminal-configs-sandbox-exclusions.rules (see README for the mapping).
 
+# Session ledger shared with Claude Code (host daemon, auto-started by the adapter).
+[mcp_servers.agent_coord]
+command = "agent_coord"
+args = ["mcp"]
+
 [tui]
 status_line = ["model-with-reasoning", "run-state", "current-dir", "git-branch", "context-used", "weekly-limit", "total-input-tokens", "total-output-tokens", "task-progress"]
 status_line_use_colors = true
