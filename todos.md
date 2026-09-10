@@ -144,8 +144,8 @@ Exit Criteria:
   (2026-09-10、 3a7068b)。 事例は 2026-08-29 の 6 行自作 (正規は base setup 1 本)
 - [ ] 5 件とも `when:` / `check:` を書く — 4 / 5 済み (上の 4 entry は両方あり)。 残りは loop 停止判断の entry
 
-Work file: todos.md 冒頭の CAVEAT 3 件 (実測の出所)。 新 entry 3 件は本機 clone の local commit のみで push は
-pending — clone の pull が `user/` dir 作成の権限で失敗しており (2026-09-10 sync.log)、 owner 実行の pull が要る
+Work file: todos.md 冒頭の CAVEAT 3 件 (実測の出所)。 新 entry 3 件は 2026-09-10 の owner pull 後に origin/main へ
+push 済み (`git ls-tree origin/main org/` で 3 件を確認)
 
 ### memory surface が予告 entry を届けられなかった機構を直す
 
