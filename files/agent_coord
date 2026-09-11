@@ -1763,7 +1763,12 @@ class Ledger:
         sessions = []
         for row in sorted(self.live_sessions(), key=lambda s: s["project"] or ""):
             item = self.public(row, connections)
-            item["unread"] = len(self.unread(row["sid"]))
+            rows = self.unread(row["sid"])
+            item["unread"] = len(rows)
+            item["deliveries"] = {
+                state: sum(1 for r in rows if r["state"] == state)
+                for state in sorted({r["state"] for r in rows})
+            }
             sessions.append(item)
         return {
             "service": {
@@ -2720,7 +2725,8 @@ def render_sessions(sessions: list[Json]) -> str:
             s["seen_ago"],
             s["capabilities"]["notify"],
             s["capabilities"]["enforcement"],
-            str(s.get("unread", "")),
+            " ".join(f"{n} {state}" for state, n in s.get("deliveries", {}).items())
+            or "0",
         ]
         for s in sessions
     ]

@@ -514,6 +514,12 @@ class NotificationTest(Direct):
         self.assertTrue(wait_for(lambda: state("b", "cc-N-b") == "pushed"))
         self.assertTrue(wait_for(lambda: state("d", "cc-ghost") == "unavailable"))
         self.assertEqual(state("c", "agy-C-c"), "pull")
+        summary = {
+            s["sid"]: s["deliveries"] for s in self.call("", "status")["sessions"]
+        }
+        self.assertEqual(summary["cc-N-b"], {"pushed": 1})
+        self.assertEqual(summary["cc-ghost"], {"unavailable": 1})
+        self.assertIn("1 unavailable", coord.render_status(self.call("", "status")))
         self.call("b", "ack", sid="cc-N-b", through=self.co.ledger.last_seq)
         self.assertEqual(self.call("b", "peek", sid="cc-N-b")["deliveries"], [])
 
