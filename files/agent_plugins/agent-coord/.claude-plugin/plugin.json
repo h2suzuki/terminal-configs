@@ -5,6 +5,5 @@
   "author": {
     "name": "terminal-configs"
   },
-  "mcpServers": "./.mcp.json",
-  "hooks": "./hooks/hooks.json"
+  "hooks": "./hooks/claude-code.json"
 }
