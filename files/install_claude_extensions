@@ -21,11 +21,14 @@ else
 fi
 
 
+
+MY_NAME="$(id -un)"
+
 run()
 {
     local RETVAL
 
-    echo -e "=> ${COLOR_YELLOW}${@}${COLOR_CLEAR}"
+    echo -e "($MY_NAME) => ${COLOR_YELLOW}${@}${COLOR_CLEAR}"
     eval "${@}"
     RETVAL=$?
 
