@@ -249,7 +249,12 @@ CREATE TABLE IF NOT EXISTS requests(
   subject TEXT, body TEXT, state TEXT, result TEXT, resolved_by TEXT, resolved_at REAL,
   created_at REAL);
 CREATE TABLE IF NOT EXISTS idempotency(key TEXT PRIMARY KEY, response TEXT, ts REAL);
+CREATE TABLE IF NOT EXISTS inbox(sid TEXT, seq INTEGER, PRIMARY KEY(sid, seq));
+CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value INTEGER);
 """
+
+EVENT_TTL = 24 * 3600  # an undelivered event outlives any real session by then
+JOIN_BACKFILL = 3600  # a newcomer sees the last hour of talk addressed to its scopes
 
 # Persisted column order per table; the in-memory rows carry exactly these keys.
 COLUMNS = {
@@ -270,7 +275,10 @@ COLUMNS = {
 
 
 class Store:
-    """Authoritative ledger held in memory; SQLite is written through so a restart rebuilds it."""
+    """Authoritative ledger held in memory; SQLite is written through so a restart rebuilds it.
+
+    Delivery fans out at post time: each recipient gets an inbox entry that its ack removes.
+    """
 
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -302,12 +310,19 @@ class Store:
         self._events = sorted(rows("events"), key=lambda e: e["seq"])
         for event in self._events:
             event["body"] = json.loads(event["body"])
+        self._by_seq = {e["seq"]: e for e in self._events}
+        meta = self.db.execute("SELECT value FROM meta WHERE key='last_seq'").fetchone()
+        self._last_seq = max(meta[0] if meta else 0, self.max_seq())
+        self._inbox: dict[str, list[int]] = {}
+        for r in self.db.execute("SELECT sid, seq FROM inbox ORDER BY seq"):
+            if r["seq"] in self._by_seq:
+                self._inbox.setdefault(r["sid"], []).append(r["seq"])
         self._waiters: dict[str, list[str]] = {}
         for r in self.db.execute("SELECT key, sid FROM waiters ORDER BY rowid"):
             self._waiters.setdefault(r["key"], []).append(r["sid"])
         self._idempotency = {
-            r["key"]: json.loads(r["response"])
-            for r in self.db.execute("SELECT key, response FROM idempotency")
+            r["key"]: {"response": json.loads(r["response"]), "ts": r["ts"]}
+            for r in self.db.execute("SELECT key, response, ts FROM idempotency")
         }
 
     def _save(self, table: str, row: Json) -> None:
@@ -327,43 +342,75 @@ class Store:
             [(key, sid) for sid in self._waiters.get(key, [])],
         )
 
+    def _expire(self) -> None:
+        """Drop events, inbox entries, replay records and long-left sessions past EVENT_TTL."""
+        cutoff = now() - EVENT_TTL
+        pruned = 0
+        while self._events and self._events[0]["ts"] < cutoff:
+            pruned = self._events.pop(0)["seq"]
+            del self._by_seq[pruned]
+        if pruned:
+            for sid, seqs in list(self._inbox.items()):
+                self._inbox[sid] = [q for q in seqs if q > pruned]
+            self.db.execute("DELETE FROM events WHERE seq<=?", (pruned,))
+            self.db.execute("DELETE FROM inbox WHERE seq<=?", (pruned,))
+        for key in [k for k, v in self._idempotency.items() if v["ts"] < cutoff]:
+            del self._idempotency[key]
+            self.db.execute("DELETE FROM idempotency WHERE key=?", (key,))
+        for sid in [
+            s["sid"]
+            for s in self._sessions.values()
+            if (s["left_at"] or cutoff) < cutoff
+        ]:
+            del self._sessions[sid]
+            self._inbox.pop(sid, None)
+            self.db.execute("DELETE FROM sessions WHERE sid=?", (sid,))
+            self.db.execute("DELETE FROM inbox WHERE sid=?", (sid,))
+
     # -- transaction helpers
     def transact(self, fn: Any, *args: Any) -> Any:
-        """Run fn under the lock in one transaction; memory is reloaded from disk on rollback."""
-        with self.lock:
-            self.pending = []
-            self.db.execute("BEGIN IMMEDIATE")
-            try:
-                result = fn(*args)
-            except CoordError as error:
-                if (
-                    error.keep
-                ):  # side effects recorded before the refusal stay (e.g. waiters)
-                    self.db.execute("COMMIT")
-                    self.emit_pending()
-                else:
+        """Run fn under the lock in one transaction; memory is reloaded from disk on rollback.
+
+        Committed events reach subscribers after the lock is released (F3: notify outside the
+        exclusive section), and only committed ones: a rollback emits nothing.
+        """
+        committed: list[Json] = []
+        listeners: list[queue.Queue[Json]] = []
+        try:
+            with self.lock:
+                self.pending = []
+                self.db.execute("BEGIN IMMEDIATE")
+                try:
+                    self._expire()
+                    result = fn(*args)
+                except CoordError as error:
+                    if (
+                        error.keep
+                    ):  # side effects recorded before the refusal stay (e.g. waiters)
+                        self.db.execute("COMMIT")
+                        committed, listeners = self.pending, list(self.listeners)
+                    else:
+                        self.db.execute("ROLLBACK")
+                        self._load()
+                    raise
+                except BaseException:
                     self.db.execute("ROLLBACK")
                     self._load()
-                raise
-            except BaseException:
-                self.db.execute("ROLLBACK")
-                self._load()
-                raise
-            self.db.execute("COMMIT")
-            self.emit_pending()
-            return copy.deepcopy(result)  # callers serialise outside the lock
-
-    def emit_pending(self) -> None:
-        events, self.pending = self.pending, []
-        for listener in list(self.listeners):
-            for event in events:
-                listener.put(event)
+                    raise
+                self.db.execute("COMMIT")
+                committed, listeners = self.pending, list(self.listeners)
+                return copy.deepcopy(result)  # callers serialise outside the lock
+        finally:
+            for listener in listeners:
+                for event in committed:
+                    listener.put(event)
 
     def append_event(
         self, kind: str, actor: str | None, scope: tuple[str, str], body: Json
     ) -> Json:
+        self._last_seq += 1
         event = {
-            "seq": self.max_seq() + 1,
+            "seq": self._last_seq,
             "ts": now(),
             "kind": kind,
             "actor": actor,
@@ -372,9 +419,38 @@ class Store:
             "body": body,
         }
         self._events.append(event)
+        self._by_seq[event["seq"]] = event
         self._save("events", event)
+        self.db.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES('last_seq', ?)",
+            (self._last_seq,),
+        )
+        for sid in self._recipients(event):
+            self._deliver(sid, event["seq"])
         self.pending.append(event)
         return event
+
+    def _recipients(self, event: Json) -> list[str]:
+        """Who gets an inbox entry: the addressee, or every present session the scope covers but the actor."""
+        if event["kind"] not in NOTIFY_KINDS:
+            return []
+        if event["scope_kind"] == "session":
+            return [event["scope_key"]]
+        return [
+            s["sid"]
+            for s in self._sessions.values()
+            if s["left_at"] is None
+            and s["sid"] != event["actor"]
+            and self.visible(event, s)
+        ]
+
+    def _deliver(self, sid: str, seq: int) -> None:
+        seqs = self._inbox.setdefault(sid, [])
+        if seq not in seqs:
+            bisect.insort(seqs, seq)
+            self.db.execute(
+                "INSERT OR IGNORE INTO inbox(sid, seq) VALUES(?,?)", (sid, seq)
+            )
 
     def events_after(self, seq: int) -> list[Json]:
         start = bisect.bisect_right(self._events, seq, key=lambda e: e["seq"])
@@ -456,33 +532,23 @@ class Store:
     def unread_for(
         self, session: Json, limit: int | None = None
     ) -> tuple[list[Json], bool]:
-        """Events after the cursor that address this session from someone else."""
-        selected: list[Json] = []
-        for event in self.events_after(session["cursor"]):
-            own = event["actor"] == session["sid"]
-            direct = (
-                event["scope_kind"] == "session"
-                and event["scope_key"] == session["sid"]
-            )
-            if event["kind"] not in NOTIFY_KINDS or (own and not direct):
-                continue
-            if not self.visible(event, session):
-                continue
-            if limit is not None and len(selected) >= limit:
-                return selected, True
-            selected.append(event)
-        return selected, False
+        """This session's undelivered inbox in seq order, capped at limit."""
+        seqs = self._inbox.get(session["sid"], [])
+        more = limit is not None and len(seqs) > limit
+        return [self._by_seq[q] for q in (seqs[:limit] if more else seqs)], more
 
     # -- idempotency
     def replay(self, key: str | None) -> Json | None:
-        return self._idempotency.get(key) if key else None
+        record = self._idempotency.get(key) if key else None
+        return record["response"] if record else None
 
     def remember(self, key: str | None, response: Json) -> Json:
         if key:
-            self._idempotency[key] = response
+            ts = now()
+            self._idempotency[key] = {"response": response, "ts": ts}
             self.db.execute(
                 "INSERT OR REPLACE INTO idempotency(key, response, ts) VALUES(?,?,?)",
-                (key, json.dumps(response, ensure_ascii=False), now()),
+                (key, json.dumps(response, ensure_ascii=False), ts),
             )
         return response
 
@@ -508,7 +574,7 @@ class Store:
             "edit_worktree": None,
             "model": None,
             "joined_at": ts,
-            "cursor": self.max_seq(),
+            "cursor": self._last_seq,
             "notified": 0,
         }
         for key in ("client", "native_id", "task", "model"):
@@ -524,6 +590,13 @@ class Store:
         self._sessions[sid] = session
         self._save("sessions", session)
         if not existing:
+            for event in self._events:  # the last hour of talk on the newcomer's scopes
+                if (
+                    event["ts"] >= ts - JOIN_BACKFILL
+                    and event["scope_kind"] != "session"
+                    and sid in self._recipients(event)
+                ):
+                    self._deliver(sid, event["seq"])
             self.append_event(
                 "join", sid, ("all", ""), {"name": name, "client": p.get("client")}
             )
@@ -656,8 +729,13 @@ class Store:
         }
 
     def ack(self, p: Json) -> Json:
+        """Confirm delivery up to a seq: those inbox entries go, the cursor only moves forward."""
         session = self.require_session(p.get("sid"))
-        through = min(int(p.get("through") or 0), self.max_seq())
+        through = min(int(p.get("through") or 0), self._last_seq)
+        sid = session["sid"]
+        if any(q <= through for q in self._inbox.get(sid, [])):
+            self._inbox[sid] = [q for q in self._inbox[sid] if q > through]
+            self.db.execute("DELETE FROM inbox WHERE sid=? AND seq<=?", (sid, through))
         session["cursor"] = max(session["cursor"], through)
         self._save("sessions", session)
         return {"cursor": session["cursor"]}
@@ -773,10 +851,15 @@ class Store:
             )
         result = str(p.get("result") or "").strip() or "resolved"
         self._close_request(req, "resolved", session["sid"], result)
+        own = (
+            req["sender"] == session["sid"]
+        )  # no self-notification: tell the addressees instead
         self.append_event(
             "request_resolve",
             session["sid"],
-            ("session", req["sender"]),
+            (req["scope_kind"], req["scope_key"])
+            if own
+            else ("session", req["sender"]),
             {
                 "req_id": req["req_id"],
                 "subject": req["subject"],
@@ -1182,7 +1265,8 @@ class Store:
                 "pid": os.getpid(),
                 "started_at": self.started_at,
                 "home": str(coord_home()),
-                "events": self.max_seq(),
+                "events": self._last_seq,
+                "retained": len(self._events),
                 "connections": len(self.connections),
             },
             "sessions": sessions,

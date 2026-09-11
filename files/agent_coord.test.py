@@ -229,6 +229,73 @@ class CoordTest(unittest.TestCase):
             store.session("a")["cursor"], durable
         )  # memory rolled back with the transaction
 
+    def test_delivery_is_per_recipient_not_a_shared_cursor(self):
+        """F2/F3: a direct message and a broadcast are acked independently; nobody's inbox depends on another session's ack."""
+        a, _ = self.join("a", self.repo)
+        b, _ = self.join("b", self.wt)
+        c, _ = self.join("c", self.clone)
+        a.call("send", sid="a", to="repo", text="for b")
+        direct = a.call("send", sid="a", to="c", text="for c")
+        c.call("ack", sid="c", through=direct["seq"])
+        self.assertEqual(self.unread_texts(c, "c"), [])
+        self.assertEqual(self.unread_texts(b, "b"), ["for b"])
+        self.assertEqual(b.call("peek", sid="b")["unread"], 1)
+
+    def test_events_expire_after_ttl_and_newcomers_get_the_last_hour(self):
+        """F2 (use case): undelivered talk lives EVENT_TTL; a newcomer is seeded with JOIN_BACKFILL of its scopes only."""
+        store = coord.Store(self.tmp / "direct" / "ledger.sqlite3")
+        call = lambda method, **p: store.transact(getattr(store, method), p)  # noqa: E731
+        call("join", sid="a", client="test", cwd=str(self.repo))
+        call("join", sid="b", client="test", cwd=str(self.wt))
+        stale = call("send", sid="a", to="project", text="old news")["seq"]
+        call("send", sid="a", to="project", text="fresh")
+        call("send", sid="a", to="b", text="private to b")
+        store._by_seq[stale]["ts"] -= coord.JOIN_BACKFILL + 1
+        call("join", sid="c", client="test", cwd=str(self.clone))
+        self.assertEqual(
+            [e["body"]["text"] for e in call("catchup", sid="c")["events"]], ["fresh"]
+        )
+        self.assertEqual(len(call("catchup", sid="b")["events"]), 3)
+        for event in store._events:
+            event["ts"] -= coord.EVENT_TTL + 1
+        last_seq = store._last_seq
+        self.assertEqual(call("peek", sid="b")["unread"], 0)
+        self.assertEqual(call("status")["service"]["retained"], 0)
+        self.assertEqual(
+            store.db.execute("SELECT count(*) FROM inbox").fetchone()[0], 0
+        )
+        self.assertEqual(
+            call("send", sid="a", to="repo", text="later")["seq"], last_seq + 1
+        )
+
+    def test_resolving_your_own_request_does_not_notify_yourself(self):
+        """F3: the requester's own resolve goes to the request's addressees, never back to the requester."""
+        a, _ = self.join("a", self.repo)
+        b, _ = self.join("b", self.wt)
+        req = a.call("request", sid="a", to="repo", subject="rig?")
+        a.call("resolve", sid="a", req_id=req["req_id"], result="never mind")
+        self.assertEqual(self.unread_texts(a, "a"), [])
+        self.assertEqual(self.unread_texts(b, "b"), ["request_open", "request_resolve"])
+
+    def test_subscribers_see_committed_events_only_after_commit(self):
+        """F3/V5: a watch subscriber gets each committed event pushed once; a refused acquire that rolls back pushes nothing."""
+        a, _ = self.join("a", self.repo)
+        watcher = self.daemon.client()
+        self.addCleanup(watcher.close)
+        self.assertTrue(watcher.call("subscribe")["subscribed"])
+        watcher.sock.settimeout(5)
+        a.call("send", sid="a", to="repo", text="pushed")
+        pushed = json.loads(watcher.file.readline())
+        self.assertEqual(
+            (pushed["method"], pushed["params"]["body"]["text"]), ("event", "pushed")
+        )
+        with self.assertRaises(coord.CoordError):
+            a.call("release", sid="a", key="never-held")  # rolls back, no event
+        a.call("acquire", sid="a", key="rig")
+        self.assertEqual(
+            json.loads(watcher.file.readline())["params"]["kind"], "acquire"
+        )
+
     def test_catchup_pages_peek_and_status_do_not_consume(self):
         """V6 + V7: paging never drops events, peek/status leave the cursor alone, ack only moves forward."""
         a, _ = self.join("a", self.repo)
