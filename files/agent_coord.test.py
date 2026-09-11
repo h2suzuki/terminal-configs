@@ -501,16 +501,19 @@ class CoordTest(unittest.TestCase):
         self.assertIn("another daemon", err.getvalue())
         self.assertTrue(self.daemon.client().call("ping")["pong"])
 
-    def test_global_flags_hoist_from_anywhere(self):
-        """CLI ergonomics: --json / --as / --no-autostart work after the subcommand."""
+    def test_global_flags_parse_from_anywhere(self):
+        """CLI ergonomics: --json / --as / --no-autostart work before or after the subcommand."""
+        after = coord.parse_cli(["status", "--json", "--as", "x", "--no-autostart"])
+        before = coord.parse_cli(["--json", "--as=x", "--no-autostart", "status"])
+        for args in (after, before):
+            self.assertEqual(
+                (args.sid, args.json, args.no_autostart), ("x", True, True)
+            )
+        plain = coord.parse_cli(["send", "hi", "--to", "all"])
         self.assertEqual(
-            coord.hoist_globals(["status", "--json", "--as", "x", "--no-autostart"]),
-            ["--json", "--as", "x", "--no-autostart", "status"],
+            (plain.sid, plain.json, plain.no_autostart), (None, False, False)
         )
-        self.assertEqual(
-            coord.hoist_globals(["send", "hi", "--to", "all"]),
-            ["send", "hi", "--to", "all"],
-        )
+        self.assertEqual(plain.to, "all")
 
     def test_remote_normalization(self):
         """Project key ignores scheme, user, case of host and the .git suffix."""
