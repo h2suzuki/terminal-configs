@@ -217,6 +217,10 @@ run claude mcp add toolbox --scope user -- toolbox_bigquery_mcp
 claude mcp remove mytask --scope user
 run claude mcp add mytask --scope user -- claude_mytask_mcp
 
+# agent_coord MCP (host-wide session ledger; its hooks come with the managed extensions)
+claude mcp remove agent_coord --scope user
+run claude mcp add agent_coord --scope user -- agent_coord mcp
+
 # Vercel CLI
 run npm install -g @vercel/vc-native
 

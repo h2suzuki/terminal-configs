@@ -2034,7 +2034,7 @@ def hook_main(event_name: str, stdin: TextIO, stdout: TextIO) -> int:
             emit_context(
                 stdout,
                 event_name,
-                f"[agent-coord] joined as {sid} ({joined['session']['name']}). Same-project peers: {peers}. Unread: {joined['unread']}. Tools: mcp agent-coord (send/catchup/acquire/worktree) or `agent_coord` CLI.",
+                f"[agent-coord] joined as {sid} ({joined['session']['name']}). Same-project peers: {peers}. Unread: {joined['unread']}. Tools: mcp agent_coord (send/catchup/acquire/worktree) or `agent_coord` CLI.",
             )
         elif event_name == "SessionEnd":
             client.call("update", sid=sid, status="done")
@@ -2223,7 +2223,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--daemon", action="store_true", help="detach into the background")
     sub.add_parser("stop", help="stop the daemon (ledger is kept)")
     sub.add_parser("doctor", help="diagnose connectivity and identity")
-    sub.add_parser("mcp", help="stdio MCP adapter (used by the plugin)")
+    sub.add_parser("mcp", help="stdio MCP adapter (registered by install_claude_extensions)")
     p = sub.add_parser("hook", help="Claude Code hook entry")
     p.add_argument("event")
     p = sub.add_parser("join", help="register this session")

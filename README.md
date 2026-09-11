@@ -225,18 +225,18 @@ Claude の drop-in は共通 Codex ルールへ自動変換しません。
 `agent_coord` は、同じ OS ユーザーで動く Claude Code / Codex などの agent session を横断して
 調整する、ホスト単位の CLI + daemon + MCP アダプタです。session 一覧、project/repo/all scope の
 メッセージング、排他的な resource lock、worktree の所有権を 1 つの ledger（SQLite,
-`~/.local/state/agent_coord/`）に集約します。CLI 本体は基本セットアップで `/usr/local/bin/` に
-配置済みですが、Claude Code から MCP・hooks として使うにはプラグインの導入が別途必要です。
+`~/.local/state/agent_coord/`）に集約します。基本セットアップが以下を配置するため、追加の導入手順はありません。
 
-    $ claude plugin marketplace add <このリポジトリのパス>
-    $ claude plugin install agent-coord@terminal-configs
+| 構成要素 | 配置 |
+|---|---|
+| CLI / daemon / MCP アダプタ本体 | `/usr/local/bin/agent_coord` |
+| Claude Code hooks（session 参加・未読通知・claim した worktree 外での編集拒否） | `/etc/claude-code/managed-settings.d/extensions.json` |
+| Claude Code MCP server `agent_coord` | `install_claude_extensions` が user scope に登録 |
+| skill `agent-coord`（LLM 向けの使い方） | `/etc/claude-code/skills/agent-coord/` |
+| Codex MCP server `agent_coord` | `/etc/codex/config.toml` |
 
-導入すると hooks が session 参加・未読通知・claim した worktree 外での編集拒否を自動で行い、
-MCP 経由で send/catchup/acquire/worktree などの tool が使えます。人間が状況を見るだけなら
+daemon は hooks / MCP アダプタから自動起動します。人間が状況を見るだけなら
 `agent_coord status` / `agent_coord watch` で足ります（LLM 不要）。
-
-Codex 側は `files/codex_config.toml`（配置先 `/etc/codex/config.toml`）に既定で
-`[mcp_servers.agent_coord]`（`command = "agent_coord"`, `args = ["mcp"]`）が入っており、追加設定は不要です。
 
 
 ## 追加セットアップの内容

@@ -1,6 +1,0 @@
-{
-  "name": "agent-coord",
-  "version": "0.1.0",
-  "description": "Session ledger for agents on this host: messaging with project/repo scopes, resource locks, worktree ownership.",
-  "author": { "name": "terminal-configs" }
-}

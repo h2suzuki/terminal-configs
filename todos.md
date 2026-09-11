@@ -57,17 +57,17 @@ git 履歴 (`git log -p -- todos.md`) と Work file にあり、ここには書�
 
 ## High
 
-### agent_coord (session 台帳 plugin) を host に配備し 2 環境で疎通させる
+### agent_coord (session 台帳) を host に配備し 2 環境で疎通させる
 
 起票: fable-5 2026-09-10
-Goal: 実装済みの agent_coord (daemon / CLI / MCP adapter / Claude Code plugin) を host 側に配備し、Claude Code と Codex の 2 環境から同じ台帳に参加して連絡・資源取得・引き継ぎが通ることを確認する。
+Goal: 実装済みの agent_coord (daemon / CLI / MCP adapter / Claude Code hooks) を host 側に配備し、Claude Code と Codex の 2 環境から同じ台帳に参加して連絡・資源取得・引き継ぎが通ることを確認する。
 Exit Criteria:
-- [ ] `/usr/local/bin/agent_coord` と managed settings の `excludedCommands` (`agent_coord *`) が deploy され、Bash から `agent_coord doctor` が host daemon に接続する
-- [ ] plugin `agent-coord@terminal-configs` を install した新規 Claude Code session で、SessionStart hook の join 文と `mcp__plugin_agent-coord_coord__*` tool が使える
+- [ ] `/usr/local/bin/agent_coord`、managed extensions.json の hooks、managed settings の `excludedCommands` (`agent_coord *`) が deploy され、Bash から `agent_coord doctor` が host daemon に接続する
+- [ ] `install_claude_extensions` 実行後の新規 Claude Code session で、SessionStart hook の join 文と `mcp__agent_coord__*` tool が使える
 - [ ] Codex session (`[mcp_servers.agent_coord]`) から同じ daemon に join し、Claude Code session と send / catchup / acquire 競合 / worktree transfer→accept (検証シナリオ V12) が通る
-- [ ] 上記の実測 (idle / busy / 再接続時に nudge が届くタイミング) を REQUIREMENTS_AND_DESIGN.ja.md 第 11 章の対応表に記録する
-Work file: REQUIREMENTS_AND_DESIGN.ja.md (第 11 章 実装判断), files/agent_coord.test.py (V1-V11 の単体テスト)
-sandbox からは `~/.claude/plugins` と `/usr/local/bin` に書けないため、install / deploy は host 端末で行う (手順は README の agent_coord 節)。
+- [ ] 上記の実測 (idle / busy / 再接続時に nudge が届くタイミング) を REQUIREMENTS_AND_DESIGN.ja.md (untracked、第 11 章) の対応表に記録する
+Work file: REQUIREMENTS_AND_DESIGN.ja.md (untracked、第 11 章 実装判断), files/agent_coord.test.py (V1-V11 の単体テスト)
+sandbox からは `/etc/claude-code` と `/usr/local/bin` に書けないため、deploy は host 端末で `ubuntu2404-wsl.sh` と `install_claude_extensions` を実行する。
 
 ### lessons-learned repo を public / private に分離する
 
