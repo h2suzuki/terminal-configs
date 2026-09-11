@@ -234,7 +234,7 @@ Claude の drop-in は共通 Codex ルールへ自動変換しません。
 | Claude Code・Codex 用 plugin bundle（client 別の manifest・hooks・MCP 宣言と共通 skill） | `/usr/local/share/agent_plugins/agent-coord/` |
 | Antigravity 用 plugin bundle（Antigravity の hooks / mcp_config 形式） | `/usr/local/share/agent_plugins/agent-coord-antigravity/` |
 | Claude Code への導入 | `install_claude_extensions` が marketplace 登録と `agent-coord@terminal-configs` の install を行う |
-| Codex への導入 | 同 script が `codex plugin marketplace add` と `codex plugin add agent-coord` を行う |
+| Codex への導入 | 同 script が `codex plugin marketplace add` と `codex plugin add agent-coord@terminal-configs` を行う |
 | Antigravity への導入 | 同 script が `agy plugin install` で専用 bundle を取り込む（`agy` がある環境のみ） |
 
 連絡は投稿時に宛先ごとの inbox へ配送され、受信側の ack で消えます。未読が生じると、Claude Code
