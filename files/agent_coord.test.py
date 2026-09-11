@@ -268,6 +268,36 @@ class CoordTest(unittest.TestCase):
             call("send", sid="a", to="repo", text="later")["seq"], last_seq + 1
         )
 
+    def test_backfill_never_repeats_a_delivery_and_is_marked(self):
+        """F2 (use case): a rejoin gets the last hour it missed while away, flagged backfill; acked and pending entries are not delivered twice."""
+        a, _ = self.join("a", self.repo)
+        b, _ = self.join("b", self.wt)
+        seen = b.call("send", sid="b", to="repo", text="seen before leaving")["seq"]
+        a.call("ack", sid="a", through=seen)
+        b.call("send", sid="b", to="repo", text="pending when leaving")
+        a.call("leave", sid="a")
+        b.call("send", sid="b", to="repo", text="posted while away")
+        _, rejoined = self.join("a", self.repo)
+        self.assertEqual(rejoined["unread"], 2)
+        events = a.call("catchup", sid="a")["events"]
+        self.assertEqual(
+            [(e["body"]["text"], e.get("backfill", False)) for e in events],
+            [("pending when leaving", False), ("posted while away", True)],
+        )
+        _, again = self.join("a", self.repo)  # a second join adds nothing
+        self.assertEqual(again["unread"], 2)
+        a.call("ack", sid="a", through=events[-1]["seq"])
+        self.assertEqual(a.call("peek", sid="a")["unread"], 0)
+        history = self.daemon.client().call("history", all=True)["events"]
+        self.assertEqual(
+            [e["kind"] for e in history if e["actor"] == "a"],
+            [
+                "join",
+                "leave",
+                "join",
+            ],  # the rejoin is announced once; the idle re-join is not
+        )
+
     def test_resolving_your_own_request_does_not_notify_yourself(self):
         """F3: the requester's own resolve goes to the request's addressees, never back to the requester."""
         a, _ = self.join("a", self.repo)

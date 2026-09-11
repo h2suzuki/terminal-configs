@@ -249,12 +249,12 @@ CREATE TABLE IF NOT EXISTS requests(
   subject TEXT, body TEXT, state TEXT, result TEXT, resolved_by TEXT, resolved_at REAL,
   created_at REAL);
 CREATE TABLE IF NOT EXISTS idempotency(key TEXT PRIMARY KEY, response TEXT, ts REAL);
-CREATE TABLE IF NOT EXISTS inbox(sid TEXT, seq INTEGER, PRIMARY KEY(sid, seq));
+CREATE TABLE IF NOT EXISTS inbox(sid TEXT, seq INTEGER, backfill INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(sid, seq));
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value INTEGER);
 """
 
 EVENT_TTL = 24 * 3600  # an undelivered event outlives any real session by then
-JOIN_BACKFILL = 3600  # a newcomer sees the last hour of talk addressed to its scopes
+JOIN_BACKFILL = 3600  # a joiner catches up on the last hour of talk on its scopes
 
 # Persisted column order per table; the in-memory rows carry exactly these keys.
 COLUMNS = {
@@ -314,9 +314,14 @@ class Store:
         meta = self.db.execute("SELECT value FROM meta WHERE key='last_seq'").fetchone()
         self._last_seq = max(meta[0] if meta else 0, self.max_seq())
         self._inbox: dict[str, list[int]] = {}
-        for r in self.db.execute("SELECT sid, seq FROM inbox ORDER BY seq"):
+        self._backfilled: set[tuple[str, int]] = (
+            set()
+        )  # (sid, seq) delivered by a join, not a post
+        for r in self.db.execute("SELECT sid, seq, backfill FROM inbox ORDER BY seq"):
             if r["seq"] in self._by_seq:
                 self._inbox.setdefault(r["sid"], []).append(r["seq"])
+                if r["backfill"]:
+                    self._backfilled.add((r["sid"], r["seq"]))
         self._waiters: dict[str, list[str]] = {}
         for r in self.db.execute("SELECT key, sid FROM waiters ORDER BY rowid"):
             self._waiters.setdefault(r["key"], []).append(r["sid"])
@@ -444,13 +449,29 @@ class Store:
             and self.visible(event, s)
         ]
 
-    def _deliver(self, sid: str, seq: int) -> None:
+    def _deliver(self, sid: str, seq: int, backfill: bool = False) -> None:
         seqs = self._inbox.setdefault(sid, [])
         if seq not in seqs:
             bisect.insort(seqs, seq)
+            if backfill:
+                self._backfilled.add((sid, seq))
             self.db.execute(
-                "INSERT OR IGNORE INTO inbox(sid, seq) VALUES(?,?)", (sid, seq)
+                "INSERT OR IGNORE INTO inbox(sid, seq, backfill) VALUES(?,?,?)",
+                (sid, seq, int(backfill)),
             )
+
+    def _backfill(self, session: Json) -> None:
+        """Deliver the last hour of the joiner's scopes, skipping anything it already got or acked."""
+        sid = session["sid"]
+        since = now() - JOIN_BACKFILL
+        for event in self.events_after(session["cursor"]):
+            if (
+                event["ts"] >= since
+                and event["scope_kind"] != "session"
+                and event["seq"] not in self._inbox.get(sid, [])
+                and sid in self._recipients(event)
+            ):
+                self._deliver(sid, event["seq"], backfill=True)
 
     def events_after(self, seq: int) -> list[Json]:
         start = bisect.bisect_right(self._events, seq, key=lambda e: e["seq"])
@@ -533,9 +554,16 @@ class Store:
         self, session: Json, limit: int | None = None
     ) -> tuple[list[Json], bool]:
         """This session's undelivered inbox in seq order, capped at limit."""
-        seqs = self._inbox.get(session["sid"], [])
+        sid = session["sid"]
+        seqs = self._inbox.get(sid, [])
         more = limit is not None and len(seqs) > limit
-        return [self._by_seq[q] for q in (seqs[:limit] if more else seqs)], more
+        events = [
+            {**self._by_seq[q], "backfill": True}
+            if (sid, q) in self._backfilled
+            else self._by_seq[q]
+            for q in (seqs[:limit] if more else seqs)
+        ]
+        return events, more
 
     # -- idempotency
     def replay(self, key: str | None) -> Json | None:
@@ -557,6 +585,7 @@ class Store:
         sid = p.get("sid") or f"anon-{short_id()}"
         identity = git_identity(p.get("cwd") or os.getcwd())
         existing = self.session(sid)
+        rejoin = bool(existing and existing["left_at"])
         ts = now()
         name = (
             p.get("name")
@@ -574,7 +603,7 @@ class Store:
             "edit_worktree": None,
             "model": None,
             "joined_at": ts,
-            "cursor": self._last_seq,
+            "cursor": 0,  # nothing acked yet; the backfill decides what a newcomer sees
             "notified": 0,
         }
         for key in ("client", "native_id", "task", "model"):
@@ -589,18 +618,12 @@ class Store:
         )
         self._sessions[sid] = session
         self._save("sessions", session)
+        self._backfill(session)
         if not existing:
-            for event in self._events:  # the last hour of talk on the newcomer's scopes
-                if (
-                    event["ts"] >= ts - JOIN_BACKFILL
-                    and event["scope_kind"] != "session"
-                    and sid in self._recipients(event)
-                ):
-                    self._deliver(sid, event["seq"])
             self.append_event(
                 "join", sid, ("all", ""), {"name": name, "client": p.get("client")}
             )
-        elif existing["left_at"]:
+        elif rejoin:
             self.append_event("join", sid, ("all", ""), {"name": name, "rejoin": True})
         return {"session": public_session(session), **self.snapshot(session)}
 
@@ -735,6 +758,9 @@ class Store:
         sid = session["sid"]
         if any(q <= through for q in self._inbox.get(sid, [])):
             self._inbox[sid] = [q for q in self._inbox[sid] if q > through]
+            self._backfilled -= {
+                (s, q) for (s, q) in self._backfilled if s == sid and q <= through
+            }
             self.db.execute("DELETE FROM inbox WHERE sid=? AND seq<=?", (sid, through))
         session["cursor"] = max(session["cursor"], through)
         self._save("sessions", session)

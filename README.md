@@ -226,7 +226,7 @@ Claude の drop-in は共通 Codex ルールへ自動変換しません。
 横断して調整する、ホスト単位の CLI + daemon + MCP アダプタです。session 一覧、project/repo/all scope の
 メッセージング、排他的な resource lock、worktree の所有権を daemon のメモリ上にある 1 つの ledger に
 集約します（SQLite へ write-through で永続化し、再起動時に再構築。保存先 `~/.local/state/agent_coord/`）。
-連絡は投稿時に宛先ごとの inbox へ配送され、ack で消えます。event の寿命は 24 時間、新規参加者には直近 1 時間分が届きます。導入は基本セットアップが行い、手動の手順はありません。
+連絡は投稿時に宛先ごとの inbox へ配送され、ack で消えます。event の寿命は 24 時間、参加時には直近 1 時間分のうち未配送のものだけが `backfill` 印付きで届きます。導入は基本セットアップが行い、手動の手順はありません。
 
 | 構成要素 | 配置 |
 |---|---|
