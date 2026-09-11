@@ -62,10 +62,10 @@ git 履歴 (`git log -p -- todos.md`) と Work file にあり、ここには書�
 起票: fable-5 2026-09-10
 Goal: 再実装済みの agent_coord (daemon / CLI / MCP adapter / client 別 hooks) を host 側に配備し、Claude Code と Codex の 2 環境から同じ台帳に参加して連絡・起こし通知・資源取得・引き継ぎが通ることを確認する。
 Exit Criteria:
-- [ ] `/usr/local/bin/agent_coord`、managed extensions.json の hooks、managed settings の `excludedCommands` (`agent_coord *`) が deploy され、Bash から `agent_coord doctor` が host daemon に接続する
+- [x] `/usr/local/bin/agent_coord` と managed settings の `excludedCommands` (`agent_coord *`) が deploy され、sandbox の Bash から `agent_coord doctor` が host daemon (0.2.0) に接続した (2026-09-11 実測)
 - [ ] `install_claude_extensions` 実行後の新規 Claude Code session で、SessionStart hook の join 文と plugin 由来の agent_coord MCP tool が使える
 - [ ] Codex session (plugin `agent-coord` の mcp.json / hooks) から同じ daemon に join し、Claude Code session と send / catchup / acquire 競合 / worktree transfer→accept (検証シナリオ V12) が通る
-- [ ] idle の Claude Code session が inbox socket 経由で、Codex session が `codex queue` 経由で起きることを実測し、REQUIREMENTS_AND_DESIGN.ja.md (untracked、第 11 章) の対応表に記録する
+- [ ] idle の Claude Code session が inbox socket 経由で、Codex session が `codex queue` 経由で起きることを実測し、REQUIREMENTS_AND_DESIGN.ja.md (untracked、第 11 章) の対応表に記録する (busy な Claude Code session への push と PostToolUse hook の注入は 2026-09-11 に実測済み)
 - [ ] Antigravity session で hooks が発火し、編集 tool の path 引数名が `TargetFile` 系で合っているかを確認する
 Work file: REQUIREMENTS_AND_DESIGN.ja.md (untracked、第 11 章 実装判断), files/agent_coord.test.py (要件 claim 単位の test 46 件)
 sandbox からは `/etc/claude-code` と `/usr/local/bin` に書けないため、deploy は host 端末で `ubuntu2404-wsl.sh` と `install_claude_extensions` を実行する。
