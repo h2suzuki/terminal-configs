@@ -1882,8 +1882,10 @@ def hook_main(event_name: str, stdin: TextIO, stdout: TextIO) -> int:
         payload = json.loads(stdin.read() or "{}")
     except (json.JSONDecodeError, ValueError):
         payload = {}
-    native = payload.get("session_id") or os.environ.get("CLAUDE_CODE_SESSION_ID")
-    sid = f"cc-{native}" if native else detect_sid()
+    client_name = detect_client()
+    native = payload.get("session_id") or native_id()
+    prefix = "codex" if client_name == "codex" else "cc"
+    sid = f"{prefix}-{native}" if native else detect_sid()
     if not sid:
         return 0
     cwd = payload.get("cwd") or os.getcwd()
@@ -1895,7 +1897,7 @@ def hook_main(event_name: str, stdin: TextIO, stdout: TextIO) -> int:
     try:
         if event_name == "SessionStart":
             joined = client.call(
-                "join", sid=sid, client="claude-code", native_id=native, cwd=cwd
+                "join", sid=sid, client=client_name, native_id=native, cwd=cwd
             )
             peers = ", ".join(p["name"] for p in joined["peers_same_project"]) or "none"
             emit_hook(

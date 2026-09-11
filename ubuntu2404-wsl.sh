@@ -110,6 +110,23 @@ copy_dir()
     done
 }
 
+copy_tree()
+{
+    # Like copy_dir, but dot entries come too (plugin manifests live in dot dirs)
+    DNAME=files/${1%%/}
+    DST=${2%%/}
+    shift 2
+
+    [ -e "$TOP_DIR/$DNAME" ] || { echo "Does not exist: $DNAME"; exit 1; }
+
+    rm -rf "$DST"
+    run install --directory "$@" "$DST"
+    for child in "$TOP_DIR/$DNAME"/* "$TOP_DIR/$DNAME"/.[!.]*; do
+        [ -e "$child" ] || continue   # empty source dir: glob stays literal
+        run cp -r --preserve=mode "$child" "$DST/"
+    done
+}
+
 
 
 
@@ -375,6 +392,7 @@ copy toolbox_bigquery_mcp           /usr/local/bin/toolbox_bigquery_mcp
 copy claude_court_guard             /usr/local/bin/claude_court_guard
 copy claude_mytask_mcp              /usr/local/bin/claude_mytask_mcp
 copy agent_coord                    /usr/local/bin/agent_coord
+copy_tree agent_plugins             /usr/local/share/agent_plugins/
 copy claude_lang_lint               /usr/local/bin/claude_lang_lint
 copy codex_task_sentinel            /usr/local/bin/codex_task_sentinel
 copy codex_order_lint               /usr/local/bin/codex_order_lint

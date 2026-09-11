@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "agent_coord": {
+      "type": "stdio",
+      "command": "agent_coord",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}

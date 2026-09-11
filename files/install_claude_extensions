@@ -217,9 +217,16 @@ run claude mcp add toolbox --scope user -- toolbox_bigquery_mcp
 claude mcp remove mytask --scope user
 run claude mcp add mytask --scope user -- claude_mytask_mcp
 
-# agent_coord MCP (host-wide session ledger; its hooks come with the managed extensions)
-claude mcp remove agent_coord --scope user
-run claude mcp add agent_coord --scope user -- agent_coord mcp
+# agent-coord plugin (host-wide session ledger; the CLI ships with the base setup)
+run claude plugin marketplace add /usr/local/share/agent_plugins
+run claude plugin install agent-coord@terminal-configs
+if command -v codex >/dev/null; then
+    run codex plugin marketplace add /usr/local/share/agent_plugins
+    run codex plugin add agent-coord
+fi
+if command -v agy >/dev/null; then
+    run agy plugin install /usr/local/share/agent_plugins/agent-coord
+fi
 
 # Vercel CLI
 run npm install -g @vercel/vc-native

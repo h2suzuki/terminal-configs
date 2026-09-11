@@ -1,0 +1,20 @@
+{
+  "name": "terminal-configs",
+  "interface": {
+    "displayName": "terminal-configs"
+  },
+  "plugins": [
+    {
+      "name": "agent-coord",
+      "source": {
+        "source": "local",
+        "path": "./agent-coord"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Coding"
+    }
+  ]
+}

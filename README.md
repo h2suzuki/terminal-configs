@@ -222,21 +222,22 @@ Claude の drop-in は共通 Codex ルールへ自動変換しません。
 
 ### 10. Agent 間協調（`agent_coord`）
 
-`agent_coord` は、同じ OS ユーザーで動く Claude Code / Codex などの agent session を横断して
-調整する、ホスト単位の CLI + daemon + MCP アダプタです。session 一覧、project/repo/all scope の
+`agent_coord` は、同じ OS ユーザーで動く Claude Code / Codex / Antigravity などの agent session を
+横断して調整する、ホスト単位の CLI + daemon + MCP アダプタです。session 一覧、project/repo/all scope の
 メッセージング、排他的な resource lock、worktree の所有権を 1 つの ledger（SQLite,
-`~/.local/state/agent_coord/`）に集約します。基本セットアップが以下を配置するため、追加の導入手順はありません。
+`~/.local/state/agent_coord/`）に集約します。導入は基本セットアップが行い、手動の手順はありません。
 
 | 構成要素 | 配置 |
 |---|---|
 | CLI / daemon / MCP アダプタ本体 | `/usr/local/bin/agent_coord` |
-| Claude Code hooks（session 参加・未読通知・claim した worktree 外での編集拒否） | `/etc/claude-code/managed-settings.d/extensions.json` |
-| Claude Code MCP server `agent_coord` | `install_claude_extensions` が user scope に登録 |
-| skill `agent-coord`（LLM 向けの使い方） | `/etc/claude-code/skills/agent-coord/` |
-| Codex MCP server `agent_coord` | `/etc/codex/config.toml` |
+| plugin bundle（MCP server・hooks・skill を 1 つの directory で 3 種の CLI に共用） | `/usr/local/share/agent_plugins/agent-coord/` |
+| Claude Code への導入 | `install_claude_extensions` が marketplace 登録と `agent-coord@terminal-configs` の install を行う |
+| Codex への導入 | 同 script が `codex plugin marketplace add` と `codex plugin add agent-coord` を行う |
+| Antigravity への導入 | 同 script が `agy plugin install` で bundle を取り込む（`agy` がある環境のみ） |
 
-daemon は hooks / MCP アダプタから自動起動します。人間が状況を見るだけなら
-`agent_coord status` / `agent_coord watch` で足ります（LLM 不要）。
+hooks が session 参加・未読通知・claim した worktree 外での編集拒否を自動で行い、MCP 経由で
+send/catchup/acquire/worktree などの tool が使えます。daemon は hooks / MCP アダプタから自動起動します。
+人間が状況を見るだけなら `agent_coord status` / `agent_coord watch` で足ります（LLM 不要）。
 
 
 ## 追加セットアップの内容
