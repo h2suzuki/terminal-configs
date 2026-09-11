@@ -224,21 +224,26 @@ Claude の drop-in は共通 Codex ルールへ自動変換しません。
 
 `agent_coord` は、同じ OS ユーザーで動く Claude Code / Codex / Antigravity などの agent session を
 横断して調整する、ホスト単位の CLI + daemon + MCP アダプタです。session 一覧、project/repo/all scope の
-メッセージング、排他的な resource lock、worktree の所有権を daemon のメモリ上にある 1 つの ledger に
+メッセージング、排他的な resource grant、worktree の所有権を daemon のメモリ上にある 1 つの ledger に
 集約します（SQLite へ write-through で永続化し、再起動時に再構築。保存先 `~/.local/state/agent_coord/`）。
-連絡は投稿時に宛先ごとの inbox へ配送され、ack で消えます。event の寿命は 24 時間、参加時には直近 1 時間分のうち未配送のものだけが `backfill` 印付きで届きます。導入は基本セットアップが行い、手動の手順はありません。
+導入は基本セットアップが行い、手動の手順はありません。
 
 | 構成要素 | 配置 |
 |---|---|
-| CLI / daemon / MCP アダプタ本体 | `/usr/local/bin/agent_coord` |
-| plugin bundle（MCP server・hooks・skill を 1 つの directory で 3 種の CLI に共用） | `/usr/local/share/agent_plugins/agent-coord/` |
+| CLI / daemon / MCP アダプタ / hooks 本体 | `/usr/local/bin/agent_coord` |
+| Claude Code・Codex 用 plugin bundle（client 別の manifest・hooks・MCP 宣言と共通 skill） | `/usr/local/share/agent_plugins/agent-coord/` |
+| Antigravity 用 plugin bundle（Antigravity の hooks / mcp_config 形式） | `/usr/local/share/agent_plugins/agent-coord-antigravity/` |
 | Claude Code への導入 | `install_claude_extensions` が marketplace 登録と `agent-coord@terminal-configs` の install を行う |
 | Codex への導入 | 同 script が `codex plugin marketplace add` と `codex plugin add agent-coord` を行う |
-| Antigravity への導入 | 同 script が `agy plugin install` で bundle を取り込む（`agy` がある環境のみ） |
+| Antigravity への導入 | 同 script が `agy plugin install` で専用 bundle を取り込む（`agy` がある環境のみ） |
 
-hooks が session 参加・未読通知・claim した worktree 外での編集拒否を自動で行い、MCP 経由で
-send/catchup/acquire/worktree などの tool が使えます。daemon は hooks / MCP アダプタから自動起動します。
-人間が状況を見るだけなら `agent_coord status` / `agent_coord watch` で足ります（LLM 不要）。
+連絡は投稿時に宛先ごとの inbox へ配送され、受信側の ack で消えます。未読が生じると、Claude Code
+session には inbox socket 経由、Codex session には `codex queue` 経由で一度だけ起こしに行き、
+Antigravity は hooks による pull のみです。どの client でも hooks が session 参加・未読注入・claim した
+worktree 外への編集拒否を行い、MCP 経由で send/catchup/acquire/worktree などの tool が使えます。
+daemon は hooks / MCP アダプタから自動起動します。人間が状況を見るだけなら `agent_coord status` /
+`agent_coord watch` で足り、`agent_coord doctor` が接続・session・通知・強制・sandbox の各能力を
+分けて表示します（LLM 不要）。
 
 
 ## 追加セットアップの内容

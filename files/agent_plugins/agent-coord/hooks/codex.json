@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "agent_coord hook --client claude-code SessionStart",
+            "command": "agent_coord hook --client codex SessionStart",
             "timeout": 10
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "agent_coord hook --client claude-code SessionEnd",
+            "command": "agent_coord hook --client codex SessionEnd",
             "timeout": 10
           }
         ]
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "agent_coord hook --client claude-code UserPromptSubmit",
+            "command": "agent_coord hook --client codex UserPromptSubmit",
             "timeout": 10
           }
         ]
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "agent_coord hook --client claude-code PostToolUse",
+            "command": "agent_coord hook --client codex PostToolUse",
             "timeout": 10
           }
         ]
@@ -47,11 +47,11 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "^(Write|Edit|MultiEdit|NotebookEdit)$",
+        "matcher": "apply_patch|Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "agent_coord hook --client claude-code PreToolUse",
+            "command": "agent_coord hook --client codex PreToolUse",
             "timeout": 10
           }
         ]

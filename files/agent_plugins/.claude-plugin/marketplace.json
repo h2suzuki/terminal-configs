@@ -10,8 +10,8 @@
   "plugins": [
     {
       "name": "agent-coord",
-      "description": "Session ledger for agents on this host: messaging with project/repo scopes, resource locks, worktree ownership.",
-      "version": "0.1.0",
+      "description": "Session ledger for agents on this host: scoped messaging, resource grants, worktree ownership.",
+      "version": "0.2.0",
       "source": "./agent-coord"
     }
   ]

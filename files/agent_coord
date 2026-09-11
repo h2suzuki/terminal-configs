@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
-"""Coordinate agent sessions on one host: ledger daemon, stdio MCP adapter, CLI, hooks."""
+"""agent_coord: one coordinator per OS user for the agent sessions on this host.
+
+Layers, top to bottom:
+  clients      per-client adapters (Claude Code / Codex / Antigravity / plain CLI): identity,
+               hook payload parsing, hook output shape, the wake channel, enforcement level
+  Coordinator  lock + git facts resolved outside the lock + Journal write-through +
+               post-commit fan-out to stream subscribers and the wake thread
+  Ledger       pure in-memory state and every rule (sessions, per-recipient deliveries,
+               resources, worktrees, requests, replay records); no I/O, injected clock
+  Journal      SQLite: write-through of changed rows, full reload at start / rollback
+  transport    newline JSON-RPC over a Unix socket; Client; MCP stdio adapter; hooks; CLI
+"""
 
 from __future__ import annotations
 
@@ -12,7 +23,6 @@ import os
 import queue
 import re
 import secrets
-import select
 import socket
 import socketserver
 import sqlite3
@@ -20,12 +30,17 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, TextIO, cast
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 MCP_PROTOCOL_VERSION = "2025-11-25"
+EVENT_TTL = 24 * 3600  # undelivered talk outlives any real session by then
+JOIN_BACKFILL = 3600  # a newcomer sees the last hour on its scopes
+REPLAY_TTL = 3600  # how long a lost reply can still be retried by id
 NOTIFY_KINDS = frozenset(
     {
         "message",
@@ -36,7 +51,6 @@ NOTIFY_KINDS = frozenset(
         "force_release",
         "transfer_propose",
         "transfer_accept",
-        "transfer_cancel",
         "worktree_force_release",
     }
 )
@@ -48,7 +62,7 @@ Json = dict[str, Any]
 
 
 class CoordError(Exception):
-    """Error carrying a JSON-RPC style code."""
+    """Error carrying a JSON-RPC style code; keep=True commits side effects recorded before it."""
 
     def __init__(
         self, message: str, code: int = -32000, data: object = None, keep: bool = False
@@ -56,18 +70,16 @@ class CoordError(Exception):
         super().__init__(message)
         self.code = code
         self.data = data
-        self.keep = (
-            keep  # commit side effects recorded before the refusal (e.g. waiter rows)
-        )
+        self.keep = keep
 
 
-# ---------------------------------------------------------------- paths
+# ---------------------------------------------------------------- paths / time
 
 
 def coord_home() -> Path:
     override = os.environ.get("AGENT_COORD_HOME")
     if override:
-        return Path(override).expanduser()
+        return Path(override)
     state = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
     return Path(state) / "agent_coord"
 
@@ -76,28 +88,66 @@ def sock_path() -> Path:
     return coord_home() / "coord.sock"
 
 
-def now() -> float:
-    return time.time()
+def worktree_root() -> Path:
+    return Path(
+        os.environ.get("AGENT_COORD_WORKTREE_ROOT") or os.path.expanduser("~/worktrees")
+    )
 
 
 def fmt_time(ts: float | None) -> str:
     return datetime.fromtimestamp(ts).strftime("%m-%d %H:%M") if ts else "-"
 
 
-def fmt_ago(ts: float | None, ref: float | None = None) -> str:
+def fmt_ago(ts: float | None, ref: float) -> str:
     if not ts:
         return "-"
-    delta = int((ref or now()) - ts)
-    if delta < 60:
-        return f"{delta}s"
-    if delta < 3600:
-        return f"{delta // 60}m"
-    if delta < 86400:
-        return f"{delta // 3600}h"
-    return f"{delta // 86400}d"
+    delta = max(0, int(ref - ts))
+    if delta >= 3600:
+        return f"{delta // 3600} hr {delta % 3600 // 60} min"
+    if delta >= 60:
+        return f"{delta // 60} min"
+    return f"{delta} sec"
 
 
-# ---------------------------------------------------------------- git identity
+def short_id() -> str:
+    return secrets.token_hex(4)
+
+
+def canon_path(value: object) -> str:
+    return os.path.realpath(os.path.expanduser(str(value or "")))
+
+
+def path_within(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip("/") + "/")
+
+
+def required(p: Json, key: str, label: str) -> str:
+    value = str(p.get(key) or "").strip()
+    if not value:
+        raise CoordError(f"{label} required", -32602)
+    return value
+
+
+def rpc_result(req_id: object, result: Json) -> Json:
+    return {"jsonrpc": "2.0", "id": req_id, "result": result}
+
+
+def rpc_error(req_id: object, code: int, message: str, data: object = None) -> Json:
+    error: Json = {"code": code, "message": message}
+    if data is not None:
+        error["data"] = data
+    return {"jsonrpc": "2.0", "id": req_id, "error": error}
+
+
+def json_line(message: Json) -> str:
+    return json.dumps(message, ensure_ascii=False) + "\n"
+
+
+def pretty(result: Json) -> str:
+    return json.dumps(result, ensure_ascii=False, indent=2, default=str)
+
+
+# ---------------------------------------------------------------- git facts (never under the lock)
 
 
 def run_git(args: list[str], cwd: str | None = None) -> tuple[int, str, str]:
@@ -107,27 +157,27 @@ def run_git(args: list[str], cwd: str | None = None) -> tuple[int, str, str]:
             cwd=cwd,
             capture_output=True,
             text=True,
-            check=False,
             timeout=30,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError) as error:
-        return 127, "", str(error)
+        return 1, "", str(error)
     return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
 
 
 def normalize_remote(url: str) -> str:
-    """Reduce a remote URL to host/path so every clone of a project shares one key."""
-    value = url.strip()
-    value = re.sub(r"^[a-z+]+://", "", value)
-    value = re.sub(r"^[^@/]+@", "", value)
-    value = value.replace(":", "/", 1) if "/" not in value.split("/", 1)[0] else value
-    value = re.sub(r"\.git/?$", "", value).rstrip("/")
-    host, _, path = value.partition("/")
+    """Project key: host/path, case-folded host, no scheme / user / .git."""
+    text = url.strip()
+    text = re.sub(r"^[a-z+]+://", "", text)
+    text = re.sub(r"^[^@/]+@", "", text)
+    text = text.replace(":", "/", 1) if re.match(r"^[^/]+:[^/]", text) else text
+    host, _, path = text.partition("/")
+    path = path.rstrip("/")
+    path = path[:-4] if path.endswith(".git") else path
     return f"{host.lower()}/{path}"
 
 
 def git_identity(cwd: str) -> Json:
-    """Describe where cwd sits: repo (common dir), checkout, branch, project key."""
     identity: Json = {
         "cwd": cwd,
         "common_dir": None,
@@ -187,60 +237,288 @@ def list_worktrees(common_dir: str) -> list[Json]:
     return items
 
 
-def path_within(path: str, root: str) -> bool:
-    return path == root or path.startswith(root.rstrip("/") + "/")
+def resolve_commit(repo_top: str, ref: str) -> str | None:
+    if ref.startswith("-"):
+        raise CoordError(f"ref {ref!r} looks like an option", -32602)
+    code, sha, _ = run_git(
+        [
+            "-C",
+            repo_top,
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            f"{ref}^{{commit}}",
+        ]
+    )
+    return sha if code == 0 and sha else None
 
 
-def canon_path(value: object) -> str:
-    return os.path.realpath(os.path.expanduser(str(value or "")))
+# ---------------------------------------------------------------- clients
 
 
-def required(p: Json, key: str, label: str) -> str:
-    value = str(p.get(key) or "").strip()
-    if not value:
-        raise CoordError(f"{label} required", -32602)
-    return value
+@dataclass
+class Identity:
+    client: str
+    native_id: str | None
+    cwd: str
 
 
-def short_id() -> str:
-    return secrets.token_hex(4)
+CLIENT_PREFIX = {"claude-code": "cc", "codex": "codex", "antigravity": "agy"}
 
 
-def rpc_result(req_id: object, result: Json) -> Json:
-    return {"jsonrpc": "2.0", "id": req_id, "result": result}
+def session_id_for(client: str, native_id: str) -> str:
+    return f"{CLIENT_PREFIX.get(client, client)}-{native_id}"
 
 
-def rpc_error(req_id: object, code: int, message: str, data: object = None) -> Json:
-    error: Json = {"code": code, "message": message}
-    if data is not None:
-        error["data"] = data
-    return {"jsonrpc": "2.0", "id": req_id, "error": error}
+class ClientAdapter:
+    """What differs per agent CLI; everything else is shared. Base = plain CLI / unknown."""
+
+    name = "cli"
+    notify = "pull"  # push: a wake channel exists; pull: hooks / polling only
+    enforcement = "advisory"  # enforced: the edit gate is a verified hard stop
+    edit_tools: frozenset[str] = frozenset()
+
+    def identity_from_env(self, env: dict[str, str]) -> Identity | None:
+        return None
+
+    def wake(self, session: Json, text: str) -> bool:
+        return False
+
+    def hook_native(self, payload: Json) -> str | None:
+        return payload.get("session_id")
+
+    def hook_cwd(self, payload: Json) -> str | None:
+        return payload.get("cwd")
+
+    def hook_edit_paths(self, payload: Json) -> list[str]:
+        if payload.get("tool_name") not in self.edit_tools:
+            return []
+        tool_input = payload.get("tool_input") or {}
+        target = tool_input.get("file_path") or tool_input.get("notebook_path")
+        return [str(target)] if target else []
+
+    def hook_context(self, event: str, text: str) -> Json:
+        return {
+            "hookSpecificOutput": {"hookEventName": event, "additionalContext": text}
+        }
+
+    def hook_deny(self, event: str, reason: str) -> Json:
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": event,
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }
+        }
+
+    def hook_silence(self, event: str) -> Json | None:
+        return None
+
+    def hook_role(self, event: str) -> str:
+        return {"SessionStart": "start", "SessionEnd": "end", "PreToolUse": "gate"}.get(
+            event, "nudge"
+        )
 
 
-def json_line(message: Json) -> str:
-    return json.dumps(message, ensure_ascii=False) + "\n"
+class ClaudeCodeAdapter(ClientAdapter):
+    name = "claude-code"
+    notify = "push"
+    enforcement = "enforced"
+    edit_tools = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
+
+    def identity_from_env(self, env: dict[str, str]) -> Identity | None:
+        if not (env.get("CLAUDECODE") or env.get("CLAUDE_CODE_SESSION_ID")):
+            return None
+        return Identity(
+            self.name,
+            env.get("CLAUDE_CODE_SESSION_ID") or None,
+            env.get("CLAUDE_PROJECT_DIR") or os.getcwd(),
+        )
+
+    @staticmethod
+    def registry_dir() -> Path:
+        return Path(
+            os.environ.get("AGENT_COORD_CLAUDE_REGISTRY")
+            or os.path.expanduser("~/.claude/sessions")
+        )
+
+    def inbox(self, native_id: str) -> tuple[str, str | None] | None:
+        """The session's inbox socket and auth key from the registry Claude Code publishes."""
+        directory = self.registry_dir()
+        try:
+            names = sorted(os.listdir(directory))
+        except OSError:
+            return None
+        for name in names:
+            if not name.endswith(".json"):
+                continue
+            try:
+                with open(directory / name, encoding="utf-8") as stream:
+                    record = json.load(stream)
+            except (OSError, ValueError):
+                continue
+            if record.get("sessionId") != native_id or not record.get(
+                "messagingSocketPath"
+            ):
+                continue
+            stem = name[: -len(".json")]
+            token = None
+            for candidate in names:
+                if candidate.startswith(stem + ".") and candidate.endswith(".key"):
+                    try:
+                        token = (
+                            (directory / candidate).read_text(encoding="utf-8").strip()
+                        )
+                    except OSError:
+                        token = None
+            return str(record["messagingSocketPath"]), token
+        return None
+
+    def wake(self, session: Json, text: str) -> bool:
+        found = self.inbox(session["native_id"] or "")
+        if not found:
+            return False
+        path, token = found
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.settimeout(5)
+            sock.connect(path)
+            if token:
+                sock.sendall(json_line({"type": "auth", "token": token}).encode())
+            message = {"type": "user", "message": {"role": "user", "content": text}}
+            sock.sendall(json_line(message).encode())
+            return True
+        except OSError:
+            return False
+        finally:
+            sock.close()
 
 
-def pretty(result: Json) -> str:
-    return json.dumps(result, ensure_ascii=False, indent=2, default=str)
+class CodexAdapter(ClientAdapter):
+    name = "codex"
+    notify = "push"
+    edit_tools = frozenset({"apply_patch", "Write", "Edit"})
+
+    def identity_from_env(self, env: dict[str, str]) -> Identity | None:
+        codex_env = any(k.startswith("CODEX_") or k == "PLUGIN_ROOT" for k in env)
+        if env.get("CLAUDECODE") or not codex_env:
+            return None
+        return Identity(self.name, env.get("CODEX_THREAD_ID") or None, os.getcwd())
+
+    def hook_edit_paths(self, payload: Json) -> list[str]:
+        if payload.get("tool_name") not in self.edit_tools:
+            return []
+        if payload.get("tool_name") != "apply_patch":
+            return super().hook_edit_paths(payload)
+        tool_input = payload.get("tool_input") or {}
+        paths = re.findall(
+            r"^\*\*\* (?:Update File|Add File|Delete File|Move to): (.+)$",
+            str(tool_input.get("command") or tool_input.get("patch") or ""),
+            flags=re.MULTILINE,
+        )
+        base = payload.get("cwd") or os.getcwd()
+        return [p if os.path.isabs(p) else os.path.join(base, p) for p in paths]
+
+    def wake(self, session: Json, text: str) -> bool:
+        if not session["native_id"]:
+            return False
+        try:
+            proc = subprocess.run(
+                ["codex", "queue", "--thread", session["native_id"], "--message", text],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return proc.returncode == 0
 
 
-# ---------------------------------------------------------------- store
+class AntigravityAdapter(ClientAdapter):
+    """Hooks speak Antigravity's schema: conversationId / workspacePaths / toolCall / decision."""
+
+    name = "antigravity"
+    edit_tools = frozenset(
+        {"write_to_file", "replace_file_content", "multi_replace_file_content"}
+    )
+    PATH_KEYS = ("TargetFile", "AbsolutePath", "target_file", "file_path", "path")
+
+    def hook_native(self, payload: Json) -> str | None:
+        return payload.get("conversationId")
+
+    def hook_cwd(self, payload: Json) -> str | None:
+        paths = payload.get("workspacePaths") or []
+        return str(paths[0]) if paths else None
+
+    def hook_edit_paths(self, payload: Json) -> list[str]:
+        call = payload.get("toolCall") or {}
+        if call.get("name") not in self.edit_tools:
+            return []
+        args = call.get("args") or {}
+        return [str(args[k]) for k in self.PATH_KEYS if args.get(k)]
+
+    def hook_context(self, event: str, text: str) -> Json:
+        return {"injectSteps": [{"ephemeralMessage": text}]}
+
+    def hook_deny(self, event: str, reason: str) -> Json:
+        return {"decision": "deny", "reason": reason}
+
+    def hook_silence(self, event: str) -> Json | None:
+        return {}
+
+    def hook_role(self, event: str) -> str:
+        return {"PreToolUse": "gate", "Stop": "end"}.get(event, "start-or-nudge")
+
+
+ADAPTERS: dict[str, ClientAdapter] = {
+    a.name: a for a in (ClaudeCodeAdapter(), CodexAdapter(), AntigravityAdapter())
+}
+GENERIC = ClientAdapter()
+
+
+def adapter_for(client: str | None) -> ClientAdapter:
+    return ADAPTERS.get(client or "", GENERIC)
+
+
+def identity_from_env(explicit_client: str | None = None) -> Identity:
+    env = dict(os.environ)
+    if explicit_client:
+        found = adapter_for(explicit_client).identity_from_env(env)
+        return found or Identity(explicit_client, None, os.getcwd())
+    if env.get("AGENT_COORD_CLIENT"):
+        return Identity(
+            env["AGENT_COORD_CLIENT"], env.get("AGENT_COORD_SID"), os.getcwd()
+        )
+    for adapter in ADAPTERS.values():
+        found = adapter.identity_from_env(env)
+        if found:
+            return found
+    return Identity("cli", env.get("AGENT_COORD_SID"), os.getcwd())
+
+
+# ---------------------------------------------------------------- journal (sqlite write-through)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions(
   sid TEXT PRIMARY KEY, client TEXT, native_id TEXT, name TEXT, task TEXT, status TEXT,
   cwd TEXT, common_dir TEXT, repo_top TEXT, checkout TEXT, branch TEXT, project TEXT,
-  edit_worktree TEXT, model TEXT, joined_at REAL, updated_at REAL,
+  edit_worktree TEXT, model TEXT, token TEXT, joined_at REAL, updated_at REAL,
   last_seen REAL, left_at REAL, cursor INTEGER NOT NULL DEFAULT 0,
-  notified INTEGER NOT NULL DEFAULT 0);
+  nudged INTEGER NOT NULL DEFAULT 0, gap_through INTEGER, gap_reason TEXT);
 CREATE TABLE IF NOT EXISTS events(
-  seq INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, kind TEXT, actor TEXT,
-  scope_kind TEXT, scope_key TEXT, body TEXT);
+  seq INTEGER PRIMARY KEY, ts REAL, kind TEXT, actor TEXT, scope_kind TEXT,
+  scope_key TEXT, body TEXT);
+CREATE TABLE IF NOT EXISTS deliveries(
+  sid TEXT, seq INTEGER, backfill INTEGER NOT NULL DEFAULT 0, state TEXT,
+  PRIMARY KEY(sid, seq));
 CREATE TABLE IF NOT EXISTS resources(
   key TEXT PRIMARY KEY, owner TEXT, purpose TEXT, generation INTEGER NOT NULL DEFAULT 0,
-  acquired_at REAL, state TEXT);
+  acquired_at REAL, state TEXT, pending_to TEXT, pending_at REAL, forced_seq INTEGER,
+  forced_from TEXT);
 CREATE TABLE IF NOT EXISTS waiters(key TEXT, sid TEXT, PRIMARY KEY(key, sid));
+CREATE TABLE IF NOT EXISTS declarations(key TEXT, sid TEXT, purpose TEXT, PRIMARY KEY(key, sid));
 CREATE TABLE IF NOT EXISTS worktrees(
   path TEXT PRIMARY KEY, common_dir TEXT, owner TEXT, generation INTEGER NOT NULL DEFAULT 0,
   enforce INTEGER NOT NULL DEFAULT 0, claimed_at REAL, pending_to TEXT, pending_at REAL);
@@ -248,37 +526,55 @@ CREATE TABLE IF NOT EXISTS requests(
   req_id TEXT PRIMARY KEY, seq INTEGER, sender TEXT, scope_kind TEXT, scope_key TEXT,
   subject TEXT, body TEXT, state TEXT, result TEXT, resolved_by TEXT, resolved_at REAL,
   created_at REAL);
-CREATE TABLE IF NOT EXISTS idempotency(key TEXT PRIMARY KEY, response TEXT, ts REAL);
-CREATE TABLE IF NOT EXISTS inbox(sid TEXT, seq INTEGER, backfill INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(sid, seq));
+CREATE TABLE IF NOT EXISTS replays(key TEXT PRIMARY KEY, response TEXT, ts REAL);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value INTEGER);
 """
 
-EVENT_TTL = 24 * 3600  # an undelivered event outlives any real session by then
-JOIN_BACKFILL = 3600  # a joiner catches up on the last hour of talk on its scopes
 
-# Persisted column order per table; the in-memory rows carry exactly these keys.
-COLUMNS = {
+def cols(names: str) -> list[str]:
+    return list(names.split())
+
+
+TABLES: dict[str, tuple[tuple[str, ...], list[str]]] = {
     "sessions": (
-        "sid client native_id name task status cwd common_dir repo_top checkout branch"
-        " project edit_worktree model joined_at updated_at last_seen left_at cursor notified"
-    ).split(),
-    "events": "seq ts kind actor scope_kind scope_key body".split(),
-    "resources": "key owner purpose generation acquired_at state".split(),
+        ("sid",),
+        cols(
+            "sid client native_id name task status cwd common_dir repo_top checkout branch"
+            " project edit_worktree model token joined_at updated_at last_seen left_at cursor"
+            " nudged gap_through gap_reason"
+        ),
+    ),
+    "events": (("seq",), cols("seq ts kind actor scope_kind scope_key body")),
+    "deliveries": (("sid", "seq"), cols("sid seq backfill state")),
+    "resources": (
+        ("key",),
+        cols(
+            "key owner purpose generation acquired_at state pending_to pending_at forced_seq"
+            " forced_from"
+        ),
+    ),
+    "waiters": (("key", "sid"), cols("key sid")),
+    "declarations": (("key", "sid"), cols("key sid purpose")),
     "worktrees": (
-        "path common_dir owner generation enforce claimed_at pending_to pending_at"
-    ).split(),
+        ("path",),
+        cols(
+            "path common_dir owner generation enforce claimed_at pending_to pending_at"
+        ),
+    ),
     "requests": (
-        "req_id seq sender scope_kind scope_key subject body state result resolved_by"
-        " resolved_at created_at"
-    ).split(),
+        ("req_id",),
+        cols(
+            "req_id seq sender scope_kind scope_key subject body state result resolved_by"
+            " resolved_at created_at"
+        ),
+    ),
+    "replays": (("key",), cols("key response ts")),
 }
+JSON_COLS = {("events", "body"), ("replays", "response")}
 
 
-class Store:
-    """Authoritative ledger held in memory; SQLite is written through so a restart rebuilds it.
-
-    Delivery fans out at post time: each recipient gets an inbox entry that its ack removes.
-    """
+class Journal:
+    """SQLite behind the ledger: applies the changed rows of a transaction, reloads everything."""
 
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -289,233 +585,293 @@ class Store:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(SCHEMA)
-        self.lock = threading.RLock()
-        self.connections: dict[int, str] = {}
-        self.listeners: list[queue.Queue[Json]] = []
-        self.pending: list[Json] = []  # events appended by the running transaction
-        self.started_at = now()
-        self._load()
 
-    # -- memory <-> sqlite
-    def _load(self) -> None:
-        """Rebuild every in-memory table from the database (startup, or after a rollback)."""
-
-        def rows(table: str) -> list[Json]:
-            return [dict(r) for r in self.db.execute(f"SELECT * FROM {table}")]
-
-        self._sessions = {r["sid"]: r for r in rows("sessions")}
-        self._resources = {r["key"]: r for r in rows("resources")}
-        self._worktrees = {r["path"]: r for r in rows("worktrees")}
-        self._requests = {r["req_id"]: r for r in rows("requests")}
-        self._events = sorted(rows("events"), key=lambda e: e["seq"])
-        for event in self._events:
-            event["body"] = json.loads(event["body"])
-        self._by_seq = {e["seq"]: e for e in self._events}
+    def load(self) -> Json:
+        data: Json = {}
+        for table, (_, cols) in TABLES.items():
+            rows = [dict(r) for r in self.db.execute(f"SELECT * FROM {table}")]
+            for row in rows:
+                for col in cols:
+                    if (table, col) in JSON_COLS and isinstance(row.get(col), str):
+                        row[col] = json.loads(row[col])
+            data[table] = rows
         meta = self.db.execute("SELECT value FROM meta WHERE key='last_seq'").fetchone()
-        self._last_seq = max(meta[0] if meta else 0, self.max_seq())
-        self._inbox: dict[str, list[int]] = {}
-        self._backfilled: set[tuple[str, int]] = (
-            set()
-        )  # (sid, seq) delivered by a join, not a post
-        for r in self.db.execute("SELECT sid, seq, backfill FROM inbox ORDER BY seq"):
-            if r["seq"] in self._by_seq:
-                self._inbox.setdefault(r["sid"], []).append(r["seq"])
-                if r["backfill"]:
-                    self._backfilled.add((r["sid"], r["seq"]))
-        self._waiters: dict[str, list[str]] = {}
-        for r in self.db.execute("SELECT key, sid FROM waiters ORDER BY rowid"):
-            self._waiters.setdefault(r["key"], []).append(r["sid"])
-        self._idempotency = {
-            r["key"]: {"response": json.loads(r["response"]), "ts": r["ts"]}
-            for r in self.db.execute("SELECT key, response, ts FROM idempotency")
-        }
+        data["last_seq"] = meta[0] if meta else 0
+        return data
 
-    def _save(self, table: str, row: Json) -> None:
-        cols = COLUMNS[table]
-        values = [row[c] for c in cols]
-        if table == "events":
-            values[cols.index("body")] = json.dumps(row["body"], ensure_ascii=False)
+    def begin(self) -> None:
+        self.db.execute("BEGIN IMMEDIATE")
+
+    def commit(
+        self,
+        upserts: list[tuple[str, Json]],
+        deletes: list[tuple[str, tuple]],
+        last_seq: int,
+    ) -> None:
+        for table, row in upserts:
+            _, cols = TABLES[table]
+            values = [
+                json.dumps(row[c], ensure_ascii=False)
+                if (table, c) in JSON_COLS
+                else row.get(c)
+                for c in cols
+            ]
+            marks = ",".join("?" * len(cols))
+            self.db.execute(
+                f"INSERT OR REPLACE INTO {table}({','.join(cols)}) VALUES({marks})",
+                values,
+            )
+        for table, key in deletes:
+            pk = TABLES[table][0] if table in TABLES else ("sid",)
+            real = "deliveries" if table == "deliveries_by_sid" else table
+            where = " AND ".join(f"{c}=?" for c in pk)
+            self.db.execute(f"DELETE FROM {real} WHERE {where}", key)
         self.db.execute(
-            f"INSERT OR REPLACE INTO {table}({','.join(cols)}) VALUES({','.join('?' * len(cols))})",
-            values,
+            "INSERT OR REPLACE INTO meta(key, value) VALUES('last_seq', ?)", (last_seq,)
+        )
+        self.db.execute("COMMIT")
+
+    def rollback(self) -> None:
+        self.db.execute("ROLLBACK")
+
+    def close(self) -> None:
+        self.db.close()
+
+
+# ---------------------------------------------------------------- ledger (pure, in memory)
+
+
+class Ledger:
+    """All state and every rule. Mutations go through touch()/drop() so the journal can follow."""
+
+    def __init__(self, clock: Callable[[], float], data: Json | None = None):
+        self.clock = clock
+        self.sessions: dict[str, Json] = {}
+        self.events: list[Json] = []
+        self.by_seq: dict[int, Json] = {}
+        self.deliveries: dict[
+            str, dict[int, Json]
+        ] = {}  # sid -> seq -> row, seq-ordered
+        self.resources: dict[str, Json] = {}
+        self.waiters: dict[str, list[str]] = {}
+        self.declarations: dict[str, dict[str, str]] = {}
+        self.worktrees: dict[str, Json] = {}
+        self.requests: dict[str, Json] = {}
+        self.replays: dict[str, Json] = {}
+        self.last_seq = 0
+        self.upserts: list[tuple[str, Json]] = []
+        self.deletes: list[tuple[str, tuple]] = []
+        self.pending_events: list[Json] = []
+        self.bound: dict[str, str] = {}  # connection -> sid (not persisted)
+        if data:
+            self.load(data)
+
+    def load(self, data: Json) -> None:
+        self.sessions = {r["sid"]: r for r in data["sessions"]}
+        self.events = sorted(data["events"], key=lambda e: e["seq"])
+        self.by_seq = {e["seq"]: e for e in self.events}
+        self.deliveries = {}
+        for r in sorted(data["deliveries"], key=lambda d: d["seq"]):
+            if r["seq"] in self.by_seq:
+                self.deliveries.setdefault(r["sid"], {})[r["seq"]] = r
+        self.resources = {r["key"]: r for r in data["resources"]}
+        self.waiters = {}
+        for r in data["waiters"]:
+            self.waiters.setdefault(r["key"], []).append(r["sid"])
+        self.declarations = {}
+        for r in data["declarations"]:
+            self.declarations.setdefault(r["key"], {})[r["sid"]] = r["purpose"]
+        self.worktrees = {r["path"]: r for r in data["worktrees"]}
+        self.requests = {r["req_id"]: r for r in data["requests"]}
+        self.replays = {r["key"]: r for r in data["replays"]}
+        self.last_seq = max(
+            data["last_seq"], self.events[-1]["seq"] if self.events else 0
         )
 
-    def _save_waiters(self, key: str) -> None:
-        self.db.execute("DELETE FROM waiters WHERE key=?", (key,))
-        self.db.executemany(
-            "INSERT INTO waiters(key, sid) VALUES(?,?)",
-            [(key, sid) for sid in self._waiters.get(key, [])],
-        )
+    # -- change tracking
+    def touch(self, table: str, row: Json) -> Json:
+        self.upserts.append((table, row))
+        return row
 
-    def _expire(self) -> None:
-        """Drop events, inbox entries, replay records and long-left sessions past EVENT_TTL."""
-        cutoff = now() - EVENT_TTL
+    def drop(self, table: str, *key: object) -> None:
+        self.deletes.append((table, tuple(key)))
+
+    def take_changes(
+        self,
+    ) -> tuple[list[tuple[str, Json]], list[tuple[str, tuple]], list[Json]]:
+        changes = (self.upserts, self.deletes, self.pending_events)
+        self.upserts, self.deletes, self.pending_events = [], [], []
+        return changes
+
+    def now(self) -> float:
+        return self.clock()
+
+    # -- expiry
+    def expire(self) -> None:
+        cutoff = self.now() - EVENT_TTL
         pruned = 0
-        while self._events and self._events[0]["ts"] < cutoff:
-            pruned = self._events.pop(0)["seq"]
-            del self._by_seq[pruned]
+        while self.events and self.events[0]["ts"] < cutoff:
+            pruned = self.events.pop(0)["seq"]
+            del self.by_seq[pruned]
+            self.drop("events", pruned)
         if pruned:
-            for sid, seqs in list(self._inbox.items()):
-                self._inbox[sid] = [q for q in seqs if q > pruned]
-            self.db.execute("DELETE FROM events WHERE seq<=?", (pruned,))
-            self.db.execute("DELETE FROM inbox WHERE seq<=?", (pruned,))
-        for key in [k for k, v in self._idempotency.items() if v["ts"] < cutoff]:
-            del self._idempotency[key]
-            self.db.execute("DELETE FROM idempotency WHERE key=?", (key,))
-        for sid in [
-            s["sid"]
-            for s in self._sessions.values()
-            if (s["left_at"] or cutoff) < cutoff
-        ]:
-            del self._sessions[sid]
-            self._inbox.pop(sid, None)
-            self.db.execute("DELETE FROM sessions WHERE sid=?", (sid,))
-            self.db.execute("DELETE FROM inbox WHERE sid=?", (sid,))
+            for sid, rows in self.deliveries.items():
+                lost = [q for q in rows if q <= pruned]
+                for q in lost:
+                    del rows[q]
+                    self.drop("deliveries", sid, q)
+                if lost and sid in self.sessions:
+                    session = self.sessions[sid]
+                    session["gap_through"], session["gap_reason"] = pruned, "expired"
+                    self.touch("sessions", session)
+        for key, record in list(self.replays.items()):
+            if record["ts"] < self.now() - REPLAY_TTL:
+                del self.replays[key]
+                self.drop("replays", key)
+        for sid, session in list(self.sessions.items()):
+            if session["left_at"] and session["left_at"] < cutoff:
+                del self.sessions[sid]
+                self.deliveries.pop(sid, None)
+                self.drop("sessions", sid)
+                self.drop("deliveries_by_sid", sid)
 
-    # -- transaction helpers
-    def transact(self, fn: Any, *args: Any) -> Any:
-        """Run fn under the lock in one transaction; memory is reloaded from disk on rollback.
-
-        Committed events reach subscribers after the lock is released (F3: notify outside the
-        exclusive section), and only committed ones: a rollback emits nothing.
-        """
-        committed: list[Json] = []
-        listeners: list[queue.Queue[Json]] = []
-        try:
-            with self.lock:
-                self.pending = []
-                self.db.execute("BEGIN IMMEDIATE")
-                try:
-                    self._expire()
-                    result = fn(*args)
-                except CoordError as error:
-                    if (
-                        error.keep
-                    ):  # side effects recorded before the refusal stay (e.g. waiters)
-                        self.db.execute("COMMIT")
-                        committed, listeners = self.pending, list(self.listeners)
-                    else:
-                        self.db.execute("ROLLBACK")
-                        self._load()
-                    raise
-                except BaseException:
-                    self.db.execute("ROLLBACK")
-                    self._load()
-                    raise
-                self.db.execute("COMMIT")
-                committed, listeners = self.pending, list(self.listeners)
-                return copy.deepcopy(result)  # callers serialise outside the lock
-        finally:
-            for listener in listeners:
-                for event in committed:
-                    listener.put(event)
-
+    # -- events and deliveries
     def append_event(
         self, kind: str, actor: str | None, scope: tuple[str, str], body: Json
     ) -> Json:
-        self._last_seq += 1
+        self.last_seq += 1
         event = {
-            "seq": self._last_seq,
-            "ts": now(),
+            "seq": self.last_seq,
+            "ts": self.now(),
             "kind": kind,
             "actor": actor,
             "scope_kind": scope[0],
             "scope_key": scope[1],
             "body": body,
         }
-        self._events.append(event)
-        self._by_seq[event["seq"]] = event
-        self._save("events", event)
-        self.db.execute(
-            "INSERT OR REPLACE INTO meta(key, value) VALUES('last_seq', ?)",
-            (self._last_seq,),
-        )
-        for sid in self._recipients(event):
-            self._deliver(sid, event["seq"])
-        self.pending.append(event)
+        self.events.append(event)
+        self.by_seq[event["seq"]] = event
+        self.touch("events", event)
+        self.pending_events.append(event)
+        for sid in self.recipients(event):
+            self.deliver(sid, event["seq"])
         return event
 
-    def _recipients(self, event: Json) -> list[str]:
-        """Who gets an inbox entry: the addressee, or every present session the scope covers but the actor."""
+    def recipients(self, event: Json) -> list[str]:
+        """The addressee, or every present session the scope covers except the actor."""
         if event["kind"] not in NOTIFY_KINDS:
             return []
         if event["scope_kind"] == "session":
-            return [event["scope_key"]]
+            return [event["scope_key"]] if event["scope_key"] in self.sessions else []
         return [
             s["sid"]
-            for s in self._sessions.values()
+            for s in self.sessions.values()
             if s["left_at"] is None
             and s["sid"] != event["actor"]
             and self.visible(event, s)
         ]
 
-    def _deliver(self, sid: str, seq: int, backfill: bool = False) -> None:
-        seqs = self._inbox.setdefault(sid, [])
-        if seq not in seqs:
-            bisect.insort(seqs, seq)
-            if backfill:
-                self._backfilled.add((sid, seq))
-            self.db.execute(
-                "INSERT OR IGNORE INTO inbox(sid, seq, backfill) VALUES(?,?,?)",
-                (sid, seq, int(backfill)),
-            )
+    def deliver(self, sid: str, seq: int, backfill: bool = False) -> None:
+        rows = self.deliveries.setdefault(sid, {})
+        if seq in rows:
+            return
+        pull = adapter_for(self.sessions[sid]["client"]).notify == "pull"
+        row = {
+            "sid": sid,
+            "seq": seq,
+            "backfill": int(backfill),
+            "state": "pull" if pull else "pending",
+        }
+        rows[seq] = row
+        self.deliveries[sid] = dict(sorted(rows.items()))
+        self.touch("deliveries", row)
+        session = self.sessions[sid]
+        if session["gap_through"]:
+            session["gap_through"], session["gap_reason"] = None, None
+            self.touch("sessions", session)
 
-    def _backfill(self, session: Json) -> None:
-        """Deliver the last hour of the joiner's scopes, skipping anything it already got or acked."""
-        sid = session["sid"]
-        since = now() - JOIN_BACKFILL
-        for event in self.events_after(session["cursor"]):
-            if (
-                event["ts"] >= since
-                and event["scope_kind"] != "session"
-                and event["seq"] not in self._inbox.get(sid, [])
-                and sid in self._recipients(event)
-            ):
-                self._deliver(sid, event["seq"], backfill=True)
+    def mark_deliveries(self, conn: str, p: Json) -> Json:
+        rows = self.deliveries.get(p["sid"], {})
+        for seq in p["seqs"]:
+            if seq in rows and rows[seq]["state"] == "pending":
+                rows[seq]["state"] = p["state"]
+                self.touch("deliveries", rows[seq])
+        return {}
 
-    def events_after(self, seq: int) -> list[Json]:
-        start = bisect.bisect_right(self._events, seq, key=lambda e: e["seq"])
-        return self._events[start:]
+    def unread(self, sid: str) -> list[Json]:
+        return list(self.deliveries.get(sid, {}).values())
 
-    def max_seq(self) -> int:
-        return self._events[-1]["seq"] if self._events else 0
+    def unread_events(
+        self, sid: str, limit: int | None = None
+    ) -> tuple[list[Json], bool]:
+        rows = self.unread(sid)
+        more = limit is not None and len(rows) > limit
+        rows = rows[:limit] if more else rows
+        events = [
+            {**self.by_seq[r["seq"]], "backfill": True}
+            if r["backfill"]
+            else self.by_seq[r["seq"]]
+            for r in rows
+        ]
+        return events, more
 
-    def live_sessions(self, ts: float) -> list[Json]:
-        """Sessions that are present or left within the last hour, newest report first."""
-        return sorted(
-            (
-                s
-                for s in self._sessions.values()
-                if s["left_at"] is None or s["left_at"] > ts - 3600
-            ),
-            key=lambda s: -(s["updated_at"] or 0),
+    def visible(self, event: Json, session: Json) -> bool:
+        kind = event["scope_kind"]
+        return kind == "all" or (
+            kind in SCOPE_COL and event["scope_key"] == session[SCOPE_COL[kind]]
         )
 
-    def session(self, sid: str) -> Json | None:
-        return self._sessions.get(sid)
+    def backfill(self, session: Json, since_ts: float) -> None:
+        """Deliver what the session missed on its scopes: after its cursor, since since_ts, not yet there."""
+        sid = session["sid"]
+        rows = self.deliveries.get(sid, {})
+        start = bisect.bisect_right(
+            self.events, session["cursor"], key=lambda e: e["seq"]
+        )
+        for event in self.events[start:]:
+            if (
+                event["ts"] >= since_ts
+                and event["scope_kind"] != "session"
+                and event["seq"] not in rows
+                and sid in self.recipients(event)
+            ):
+                self.deliver(sid, event["seq"], backfill=True)
 
-    def require_session(self, sid: str | None) -> Json:
+    # -- sessions and identity
+    def session(self, sid: str | None) -> Json | None:
+        return self.sessions.get(sid or "")
+
+    def bind(self, conn: str, sid: str) -> None:
+        if conn:
+            self.bound[conn] = sid
+
+    def actor(self, conn: str, p: Json) -> Json:
+        """The session this connection may act as: the one it registered by join / attach."""
+        sid = p.get("sid") or self.bound.get(conn)
         if not sid:
+            raise CoordError("session id required: join or attach first", -32602)
+        if self.bound.get(conn) != sid:
             raise CoordError(
-                "session id required (join first, or pass --as <sid>)", -32602
+                f"this connection is not registered as {sid}: join or attach first",
+                -32001,
             )
-        session = self.session(sid)
+        session = self.sessions.get(sid)
         if session is None:
             raise CoordError(f"unknown session {sid}: join first", -32001)
         if session["left_at"]:
             raise CoordError(
                 f"session {sid} has left; join again to participate", -32001
             )
-        session["last_seen"] = now()
-        self._save("sessions", session)
+        session["last_seen"] = self.now()
+        self.touch("sessions", session)
         return session
 
     def resolve_sid(self, ref: str) -> str:
-        if self.session(ref):
+        if ref in self.sessions:
             return ref
         sids = [
             s["sid"]
-            for s in self._sessions.values()
+            for s in self.sessions.values()
             if s["name"] == ref and s["left_at"] is None
         ]
         if len(sids) == 1:
@@ -544,67 +900,73 @@ class Store:
             return ("session", session["sid"])
         return ("session", self.resolve_sid(target))
 
-    def visible(self, event: Json, session: Json) -> bool:
-        kind = event["scope_kind"]
-        return kind == "all" or (
-            kind in SCOPE_COL and event["scope_key"] == session[SCOPE_COL[kind]]
-        )
+    def capabilities(self, session: Json) -> Json:
+        adapter = adapter_for(session["client"])
+        return {"notify": adapter.notify, "enforcement": adapter.enforcement}
 
-    def unread_for(
-        self, session: Json, limit: int | None = None
-    ) -> tuple[list[Json], bool]:
-        """This session's undelivered inbox in seq order, capped at limit."""
-        sid = session["sid"]
-        seqs = self._inbox.get(sid, [])
-        more = limit is not None and len(seqs) > limit
-        events = [
-            {**self._by_seq[q], "backfill": True}
-            if (sid, q) in self._backfilled
-            else self._by_seq[q]
-            for q in (seqs[:limit] if more else seqs)
-        ]
-        return events, more
+    def public(self, session: Json, connections: dict[str, str] | None = None) -> Json:
+        ts = self.now()
+        out = {k: v for k, v in session.items() if k not in ("token", "nudged")}
+        out["updated_ago"] = fmt_ago(session["updated_at"], ts)
+        out["seen_ago"] = fmt_ago(session["last_seen"], ts)
+        out["capabilities"] = self.capabilities(session)
+        if connections is not None:
+            out["connections"] = sum(
+                1 for s in connections.values() if s == session["sid"]
+            )
+        return out
 
-    # -- idempotency
+    # -- replay (retry with the same request id)
+    def replay_key(self, session: Json, method: str, p: Json) -> str | None:
+        rid = p.get("request_id")
+        return f"{session['sid']}\x00{method}\x00{rid}" if rid else None
+
     def replay(self, key: str | None) -> Json | None:
-        record = self._idempotency.get(key) if key else None
-        return record["response"] if record else None
+        record = self.replays.get(key or "")
+        return copy.deepcopy(record["response"]) if record else None
 
     def remember(self, key: str | None, response: Json) -> Json:
         if key:
-            ts = now()
-            self._idempotency[key] = {"response": response, "ts": ts}
-            self.db.execute(
-                "INSERT OR REPLACE INTO idempotency(key, response, ts) VALUES(?,?,?)",
-                (key, json.dumps(response, ensure_ascii=False), ts),
-            )
+            row = {"key": key, "response": response, "ts": self.now()}
+            self.replays[key] = self.touch("replays", row)
         return response
 
-    # -- sessions
-    def join(self, p: Json) -> Json:
-        sid = p.get("sid") or f"anon-{short_id()}"
-        identity = git_identity(p.get("cwd") or os.getcwd())
-        existing = self.session(sid)
+    # ================================================================ methods: (conn, p, ...)
+    def join(self, conn: str, p: Json, identity: Json) -> Json:
+        client = str(p.get("client") or "cli")
+        native = p.get("native_id")
+        sid = p.get("sid") or (
+            session_id_for(client, str(native)) if native else f"anon-{short_id()}"
+        )
+        existing = self.sessions.get(sid)
+        if (
+            existing
+            and native
+            and existing["native_id"]
+            and existing["native_id"] != native
+        ):
+            raise CoordError(f"{sid} is registered to another native id", -32001)
         rejoin = bool(existing and existing["left_at"])
-        ts = now()
+        ts = self.now()
         name = (
             p.get("name")
             or (existing or {}).get("name")
-            or (
-                f"{p.get('client') or 'agent'}@{os.path.basename(identity['cwd'].rstrip('/'))}"
-            )
+            or f"{client}@{os.path.basename(identity['cwd'].rstrip('/'))}"
         )
         session = existing or {
             "sid": sid,
-            "client": "unknown",
-            "native_id": None,
+            "client": client,
+            "native_id": native,
             "task": None,
             "status": "unset",
             "edit_worktree": None,
             "model": None,
+            "token": secrets.token_hex(16),
             "joined_at": ts,
-            "cursor": 0,  # nothing acked yet; the backfill decides what a newcomer sees
-            "notified": 0,
+            "cursor": 0,
+            "nudged": 0,
+            "gap_through": None,
+            "gap_reason": None,
         }
         for key in ("client", "native_id", "task", "model"):
             if p.get(key) is not None:
@@ -616,82 +978,87 @@ class Store:
             left_at=None,
             **{k: identity[k] for k in IDENTITY_COLS},
         )
-        self._sessions[sid] = session
-        self._save("sessions", session)
-        self._backfill(session)
+        self.sessions[sid] = self.touch("sessions", session)
+        self.bind(conn, sid)
+        self.backfill(session, ts - (EVENT_TTL if existing else JOIN_BACKFILL))
         if not existing:
             self.append_event(
-                "join", sid, ("all", ""), {"name": name, "client": p.get("client")}
+                "join", sid, ("all", ""), {"name": name, "client": client}
             )
         elif rejoin:
             self.append_event("join", sid, ("all", ""), {"name": name, "rejoin": True})
-        return {"session": public_session(session), **self.snapshot(session)}
+        return {
+            "session": {**self.public(session), "token": session["token"]},
+            **self.snapshot(session),
+        }
+
+    def attach(self, conn: str, p: Json) -> Json:
+        """Register this connection as an existing session, proven by its native id or token."""
+        sid = required(p, "sid", "sid")
+        session = self.sessions.get(sid)
+        if session is None:
+            raise CoordError(f"unknown session {sid}: join first", -32001)
+        by_native = bool(p.get("native_id")) and session["native_id"] == p["native_id"]
+        by_token = bool(p.get("token")) and session["token"] == p["token"]
+        if not (by_native or by_token):
+            raise CoordError(
+                f"cannot attach as {sid}: native id or token does not match", -32001
+            )
+        session["last_seen"] = self.now()
+        self.touch("sessions", session)
+        self.bind(conn, sid)
+        return {"session": self.public(session)}
 
     def snapshot(self, session: Json) -> Json:
-        """Current state a newcomer needs: peers, held resources, open requests, unread count."""
-        unread, _ = self.unread_for(session)
+        """Current state a joiner needs regardless of age: peers, held grants, open requests, unread."""
         peers = [
-            public_session(s)
+            self.public(s)
             for s in sorted(
-                self._sessions.values(), key=lambda s: -(s["updated_at"] or 0)
+                self.sessions.values(), key=lambda s: -(s["updated_at"] or 0)
             )
             if s["left_at"] is None and s["sid"] != session["sid"]
         ]
         return {
             "peers_same_project": [
-                p for p in peers if p["project"] == session["project"]
+                x for x in peers if x["project"] == session["project"]
             ],
             "peers_total": len(peers),
-            "held_resources": [
-                r for r in self._resources.values() if r["owner"] == session["sid"]
-            ],
+            "resources_held": [r for r in self.resources.values() if r["owner"]],
             "owned_worktrees": [
                 w["path"]
-                for w in self._worktrees.values()
+                for w in self.worktrees.values()
                 if w["owner"] == session["sid"]
             ],
             "open_requests": self.open_requests(session),
-            "unread": len(unread),
+            "unread": len(self.unread(session["sid"])),
         }
 
-    def open_requests(self, session: Json | None) -> list[Json]:
-        rows = sorted(
-            (r for r in self._requests.values() if r["state"] == "open"),
-            key=lambda r: r["seq"],
-        )
-        if session is None:
-            return rows
-        return [
-            r for r in rows if r["sender"] == session["sid"] or self.visible(r, session)
-        ]
-
-    def update(self, p: Json) -> Json:
-        session = self.require_session(p.get("sid"))
-        fields: Json = {}
-        for key in ("name", "task", "status", "model"):
-            if p.get(key) is not None:
-                fields[key] = p[key]
+    def update(self, conn: str, p: Json, identity: Json | None) -> Json:
+        session = self.actor(conn, p)
+        fields: Json = {
+            k: p[k] for k in ("name", "task", "status", "model") if p.get(k) is not None
+        }
         if "status" in fields and fields["status"] not in STATUSES:
             raise CoordError(f"status must be one of {', '.join(STATUSES)}", -32602)
-        if p.get("cwd"):
-            fields.update(git_identity(p["cwd"]))
+        if identity:
+            fields.update({k: identity[k] for k in IDENTITY_COLS})
         if not fields:
             raise CoordError("nothing to update", -32602)
-        session.update(fields, updated_at=now())
-        self._save("sessions", session)
+        session.update(fields, updated_at=self.now())
+        self.touch("sessions", session)
         self.append_event("update", session["sid"], ("all", ""), fields)
-        return {"session": public_session(session)}
+        return {"session": self.public(session)}
 
-    def leave(self, p: Json) -> Json:
-        session = self.require_session(p.get("sid"))
-        ts = now()
+    def leave(self, conn: str, p: Json) -> Json:
+        session = self.actor(conn, p)
+        ts = self.now()
         session.update(left_at=ts, updated_at=ts)
-        self._save("sessions", session)
+        self.touch("sessions", session)
         held = 0
-        for resource in self._resources.values():
+        for resource in self.resources.values():
             if resource["owner"] == session["sid"] and resource["state"] == "held":
                 resource["state"] = "unconfirmed"
-                self._save("resources", resource)
+                self.touch("resources", resource)
                 held += 1
         self.append_event(
             "leave",
@@ -701,27 +1068,40 @@ class Store:
         )
         return {"left": session["sid"], "resources_marked_unconfirmed": held}
 
-    def whoami(self, p: Json) -> Json:
-        session = self.require_session(p.get("sid"))
-        return {"session": public_session(session), **self.snapshot(session)}
+    def whoami(self, conn: str, p: Json) -> Json:
+        session = self.actor(conn, p)
+        return {
+            "session": {**self.public(session), "token": session["token"]},
+            **self.snapshot(session),
+        }
 
-    def sessions(self, p: Json) -> Json:
-        me = self.session(p.get("sid") or "")
+    def sessions_(self, conn: str, p: Json, connections: dict[str, str]) -> Json:
+        me = self.session(p.get("sid") or self.bound.get(conn))
         scope = p.get("scope") or "all"
-        ts = now()
-        rows = self.live_sessions(ts)
+        rows = self.live_sessions()
         if scope in ("project", "repo"):
             if not me:
                 raise CoordError("scope project/repo needs your own session id", -32602)
-            key = SCOPE_COL[scope]
-            rows = [r for r in rows if r[key] == me[key]]
-        return {"sessions": [public_session(r, self.connections, ts) for r in rows]}
+            rows = [r for r in rows if r[SCOPE_COL[scope]] == me[SCOPE_COL[scope]]]
+        return {"sessions": [self.public(r, connections) for r in rows]}
+
+    def live_sessions(self) -> list[Json]:
+        ts = self.now()
+        return sorted(
+            (
+                s
+                for s in self.sessions.values()
+                if s["left_at"] is None or s["left_at"] > ts - 3600
+            ),
+            key=lambda s: -(s["updated_at"] or 0),
+        )
 
     # -- messaging
-    def send(self, p: Json) -> Json:
-        if replay := self.replay(p.get("request_id")):
+    def send(self, conn: str, p: Json) -> Json:
+        session = self.actor(conn, p)
+        key = self.replay_key(session, "send", p)
+        if replay := self.replay(key):
             return replay
-        session = self.require_session(p.get("sid"))
         text = required(p, "text", "text")
         scope = self.scope_for(session, p.get("to"))
         event = self.append_event(
@@ -730,106 +1110,108 @@ class Store:
             scope,
             {"text": text, "from_name": session["name"]},
         )
-        return self.remember(
-            p.get("request_id"),
-            {
-                "seq": event["seq"],
-                "scope": f"{scope[0]}:{scope[1]}" if scope[1] else scope[0],
-            },
-        )
+        label = f"{scope[0]}:{scope[1]}" if scope[1] else scope[0]
+        return self.remember(key, {"seq": event["seq"], "scope": label})
 
-    def catchup(self, p: Json) -> Json:
-        session = self.require_session(p.get("sid"))
+    def catchup(self, conn: str, p: Json) -> Json:
+        session = self.actor(conn, p)
         if p.get("ack_through") is not None:
-            self.ack({"sid": session["sid"], "through": p["ack_through"]})
+            self.ack(conn, {"sid": session["sid"], "through": p["ack_through"]})
         limit = max(1, min(int(p.get("limit") or 20), 200))
-        events, more = self.unread_for(session, limit)
+        events, more = self.unread_events(session["sid"], limit)
         return {
             "cursor": session["cursor"],
             "events": events,
             "more": more,
             "last_seq": events[-1]["seq"] if events else session["cursor"],
+            "gap": self.gap(session),
         }
 
-    def ack(self, p: Json) -> Json:
-        """Confirm delivery up to a seq: those inbox entries go, the cursor only moves forward."""
-        session = self.require_session(p.get("sid"))
-        through = min(int(p.get("through") or 0), self._last_seq)
+    def gap(self, session: Json) -> Json | None:
+        if session["gap_through"]:
+            return {"through": session["gap_through"], "reason": session["gap_reason"]}
+        return None
+
+    def ack(self, conn: str, p: Json) -> Json:
+        """Confirm delivery up to a seq; the cursor only moves forward; acked entries go."""
+        session = self.actor(conn, p)
+        through = min(int(p.get("through") or 0), self.last_seq)
         sid = session["sid"]
-        if any(q <= through for q in self._inbox.get(sid, [])):
-            self._inbox[sid] = [q for q in self._inbox[sid] if q > through]
-            self._backfilled -= {
-                (s, q) for (s, q) in self._backfilled if s == sid and q <= through
-            }
-            self.db.execute("DELETE FROM inbox WHERE sid=? AND seq<=?", (sid, through))
+        rows = self.deliveries.get(sid, {})
+        for seq in [q for q in rows if q <= through]:
+            del rows[seq]
+            self.drop("deliveries", sid, seq)
         session["cursor"] = max(session["cursor"], through)
-        self._save("sessions", session)
+        self.touch("sessions", session)
         return {"cursor": session["cursor"]}
 
-    def peek(self, p: Json) -> Json:
-        session = self.require_session(p.get("sid"))
-        events, _ = self.unread_for(session)
+    def peek(self, conn: str, p: Json) -> Json:
+        session = self.actor(conn, p)
+        rows = self.unread(session["sid"])
         return {
-            "unread": len(events),
-            "first_seq": events[0]["seq"] if events else None,
-            "last_seq": events[-1]["seq"] if events else None,
+            "unread": len(rows),
+            "first_seq": rows[0]["seq"] if rows else None,
+            "last_seq": rows[-1]["seq"] if rows else None,
             "cursor": session["cursor"],
-            "kinds": sorted({e["kind"] for e in events}),
+            "kinds": sorted({self.by_seq[r["seq"]]["kind"] for r in rows}),
+            "deliveries": [{"seq": r["seq"], "state": r["state"]} for r in rows],
+            "gap": self.gap(session),
         }
 
-    def nudge(self, p: Json) -> Json:
-        """Once per new unread range: text for a hook to inject, else null."""
-        session = self.require_session(p.get("sid"))
-        events, _ = self.unread_for(session)
-        if not events or events[-1]["seq"] <= session["notified"]:
-            return {"text": None, "unread": len(events)}
-        session["notified"] = events[-1]["seq"]
-        self._save("sessions", session)
+    def unread_text(self, session: Json) -> str | None:
+        rows = self.unread(session["sid"])
+        if not rows:
+            return None
+        events = [self.by_seq[r["seq"]] for r in rows]
         senders = sorted(
             {e["body"].get("from_name") or e["actor"] or "?" for e in events}
         )
-        return {
-            "text": (
-                f"[agent-coord] {len(events)} unread event(s) for this session"
-                f" (seq {events[0]['seq']}..{events[-1]['seq']}; from {', '.join(senders)})."
-                " Read them with the catchup tool, then ack the last seq."
-            ),
-            "unread": len(events),
-        }
+        return (
+            f"[agent-coord] {len(rows)} unread event(s) for this session"
+            f" (seq {rows[0]['seq']}..{rows[-1]['seq']}; from {', '.join(senders)})."
+            " Read them with the catchup tool, then ack the last seq."
+        )
 
-    def history(self, p: Json) -> Json:
-        session = self.session(p.get("sid") or "")
+    def nudge(self, conn: str, p: Json) -> Json:
+        """Once per new unread range (pull path): text for a hook to inject, else null."""
+        session = self.actor(conn, p)
+        rows = self.unread(session["sid"])
+        if not rows or rows[-1]["seq"] <= session["nudged"]:
+            return {"text": None, "unread": len(rows)}
+        session["nudged"] = rows[-1]["seq"]
+        self.touch("sessions", session)
+        return {"text": self.unread_text(session), "unread": len(rows)}
+
+    def history(self, conn: str, p: Json) -> Json:
+        session = self.session(p.get("sid") or self.bound.get(conn))
         since = int(p.get("since") or 0)
         limit = max(1, min(int(p.get("limit") or 50), 500))
+        start = bisect.bisect_right(self.events, since, key=lambda e: e["seq"])
         events: list[Json] = []
-        for event in self.events_after(since):
-            if (
-                p.get("all")
-                or session is None
-                or self.visible(event, session)
-                or event["actor"] == session["sid"]
-            ):
+        for event in self.events[start:]:
+            mine = session is not None and event["actor"] == session["sid"]
+            if p.get("all") or session is None or self.visible(event, session) or mine:
                 events.append(event)
                 if len(events) > limit:
                     break
         return {"events": events[:limit], "more": len(events) > limit}
 
     # -- requests
-    def request(self, p: Json) -> Json:
-        if replay := self.replay(p.get("request_id")):
+    def request(self, conn: str, p: Json) -> Json:
+        session = self.actor(conn, p)
+        key = self.replay_key(session, "request", p)
+        if replay := self.replay(key):
             return replay
-        session = self.require_session(p.get("sid"))
         subject = required(p, "subject", "subject")
         scope = self.scope_for(session, p.get("to"))
+        req_id = f"R{self.last_seq + 1}"
         body = {
             "subject": subject,
             "text": p.get("body") or "",
             "from_name": session["name"],
+            "req_id": req_id,
         }
-        req_id = f"R{self.max_seq() + 1}"
-        event = self.append_event(
-            "request_open", session["sid"], scope, {**body, "req_id": req_id}
-        )
+        event = self.append_event("request_open", session["sid"], scope, body)
         req = {
             "req_id": req_id,
             "seq": event["seq"],
@@ -842,41 +1224,38 @@ class Store:
             "result": None,
             "resolved_by": None,
             "resolved_at": None,
-            "created_at": now(),
+            "created_at": self.now(),
         }
-        self._requests[req_id] = req
-        self._save("requests", req)
+        self.requests[req_id] = self.touch("requests", req)
         if scope[0] == "session" and p.get("resource"):
-            self._add_waiter(p["resource"], session["sid"])
-        return self.remember(
-            p.get("request_id"), {"req_id": req_id, "seq": event["seq"]}
-        )
+            self.add_waiter(str(p["resource"]), session["sid"])
+        return self.remember(key, {"req_id": req_id, "seq": event["seq"]})
 
-    def _request(self, req_id: str) -> Json:
-        req = self._requests.get(req_id)
+    def _open_request(self, req_id: object) -> Json:
+        req = self.requests.get(str(req_id))
         if req is None:
             raise CoordError(f"unknown request {req_id}", -32602)
-        return req
-
-    def _close_request(
-        self, req: Json, state: str, by: str, result: str | None
-    ) -> None:
-        req.update(state=state, result=result, resolved_by=by, resolved_at=now())
-        self._save("requests", req)
-
-    def resolve(self, p: Json) -> Json:
-        session = self.require_session(p.get("sid"))
-        req = self._request(str(p.get("req_id")))
         if req["state"] != "open":
             raise CoordError(
                 f"request {req['req_id']} is already {req['state']}", -32003
             )
+        return req
+
+    def resolve(self, conn: str, p: Json) -> Json:
+        session = self.actor(conn, p)
+        req = self._open_request(p.get("req_id"))
         if req["sender"] != session["sid"] and not self.visible(req, session):
             raise CoordError(
                 "only the requester or an addressee can resolve a request", -32003
             )
         result = str(p.get("result") or "").strip() or "resolved"
-        self._close_request(req, "resolved", session["sid"], result)
+        req.update(
+            state="resolved",
+            result=result,
+            resolved_by=session["sid"],
+            resolved_at=self.now(),
+        )
+        self.touch("requests", req)
         own = (
             req["sender"] == session["sid"]
         )  # no self-notification: tell the addressees instead
@@ -895,16 +1274,15 @@ class Store:
         )
         return {"req_id": req["req_id"], "state": "resolved"}
 
-    def cancel(self, p: Json) -> Json:
-        session = self.require_session(p.get("sid"))
-        req = self._request(str(p.get("req_id")))
+    def cancel(self, conn: str, p: Json) -> Json:
+        session = self.actor(conn, p)
+        req = self._open_request(p.get("req_id"))
         if req["sender"] != session["sid"]:
             raise CoordError("only the requester can cancel", -32003)
-        if req["state"] != "open":
-            raise CoordError(
-                f"request {req['req_id']} is already {req['state']}", -32003
-            )
-        self._close_request(req, "cancelled", session["sid"], None)
+        req.update(
+            state="cancelled", resolved_by=session["sid"], resolved_at=self.now()
+        )
+        self.touch("requests", req)
         self.append_event(
             "request_cancel",
             session["sid"],
@@ -917,25 +1295,68 @@ class Store:
         )
         return {"req_id": req["req_id"], "state": "cancelled"}
 
-    def requests(self, p: Json) -> Json:
-        session = self.session(p.get("sid") or "")
+    def open_requests(self, session: Json | None) -> list[Json]:
+        rows = sorted(
+            (r for r in self.requests.values() if r["state"] == "open"),
+            key=lambda r: r["seq"],
+        )
+        if session is None:
+            return rows
+        return [
+            r for r in rows if r["sender"] == session["sid"] or self.visible(r, session)
+        ]
+
+    def requests_(self, conn: str, p: Json) -> Json:
+        session = self.session(p.get("sid") or self.bound.get(conn))
         return {"requests": self.open_requests(None if p.get("all") else session)}
 
     # -- resources
-    def _add_waiter(self, key: str, sid: str) -> None:
-        waiters = self._waiters.setdefault(key, [])
+    def add_waiter(self, key: str, sid: str) -> None:
+        waiters = self.waiters.setdefault(key, [])
         if sid not in waiters:
             waiters.append(sid)
-            self._save_waiters(key)
+            self.touch("waiters", {"key": key, "sid": sid})
 
-    def acquire(self, p: Json) -> Json:
-        if replay := self.replay(p.get("request_id")):
-            return replay
-        session = self.require_session(p.get("sid"))
+    def clear_waiters(self, key: str) -> list[str]:
+        waiters = self.waiters.pop(key, [])
+        for sid in waiters:
+            self.drop("waiters", key, sid)
+        return waiters
+
+    def resource_view(self, resource: Json) -> Json:
+        declared = self.declarations.get(resource["key"], {})
+        return {
+            **resource,
+            "declared_by": [{"sid": s, "purpose": u} for s, u in declared.items()],
+        }
+
+    def blank_resource(self, key: str) -> Json:
+        return {
+            "key": key,
+            "owner": None,
+            "purpose": None,
+            "generation": 0,
+            "acquired_at": None,
+            "state": "free",
+            "pending_to": None,
+            "pending_at": None,
+            "forced_seq": None,
+            "forced_from": None,
+        }
+
+    def acquire(self, conn: str, p: Json) -> Json:
+        session = self.actor(conn, p)
         key = required(p, "key", "resource key")
-        current = self._resources.get(key)
-        if current and current["owner"] and current["owner"] != session["sid"]:
-            self._add_waiter(key, session["sid"])
+        current = self.resources.get(key)
+        replay_key = self.replay_key(session, "acquire", p)
+        cached = self.replay(replay_key)
+        if cached and current and current["owner"] == session["sid"]:
+            if current["generation"] == cached["generation"]:
+                return cached
+        if current and current["owner"] == session["sid"]:
+            return {"key": key, "generation": current["generation"]}
+        if current and current["owner"]:
+            self.add_waiter(key, session["sid"])
             owner = self.session(current["owner"])
             raise CoordError(
                 f"resource {key!r} is held by {current['owner']} ({owner['name'] if owner else '?'})"
@@ -944,252 +1365,291 @@ class Store:
                     " [state: unconfirmed]" if current["state"] == "unconfirmed" else ""
                 ),
                 -32010,
-                {
-                    "owner": current["owner"],
-                    "purpose": current["purpose"],
-                    "acquired_at": current["acquired_at"],
-                    "state": current["state"],
-                },
+                {k: current[k] for k in ("owner", "purpose", "acquired_at", "state")},
                 keep=True,
             )
-        generation = (current["generation"] if current else 0) + 1
+        if (
+            current
+            and current["forced_from"] == session["sid"]
+            and current["forced_seq"]
+            and current["forced_seq"] > session["cursor"]
+        ):
+            raise CoordError(
+                f"resource {key!r} was force-released from you (seq {current['forced_seq']});"
+                " read and ack the notice first",
+                -32013,
+            )
         resource = {
-            "key": key,
+            **self.blank_resource(key),
             "owner": session["sid"],
             "purpose": p.get("purpose"),
-            "generation": generation,
-            "acquired_at": now(),
+            "generation": (current["generation"] if current else 0) + 1,
+            "acquired_at": self.now(),
             "state": "held",
         }
-        self._resources[key] = resource
-        self._save("resources", resource)
-        if session["sid"] in self._waiters.get(key, []):
-            self._waiters[key].remove(session["sid"])
-            self._save_waiters(key)
+        self.resources[key] = self.touch("resources", resource)
+        if session["sid"] in self.waiters.get(key, []):
+            self.waiters[key].remove(session["sid"])
+            self.drop("waiters", key, session["sid"])
         self.append_event(
             "acquire",
             session["sid"],
             ("all", ""),
-            {"key": key, "purpose": p.get("purpose"), "generation": generation},
+            {
+                "key": key,
+                "purpose": p.get("purpose"),
+                "generation": resource["generation"],
+            },
         )
         return self.remember(
-            p.get("request_id"), {"key": key, "generation": generation}
+            replay_key, {"key": key, "generation": resource["generation"]}
         )
 
-    def release(self, p: Json) -> Json:
-        session = self.require_session(p.get("sid"))
-        key = str(p.get("key") or "").strip()
-        current = self._resources.get(key)
+    def _held_by(self, session: Json, p: Json) -> Json:
+        key = required(p, "key", "resource key")
+        current = self.resources.get(key)
         if not current or not current["owner"]:
             raise CoordError(f"resource {key!r} is not held", -32011)
         if current["owner"] != session["sid"]:
             raise CoordError(
                 f"resource {key!r} is held by {current['owner']}, not you", -32011
             )
-        if (
-            p.get("generation") is not None
-            and int(p["generation"]) != current["generation"]
-        ):
+        return current
+
+    def release(self, conn: str, p: Json) -> Json:
+        session = self.actor(conn, p)
+        key = self.replay_key(session, "release", p)
+        if replay := self.replay(key):
+            return replay
+        if p.get("generation") is None:
+            raise CoordError(
+                "generation required: pass the generation acquire returned", -32602
+            )
+        current = self._held_by(session, p)
+        if int(p["generation"]) != current["generation"]:
             raise CoordError(
                 f"stale generation {p['generation']} (current {current['generation']})",
                 -32011,
             )
         generation = current["generation"]
-        self._do_release(current, session["sid"], session["name"], "release", None)
-        return {"key": key, "released_generation": generation}
+        self._free(current, session["sid"], session["name"], "release", None)
+        return self.remember(
+            key, {"key": current["key"], "released_generation": generation}
+        )
 
-    def _do_release(
+    def _free(
         self, resource: Json, actor: str, actor_name: str, kind: str, reason: str | None
     ) -> None:
-        """Record the free state once; notify each waiter directly so nobody gets it twice."""
+        """Record the free state once; tell each waiter directly so nobody learns it twice."""
         key = resource["key"]
-        resource.update(owner=None, purpose=None, acquired_at=None, state="free")
-        self._save("resources", resource)
-        waiters = self._waiters.pop(key, [])
-        self._save_waiters(key)
+        resource.update(
+            owner=None,
+            purpose=None,
+            acquired_at=None,
+            state="free",
+            pending_to=None,
+            pending_at=None,
+        )
+        self.touch("resources", resource)
         body = {"key": key, "from_name": actor_name, "reason": reason}
         self.append_event("resource_free", actor, ("all", ""), {**body, "kind": kind})
-        for waiter in waiters:
-            if waiter != actor:
+        for waiter in self.clear_waiters(key):
+            if waiter != actor and waiter in self.sessions:
                 self.append_event(
                     kind, actor, ("session", waiter), {**body, "you_waited": True}
                 )
 
-    def force_release(self, p: Json) -> Json:
-        key = str(p.get("key") or "").strip()
-        reason = required(p, "reason", "a reason for force release is")
-        current = self._resources.get(key)
+    def user_action(self, p: Json) -> str:
+        """Force paths are the user's own explicit operation, never an agent's shortcut."""
+        if not p.get("user_action"):
+            raise CoordError(
+                "force operations are user actions: run them from the CLI as yourself",
+                -32003,
+            )
+        required(p, "reason", "a reason for the force operation is")
+        return "user"
+
+    def force_release(self, conn: str, p: Json) -> Json:
+        actor = self.user_action(p)
+        key = required(p, "key", "resource key")
+        current = self.resources.get(key)
         if not current or not current["owner"]:
             raise CoordError(f"resource {key!r} is not held", -32011)
         previous = current["owner"]
-        actor = self.actor_for(p)
-        self._do_release(
-            current, actor, p.get("name") or actor, "force_release", reason
-        )
-        self.append_event(
+        self._free(current, actor, actor, "force_release", p["reason"])
+        notice = self.append_event(
             "force_release",
             actor,
             ("session", previous),
-            {"key": key, "reason": reason, "previous_owner": True},
+            {"key": key, "reason": p["reason"], "previous_owner": True},
         )
+        current.update(forced_seq=notice["seq"], forced_from=previous)
+        self.touch("resources", current)
         return {"key": key, "previous_owner": previous}
 
-    def resources(self, p: Json) -> Json:
-        return {"resources": [self._resources[k] for k in sorted(self._resources)]}
+    def resource_transfer(self, conn: str, p: Json) -> Json:
+        session = self.actor(conn, p)
+        current = self._held_by(session, p)
+        to = self.resolve_sid(str(p.get("to") or ""))
+        if to == session["sid"]:
+            raise CoordError("cannot transfer to yourself", -32602)
+        current.update(pending_to=to, pending_at=self.now())
+        self.touch("resources", current)
+        self.append_event(
+            "transfer_propose",
+            session["sid"],
+            ("session", to),
+            {
+                "key": current["key"],
+                "from_name": session["name"],
+                "note": p.get("note"),
+            },
+        )
+        return {"key": current["key"], "pending_to": to}
 
-    def actor_for(self, p: Json) -> str:
-        """Force paths are user-initiated CLI actions: an unregistered caller acts as 'user'."""
-        return str(p.get("sid") or "user")
-
-    # -- worktrees
-    def _repo_worktrees(self, session: Json) -> list[Json]:
-        if not session["common_dir"]:
-            raise CoordError("this session is not inside a git repo", -32602)
-        items = list_worktrees(session["common_dir"])
-        for item in items:
-            item["ownership"] = self._worktrees.get(item["path"])
-        return items
-
-    def worktree_list(self, p: Json) -> Json:
-        session = self.require_session(p.get("sid"))
+    def resource_accept(self, conn: str, p: Json) -> Json:
+        session = self.actor(conn, p)
+        key = required(p, "key", "resource key")
+        current = self.resources.get(key)
+        if not current or current["pending_to"] != session["sid"]:
+            raise CoordError(
+                f"no transfer of {key!r} is pending for {session['sid']}", -32011
+            )
+        previous = current["owner"]
+        current.update(
+            owner=session["sid"],
+            generation=current["generation"] + 1,
+            acquired_at=self.now(),
+            state="held",
+            pending_to=None,
+            pending_at=None,
+        )
+        self.touch("resources", current)
+        self.append_event(
+            "transfer_accept",
+            session["sid"],
+            ("session", previous),
+            {"key": key, "from_name": session["name"]},
+        )
         return {
-            "common_dir": session["common_dir"],
-            "worktrees": self._repo_worktrees(session),
+            "key": key,
+            "owner": session["sid"],
+            "previous_owner": previous,
+            "generation": current["generation"],
         }
 
-    def _verify_member(self, session: Json, path: object) -> str:
-        real = canon_path(path)
-        members = {w["path"] for w in self._repo_worktrees(session)}
-        if real not in members:
+    def declare(self, conn: str, p: Json) -> Json:
+        session = self.actor(conn, p)
+        key = required(p, "key", "resource key")
+        purpose = str(p.get("purpose") or "")
+        self.declarations.setdefault(key, {})[session["sid"]] = purpose
+        self.touch(
+            "declarations", {"key": key, "sid": session["sid"], "purpose": purpose}
+        )
+        if key not in self.resources:
+            self.resources[key] = self.touch("resources", self.blank_resource(key))
+        return {"key": key, "declared": True}
+
+    def resources_(self, conn: str, p: Json) -> Json:
+        return {
+            "resources": [
+                self.resource_view(self.resources[k]) for k in sorted(self.resources)
+            ]
+        }
+
+    # -- worktrees (git facts arrive as parameters; nothing forks here)
+    def worktree_claim(self, conn: str, p: Json, members: list[Json]) -> Json:
+        session = self.actor(conn, p)
+        path = str(p.get("path") or session["checkout"] or "")
+        if not os.path.isabs(path):
+            raise CoordError("worktree path must be absolute", -32602)
+        path = canon_path(path)
+        if path not in {m["path"] for m in members}:
             raise CoordError(
-                f"{real} is not a worktree of {session['repo_top']}", -32602
+                f"{path} is not a worktree of {session['repo_top']}", -32602
             )
-        return real
-
-    def _set_edit_worktree(self, session: Json, path: str | None) -> None:
-        session.update(edit_worktree=path, updated_at=now())
-        self._save("sessions", session)
-
-    def worktree_claim(self, p: Json) -> Json:
-        session = self.require_session(p.get("sid"))
-        path = self._verify_member(session, p.get("path") or session["checkout"])
-        current = self._worktrees.get(path)
+        current = self.worktrees.get(path)
         if current and current["owner"] and current["owner"] != session["sid"]:
             owner = self.session(current["owner"])
             raise CoordError(
-                f"{path} is owned by {current['owner']} ({owner['name'] if owner else '?'}) since {fmt_time(current['claimed_at'])}",
+                f"{path} is owned by {current['owner']} ({owner['name'] if owner else '?'})"
+                f" since {fmt_time(current['claimed_at'])}",
                 -32010,
             )
-        enforce = 1 if p.get("enforce") else 0
         worktree = {
             "path": path,
             "common_dir": session["common_dir"],
             "owner": session["sid"],
             "generation": (current["generation"] if current else 0) + 1,
-            "enforce": enforce,
-            "claimed_at": now(),
+            "enforce": 1 if p.get("enforce") else 0,
+            "claimed_at": self.now(),
             "pending_to": None,
             "pending_at": None,
         }
-        self._worktrees[path] = worktree
-        self._save("worktrees", worktree)
+        self.worktrees[path] = self.touch("worktrees", worktree)
         self._set_edit_worktree(session, path)
         self.append_event(
             "worktree_claim",
             session["sid"],
             ("repo", session["common_dir"]),
-            {"path": path, "enforce": bool(enforce)},
+            {"path": path, "enforce": bool(worktree["enforce"])},
         )
         return {
             "path": path,
             "generation": worktree["generation"],
-            "enforce": bool(enforce),
+            "enforce": bool(worktree["enforce"]),
         }
 
-    def worktree_create(self, p: Json) -> Json:
-        session = self.require_session(p.get("sid"))
+    def worktree_plan(self, conn: str, p: Json) -> Json:
+        """Validate a create request and say what would happen; the Coordinator runs git."""
+        session = self.actor(conn, p)
         name = str(p.get("name") or "")
         if not NAME_RE.match(name):
             raise CoordError(
                 "worktree name must match [A-Za-z0-9][A-Za-z0-9._-]*", -32602
             )
-        repo_top = session["repo_top"]
-        if not repo_top:
+        if not session["repo_top"]:
             raise CoordError("this session is not inside a git repo", -32602)
-        root = Path(
-            p.get("root") or os.path.expanduser("~/worktrees")
-        ) / os.path.basename(repo_top)
-        target = str(root / name)
-        if os.path.exists(target):
-            if target not in {w["path"] for w in self._repo_worktrees(session)}:
-                raise CoordError(
-                    f"{target} exists and is not a worktree of {repo_top}", -32012
-                )
-            return {
-                **self.worktree_claim(
-                    {"sid": session["sid"], "path": target, "enforce": p.get("enforce")}
-                ),
-                "created": False,
-                "resumed": True,
-            }
-        base = str(p.get("base") or "HEAD")
-        code, base_sha, err = run_git(
-            ["-C", repo_top, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"]
-        )
-        if code != 0:
-            raise CoordError(
-                f"base {base!r} is not a local commit in {repo_top}: {err or 'unknown ref'}",
-                -32602,
-            )
-        code, _, _ = run_git(
-            ["-C", repo_top, "rev-parse", "--verify", "--quiet", f"refs/heads/{name}"]
-        )
-        args = ["-C", repo_top, "worktree", "add", target] + (
-            [name] if code == 0 else ["-b", name, base_sha]
-        )
-        root.mkdir(parents=True, exist_ok=True)
-        code, out, err = run_git(args)
-        if code != 0:
-            raise CoordError(
-                f"git worktree add failed (rc={code}): {err or out}. Nothing was deleted; inspect {target} and branch {name}",
-                -32012,
-            )
-        self.append_event(
-            "worktree_create",
-            session["sid"],
-            ("repo", session["common_dir"]),
-            {"path": target, "branch": name, "base": base_sha[:12]},
-        )
+        allowed = canon_path(worktree_root())
+        root = canon_path(p.get("root") or allowed)
+        if not path_within(root, allowed):
+            raise CoordError(f"worktree root must stay under {allowed}", -32602)
+        base = str(p.get("base") or "")
+        if base.startswith("-"):
+            raise CoordError(f"base {base!r} looks like an option", -32602)
         return {
-            **self.worktree_claim(
-                {"sid": session["sid"], "path": target, "enforce": p.get("enforce")}
-            ),
-            "created": True,
+            "repo_top": session["repo_top"],
+            "common_dir": session["common_dir"],
+            "target": str(Path(root) / os.path.basename(session["repo_top"]) / name),
             "branch": name,
-            "base": base_sha[:12],
+            "base_ref": base or "HEAD",
+            "base_explicit": bool(base),
         }
 
-    def _owned(self, session: Json, p: Json) -> Json:
-        """Worktree row (default: the session's edit worktree) that this session owns."""
-        path = canon_path(p.get("path") or session["edit_worktree"])
-        current = self._worktrees.get(path)
+    def _owned_worktree(self, session: Json, p: Json) -> Json:
+        raw = p.get("path") or session["edit_worktree"]
+        current = self.worktrees.get(canon_path(raw)) if raw else None
         if not current or current["owner"] != session["sid"]:
-            raise CoordError(f"{path} is not owned by {session['sid']}", -32011)
+            raise CoordError(
+                f"{raw or '(no worktree)'} is not owned by {session['sid']}", -32011
+            )
         return current
 
-    def _drop_owner(self, worktree: Json) -> None:
-        """One state transition shared by release, force-release and accept."""
-        worktree.update(owner=None, pending_to=None, pending_at=None)
-        self._save("worktrees", worktree)
-        for session in self._sessions.values():
-            if session["edit_worktree"] == worktree["path"]:
-                session["edit_worktree"] = None
-                self._save("sessions", session)
+    def _set_edit_worktree(self, session: Json, path: str | None) -> None:
+        session.update(edit_worktree=path, updated_at=self.now())
+        self.touch("sessions", session)
 
-    def worktree_release(self, p: Json) -> Json:
-        session = self.require_session(p.get("sid"))
-        worktree = self._owned(session, p)
-        self._drop_owner(worktree)
+    def _drop_worktree_owner(self, worktree: Json) -> None:
+        worktree.update(owner=None, pending_to=None, pending_at=None)
+        self.touch("worktrees", worktree)
+        for session in self.sessions.values():
+            if session["edit_worktree"] == worktree["path"]:
+                self._set_edit_worktree(session, None)
+
+    def worktree_release(self, conn: str, p: Json) -> Json:
+        session = self.actor(conn, p)
+        worktree = self._owned_worktree(session, p)
+        self._drop_worktree_owner(worktree)
         self.append_event(
             "worktree_release",
             session["sid"],
@@ -1198,14 +1658,14 @@ class Store:
         )
         return {"path": worktree["path"], "owner": None}
 
-    def worktree_transfer(self, p: Json) -> Json:
-        session = self.require_session(p.get("sid"))
-        worktree = self._owned(session, p)
+    def worktree_transfer(self, conn: str, p: Json) -> Json:
+        session = self.actor(conn, p)
+        worktree = self._owned_worktree(session, p)
         to = self.resolve_sid(str(p.get("to") or ""))
         if to == session["sid"]:
             raise CoordError("cannot transfer to yourself", -32602)
-        worktree.update(pending_to=to, pending_at=now())
-        self._save("worktrees", worktree)
+        worktree.update(pending_to=to, pending_at=self.now())
+        self.touch("worktrees", worktree)
         self.append_event(
             "transfer_propose",
             session["sid"],
@@ -1218,20 +1678,22 @@ class Store:
         )
         return {"path": worktree["path"], "pending_to": to}
 
-    def worktree_accept(self, p: Json) -> Json:
-        session = self.require_session(p.get("sid"))
+    def worktree_accept(self, conn: str, p: Json) -> Json:
+        session = self.actor(conn, p)
         path = canon_path(p.get("path"))
-        current = self._worktrees.get(path)
+        current = self.worktrees.get(path)
         if not current or current["pending_to"] != session["sid"]:
             raise CoordError(
                 f"no transfer of {path} is pending for {session['sid']}", -32011
             )
         previous = current["owner"]
-        self._drop_owner(current)
+        self._drop_worktree_owner(current)
         current.update(
-            owner=session["sid"], generation=current["generation"] + 1, claimed_at=now()
+            owner=session["sid"],
+            generation=current["generation"] + 1,
+            claimed_at=self.now(),
         )
-        self._save("worktrees", current)
+        self.touch("worktrees", current)
         self._set_edit_worktree(session, path)
         self.append_event(
             "transfer_accept",
@@ -1241,35 +1703,40 @@ class Store:
         )
         return {"path": path, "owner": session["sid"], "previous_owner": previous}
 
-    def worktree_force_release(self, p: Json) -> Json:
+    def worktree_force_release(self, conn: str, p: Json) -> Json:
+        actor = self.user_action(p)
         path = canon_path(p.get("path"))
-        reason = required(p, "reason", "a reason for force release is")
-        current = self._worktrees.get(path)
+        current = self.worktrees.get(path)
         if not current or not current["owner"]:
             raise CoordError(f"{path} has no owner", -32011)
         previous = current["owner"]
-        self._drop_owner(current)
-        actor = self.actor_for(p)
+        self._drop_worktree_owner(current)
         self.append_event(
             "worktree_force_release",
             actor,
             ("session", previous),
-            {"path": path, "reason": reason},
+            {"path": path, "reason": p["reason"]},
         )
         return {"path": path, "previous_owner": previous}
 
-    def edit_check(self, p: Json) -> Json:
-        """Deny edits that land in another checkout of the repo the session claimed with enforce."""
-        session = self.session(p.get("sid") or "")
-        target = canon_path(p.get("path"))
+    def edit_check(self, conn: str, p: Json, members: list[Json]) -> Json:
+        """Deny an edit that lands in another checkout of the repo this session claimed with enforce."""
+        session = self.session(p.get("sid") or self.bound.get(conn))
+        target = str(p.get("path") or "")
         if not session or not session["edit_worktree"]:
             return {"allow": True, "reason": "no enforced worktree"}
-        claim = self._worktrees.get(session["edit_worktree"])
+        claim = self.worktrees.get(session["edit_worktree"])
         if not claim or claim["owner"] != session["sid"] or not claim["enforce"]:
             return {"allow": True, "reason": "claim inactive or not enforced"}
+        if not os.path.isabs(target):
+            return {
+                "allow": False,
+                "reason": f"{target!r} is relative; the gate only judges absolute paths",
+            }
+        target = canon_path(target)
         if path_within(target, claim["path"]):
             return {"allow": True, "reason": "inside own worktree"}
-        for item in list_worktrees(claim["common_dir"]):
+        for item in members:
             if path_within(target, item["path"]):
                 return {
                     "allow": False,
@@ -1277,93 +1744,311 @@ class Store:
                 }
         return {"allow": True, "reason": "outside the repo"}
 
+    def worktree_view(self, worktree: Json) -> Json:
+        owner = self.session(worktree["owner"]) if worktree["owner"] else None
+        level = "coop"
+        if worktree["enforce"]:
+            level = adapter_for(owner["client"]).enforcement if owner else "advisory"
+        return {**worktree, "enforcement": level}
+
     # -- overview
-    def status(self, p: Json) -> Json:
-        ts = now()
+    def status(
+        self,
+        conn: str,
+        p: Json,
+        connections: dict[str, str],
+        started_at: float,
+        home: Path,
+    ) -> Json:
         sessions = []
-        for row in sorted(self.live_sessions(ts), key=lambda s: s["project"] or ""):
-            item = public_session(row, self.connections, ts)
-            item["unread"] = len(self.unread_for(row)[0])
+        for row in sorted(self.live_sessions(), key=lambda s: s["project"] or ""):
+            item = self.public(row, connections)
+            item["unread"] = len(self.unread(row["sid"]))
             sessions.append(item)
         return {
             "service": {
                 "version": VERSION,
                 "pid": os.getpid(),
-                "started_at": self.started_at,
-                "home": str(coord_home()),
-                "events": self._last_seq,
-                "retained": len(self._events),
-                "connections": len(self.connections),
+                "started_at": started_at,
+                "home": str(home),
+                "events": self.last_seq,
+                "retained": len(self.events),
+                "connections": len(connections),
+                "projects": sorted(
+                    {s["project"] for s in sessions if s.get("project")}
+                ),
             },
             "sessions": sessions,
             "resources": [
-                self._resources[k]
-                for k in sorted(self._resources)
-                if self._resources[k]["owner"]
+                self.resource_view(self.resources[k])
+                for k in sorted(self.resources)
+                if self.resources[k]["owner"]
+            ],
+            "waiters": [
+                {"key": k, "sid": s}
+                for k in sorted(self.waiters)
+                for s in self.waiters[k]
             ],
             "worktrees": [
-                self._worktrees[k]
-                for k in sorted(self._worktrees)
-                if self._worktrees[k]["owner"] or self._worktrees[k]["pending_to"]
+                self.worktree_view(self.worktrees[k])
+                for k in sorted(self.worktrees)
+                if self.worktrees[k]["owner"] or self.worktrees[k]["pending_to"]
             ],
             "requests": self.open_requests(None),
         }
 
 
-def public_session(
-    row: Json, connections: dict[int, str] | None = None, ts: float | None = None
-) -> Json:
-    result = {k: v for k, v in row.items() if k != "notified"}
-    if connections is not None:
-        result["connections"] = sum(1 for s in connections.values() if s == row["sid"])
-    result["updated_ago"] = fmt_ago(row.get("updated_at"), ts)
-    result["seen_ago"] = fmt_ago(row.get("last_seen"), ts)
-    return result
-
-
-METHODS = {
-    "join",
-    "update",
-    "leave",
-    "whoami",
-    "sessions",
-    "send",
-    "catchup",
-    "ack",
-    "peek",
-    "nudge",
-    "history",
-    "request",
-    "resolve",
-    "cancel",
-    "requests",
-    "acquire",
-    "release",
-    "force_release",
-    "resources",
-    "worktree_list",
-    "worktree_claim",
-    "worktree_create",
-    "worktree_release",
-    "worktree_transfer",
-    "worktree_accept",
-    "worktree_force_release",
-    "edit_check",
-    "status",
+METHODS = frozenset(
+    (
+        "join attach update leave whoami sessions send catchup ack peek nudge history request"
+        " resolve cancel requests acquire release force_release resource_transfer resource_accept"
+        " declare resources worktree_list worktree_claim worktree_create worktree_release"
+        " worktree_transfer worktree_accept worktree_force_release edit_check status"
+    ).split()
+)
+USER_ONLY = frozenset({"force_release", "worktree_force_release"})
+LEDGER_NAME = {
+    "sessions": "sessions_",
+    "requests": "requests_",
+    "resources": "resources_",
 }
 
 
-# ---------------------------------------------------------------- daemon
+# ---------------------------------------------------------------- coordinator
+
+
+class Coordinator:
+    """Serialises ledger access, keeps git out of the lock, and fans out after commit."""
+
+    def __init__(self, home: Path, clock: Callable[[], float] | None = None):
+        self.home = home
+        self.clock = clock or time.time
+        self.journal = Journal(home / "ledger.sqlite3")
+        self.ledger = Ledger(self.clock, self.journal.load())
+        self.lock = threading.RLock()
+        self.connections: dict[str, str] = {}
+        self.subscribers: list[Callable[[Json], None]] = []
+        self.started_at = self.clock()
+        self.committed: list[Json] = []
+        self.wakes: queue.Queue[bool] = queue.Queue()
+        self.waker = threading.Thread(target=self._wake_loop, daemon=True)
+        self.waker.start()
+
+    def close(self) -> None:
+        self.wakes.put(False)
+        self.waker.join(5)
+        self.journal.close()
+
+    def subscribe(self, callback: Callable[[Json], None]) -> None:
+        with self.lock:
+            self.subscribers.append(callback)
+
+    def unsubscribe(self, callback: Callable[[Json], None]) -> None:
+        with self.lock:
+            if callback in self.subscribers:
+                self.subscribers.remove(callback)
+
+    def disconnect(self, conn: str) -> None:
+        with self.lock:
+            self.ledger.bound.pop(conn, None)
+            self.connections.pop(conn, None)
+
+    def _session_common_dir(self, conn: str, p: Json) -> str | None:
+        with self.lock:
+            session = self.ledger.session(p.get("sid") or self.ledger.bound.get(conn))
+            return session["common_dir"] if session else None
+
+    def call(self, conn: str, method: str, params: Json) -> Any:
+        if method not in METHODS:
+            raise CoordError(f"unknown method {method!r}", -32601)
+        if method == "worktree_create":
+            return self._worktree_create(conn, params)
+        extra: tuple = ()
+        if method == "join":
+            extra = (git_identity(str(params.get("cwd") or os.getcwd())),)
+        elif method == "update":
+            extra = (git_identity(str(params["cwd"])) if params.get("cwd") else None,)
+        elif method in ("worktree_claim", "worktree_list", "edit_check"):
+            common_dir = self._session_common_dir(conn, params)
+            members = list_worktrees(common_dir) if common_dir else []
+            if method == "worktree_list":
+                return self.transact(lambda: self._worktree_list(conn, params, members))
+            extra = (members,)
+        elif method == "sessions":
+            extra = (self.connections,)
+        elif method == "status":
+            extra = (self.connections, self.started_at, self.home)
+        target = getattr(self.ledger, LEDGER_NAME.get(method, method))
+        return self.transact(lambda: target(conn, params, *extra), conn)
+
+    def _worktree_list(self, conn: str, p: Json, members: list[Json]) -> Json:
+        session = self.ledger.actor(conn, p)
+        for item in members:
+            registered = self.ledger.worktrees.get(item["path"])
+            item["ownership"] = (
+                self.ledger.worktree_view(registered) if registered else None
+            )
+        return {"common_dir": session["common_dir"], "worktrees": members}
+
+    def _worktree_create(self, conn: str, p: Json) -> Json:
+        plan = self.transact(lambda: self.ledger.worktree_plan(conn, p), conn)
+        repo_top, target, name = plan["repo_top"], plan["target"], plan["branch"]
+        members = list_worktrees(plan["common_dir"])
+        existing_branch = resolve_commit(repo_top, f"refs/heads/{name}")
+        base = resolve_commit(repo_top, plan["base_ref"])
+        if base is None:
+            raise CoordError(
+                f"base {plan['base_ref']!r} is not a local commit in {repo_top}", -32602
+            )
+        if existing_branch:
+            if plan["base_explicit"] and base != existing_branch:
+                raise CoordError(
+                    f"branch {name} already exists at {existing_branch[:12]}; drop --base or pick another name",
+                    -32602,
+                )
+            base = existing_branch
+        if p.get("dry_run"):
+            return {
+                "target": target,
+                "branch": name,
+                "base": base,
+                "exists": os.path.exists(target),
+            }
+        if os.path.exists(target):
+            if target not in {m["path"] for m in members}:
+                raise CoordError(
+                    f"{target} exists and is not a worktree of {repo_top}; nothing was touched",
+                    -32012,
+                )
+            claim = self.transact(
+                lambda: self.ledger.worktree_claim(
+                    conn, {**p, "path": target}, members
+                ),
+                conn,
+            )
+            return {
+                **claim,
+                "created": False,
+                "resumed": True,
+                "branch": name,
+                "base": base,
+            }
+        args = ["-C", repo_top, "worktree", "add"]
+        args += (
+            ["--", target, name]
+            if existing_branch
+            else ["-b", name, "--", target, base]
+        )
+        Path(target).parent.mkdir(parents=True, exist_ok=True)
+        code, out, err = run_git(args)
+        if code != 0:
+            raise CoordError(
+                f"git worktree add failed (rc={code}): {err or out}. Nothing was deleted;"
+                f" inspect {target} and branch {name}",
+                -32012,
+            )
+        members = list_worktrees(plan["common_dir"])
+
+        def record() -> Json:
+            session = self.ledger.actor(conn, p)
+            self.ledger.append_event(
+                "worktree_create",
+                session["sid"],
+                ("repo", session["common_dir"]),
+                {"path": target, "branch": name, "base": base[:12]},
+            )
+            return self.ledger.worktree_claim(conn, {**p, "path": target}, members)
+
+        claim = self.transact(record, conn)
+        return {
+            **claim,
+            "created": True,
+            "resumed": False,
+            "branch": name,
+            "base": base,
+        }
+
+    def transact(self, fn: Callable[[], Any], conn: str = "") -> Any:
+        """One locked transaction; write-through; stream and wake only committed events, outside the lock."""
+        events: list[Json] = []
+        subscribers: list[Callable[[Json], None]] = []
+        try:
+            with self.lock:
+                self.ledger.take_changes()
+                self.journal.begin()
+                try:
+                    self.ledger.expire()
+                    result = fn()
+                except CoordError as error:
+                    if error.keep:
+                        events, subscribers = self._commit()
+                    else:
+                        self._rollback()
+                    raise
+                except BaseException:
+                    self._rollback()
+                    raise
+                events, subscribers = self._commit()
+                if conn and conn in self.ledger.bound:
+                    self.connections[conn] = self.ledger.bound[conn]
+                return copy.deepcopy(result)
+        finally:
+            for event in events:
+                for callback in subscribers:
+                    callback(event)
+            if events:
+                self.wakes.put(True)
+
+    def _commit(self) -> tuple[list[Json], list[Callable[[Json], None]]]:
+        upserts, deletes, events = self.ledger.take_changes()
+        self.journal.commit(upserts, deletes, self.ledger.last_seq)
+        return events, list(self.subscribers)
+
+    def _rollback(self) -> None:
+        self.journal.rollback()
+        self.ledger.load(self.journal.load())
+        self.ledger.take_changes()
+
+    # -- wake channel (push), never under the lock
+    def _wake_loop(self) -> None:
+        while self.wakes.get():
+            try:
+                self._wake_pending()
+            except Exception as error:  # a broken channel must not stop the daemon
+                sys.stderr.write(f"agent_coord wake: {error!r}\n")
+
+    def _wake_pending(self) -> None:
+        with self.lock:
+            targets = []
+            for sid, rows in self.ledger.deliveries.items():
+                states = [r["state"] for r in rows.values()]
+                session = self.ledger.sessions.get(sid)
+                if session and "pending" in states and "pushed" not in states:
+                    seqs = [q for q, r in rows.items() if r["state"] == "pending"]
+                    targets.append(
+                        (copy.deepcopy(session), seqs, self.ledger.unread_text(session))
+                    )
+        for session, seqs, text in targets:
+            ok = adapter_for(session["client"]).wake(session, text or "")
+            outcome = {
+                "sid": session["sid"],
+                "seqs": seqs,
+                "state": "pushed" if ok else "unavailable",
+            }
+            self.transact(lambda o=outcome: self.ledger.mark_deliveries("", o))
+
+
+# ---------------------------------------------------------------- transport
 
 
 class Handler(socketserver.StreamRequestHandler):
-    """One UDS connection: newline JSON-RPC requests; after subscribe, pushed events."""
+    """One socket connection: newline JSON-RPC requests; after subscribe, pushed events."""
 
     server: DaemonServer
 
     def handle(self) -> None:
-        store = self.server.store
-        conn_id = threading.get_ident()
+        co = self.server.coordinator
+        conn = f"c{id(self)}"
         try:
             for raw in self.rfile:
                 try:
@@ -1373,39 +2058,36 @@ class Handler(socketserver.StreamRequestHandler):
                     continue
                 if not isinstance(message, dict):
                     continue
-                method, params, req_id = (
-                    message.get("method"),
-                    message.get("params") or {},
-                    message.get("id"),
-                )
-                if method == "subscribe":
+                method = message.get("method")
+                params = message.get("params") or {}
+                req_id = message.get("id")
+                if method == "ping":
+                    self.reply(
+                        rpc_result(
+                            req_id,
+                            {"pong": True, "pid": os.getpid(), "version": VERSION},
+                        )
+                    )
+                elif method == "subscribe":
                     self.reply(rpc_result(req_id, {"subscribed": True}))
-                    self.stream_events(store)
+                    self.stream(co)
                     return
-                if method == "shutdown":
+                elif method == "shutdown":
                     self.reply(rpc_result(req_id, {"stopping": True}))
                     threading.Thread(target=self.server.shutdown, daemon=True).start()
                     return
-                self.reply(self.dispatch(store, conn_id, method, params, req_id))
+                elif not isinstance(method, str) or not isinstance(params, dict):
+                    self.reply(rpc_error(req_id, -32600, "invalid request"))
+                else:
+                    self.reply(self.dispatch(co, conn, method, params, req_id))
         finally:
-            with store.lock:
-                store.connections.pop(conn_id, None)
+            co.disconnect(conn)
 
     def dispatch(
-        self, store: Store, conn_id: int, method: object, params: object, req_id: object
+        self, co: Coordinator, conn: str, method: str, params: Json, req_id: object
     ) -> Json:
-        if method == "ping":
-            return rpc_result(
-                req_id, {"pong": True, "pid": os.getpid(), "version": VERSION}
-            )
-        if (
-            not isinstance(method, str)
-            or method not in METHODS
-            or not isinstance(params, dict)
-        ):
-            return rpc_error(req_id, -32601, f"unknown method {method!r}")
         try:
-            result = store.transact(getattr(store, method), params)
+            return rpc_result(req_id, co.call(conn, method, params))
         except CoordError as error:
             return rpc_error(req_id, error.code, str(error), error.data)
         except (ValueError, TypeError) as error:
@@ -1413,15 +2095,10 @@ class Handler(socketserver.StreamRequestHandler):
         except (sqlite3.Error, OSError) as error:
             self.server.log(f"{method} failed: {error!r}")
             return rpc_error(req_id, -32603, f"internal error: {error}")
-        if method in ("join", "whoami") and params.get("sid"):
-            with store.lock:
-                store.connections[conn_id] = str(params["sid"])
-        return rpc_result(req_id, result)
 
-    def stream_events(self, store: Store) -> None:
+    def stream(self, co: Coordinator) -> None:
         events: queue.Queue[Json] = queue.Queue()
-        with store.lock:
-            store.listeners.append(events)
+        co.subscribe(events.put)
         try:
             while not self.server.stopping:
                 try:
@@ -1432,8 +2109,7 @@ class Handler(socketserver.StreamRequestHandler):
         except OSError:
             pass
         finally:
-            with store.lock:
-                store.listeners.remove(events)
+            co.unsubscribe(events.put)
 
     def reply(self, message: Json) -> None:
         self.wfile.write(json_line(message).encode())
@@ -1444,8 +2120,8 @@ class DaemonServer(socketserver.ThreadingUnixStreamServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, path: Path, store: Store, log_file: TextIO | None):
-        self.store = store
+    def __init__(self, path: Path, coordinator: Coordinator, log_file: TextIO | None):
+        self.coordinator = coordinator
         self.stopping = False
         self.log_file = log_file
         super().__init__(str(path), Handler)
@@ -1461,7 +2137,6 @@ class DaemonServer(socketserver.ThreadingUnixStreamServer):
 
 
 def acquire_singleton(home: Path) -> int | None:
-    """Return a held lock fd, or None when another daemon owns the home."""
     home.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(home / "coord.lock"), os.O_RDWR | os.O_CREAT, 0o600)
     try:
@@ -1479,13 +2154,18 @@ def serve(
 ) -> int:
     lock_fd = acquire_singleton(home)
     if lock_fd is None:
-        print(f"another daemon already serves {home}", file=sys.stderr)
-        return 0
+        (log_file or sys.stderr).write(f"another daemon already serves {home}\n")
+        return 1
     path = home / "coord.sock"
     if path.exists():
         path.unlink()
-    store = Store(home / "ledger.sqlite3")
-    server = DaemonServer(path, store, log_file)
+    try:
+        coordinator = Coordinator(home)
+    except (sqlite3.Error, ValueError, OSError) as error:
+        (log_file or sys.stderr).write(f"ledger unreadable in {home}: {error!r}\n")
+        os.close(lock_fd)
+        return 1
+    server = DaemonServer(path, coordinator, log_file)
     os.chmod(path, 0o600)
     server.log(f"agent_coord {VERSION} serving {path} pid={os.getpid()}")
     if ready:
@@ -1494,6 +2174,7 @@ def serve(
         server.serve_forever(poll_interval=0.5)
     finally:
         server.server_close()
+        coordinator.close()
         if path.exists():
             path.unlink()
         os.close(lock_fd)
@@ -1514,21 +2195,20 @@ def spawn_daemon(home: Path) -> None:
         )
 
 
-# ---------------------------------------------------------------- client
-
-
 class Client:
     """Synchronous newline JSON-RPC client over the daemon's unix socket."""
 
     def __init__(self, path: Path | None = None, autostart: bool = True):
         self.path = path or sock_path()
-        self.sock = self.connect(autostart)
+        self.sock = self.connect(
+            autostart and not os.environ.get("AGENT_COORD_NO_AUTOSTART")
+        )
         self.file = self.sock.makefile("r", encoding="utf-8")
-        self.sock.settimeout(30)
+        self.sock.settimeout(60)
         self.counter = 0
 
     def connect(self, autostart: bool) -> socket.socket:
-        deadline = now() + 5
+        deadline = time.time() + 5
         spawned = False
         while True:
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -1538,7 +2218,7 @@ class Client:
                 return sock
             except OSError as error:
                 sock.close()
-                if not autostart or os.environ.get("AGENT_COORD_NO_AUTOSTART"):
+                if not autostart:
                     raise CoordError(self.diagnose(error), -32050) from error
                 if not spawned:
                     try:
@@ -1549,7 +2229,7 @@ class Client:
                             -32050,
                         ) from spawn_error
                     spawned = True
-                if now() > deadline:
+                if time.time() > deadline:
                     raise CoordError(
                         self.diagnose(error) + " (autostart timed out)", -32050
                     ) from error
@@ -1591,315 +2271,219 @@ class Client:
         self.sock.close()
 
 
-# ---------------------------------------------------------------- identity of the caller
-
-
-def detect_client() -> str:
-    if os.environ.get("AGENT_COORD_CLIENT"):
-        return os.environ["AGENT_COORD_CLIENT"]
-    if os.environ.get("CLAUDECODE") or os.environ.get("CLAUDE_CODE_SESSION_ID"):
-        return "claude-code"
-    if any(k.startswith("CODEX_") for k in os.environ):
-        return "codex"
-    return "cli"
-
-
-def detect_sid(explicit: str | None = None) -> str | None:
-    if explicit:
-        return explicit
-    if os.environ.get("AGENT_COORD_SID"):
-        return os.environ["AGENT_COORD_SID"]
-    if os.environ.get("CLAUDE_CODE_SESSION_ID"):
-        return "cc-" + os.environ["CLAUDE_CODE_SESSION_ID"]
-    if os.environ.get("CODEX_THREAD_ID"):
-        return "codex-" + os.environ["CODEX_THREAD_ID"]
-    return None
-
-
-def native_id() -> str | None:
-    return os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID")
+def ensure_session(
+    client: Client,
+    identity: Identity,
+    name: str | None = None,
+    model: str | None = None,
+) -> Json:
+    """Attach to the session this process belongs to, joining if the ledger does not know it yet."""
+    if not identity.native_id:
+        return client.call(
+            "join", client=identity.client, cwd=identity.cwd, name=name, model=model
+        )
+    sid = session_id_for(identity.client, identity.native_id)
+    try:
+        return client.call("attach", sid=sid, native_id=identity.native_id)
+    except CoordError as error:
+        if error.code != -32001:
+            raise
+    return client.call(
+        "join",
+        client=identity.client,
+        native_id=identity.native_id,
+        cwd=identity.cwd,
+        name=name,
+        model=model,
+    )
 
 
 # ---------------------------------------------------------------- MCP adapter
 
+
+def tool(
+    name: str,
+    description: str,
+    properties: Json,
+    required_keys: list[str] | None = None,
+) -> Json:
+    schema: Json = {
+        "type": "object",
+        "properties": properties,
+        "additionalProperties": False,
+    }
+    if required_keys:
+        schema["required"] = required_keys
+    return {"name": name, "description": description, "inputSchema": schema}
+
+
+S, N, B = {"type": "string"}, {"type": "integer"}, {"type": "boolean"}
 MCP_TOOLS: list[Json] = [
-    {
-        "name": "whoami",
-        "description": "Show this session's coordinator identity, project/repo keys, peers in the same project, held resources, open requests and unread count.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {},
-            "additionalProperties": False,
+    tool(
+        "whoami",
+        "This session's identity, project/repo keys, peers, held grants, open requests and unread count.",
+        {},
+    ),
+    tool(
+        "update",
+        "Self-report name / task / status / model.",
+        {
+            "name": S,
+            "task": S,
+            "status": {"type": "string", "enum": list(STATUSES)},
+            "model": S,
+            "cwd": S,
         },
-    },
-    {
-        "name": "update",
-        "description": "Update this session's self-reported name, task, status (working|waiting|idle|blocked|done) or model.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "task": {"type": "string"},
-                "status": {"type": "string", "enum": list(STATUSES)},
-                "model": {"type": "string"},
+    ),
+    tool(
+        "sessions",
+        "List sessions on this host (scope all / project / repo).",
+        {"scope": {"type": "string", "enum": ["all", "project", "repo"]}},
+    ),
+    tool(
+        "send",
+        "Post a coordination message to project (default) / repo / all / a session name or id / self.",
+        {"text": S, "to": S, "request_id": S},
+        ["text"],
+    ),
+    tool(
+        "catchup",
+        "Fetch unread events (non-consuming); ack_through moves the cursor first.",
+        {"limit": N, "ack_through": N},
+    ),
+    tool("ack", "Mark events up to a seq as read.", {"through": N}, ["through"]),
+    tool("peek", "Count unread and their delivery states without consuming.", {}),
+    tool(
+        "history",
+        "Replay retained events (non-consuming).",
+        {"since": N, "limit": N, "all": B},
+    ),
+    tool(
+        "request",
+        "Open a request that needs an answer; resolution never grants a resource.",
+        {"subject": S, "to": S, "body": S, "resource": S, "request_id": S},
+        ["subject"],
+    ),
+    tool(
+        "resolve",
+        "Close a request with a result.",
+        {"req_id": S, "result": S},
+        ["req_id"],
+    ),
+    tool("cancel", "Cancel your own open request.", {"req_id": S}, ["req_id"]),
+    tool("requests", "List open requests.", {"all": B}),
+    tool(
+        "acquire",
+        "Take the exclusive grant on a resource key; a conflict names the owner and purpose.",
+        {"key": S, "purpose": S, "request_id": S},
+        ["key"],
+    ),
+    tool(
+        "release",
+        "Release a grant you hold, passing the generation acquire returned.",
+        {"key": S, "generation": N, "request_id": S},
+        ["key", "generation"],
+    ),
+    tool(
+        "resource_transfer",
+        "Propose handing a grant to another session; it takes effect when they accept.",
+        {"key": S, "to": S, "note": S},
+        ["key", "to"],
+    ),
+    tool(
+        "resource_accept",
+        "Accept a grant transfer proposed to you.",
+        {"key": S},
+        ["key"],
+    ),
+    tool(
+        "declare",
+        "Record a non-exclusive use of a resource key.",
+        {"key": S, "purpose": S},
+        ["key"],
+    ),
+    tool("resources", "List resource keys, owners, waiters and declarations.", {}),
+    tool(
+        "worktree",
+        "Worktree ownership: list / claim / create / release / transfer / accept.",
+        {
+            "action": {
+                "type": "string",
+                "enum": ["list", "claim", "create", "release", "transfer", "accept"],
             },
-            "additionalProperties": False,
+            "path": S,
+            "name": S,
+            "base": S,
+            "enforce": B,
+            "dry_run": B,
+            "to": S,
+            "note": S,
         },
-    },
-    {
-        "name": "sessions",
-        "description": "List participating sessions. scope: all (default) | project (same remote/project, any clone) | repo (same git common-dir incl. worktrees).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "scope": {"type": "string", "enum": ["all", "project", "repo"]}
-            },
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "send",
-        "description": "Post a message to the shared ledger. to: project (default) | repo | all | session:<sid> | <session name> | self. Others read it via catchup; the ledger is visible to every participant.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "text": {"type": "string"},
-                "to": {"type": "string"},
-                "request_id": {
-                    "type": "string",
-                    "description": "Idempotency key for safe retries.",
-                },
-            },
-            "required": ["text"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "catchup",
-        "description": "Fetch unread events addressed to this session (messages, requests, releases, transfers). Events stay unread until acknowledged: pass ack_through=<last seq you have processed> on the next call, or call ack.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "limit": {"type": "integer"},
-                "ack_through": {"type": "integer"},
-            },
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "ack",
-        "description": "Mark events up to seq as read for this session (cursor only moves forward).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"through": {"type": "integer"}},
-            "required": ["through"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "peek",
-        "description": "Count unread events without consuming them.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {},
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "history",
-        "description": "Read the ledger (non-consuming) from seq `since`; all=true includes events outside your scopes.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "since": {"type": "integer"},
-                "limit": {"type": "integer"},
-                "all": {"type": "boolean"},
-            },
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "request",
-        "description": "Open a request that needs an answer (e.g. asking a resource owner to release). to: same forms as send. Resolve/cancel are separate explicit steps; resolution never grants a resource.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "to": {"type": "string"},
-                "subject": {"type": "string"},
-                "body": {"type": "string"},
-                "resource": {
-                    "type": "string",
-                    "description": "Resource key you are waiting for; you get notified on its release.",
-                },
-                "request_id": {"type": "string"},
-            },
-            "required": ["subject"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "resolve",
-        "description": "Resolve an open request (as requester or addressee) with a result note.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"req_id": {"type": "string"}, "result": {"type": "string"}},
-            "required": ["req_id"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "cancel",
-        "description": "Cancel your own open request.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"req_id": {"type": "string"}},
-            "required": ["req_id"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "requests",
-        "description": "List open requests you sent or that address you (all=true for every open request).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"all": {"type": "boolean"}},
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "acquire",
-        "description": "Atomically take exclusive use of a shared resource key (machine, port, test rig). On conflict the owner, purpose and time are returned; then use request to ask them.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "key": {"type": "string"},
-                "purpose": {"type": "string"},
-                "request_id": {"type": "string"},
-            },
-            "required": ["key"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "release",
-        "description": "Release a resource you hold (generation optional; stale generations are rejected). Waiting sessions are notified.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "key": {"type": "string"},
-                "generation": {"type": "integer"},
-            },
-            "required": ["key"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "resources",
-        "description": "List registered resource keys and their owners.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {},
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "worktree",
-        "description": "Worktree ownership. action: list | claim (path, enforce) | create (name, base, enforce) | release (path) | transfer (path, to) | accept (path). create puts the worktree under ~/worktrees/<repo>/<name> and claims it.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": [
-                        "list",
-                        "claim",
-                        "create",
-                        "release",
-                        "transfer",
-                        "accept",
-                    ],
-                },
-                "path": {"type": "string"},
-                "name": {"type": "string"},
-                "base": {"type": "string"},
-                "to": {"type": "string"},
-                "enforce": {"type": "boolean"},
-                "note": {"type": "string"},
-            },
-            "required": ["action"],
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "status",
-        "description": "Overview of all sessions, held resources, worktree ownership and open requests (same view as the agent_coord status CLI).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {},
-            "additionalProperties": False,
-        },
-    },
-    {
-        "name": "leave",
-        "description": "Leave the ledger explicitly. Held resources become 'unconfirmed' (not released).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {},
-            "additionalProperties": False,
-        },
-    },
+        ["action"],
+    ),
+    tool("status", "Host-wide overview (the same data the CLI shows).", {}),
+    tool("leave", "Leave the ledger; held grants become unconfirmed, not free.", {}),
 ]
-MCP_TOOL_NAMES = frozenset(t["name"] for t in MCP_TOOLS)
+RESERVED_ARGS = frozenset({"sid", "native_id", "token", "user_action"})
+JSON_TYPES = {"string": str, "integer": int, "boolean": bool}
+
+
+def check_arguments(schema: Json, arguments: Json) -> None:
+    properties = schema.get("properties", {})
+    for key in schema.get("required", []):
+        if key not in arguments:
+            raise CoordError(f"argument {key!r} is required", -32602)
+    for key, value in arguments.items():
+        spec = properties.get(key)
+        if spec is None:
+            raise CoordError(f"unknown argument {key!r}", -32602)
+        expected = JSON_TYPES.get(spec.get("type", ""))
+        if expected and (
+            not isinstance(value, expected)
+            or (expected is int and isinstance(value, bool))
+        ):
+            raise CoordError(f"argument {key!r} must be {spec['type']}", -32602)
+        if "enum" in spec and value not in spec["enum"]:
+            raise CoordError(f"argument {key!r} must be one of {spec['enum']}", -32602)
 
 
 class McpAdapter:
-    """stdio MCP server that forwards every tool call to the daemon as one session."""
+    """stdio MCP server: one session identity, every tool call forwarded to the daemon."""
 
-    def __init__(self, client: Client, sid: str, cwd: str):
+    def __init__(self, client: Client, identity: Identity):
         self.client = client
-        self.sid = sid
-        self.cwd = cwd
-        self.joined = False
+        self.identity = identity
+        self.sid: str | None = None
 
-    def ensure_joined(self) -> Json:
-        result = self.client.call(
-            "join",
-            sid=self.sid,
-            client=detect_client(),
-            native_id=native_id(),
-            cwd=self.cwd,
-            model=os.environ.get("CLAUDE_MODEL"),
-        )
-        self.joined = True
-        return result
+    def ensure_joined(self) -> str:
+        if self.sid is None:
+            joined = ensure_session(
+                self.client, self.identity, model=os.environ.get("CLAUDE_MODEL")
+            )
+            self.sid = joined["session"]["sid"]
+        return self.sid
 
     def call_tool(self, name: str, arguments: Json) -> Json:
-        if not self.joined:
-            self.ensure_joined()
-        if name == "worktree":
-            action = str(arguments.pop("action", ""))
-            method = f"worktree_{action}"
-            if method not in METHODS or action == "force_release":
-                raise CoordError(f"unknown worktree action {action!r}", -32602)
-            return self.client.call(method, sid=self.sid, **arguments)
-        if name not in MCP_TOOL_NAMES:
+        spec = next((t for t in MCP_TOOLS if t["name"] == name), None)
+        if spec is None:
             raise CoordError(f"unknown tool {name}", -32601)
-        result = self.client.call(name, sid=self.sid, **arguments)
+        arguments = {k: v for k, v in arguments.items() if k not in RESERVED_ARGS}
+        check_arguments(spec["inputSchema"], arguments)
+        sid = self.ensure_joined()
+        method = f"worktree_{arguments.pop('action')}" if name == "worktree" else name
+        result = self.client.call(method, sid=sid, **arguments)
         if name == "leave":
-            self.joined = False
+            self.sid = None
         return result
 
     def dispatch(self, message: Json) -> Json | None:
         if "id" not in message:
             return None
         req_id, method = message.get("id"), message.get("method")
+        params = message.get("params") or {}
         if method == "initialize":
-            params = message.get("params") or {}
-            protocol = (
-                params.get("protocolVersion")
-                if isinstance(params.get("protocolVersion"), str)
-                else MCP_PROTOCOL_VERSION
-            )
+            requested = params.get("protocolVersion")
+            protocol = requested if isinstance(requested, str) else MCP_PROTOCOL_VERSION
             return rpc_result(
                 req_id,
                 {
@@ -1913,18 +2497,22 @@ class McpAdapter:
         if method == "ping":
             return rpc_result(req_id, {})
         if method == "tools/call":
-            params = message.get("params") or {}
-            name = params.get("name")
-            arguments = params.get("arguments") or {}
+            name, arguments = params.get("name"), params.get("arguments") or {}
             if not isinstance(name, str) or not isinstance(arguments, dict):
-                text = "tool call needs a name and an object of arguments"
-                return rpc_result(req_id, tool_result(text, True))
+                return rpc_result(
+                    req_id,
+                    tool_result(
+                        "tool call needs a name and an object of arguments", True
+                    ),
+                )
             try:
                 result = self.call_tool(name, dict(arguments))
             except CoordError as error:
                 return rpc_result(
                     req_id, tool_result(f"error {error.code}: {error}", True)
                 )
+            except Exception as error:  # the adapter must outlive any single bad call
+                return rpc_result(req_id, tool_result(f"error: {error!r}", True))
             return rpc_result(req_id, tool_result(render_tool(name, result), False))
         return rpc_error(req_id, -32601, "Method not found")
 
@@ -1933,71 +2521,14 @@ def tool_result(text: str, is_error: bool) -> Json:
     return {"content": [{"type": "text", "text": text}], "isError": is_error}
 
 
-def render_event(event: Json) -> str:
-    body = event["body"]
-    who = body.get("from_name") or event["actor"] or "?"
-    scope = event["scope_kind"] + (
-        f":{event['scope_key']}" if event["scope_kind"] != "all" else ""
-    )
-    head = f"#{event['seq']} {fmt_time(event['ts'])} [{event['kind']}] {who} -> {scope}"
-    if event["kind"] == "message":
-        return f"{head}\n    {body.get('text', '')}"
-    if event["kind"] == "request_open":
-        return f"{head} {body.get('req_id', '')}: {body.get('subject', '')}\n    {body.get('text', '')}".rstrip()
-    detail = {
-        k: v
-        for k, v in body.items()
-        if k not in ("from_name",) and v not in (None, "", False)
-    }
-    return f"{head} {json.dumps(detail, ensure_ascii=False)}"
-
-
-def render_catchup(result: Json) -> str:
-    events = result["events"]
-    if not events:
-        return f"No unread events (cursor {result['cursor']})."
-    lines = [render_event(e) for e in events]
-    lines.append(
-        f"-- {len(events)} event(s){' (more pending)' if result['more'] else ''}. Ack with ack_through={result['last_seq']} on your next catchup, or ack(through={result['last_seq']})."
-    )
-    return "\n".join(lines)
-
-
-def render_history(result: Json) -> str:
-    return "\n".join(render_event(e) for e in result["events"]) or "No events."
-
-
-def render_identity(result: Json) -> str:
-    s = result["session"]
-    return (
-        f"{s['sid']} name={s['name']} client={s['client']} project={s['project']}\n"
-        f"repo_top={s['repo_top']} checkout={s['checkout']} branch={s['branch']} edit_worktree={s['edit_worktree']}\n"
-        f"peers in project: {', '.join(p['name'] for p in result['peers_same_project']) or 'none'} ({result['peers_total']} total)\n"
-        f"held: {[r['key'] for r in result['held_resources']]} worktrees: {result['owned_worktrees']} open requests: {len(result['open_requests'])} unread: {result['unread']}"
-    )
-
-
-def render_tool(name: str, result: Json) -> str:
-    renderers = {
-        "catchup": render_catchup,
-        "history": render_history,
-        "status": render_status,
-        "sessions": lambda r: render_sessions(r["sessions"]),
-        "join": render_identity,
-        "whoami": render_identity,
-    }
-    return renderers.get(name, pretty)(result)
-
-
-def run_mcp(stdin: TextIO, stdout: TextIO) -> int:
-    sid = detect_sid() or f"{detect_client()}-{short_id()}"
-    cwd = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+def run_mcp(stdin: TextIO, stdout: TextIO, client_name: str | None = None) -> int:
+    identity = identity_from_env(client_name)
     try:
         client = Client()
     except CoordError as error:
         print(f"agent_coord mcp: {error}", file=sys.stderr)
         return 1
-    adapter = McpAdapter(client, sid, cwd)
+    adapter = McpAdapter(client, identity)
     try:
         adapter.ensure_joined()
     except CoordError as error:
@@ -2013,74 +2544,103 @@ def run_mcp(stdin: TextIO, stdout: TextIO) -> int:
         if response is not None:
             stdout.write(json_line(response))
             stdout.flush()
+    client.close()
     return 0
 
 
-# ---------------------------------------------------------------- hooks (Claude Code)
+# ---------------------------------------------------------------- hooks
 
 
-def hook_main(event_name: str, stdin: TextIO, stdout: TextIO) -> int:
-    """Claude Code hook entry: join on start, nudge on unread, deny edits outside the claimed worktree."""
+def hook_main(client_name: str, event: str, stdin: TextIO, stdout: TextIO) -> int:
+    """Hook entry for every client: the adapter translates payload and output, the daemon decides."""
+    adapter = adapter_for(client_name)
     try:
         payload = json.loads(stdin.read() or "{}")
     except (json.JSONDecodeError, ValueError):
         payload = {}
-    client_name = detect_client()
-    native = payload.get("session_id") or native_id()
-    prefix = "codex" if client_name == "codex" else "cc"
-    sid = f"{prefix}-{native}" if native else detect_sid()
-    if not sid:
+    if not isinstance(payload, dict):
+        payload = {}
+    native = adapter.hook_native(payload)
+    if not native:
         return 0
-    cwd = payload.get("cwd") or os.getcwd()
+    identity = Identity(
+        adapter.name, str(native), adapter.hook_cwd(payload) or os.getcwd()
+    )
+    role = adapter.hook_role(event)
     try:
-        client = Client(autostart=event_name != "SessionEnd")
+        client = Client(autostart=role != "end")
     except CoordError as error:
         print(f"agent_coord hook: {error}", file=sys.stderr)
         return 0
     try:
-        if event_name == "SessionStart":
-            joined = client.call(
-                "join", sid=sid, client=client_name, native_id=native, cwd=cwd
-            )
-            peers = ", ".join(p["name"] for p in joined["peers_same_project"]) or "none"
-            emit_hook(
-                stdout,
-                event_name,
-                additionalContext=f"[agent-coord] joined as {sid} ({joined['session']['name']}). Same-project peers: {peers}. Unread: {joined['unread']}. Tools: mcp agent_coord (send/catchup/acquire/worktree) or `agent_coord` CLI.",
-            )
-        elif event_name == "SessionEnd":
-            client.call("update", sid=sid, status="done")
-        elif event_name == "PreToolUse":
-            tool_input = payload.get("tool_input") or {}
-            target = tool_input.get("file_path") or tool_input.get("notebook_path")
-            if target:
-                verdict = client.call("edit_check", sid=sid, path=target)
-                if not verdict["allow"]:
-                    emit_hook(
-                        stdout,
-                        event_name,
-                        permissionDecision="deny",
-                        permissionDecisionReason=f"[agent-coord] {verdict['reason']}",
-                    )
-        else:
-            nudge = client.call("nudge", sid=sid)
-            if nudge.get("text"):
-                emit_hook(stdout, event_name, additionalContext=nudge["text"])
+        output = hook_dispatch(client, adapter, identity, event, role, payload)
     except CoordError as error:
-        if error.code != -32001:
-            print(f"agent_coord hook: {error}", file=sys.stderr)
+        output = adapter.hook_silence(event)
+        print(f"agent_coord hook: {error}", file=sys.stderr)
     finally:
         client.close()
+    if output is not None:
+        stdout.write(json_line(output))
     return 0
 
 
-def emit_hook(stdout: TextIO, event_name: str, **fields: str) -> None:
-    stdout.write(
-        json_line({"hookSpecificOutput": {"hookEventName": event_name, **fields}})
+def hook_dispatch(
+    client: Client,
+    adapter: ClientAdapter,
+    identity: Identity,
+    event: str,
+    role: str,
+    payload: Json,
+) -> Json | None:
+    sid = session_id_for(identity.client, str(identity.native_id))
+    if role == "start":
+        return adapter.hook_context(
+            event, joined_text(ensure_session(client, identity), sid)
+        )
+    if role == "start-or-nudge":
+        try:
+            client.call("attach", sid=sid, native_id=identity.native_id)
+        except CoordError as error:
+            if error.code != -32001:
+                raise
+            return adapter.hook_context(
+                event, joined_text(ensure_session(client, identity), sid)
+            )
+        nudge = client.call("nudge", sid=sid)
+        return (
+            adapter.hook_context(event, nudge["text"])
+            if nudge.get("text")
+            else adapter.hook_silence(event)
+        )
+    ensure_session(client, identity)
+    if role == "end":
+        client.call("update", sid=sid, status="done")
+        return adapter.hook_silence(event)
+    if role == "gate":
+        for path in adapter.hook_edit_paths(payload):
+            verdict = client.call("edit_check", sid=sid, path=path)
+            if not verdict["allow"]:
+                return adapter.hook_deny(event, f"[agent-coord] {verdict['reason']}")
+        return adapter.hook_silence(event)
+    nudge = client.call("nudge", sid=sid)
+    return (
+        adapter.hook_context(event, nudge["text"])
+        if nudge.get("text")
+        else adapter.hook_silence(event)
     )
 
 
-# ---------------------------------------------------------------- CLI rendering
+def joined_text(joined: Json, sid: str) -> str:
+    session = joined["session"]
+    peers = ", ".join(p["name"] for p in joined.get("peers_same_project", [])) or "none"
+    return (
+        f"[agent-coord] joined as {sid} ({session['name']}). Same-project peers: {peers}."
+        f" Unread: {joined.get('unread', 0)}."
+        " Tools: mcp agent_coord (send/catchup/acquire/worktree) or `agent_coord` CLI."
+    )
+
+
+# ---------------------------------------------------------------- rendering
 
 
 def table(rows: list[list[str]], header: list[str]) -> str:
@@ -2091,6 +2651,54 @@ def table(rows: list[list[str]], header: list[str]) -> str:
 
     return "\n".join(
         [line(header), line(["-" * w for w in widths]), *[line(r) for r in rows]]
+    )
+
+
+def render_event(event: Json) -> str:
+    body = event["body"]
+    who = body.get("from_name") or event["actor"] or "?"
+    scope = event["scope_kind"] + (
+        f":{event['scope_key']}" if event["scope_kind"] != "all" else ""
+    )
+    flag = " (backfill)" if event.get("backfill") else ""
+    head = f"#{event['seq']} {fmt_time(event['ts'])} [{event['kind']}]{flag} {who} -> {scope}"
+    if event["kind"] == "message":
+        return f"{head}\n    {body.get('text', '')}"
+    if event["kind"] == "request_open":
+        return f"{head} {body.get('req_id', '')}: {body.get('subject', '')}\n    {body.get('text', '')}".rstrip()
+    detail = {
+        k: v for k, v in body.items() if k != "from_name" and v not in (None, "", False)
+    }
+    return f"{head} {json.dumps(detail, ensure_ascii=False)}"
+
+
+def render_catchup(result: Json) -> str:
+    events = result["events"]
+    lines = [render_event(e) for e in events] or [
+        f"No unread events (cursor {result['cursor']})."
+    ]
+    if result.get("gap"):
+        gap = result["gap"]
+        lines.insert(
+            0,
+            f"-- events up to seq {gap['through']} were dropped ({gap['reason']}); check status for the current state",
+        )
+    if events:
+        more = " (more pending)" if result["more"] else ""
+        lines.append(
+            f"-- {len(events)} event(s){more}. Ack with ack(through={result['last_seq']}) or catchup(ack_through={result['last_seq']})."
+        )
+    return "\n".join(lines)
+
+
+def render_identity(result: Json) -> str:
+    s = result["session"]
+    held = [f"{r['key']}@{r['owner']}" for r in result["resources_held"]]
+    return (
+        f"{s['sid']} name={s['name']} client={s['client']} project={s['project']}\n"
+        f"repo_top={s['repo_top']} checkout={s['checkout']} branch={s['branch']} edit_worktree={s['edit_worktree']}\n"
+        f"peers in project: {', '.join(p['name'] for p in result['peers_same_project']) or 'none'} ({result['peers_total']} total)\n"
+        f"held on host: {held} my worktrees: {result['owned_worktrees']} open requests: {len(result['open_requests'])} unread: {result['unread']}"
     )
 
 
@@ -2109,70 +2717,93 @@ def render_sessions(sessions: list[Json]) -> str:
             + (f"@{s['branch']}" if s.get("branch") else ""),
             f"{s.get('connections', '?')}c",
             s["updated_ago"],
+            s["seen_ago"],
+            s["capabilities"]["notify"],
+            s["capabilities"]["enforcement"],
             str(s.get("unread", "")),
         ]
         for s in sessions
     ]
-    return table(
-        rows,
-        [
-            "sid",
-            "name",
-            "client",
-            "status",
-            "task",
-            "project",
-            "checkout",
-            "conn",
-            "updated",
-            "unread",
-        ],
-    )
+    header = [
+        "sid",
+        "name",
+        "client",
+        "status",
+        "task",
+        "project",
+        "checkout",
+        "conn",
+        "reported",
+        "seen",
+        "notify",
+        "gate",
+        "unread",
+    ]
+    return table(rows, header)
 
 
 def render_status(status: Json) -> str:
     service = status["service"]
     parts = [
-        f"agent_coord {service['version']} pid {service['pid']} up since {fmt_time(service['started_at'])}; {service['events']} events, {service['connections']} live connection(s); home {service['home']}",
+        f"agent_coord {service['version']} pid {service['pid']} up since {fmt_time(service['started_at'])};"
+        f" {service['events']} events ({service['retained']} retained), {service['connections']} live connection(s); home {service['home']}",
         "",
-        "Sessions (self-reported status/task; 'updated' = last self report, conn = live connections)",
+        "Sessions ('reported' = age of the last self-report, 'seen' = age of the last call observed; notify push = idle sessions get woken, pull = hooks only)",
         render_sessions(status["sessions"]),
     ]
-    if status["resources"]:
+    if status["resources"] or status["waiters"]:
+        waiting: dict[str, list[str]] = {}
+        for w in status["waiters"]:
+            waiting.setdefault(w["key"], []).append(w["sid"])
+        rows = [
+            [
+                r["key"],
+                r["owner"] or "-",
+                r["purpose"] or "-",
+                fmt_time(r["acquired_at"]),
+                r["state"] or "-",
+                str(r["generation"]),
+                ", ".join(waiting.get(r["key"], [])) or "-",
+                r["pending_to"] or "-",
+            ]
+            for r in status["resources"]
+        ]
+        for key, sids in waiting.items():
+            if not any(r["key"] == key for r in status["resources"]):
+                rows.append([key, "-", "-", "-", "free", "-", ", ".join(sids), "-"])
         parts += [
             "",
             "Resources",
             table(
+                rows,
                 [
-                    [
-                        r["key"],
-                        r["owner"] or "-",
-                        r["purpose"] or "-",
-                        fmt_time(r["acquired_at"]),
-                        r["state"] or "-",
-                        str(r["generation"]),
-                    ]
-                    for r in status["resources"]
+                    "key",
+                    "owner",
+                    "purpose",
+                    "since",
+                    "state",
+                    "gen",
+                    "waiting",
+                    "pending_to",
                 ],
-                ["key", "owner", "purpose", "since", "state", "gen"],
             ),
         ]
     if status["worktrees"]:
         parts += [
             "",
-            "Worktrees",
+            "Worktrees (enforced = verified edit gate; advisory = this client has no verified gate; coop = not enforced)",
             table(
                 [
                     [
                         w["path"],
                         w["owner"] or "-",
-                        "enforce" if w["enforce"] else "coop",
+                        w["enforcement"],
                         fmt_time(w["claimed_at"]),
                         w["pending_to"] or "-",
                     ]
                     for w in status["worktrees"]
                 ],
-                ["path", "owner", "mode", "since", "pending_to"],
+                ["path", "owner", "enforcement", "since", "pending_to"],
             ),
         ]
     if status["requests"]:
@@ -2196,18 +2827,30 @@ def render_status(status: Json) -> str:
     return "\n".join(parts)
 
 
+def render_tool(name: str, result: Json) -> str:
+    renderers: dict[str, Callable[[Json], str]] = {
+        "catchup": render_catchup,
+        "history": lambda r: (
+            "\n".join(render_event(e) for e in r["events"]) or "No events."
+        ),
+        "status": render_status,
+        "sessions": lambda r: render_sessions(r["sessions"]),
+        "join": render_identity,
+        "whoami": render_identity,
+    }
+    return renderers.get(name, pretty)(result)
+
+
 # ---------------------------------------------------------------- CLI
 
 
 def build_parser() -> argparse.ArgumentParser:
-    common = argparse.ArgumentParser(
-        add_help=False
-    )  # global flags, before or after the subcommand
+    common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
         "--as",
         dest="sid",
         default=argparse.SUPPRESS,
-        help="act as this session id (default: from CLAUDE_CODE_SESSION_ID / AGENT_COORD_SID)",
+        help="act as this session id (needs AGENT_COORD_TOKEN or the matching native id)",
     )
     common.add_argument(
         "--json",
@@ -2228,76 +2871,86 @@ def build_parser() -> argparse.ArgumentParser:
     )
     top = parser.add_subparsers(dest="command", required=True)
 
-    class Sub:
-        def add_parser(self, name: str, **kw: Any) -> argparse.ArgumentParser:
-            return top.add_parser(name, parents=[common], **kw)
+    def sub(name: str, **kw: Any) -> argparse.ArgumentParser:
+        return top.add_parser(name, parents=[common], **kw)
 
-    sub = Sub()
-    p = sub.add_parser("serve", help="run the coordinator daemon")
+    p = sub("serve", help="run the coordinator daemon")
     p.add_argument("--daemon", action="store_true", help="detach into the background")
-    sub.add_parser("stop", help="stop the daemon (ledger is kept)")
-    sub.add_parser("doctor", help="diagnose connectivity and identity")
-    sub.add_parser(
-        "mcp", help="stdio MCP adapter (registered by install_claude_extensions)"
+    sub("stop", help="stop the daemon (ledger is kept)")
+    sub(
+        "doctor",
+        help="diagnose the connect / session / notify / enforcement / sandbox lanes",
     )
-    p = sub.add_parser("hook", help="Claude Code hook entry")
+    p = sub("mcp", help="stdio MCP adapter")
+    p.add_argument("--client", choices=sorted(ADAPTERS))
+    p = sub("hook", help="hook entry: agent_coord hook --client <name> <event>")
+    p.add_argument("--client", required=True, choices=sorted(ADAPTERS))
     p.add_argument("event")
-    p = sub.add_parser("join", help="register this session")
+    p = sub("join", help="register this session")
     p.add_argument("--name")
     p.add_argument("--task")
-    p.add_argument("--client")
     p.add_argument("--cwd")
-    sub.add_parser("whoami")
-    sub.add_parser("leave")
-    p = sub.add_parser("update")
+    sub("whoami")
+    sub("leave")
+    p = sub("update")
     p.add_argument("--name")
     p.add_argument("--task")
     p.add_argument("--status", choices=STATUSES)
     p.add_argument("--cwd")
-    p = sub.add_parser("sessions")
+    p = sub("sessions")
     p.add_argument("--scope", choices=["all", "project", "repo"], default="all")
-    p = sub.add_parser("send")
+    p = sub("send")
     p.add_argument("text")
     p.add_argument("--to", default="project")
     p.add_argument("--request-id")
-    p = sub.add_parser("catchup")
+    p = sub("catchup")
     p.add_argument("--limit", type=int, default=20)
     p.add_argument("--ack-through", type=int)
-    p = sub.add_parser("ack")
+    p = sub("ack")
     p.add_argument("through", type=int)
-    sub.add_parser("peek")
-    sub.add_parser("nudge")
-    p = sub.add_parser("history")
+    sub("peek")
+    sub("nudge")
+    p = sub("history")
     p.add_argument("--since", type=int, default=0)
     p.add_argument("--limit", type=int, default=50)
     p.add_argument("--all", action="store_true")
-    p = sub.add_parser("request")
+    p = sub("request")
     p.add_argument("subject")
     p.add_argument("--to", default="project")
     p.add_argument("--body")
     p.add_argument("--resource")
     p.add_argument("--request-id")
-    p = sub.add_parser("resolve")
+    p = sub("resolve")
     p.add_argument("req_id")
     p.add_argument("--result")
-    p = sub.add_parser("cancel")
+    p = sub("cancel")
     p.add_argument("req_id")
-    p = sub.add_parser("requests")
+    p = sub("requests")
     p.add_argument("--all", action="store_true")
-    p = sub.add_parser("acquire")
+    p = sub("acquire")
     p.add_argument("key")
     p.add_argument("--purpose")
     p.add_argument("--request-id")
-    p = sub.add_parser("release")
+    p = sub("release")
     p.add_argument("key")
-    p.add_argument("--generation", type=int)
-    p = sub.add_parser(
+    p.add_argument("generation", type=int)
+    p.add_argument("--request-id")
+    p = sub("declare")
+    p.add_argument("key")
+    p.add_argument("--purpose")
+    p = sub("transfer", help="propose handing a resource grant to another session")
+    p.add_argument("key")
+    p.add_argument("to")
+    p.add_argument("--note")
+    p = sub("accept", help="accept a resource grant proposed to you")
+    p.add_argument("key")
+    p = sub(
         "force-release", help="user override for an unreachable owner; reason required"
     )
     p.add_argument("key")
     p.add_argument("--reason", required=True)
-    sub.add_parser("resources")
-    p = sub.add_parser("worktree")
+    sub("resources")
+    p = sub("worktree")
     w = p.add_subparsers(dest="action", required=True)
     w.add_parser("list")
     c = w.add_parser("claim")
@@ -2308,6 +2961,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--base")
     c.add_argument("--root")
     c.add_argument("--enforce", action="store_true")
+    c.add_argument("--dry-run", action="store_true")
     c = w.add_parser("release")
     c.add_argument("path", nargs="?")
     c = w.add_parser("transfer")
@@ -2319,14 +2973,13 @@ def build_parser() -> argparse.ArgumentParser:
     c = w.add_parser("force-release")
     c.add_argument("path")
     c.add_argument("--reason", required=True)
-    sub.add_parser("status")
-    p = sub.add_parser("watch", help="live status; redraws on every ledger change")
+    sub("status")
+    p = sub("watch", help="live status; redraws on every ledger change")
     p.add_argument("--interval", type=float, default=30)
     return parser
 
 
 def parse_cli(argv: list[str] | None) -> argparse.Namespace:
-    """Shared flags keep SUPPRESS defaults (set_defaults would leak into every subparser), so fill them here."""
     args = build_parser().parse_args(argv)
     for key, value in (("sid", None), ("json", False), ("no_autostart", False)):
         vars(args).setdefault(key, value)
@@ -2334,7 +2987,7 @@ def parse_cli(argv: list[str] | None) -> argparse.Namespace:
 
 
 def cli_params(args: argparse.Namespace) -> Json:
-    skip = {"sid", "json", "no_autostart", "command", "action"}
+    skip = {"sid", "json", "no_autostart", "command", "action", "client"}
     return {
         k: v
         for k, v in vars(args).items()
@@ -2344,7 +2997,7 @@ def cli_params(args: argparse.Namespace) -> Json:
 
 def daemonize_serve(home: Path) -> int:
     try:
-        Client(home / "coord.sock").close()  # autostart spawns the daemon and waits
+        Client(home / "coord.sock").close()
     except CoordError as error:
         print(
             f"daemon did not come up ({error}); see {home / 'daemon.log'}",
@@ -2355,36 +3008,51 @@ def daemonize_serve(home: Path) -> int:
     return 0
 
 
-def doctor(sid: str | None, autostart: bool) -> int:
-    identity = git_identity(os.getcwd())
-    print(
+def doctor(identity: Identity, autostart: bool, out: TextIO = sys.stdout) -> int:
+    """Each lane on its own line: connect (CLI/MCP), session, notify, enforcement, sandbox."""
+    adapter = adapter_for(identity.client)
+    lines = [
         f"home: {coord_home()}  socket: {sock_path()}  exists: {sock_path().exists()}"
-    )
-    print(
-        f"caller: client={detect_client()} sid={sid or '(none: pass --as or set CLAUDE_CODE_SESSION_ID)'}"
-    )
-    print(
-        f"cwd identity: project={identity['project']} repo_top={identity['repo_top']} checkout={identity['checkout']} branch={identity['branch']}"
-    )
+    ]
     try:
         client = Client(autostart=autostart)
     except CoordError as error:
-        print(f"connect: FAILED: {error}")
+        lines.append(f"connect: FAILED: {error}")
+        out.write("\n".join(lines) + "\n")
         return 1
     pong = client.call("ping")
-    print(f"connect: ok (daemon pid {pong['pid']} version {pong['version']})")
-    if sid:
-        try:
-            me = client.call("whoami", sid=sid)
-            print(
-                f"session: registered as {me['session']['name']} (unread {me['unread']})"
-            )
-        except CoordError as error:
-            print(f"session: {error}")
-    print(
-        "notifications: Claude Code hooks inject unread nudges at prompt/tool boundaries; no in-flight interrupt"
+    mismatch = (
+        "" if pong["version"] == VERSION else f" (CLI is {VERSION}: restart the daemon)"
+    )
+    lines.append(
+        f"connect: ok (daemon pid {pong['pid']} version {pong['version']}{mismatch})"
+    )
+    sid = (
+        session_id_for(identity.client, identity.native_id)
+        if identity.native_id
+        else "-"
+    )
+    lines.append(
+        f"session: client={identity.client} native_id={identity.native_id or '(none: joins as anon)'} sid={sid}"
+    )
+    if identity.client == "claude-code" and identity.native_id:
+        found = ClaudeCodeAdapter().inbox(identity.native_id)
+        lines.append(
+            f"notify: push via inbox socket {found[0] if found else '(session not in the registry: pull only)'}"
+        )
+    elif identity.client == "codex":
+        lines.append("notify: push via `codex queue --thread`")
+    else:
+        lines.append(
+            f"notify: pull (hooks / polling only) for client {identity.client}"
+        )
+    lines.append(f"enforcement: {adapter.enforcement} for client {identity.client}")
+    sandboxed = os.environ.get("CLAUDE_CODE_SANDBOX") or os.environ.get("SANDBOX")
+    lines.append(
+        f"sandbox: {'sandboxed shell' if sandboxed else 'host shell'}; socket reached at {sock_path()}"
     )
     client.close()
+    out.write("\n".join(lines) + "\n")
     return 0
 
 
@@ -2394,12 +3062,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "serve":
         return daemonize_serve(home) if args.daemon else serve(home)
     if args.command == "mcp":
-        return run_mcp(sys.stdin, sys.stdout)
+        return run_mcp(sys.stdin, sys.stdout, args.client)
     if args.command == "hook":
-        return hook_main(args.event, sys.stdin, sys.stdout)
-    sid = detect_sid(args.sid)
+        return hook_main(args.client, args.event, sys.stdin, sys.stdout)
+    identity = identity_from_env()
     if args.command == "doctor":
-        return doctor(sid, not args.no_autostart)
+        return doctor(identity, not args.no_autostart)
     try:
         client = Client(
             autostart=not args.no_autostart
@@ -2415,7 +3083,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "watch":
             return watch(client, args.interval)
-        result = run_command(client, args, sid)
+        result = run_command(client, args, identity)
     except CoordError as error:
         print(f"agent_coord: {error}", file=sys.stderr)
         if args.json and error.data:
@@ -2427,44 +3095,80 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def run_command(client: Client, args: argparse.Namespace, sid: str | None) -> Json:
+READ_ONLY = frozenset({"status", "sessions", "history", "requests", "resources"})
+
+
+def run_command(client: Client, args: argparse.Namespace, identity: Identity) -> Json:
     params = cli_params(args)
-    if args.command == "join":
+    command = args.command
+    if command == "join":
+        cwd = params.pop("cwd", None)
         return client.call(
             "join",
-            sid=sid,
-            client=params.pop("client", None) or detect_client(),
-            native_id=native_id(),
-            cwd=params.pop("cwd", None) or os.getcwd(),
+            client=identity.client,
+            native_id=identity.native_id,
+            cwd=cwd or identity.cwd,
             **params,
         )
-    method = args.command.replace("-", "_")
-    if args.command == "worktree":
+    if command == "force-release" or (
+        command == "worktree" and args.action == "force-release"
+    ):
+        method = (
+            "force_release" if command == "force-release" else "worktree_force_release"
+        )
+        return client.call(method, user_action=True, **params)
+    sid: str | None = None
+    if command not in READ_ONLY:
+        if args.sid:
+            client.call(
+                "attach",
+                sid=args.sid,
+                token=os.environ.get("AGENT_COORD_TOKEN"),
+                native_id=identity.native_id,
+            )
+            sid = args.sid
+        else:
+            sid = ensure_session(client, identity)["session"]["sid"]
+    method = {"transfer": "resource_transfer", "accept": "resource_accept"}.get(
+        command, command.replace("-", "_")
+    )
+    if command == "worktree":
         method = f"worktree_{args.action.replace('-', '_')}"
     return client.call(method, sid=sid, **params)
 
 
 def watch(client: Client, interval: float) -> int:
-    status = Client(autostart=False)  # the subscribed socket only streams events
+    status = Client(autostart=False)
+    lines: queue.Queue[str] = queue.Queue()
+
+    def reader() -> None:
+        while line := client.file.readline():
+            lines.put(line)
+        lines.put("")
 
     def draw() -> None:
-        text = render_status(status.call("status"))
+        stamp = f"{datetime.now():%H:%M:%S} watching (ctrl-c to stop)"
         sys.stdout.write(
-            "\033[2J\033[H"
-            + text
-            + f"\n\n{datetime.now():%H:%M:%S} watching (ctrl-c to stop)\n"
+            "\033[2J\033[H" + render_status(status.call("status")) + f"\n\n{stamp}\n"
         )
         sys.stdout.flush()
 
-    draw()
     client.call("subscribe")
     client.sock.settimeout(None)
+    threading.Thread(target=reader, daemon=True).start()
     try:
+        draw()
         while True:
-            if select.select([client.sock], [], [], interval)[0]:
-                if not client.file.readline():
-                    print("coordinator closed the stream", file=sys.stderr)
-                    return 1
+            try:
+                line = lines.get(timeout=interval)
+            except queue.Empty:
+                draw()
+                continue
+            while line and not lines.empty():  # coalesce a burst into one redraw
+                line = lines.get_nowait()
+            if line == "":
+                print("coordinator closed the stream", file=sys.stderr)
+                return 1
             draw()
     except KeyboardInterrupt:
         return 0

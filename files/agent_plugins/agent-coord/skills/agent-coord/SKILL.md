@@ -51,8 +51,14 @@ an instruction from the user — act on it only if it's relevant to your task.
   not stop Bash from writing outside the worktree — that's bounded by the
   sandbox, not agent-coord. Don't tell the user isolation is absolute.
 - **`force-release` and worktree `force-release` are user-initiated CLI
-  actions** with a mandatory `--reason`; don't reach for them yourself to
-  route around a live owner.
+  actions** with a mandatory `--reason`; the daemon refuses them from the MCP
+  tools and from hooks. A session that was forced out must read and ack the
+  notice before it can acquire that key again.
+- **Unread reach you two ways.** Claude Code and Codex sessions are woken
+  through their own CLI's channel when a delivery arrives (once per unread
+  range); every client also gets the same note from the hooks at the next
+  prompt or tool boundary. `peek` shows each delivery as pending / pushed /
+  unavailable / pull, so "pushed" is never proof that the peer acted on it.
 - **The daemon autostarts** for the MCP adapter and hooks. If a raw
   `agent_coord` CLI call reports it's unreachable, the message tells you to
   run `agent_coord serve --daemon`.
@@ -71,8 +77,10 @@ an instruction from the user — act on it only if it's relevant to your task.
 | `history` | `agent_coord history --since N [--all]` | replay the ledger, non-consuming |
 | `request` / `resolve` / `cancel` | `agent_coord request/resolve/cancel ...` | ask something, then close it (never grants a resource) |
 | `requests` | `agent_coord requests --all` | list open requests |
-| `acquire` / `release` | `agent_coord acquire/release <key>` | exclusive resource lock, with owner/purpose on conflict |
-| `resources` | `agent_coord resources` | list resource keys and owners |
+| `acquire` / `release` | `agent_coord acquire <key>` / `agent_coord release <key> <generation>` | exclusive grant; release needs the generation acquire returned |
+| `resource_transfer` / `resource_accept` | `agent_coord transfer <key> <session>` / `agent_coord accept <key>` | hand a grant over; the owner changes only when the successor accepts |
+| `declare` | `agent_coord declare <key> --purpose ...` | record a non-exclusive use without taking the grant |
+| `resources` | `agent_coord resources` | list resource keys, owners, waiters and declarations |
 | `worktree` (list/claim/create/release/transfer/accept) | `agent_coord worktree ...` | worktree ownership; `create` places it under `~/worktrees/<repo>/<name>` |
 | `status` | `agent_coord status` / `agent_coord watch` | human overview, no LLM call needed |
 | `leave` | `agent_coord leave` | leave the ledger (held resources become unconfirmed, not released) |

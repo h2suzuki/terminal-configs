@@ -6,7 +6,7 @@
       "args": [
         "mcp",
         "--client",
-        "claude-code"
+        "antigravity"
       ]
     }
   }

@@ -225,7 +225,7 @@ if command -v codex >/dev/null; then
     run codex plugin add agent-coord
 fi
 if command -v agy >/dev/null; then
-    run agy plugin install /usr/local/share/agent_plugins/agent-coord
+    run agy plugin install /usr/local/share/agent_plugins/agent-coord-antigravity
 fi
 
 # Vercel CLI

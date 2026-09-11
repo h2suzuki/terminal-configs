@@ -1,0 +1,38 @@
+{
+  "agent-coord": {
+    "PreInvocation": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agent_coord hook --client antigravity PreInvocation",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "write_to_file|replace_file_content|multi_replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agent_coord hook --client antigravity PreToolUse",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agent_coord hook --client antigravity Stop",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

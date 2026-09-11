@@ -1,5 +1,51 @@
 #!/usr/bin/env python3
-"""Verification scenarios V1-V11 of the coordinator design doc, run against agent_coord."""
+"""Requirement-driven tests for agent_coord, written before the implementation.
+
+Each test names the requirement sentence it pins (REQUIREMENTS_AND_DESIGN.ja.md,
+chapter.section or F<n> / V<n>). Unit tests drive the in-process Coordinator with an
+injected clock; scenario tests run the daemon, the transport, the hook and MCP
+adapters, and fake wake channels, following the workflows of chapter 3 and V1-V13.
+
+Claim map (ID -> requirement):
+  C42-1  4.2 memory is the current state; changes persist before the reply; restart rebuilds
+  C42-2  4.2 retry with the same request id neither posts nor acquires twice
+  C42-3  4.2 a second daemon on the same home fails clearly (non-zero) and keeps one ledger
+  C43-1  4.3 connection != session: a dropped connection leaves ownership and cursor alone
+  C43-2  4.3 one session, several connections, one cursor that never moves backwards
+  F1-1   F1 stable coordinator sid mapped from the native id; pid is never the owner id
+  F1-2   F1 read-only use (status / history) creates no session
+  F2-1   F2 delivery is per recipient: direct and broadcast are acked independently
+  F2-2   F2 catchup pages; unreturned events are not acked; peek/status/watch do not consume
+  F2-3   F2 a newcomer gets current state and the last hour of its scopes, not the whole history
+  F2-4   F2 a rejoin resumes from its cursor within retention, flagged backfill, no repeats
+  F2-5   F2 expiry (24h) never loses ownership / open requests, and reports the gap to the reader
+  F2-6   F2 ack is not resolution: requests close only by resolve / cancel
+  F3-1   F3 unread is announced once per unread range; heartbeats do not wake anyone
+  F3-2   F3 no self-notification: own broadcast, own resolve, own release never come back
+  F3-3   F3 subscribers and wake pushes happen after commit, outside the lock; rollback pushes nothing
+  F3-4   F3 notification state per delivery: pending / pushed / unavailable / pull, and ack removes it
+  F3-5   F3 Claude Code sessions are woken through the documented inbox socket found in the registry
+  F3-6   F3 Codex sessions are woken with `codex queue --thread <id>`; Antigravity is pull-only
+  F4-1   F4 acquire is atomic and exclusive; the conflict answer names owner, purpose, time
+  F4-2   F4 release verifies owner and generation; a stale release never frees a newer grant
+  F4-3   F4 leave marks held resources unconfirmed, never free; force needs a user action + reason
+  F4-4   F4 a forced-out owner cannot re-take the resource until it has read the force notice
+  F4-5   F4 resources hand over by transfer -> accept, in one step at accept
+  F4-6   F4 a use declaration is recorded without taking the exclusive grant
+  F5-1   F5 claim rejects a foreign owner; the same worktree is never owned by two sessions
+  F5-2   F5 create plans base and target before running git, refuses a same-named foreign dir
+  F5-3   F5 partial failure deletes nothing and is resumable
+  F5-4   F5 worktree transfer -> accept flips the owner once; the old owner's late change is refused
+  F5-5   F5 the edit gate denies only same-repo foreign checkouts and never guesses a relative path
+  F5-6   F5 the enforcement level shown follows the client's verified capability, not the flag
+  F6-1   F6 status shows self-report and observation separately, waiters, capabilities, service
+  F7-1   F7 a caller acts only as the session it registered on this connection (or by token)
+  F7-2   F7 no path / ref passthrough: worktree root is confined, refs go after --
+  F7-3   F7 unreachable daemon is diagnosed; no second ledger
+  F8-1   F8 hooks: Claude Code and Codex payloads / outputs; Antigravity payloads / outputs
+  F8-2   F8 doctor separates CLI/MCP, host/sandbox, notification, enforcement capability
+  MCP-1  the stdio adapter never dies on a bad tool call and strips reserved arguments
+"""
 
 from __future__ import annotations
 
@@ -7,24 +53,27 @@ import importlib.machinery
 import importlib.util
 import io
 import json
-import sqlite3
 import os
+import socket
+import stat
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from typing import Any
 
 SPEC = importlib.util.spec_from_loader(
-    "agent_coord",
+    "coord",
     importlib.machinery.SourceFileLoader(
-        "agent_coord", str(Path(__file__).with_name("agent_coord"))
+        "coord", os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent_coord")
     ),
 )
-assert SPEC is not None and SPEC.loader is not None
+assert SPEC and SPEC.loader
 coord = importlib.util.module_from_spec(SPEC)
+sys.modules["coord"] = coord  # dataclasses resolve annotations through sys.modules
 SPEC.loader.exec_module(coord)
 
 
@@ -50,6 +99,728 @@ def make_repo(root: Path, name: str, remote: str | None = None) -> Path:
     return repo
 
 
+class Clock:
+    def __init__(self, start: float = 1_800_000_000.0):
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class InboxServer:
+    """Fake Claude Code inbox socket: records every JSON line a poster sends."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.lines: list[dict] = []
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.bind(str(path))
+        self.sock.listen(8)
+        self.thread = threading.Thread(target=self.loop, daemon=True)
+        self.thread.start()
+
+    def loop(self) -> None:
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            with conn, conn.makefile("r", encoding="utf-8") as stream:
+                for line in stream:
+                    self.lines.append(json.loads(line))
+
+    def close(self) -> None:
+        self.sock.close()
+
+
+def wait_for(predicate: Any, timeout: float = 3.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return bool(predicate())
+
+
+class Fixture(unittest.TestCase):
+    """Temp home, three repos (main + linked worktree, a clone, a same-named other repo)."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="coord-test-"))
+        self.home = self.tmp / "home"
+        self.clock = Clock()
+        self.repo = make_repo(self.tmp, "repo", "https://github.com/example/repo.git")
+        self.clone = make_repo(self.tmp, "clone", "git@github.com:example/repo.git")
+        self.other = make_repo(self.tmp / "elsewhere", "repo")
+        self.wt = self.tmp / "wt" / "repo" / "feature"
+        git("worktree", "add", "-q", str(self.wt), "-b", "feature", cwd=str(self.repo))
+        self.registry = self.tmp / "claude-sessions"
+        self.registry.mkdir()
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        self.codex_log = self.tmp / "codex.log"
+        shim = self.bin / "codex"
+        shim.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{self.codex_log}"\n')
+        shim.chmod(shim.stat().st_mode | stat.S_IXUSR)
+        self.env = {
+            "AGENT_COORD_HOME": str(self.home),
+            "AGENT_COORD_CLAUDE_REGISTRY": str(self.registry),
+            "AGENT_COORD_WORKTREE_ROOT": str(self.tmp / "worktrees"),
+            "PATH": f"{self.bin}:{os.environ.get('PATH', '')}",
+        }
+        self.saved = {k: os.environ.get(k) for k in self.env}
+        os.environ.update(self.env)
+        self.addCleanup(self.restore_env)
+
+    def restore_env(self) -> None:
+        for key, value in self.saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def register_claude_session(self, native: str) -> InboxServer:
+        """Mimic ~/.claude/sessions/<pid>.json plus a bound inbox socket."""
+        sock = self.tmp / f"{native[:6]}.sock"
+        server = InboxServer(sock)
+        self.addCleanup(server.close)
+        pid = 1000 + len(os.listdir(self.registry))
+        (self.registry / f"{pid}.abc.key").write_text("tok-" + native)
+        (self.registry / f"{pid}.json").write_text(
+            json.dumps(
+                {
+                    "pid": pid,
+                    "sessionId": native,
+                    "messagingSocketPath": str(sock),
+                    "kind": "interactive",
+                    "status": "idle",
+                }
+            )
+        )
+        return server
+
+
+class Direct(Fixture):
+    """Unit level: the Coordinator in-process, clock injected, one connection id per call."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.co = coord.Coordinator(self.home, clock=self.clock)
+        self.addCleanup(lambda: self.co.close())
+
+    def call(self, conn: str, method: str, **params: Any) -> Any:
+        return self.co.call(conn, method, params)
+
+    def join(self, sid: str, cwd: Path, client: str = "test", **extra: Any) -> dict:
+        return self.call(
+            sid, "join", sid=sid, client=client, cwd=str(cwd), native_id=sid, **extra
+        )
+
+    def texts(self, sid: str) -> list[str]:
+        events = self.call(sid, "catchup", sid=sid)["events"]
+        return [e["body"].get("text") or e["kind"] for e in events]
+
+
+# ------------------------------------------------------------------ 4.x and F1
+
+
+class LedgerTest(Direct):
+    def test_c42_1_memory_serves_reads_and_sqlite_persists_before_reply(self):
+        self.join("a", self.repo)
+        statements: list[str] = []
+        self.co.journal.db.set_trace_callback(statements.append)
+        self.call("a", "whoami", sid="a")
+        self.call("", "status")
+        self.co.journal.db.set_trace_callback(None)
+        selects = [s for s in statements if s.lstrip().upper().startswith("SELECT")]
+        self.assertEqual(selects, [])
+        seq = self.call("a", "send", sid="a", to="all", text="hi")["seq"]
+        row = self.co.journal.db.execute(
+            "SELECT seq FROM events WHERE seq=?", (seq,)
+        ).fetchone()
+        self.assertEqual(row[0], seq)
+
+    def test_c42_1_restart_rebuilds_ownership_cursor_inbox_and_requests(self):
+        """V4: nothing is auto-released and the unread survive a restart."""
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        grant = self.call("a", "acquire", sid="a", key="rig-1")
+        first = self.call("a", "send", sid="a", to="repo", text="one")["seq"]
+        self.call("b", "ack", sid="b", through=first)
+        self.call("a", "send", sid="a", to="repo", text="two")
+        req = self.call("a", "request", sid="a", to="b", subject="please")
+        self.co.close()
+        self.co = coord.Coordinator(self.home, clock=self.clock)
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        status = self.call("", "status")
+        self.assertEqual(
+            [(r["key"], r["owner"], r["generation"]) for r in status["resources"]],
+            [("rig-1", "a", grant["generation"])],
+        )
+        self.assertEqual([t for t in self.texts("b") if t != "request_open"], ["two"])
+        self.assertEqual(
+            [r["req_id"] for r in self.call("b", "requests", sid="b")["requests"]],
+            [req["req_id"]],
+        )
+
+    def test_c42_2_retry_is_scoped_to_session_and_method(self):
+        """V3: a lost reply is retried with the same id; the id must not leak across methods or sessions."""
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        first = self.call("a", "send", sid="a", to="repo", text="x", request_id="K")
+        again = self.call("a", "send", sid="a", to="repo", text="x", request_id="K")
+        self.assertEqual(first, again)
+        self.assertEqual(self.texts("b"), ["x"])
+        grant = self.call("a", "acquire", sid="a", key="rig", request_id="K")
+        self.assertEqual(self.call("", "status")["resources"][0]["owner"], "a")
+        self.assertEqual(
+            self.call("a", "acquire", sid="a", key="rig", request_id="K"), grant
+        )
+        with self.assertRaises(coord.CoordError):
+            self.call("b", "acquire", sid="b", key="rig", request_id="K")
+        gen = grant["generation"]
+        released = self.call(
+            "a", "release", sid="a", key="rig", generation=gen, request_id="R"
+        )
+        self.assertEqual(
+            self.call(
+                "a", "release", sid="a", key="rig", generation=gen, request_id="R"
+            ),
+            released,
+        )
+
+    def test_c42_2_a_stale_acquire_replay_does_not_grant_after_release(self):
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        grant = self.call("a", "acquire", sid="a", key="rig", request_id="K")
+        self.call("a", "release", sid="a", key="rig", generation=grant["generation"])
+        self.call("b", "acquire", sid="b", key="rig")
+        with self.assertRaises(coord.CoordError):
+            self.call("a", "acquire", sid="a", key="rig", request_id="K")
+
+    def test_c43_1_a_dropped_connection_keeps_ownership_and_cursor(self):
+        self.join("a", self.repo)
+        self.call("a", "acquire", sid="a", key="rig")
+        self.co.disconnect("a")
+        status = self.call("", "status")
+        self.assertEqual(status["resources"][0]["owner"], "a")
+        self.assertIsNone(status["sessions"][0]["left_at"])
+
+    def test_c43_2_two_connections_share_one_monotonic_cursor(self):
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        seqs = [
+            self.call("a", "send", sid="a", to="repo", text=f"m{i}")["seq"]
+            for i in range(3)
+        ]
+        self.call("b2", "attach", sid="b", native_id="b")
+        self.call("b2", "ack", sid="b", through=seqs[2])
+        self.assertEqual(
+            self.call("b", "ack", sid="b", through=seqs[0])["cursor"], seqs[2]
+        )
+        self.assertEqual(self.call("b", "peek", sid="b")["unread"], 0)
+
+    def test_f1_1_sid_is_derived_from_the_native_id_not_the_pid(self):
+        joined = self.call(
+            "x", "join", client="claude-code", native_id="N1", cwd=str(self.repo)
+        )
+        self.assertEqual(joined["session"]["sid"], "cc-N1")
+        self.assertEqual(coord.session_id_for("codex", "T9"), "codex-T9")
+        self.assertEqual(coord.session_id_for("antigravity", "conv"), "agy-conv")
+
+    def test_f1_2_read_only_calls_create_no_session(self):
+        self.join("a", self.repo)
+        self.call("", "status")
+        self.call("", "history", all=True)
+        self.call("", "sessions")
+        self.assertEqual(len(self.call("", "status")["sessions"]), 1)
+
+
+# ------------------------------------------------------------------ F2 delivery
+
+
+class DeliveryTest(Direct):
+    def test_f2_1_direct_and_broadcast_are_acked_independently(self):
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        self.join("c", self.clone)
+        self.join("d", self.other)
+        self.call("a", "send", sid="a", to="repo", text="repo only")
+        self.call("a", "send", sid="a", to="project", text="project wide")
+        self.call("a", "send", sid="a", to="all", text="everyone")
+        direct = self.call("a", "send", sid="a", to="c", text="direct")["seq"]
+        self.call("c", "ack", sid="c", through=direct)
+        self.assertEqual(self.texts("b"), ["repo only", "project wide", "everyone"])
+        self.assertEqual(self.texts("c"), [])
+        self.assertEqual(self.texts("d"), ["everyone"])
+        self.assertEqual(self.texts("a"), [])
+        self.call("a", "send", sid="a", to="self", text="note to self")
+        self.assertEqual(self.texts("a"), ["note to self"])
+
+    def test_f2_2_paging_never_acks_unreturned_events_and_viewers_do_not_consume(self):
+        """V6 + V7."""
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        for i in range(5):
+            self.call("a", "send", sid="a", to="repo", text=f"m{i}")
+        self.assertEqual(self.call("b", "peek", sid="b")["unread"], 5)
+        self.call("", "status")
+        page = self.call("b", "catchup", sid="b", limit=2)
+        self.assertTrue(page["more"])
+        self.assertEqual([e["body"]["text"] for e in page["events"]], ["m0", "m1"])
+        self.assertEqual(self.call("b", "peek", sid="b")["unread"], 5)
+        rest = self.call(
+            "b", "catchup", sid="b", limit=10, ack_through=page["last_seq"]
+        )
+        self.assertEqual(
+            [e["body"]["text"] for e in rest["events"]], ["m2", "m3", "m4"]
+        )
+        self.assertFalse(rest["more"])
+        self.call("b", "ack", sid="b", through=rest["last_seq"])
+        self.call("b", "ack", sid="b", through=1)
+        self.assertEqual(self.call("b", "peek", sid="b")["unread"], 0)
+
+    def test_f2_3_newcomer_sees_state_and_the_last_hour_only(self):
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        self.call("a", "send", sid="a", to="project", text="old news")
+        self.clock.advance(coord.JOIN_BACKFILL + 1)
+        self.call("a", "send", sid="a", to="project", text="fresh")
+        self.call("a", "send", sid="a", to="b", text="private")
+        self.call("a", "acquire", sid="a", key="rig")
+        self.call("a", "request", sid="a", to="project", subject="open one")
+        joined = self.join("c", self.clone)
+        got = [
+            (e["body"].get("text") or e["kind"], e.get("backfill"))
+            for e in self.call("c", "catchup", sid="c")["events"]
+        ]
+        self.assertEqual(got, [("fresh", True), ("request_open", True)])
+        self.assertEqual([r["key"] for r in joined["resources_held"]], ["rig"])
+        self.assertEqual(len(joined["open_requests"]), 1)
+
+    def test_f2_4_rejoin_resumes_from_its_cursor_without_repeats(self):
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        seen = self.call("b", "send", sid="b", to="repo", text="seen")["seq"]
+        self.call("a", "ack", sid="a", through=seen)
+        self.call("b", "send", sid="b", to="repo", text="pending")
+        self.call("a", "leave", sid="a")
+        self.clock.advance(2 * coord.JOIN_BACKFILL)
+        self.call("b", "send", sid="b", to="repo", text="while away")
+        rejoined = self.join("a", self.repo)
+        self.assertEqual(rejoined["unread"], 2)
+        events = self.call("a", "catchup", sid="a")["events"]
+        self.assertEqual(
+            [(e["body"]["text"], bool(e.get("backfill"))) for e in events],
+            [("pending", False), ("while away", True)],
+        )
+        self.assertEqual(self.join("a", self.repo)["unread"], 2)
+        history = self.call("", "history", all=True)["events"]
+        self.assertEqual(
+            [e["kind"] for e in history if e["actor"] == "a"], ["join", "leave", "join"]
+        )
+
+    def test_f2_5_expiry_keeps_ownership_and_requests_and_reports_the_gap(self):
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        self.call("a", "acquire", sid="a", key="rig")
+        req = self.call("a", "request", sid="a", to="b", subject="stays open")
+        self.call("a", "send", sid="a", to="b", text="lost to time")
+        last = self.co.ledger.last_seq
+        self.clock.advance(coord.EVENT_TTL + 1)
+        peek = self.call("b", "peek", sid="b")
+        self.assertEqual(peek["unread"], 0)
+        self.assertEqual(peek["gap"], {"through": last, "reason": "expired"})
+        status = self.call("", "status")
+        self.assertEqual(status["resources"][0]["owner"], "a")
+        self.assertEqual(status["requests"][0]["req_id"], req["req_id"])
+        self.assertEqual(
+            self.call("a", "send", sid="a", to="b", text="new")["seq"], last + 1
+        )
+        self.assertIsNone(self.call("b", "peek", sid="b")["gap"])
+        second = self.call("a", "request", sid="a", to="b", subject="second")
+        self.assertNotEqual(second["req_id"], req["req_id"])
+
+    def test_f2_6_ack_never_resolves_a_request(self):
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        req = self.call("a", "request", sid="a", to="b", subject="rig?")
+        events = self.call("b", "catchup", sid="b")["events"]
+        self.call("b", "ack", sid="b", through=events[-1]["seq"])
+        self.assertEqual(
+            self.call("b", "requests", sid="b")["requests"][0]["state"], "open"
+        )
+        self.call("b", "resolve", sid="b", req_id=req["req_id"], result="done")
+        self.assertEqual(self.call("b", "requests", sid="b")["requests"], [])
+        with self.assertRaises(coord.CoordError):
+            self.call("a", "cancel", sid="a", req_id=req["req_id"])
+
+
+# ------------------------------------------------------------------ F3 notification
+
+
+class NotificationTest(Direct):
+    def test_f3_1_nudge_once_per_unread_range_and_heartbeats_stay_silent(self):
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        self.call("a", "send", sid="a", to="repo", text="ping")
+        self.assertIn("1 unread", self.call("b", "nudge", sid="b")["text"])
+        self.assertIsNone(self.call("b", "nudge", sid="b")["text"])
+        self.call("b", "update", sid="b", status="working")
+        self.call("b", "peek", sid="b")
+        self.assertIsNone(self.call("b", "nudge", sid="b")["text"])
+        self.call("a", "send", sid="a", to="repo", text="pong")
+        self.assertIn("2 unread", self.call("b", "nudge", sid="b")["text"])
+
+    def test_f3_2_no_self_notification(self):
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        req = self.call("a", "request", sid="a", to="repo", subject="rig?")
+        self.call("a", "resolve", sid="a", req_id=req["req_id"], result="never mind")
+        grant = self.call("a", "acquire", sid="a", key="rig")
+        self.call("a", "release", sid="a", key="rig", generation=grant["generation"])
+        self.assertEqual(self.texts("a"), [])
+        self.assertEqual(self.texts("b"), ["request_open", "request_resolve"])
+
+    def test_f3_3_streams_only_committed_events(self):
+        self.join("a", self.repo)
+        pushed: list[dict] = []
+        self.co.subscribe(pushed.append)
+        self.call("a", "send", sid="a", to="all", text="pushed")
+        with self.assertRaises(coord.CoordError):
+            self.call("a", "release", sid="a", key="never", generation=1)
+        self.assertEqual([e["kind"] for e in pushed], ["message"])
+
+    def test_f3_4_delivery_state_pending_pushed_unavailable_pull(self):
+        inbox = self.register_claude_session("N-b")
+        self.join("a", self.repo)
+        self.call("b", "join", client="claude-code", native_id="N-b", cwd=str(self.wt))
+        self.call(
+            "c", "join", client="antigravity", native_id="C-c", cwd=str(self.clone)
+        )
+        self.call(
+            "d", "join", client="claude-code", native_id="ghost", cwd=str(self.clone)
+        )
+        self.call("a", "send", sid="a", to="project", text="wake up")
+        self.assertTrue(wait_for(lambda: len(inbox.lines) >= 2))
+
+        def state(conn: str, sid: str) -> str:
+            return self.call(conn, "peek", sid=sid)["deliveries"][0]["state"]
+
+        self.assertTrue(wait_for(lambda: state("b", "cc-N-b") == "pushed"))
+        self.assertTrue(wait_for(lambda: state("d", "cc-ghost") == "unavailable"))
+        self.assertEqual(state("c", "agy-C-c"), "pull")
+        self.call("b", "ack", sid="cc-N-b", through=self.co.ledger.last_seq)
+        self.assertEqual(self.call("b", "peek", sid="cc-N-b")["deliveries"], [])
+
+    def test_f3_5_claude_code_is_woken_through_its_registered_inbox_socket(self):
+        inbox = self.register_claude_session("N-b")
+        self.join("a", self.repo)
+        self.call("b", "join", client="claude-code", native_id="N-b", cwd=str(self.wt))
+        self.call("a", "send", sid="a", to="repo", text="hello b")
+        self.assertTrue(wait_for(lambda: len(inbox.lines) >= 2))
+        auth, message = inbox.lines[:2]
+        self.assertEqual(auth, {"type": "auth", "token": "tok-N-b"})
+        self.assertEqual(message["type"], "user")
+        self.assertEqual(message["message"]["role"], "user")
+        self.assertIn("1 unread", message["message"]["content"])
+        self.call("a", "send", sid="a", to="repo", text="again")
+        time.sleep(0.3)
+        self.assertEqual(len(inbox.lines), 2)  # same unread range: one wake only
+        self.call("b", "ack", sid="cc-N-b", through=self.co.ledger.last_seq)
+        self.call("a", "send", sid="a", to="repo", text="new range")
+        self.assertTrue(wait_for(lambda: len(inbox.lines) >= 4, timeout=10))
+
+    def test_f3_6_codex_is_woken_with_codex_queue_and_antigravity_is_pull_only(self):
+        self.join("a", self.repo)
+        self.call("b", "join", client="codex", native_id="T-1", cwd=str(self.wt))
+        self.call(
+            "c", "join", client="antigravity", native_id="C-1", cwd=str(self.clone)
+        )
+        self.call("a", "send", sid="a", to="project", text="wake")
+        self.assertTrue(wait_for(lambda: self.codex_log.exists()))
+        line = self.codex_log.read_text().strip()
+        self.assertTrue(line.startswith("queue --thread T-1 --message "), line)
+        caps = {
+            s["sid"]: s["capabilities"] for s in self.call("", "status")["sessions"]
+        }
+        self.assertEqual(
+            caps["codex-T-1"], {"notify": "push", "enforcement": "advisory"}
+        )
+        self.assertEqual(caps["agy-C-1"], {"notify": "pull", "enforcement": "advisory"})
+
+
+# ------------------------------------------------------------------ F4 resources
+
+
+class ResourceTest(Direct):
+    def test_f4_1_acquire_is_exclusive_and_the_conflict_names_the_owner(self):
+        """V2."""
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        self.call("a", "acquire", sid="a", key="rig", purpose="soak")
+        with self.assertRaises(coord.CoordError) as ctx:
+            self.call("b", "acquire", sid="b", key="rig")
+        self.assertEqual(ctx.exception.code, -32010)
+        self.assertEqual(ctx.exception.data["owner"], "a")
+        self.assertEqual(ctx.exception.data["purpose"], "soak")
+        self.assertEqual(
+            self.call("", "status")["waiters"], [{"key": "rig", "sid": "b"}]
+        )
+
+    def test_f4_2_release_needs_owner_and_generation(self):
+        """V3."""
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        first = self.call("a", "acquire", sid="a", key="rig")
+        self.assertEqual(self.call("a", "acquire", sid="a", key="rig"), first)
+        with self.assertRaises(coord.CoordError):
+            self.call(
+                "b", "release", sid="b", key="rig", generation=first["generation"]
+            )
+        with self.assertRaises(coord.CoordError):
+            self.call("a", "release", sid="a", key="rig")
+        self.call("a", "release", sid="a", key="rig", generation=first["generation"])
+        second = self.call("b", "acquire", sid="b", key="rig")
+        with self.assertRaises(coord.CoordError):
+            self.call(
+                "a", "release", sid="a", key="rig", generation=first["generation"]
+            )
+        self.assertEqual(
+            self.call("", "status")["resources"][0]["generation"], second["generation"]
+        )
+
+    def test_f4_3_leave_marks_unconfirmed_and_force_needs_a_user_action(self):
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        self.call("a", "acquire", sid="a", key="rig")
+        self.call("a", "leave", sid="a")
+        self.assertEqual(
+            self.call("", "status")["resources"][0]["state"], "unconfirmed"
+        )
+        with self.assertRaises(coord.CoordError):
+            self.call("b", "acquire", sid="b", key="rig")
+        with self.assertRaises(coord.CoordError):
+            self.call("b", "force_release", key="rig", reason="stale")
+        with self.assertRaises(coord.CoordError):
+            self.call("user", "force_release", key="rig", user_action=True)
+        forced = self.call(
+            "user", "force_release", key="rig", reason="owner gone", user_action=True
+        )
+        self.assertEqual(forced["previous_owner"], "a")
+        event = self.call("", "history", all=True)["events"][-1]
+        self.assertEqual(
+            (event["actor"], event["body"]["reason"]), ("user", "owner gone")
+        )
+        self.call("b", "acquire", sid="b", key="rig")
+
+    def test_f4_4_forced_out_owner_must_read_the_notice_before_retaking(self):
+        self.join("a", self.repo)
+        self.call("a", "acquire", sid="a", key="rig")
+        self.call("user", "force_release", key="rig", reason="stop", user_action=True)
+        with self.assertRaises(coord.CoordError):
+            self.call("a", "acquire", sid="a", key="rig")
+        notice = self.call("a", "catchup", sid="a")["events"][-1]
+        self.assertEqual(notice["kind"], "force_release")
+        self.call("a", "ack", sid="a", through=notice["seq"])
+        self.call("a", "acquire", sid="a", key="rig")
+
+    def test_f4_5_resource_transfer_then_accept_flips_the_owner_once(self):
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        self.join("c", self.clone)
+        grant = self.call("a", "acquire", sid="a", key="rig")
+        self.call("a", "resource_transfer", sid="a", key="rig", to="b")
+        self.assertEqual(self.call("", "status")["resources"][0]["owner"], "a")
+        with self.assertRaises(coord.CoordError):
+            self.call("c", "resource_accept", sid="c", key="rig")
+        accepted = self.call("b", "resource_accept", sid="b", key="rig")
+        self.assertEqual((accepted["owner"], accepted["previous_owner"]), ("b", "a"))
+        self.assertGreater(accepted["generation"], grant["generation"])
+        with self.assertRaises(coord.CoordError):
+            self.call(
+                "a", "release", sid="a", key="rig", generation=grant["generation"]
+            )
+        self.assertEqual(self.texts("b")[-1], "transfer_propose")
+        self.assertEqual(self.texts("a")[-1], "transfer_accept")
+
+    def test_f4_6_declaration_is_visible_but_never_blocks_acquire(self):
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        self.call("a", "declare", sid="a", key="rig", purpose="reading logs")
+        listing = self.call("", "resources")["resources"]
+        self.assertEqual(
+            listing[0]["declared_by"], [{"sid": "a", "purpose": "reading logs"}]
+        )
+        self.call("b", "acquire", sid="b", key="rig")
+
+
+# ------------------------------------------------------------------ F5 worktrees
+
+
+class WorktreeTest(Direct):
+    def test_f5_1_claim_is_exclusive_and_membership_checked(self):
+        """V8 first half."""
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        self.join("d", self.other)
+        self.call("a", "worktree_claim", sid="a", path=str(self.wt), enforce=True)
+        with self.assertRaises(coord.CoordError):
+            self.call("b", "worktree_claim", sid="b", path=str(self.wt))
+        with self.assertRaises(coord.CoordError):
+            self.call("d", "worktree_claim", sid="d", path=str(self.wt))
+        with self.assertRaises(coord.CoordError):
+            self.call("a", "worktree_claim", sid="a", path="relative/path")
+
+    def test_f5_2_create_plans_first_and_refuses_a_foreign_dir(self):
+        self.join("a", self.repo)
+        plan = self.call("a", "worktree_create", sid="a", name="x1", dry_run=True)
+        self.assertEqual(plan["target"], str(self.tmp / "worktrees" / "repo" / "x1"))
+        self.assertEqual(plan["base"], git("rev-parse", "HEAD", cwd=str(self.repo)))
+        self.assertFalse(os.path.exists(plan["target"]))
+        created = self.call("a", "worktree_create", sid="a", name="x1")
+        self.assertTrue(created["created"])
+        self.assertEqual(created["base"], plan["base"])
+        self.assertEqual(git("rev-parse", "HEAD", cwd=created["path"]), plan["base"])
+        with self.assertRaises(coord.CoordError):
+            self.call(
+                "a",
+                "worktree_create",
+                sid="a",
+                name="x9",
+                root=str(self.tmp / "anywhere"),
+            )
+        with self.assertRaises(coord.CoordError):
+            self.call(
+                "a", "worktree_create", sid="a", name="x9", base="--output=/tmp/x"
+            )
+        foreign = self.tmp / "worktrees" / "repo" / "taken"
+        foreign.mkdir(parents=True)
+        with self.assertRaises(coord.CoordError):
+            self.call("a", "worktree_create", sid="a", name="taken")
+        self.assertTrue(foreign.exists())
+
+    def test_f5_2_existing_branch_reports_its_real_tip(self):
+        self.join("a", self.repo)
+        git("branch", "old", "HEAD", cwd=str(self.repo))
+        (self.repo / "later").write_text("y\n")
+        git("add", "later", cwd=str(self.repo))
+        git("commit", "-q", "-m", "later", cwd=str(self.repo))
+        old_tip = git("rev-parse", "old", cwd=str(self.repo))
+        with self.assertRaises(coord.CoordError):
+            self.call("a", "worktree_create", sid="a", name="old", base="HEAD")
+        created = self.call("a", "worktree_create", sid="a", name="old")
+        self.assertEqual(created["base"], old_tip)
+
+    def test_f5_3_partial_failure_deletes_nothing_and_resumes(self):
+        """V11."""
+        self.join("a", self.repo)
+        target = self.tmp / "worktrees" / "repo" / "x2"
+        git("branch", "x2", cwd=str(self.repo))
+        git("worktree", "add", "-q", str(target), "x2", cwd=str(self.repo))
+        resumed = self.call("a", "worktree_create", sid="a", name="x2")
+        self.assertEqual((resumed["created"], resumed["resumed"]), (False, True))
+        self.assertTrue((target / "README").exists())
+
+    def test_f5_4_transfer_accept_flips_once_and_the_old_owner_is_refused(self):
+        """V8 second half."""
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        self.call("a", "worktree_claim", sid="a", path=str(self.wt))
+        self.call(
+            "a", "worktree_transfer", sid="a", path=str(self.wt), to="b", note="yours"
+        )
+        self.assertEqual(self.call("", "status")["worktrees"][0]["owner"], "a")
+        accepted = self.call("b", "worktree_accept", sid="b", path=str(self.wt))
+        self.assertEqual(accepted["previous_owner"], "a")
+        with self.assertRaises(coord.CoordError):
+            self.call("a", "worktree_release", sid="a", path=str(self.wt))
+        self.assertEqual(
+            self.call("b", "whoami", sid="b")["session"]["edit_worktree"], str(self.wt)
+        )
+        self.assertIsNone(self.call("a", "whoami", sid="a")["session"]["edit_worktree"])
+
+    def test_f5_5_edit_gate_denies_same_repo_foreign_checkouts_only(self):
+        """V9."""
+        self.join("a", self.repo, client="claude-code")
+        self.call("a", "worktree_claim", sid="a", path=str(self.wt), enforce=True)
+
+        def allowed(path: str) -> bool:
+            return self.call("a", "edit_check", sid="a", path=path)["allow"]
+
+        self.assertFalse(allowed(str(self.repo / "README")))
+        self.assertTrue(allowed(str(self.wt / "README")))
+        self.assertTrue(allowed("/tmp/scratch.txt"))
+        self.assertTrue(allowed(str(self.other / "README")))
+        self.assertFalse(allowed("README"))
+
+    def test_f5_6_enforcement_level_follows_the_client_capability(self):
+        self.join("a", self.repo, client="claude-code")
+        self.join("b", self.wt, client="codex")
+        self.call("a", "worktree_claim", sid="a", path=str(self.repo), enforce=True)
+        self.call("b", "worktree_claim", sid="b", path=str(self.wt), enforce=True)
+        levels = {
+            w["owner"]: w["enforcement"] for w in self.call("", "status")["worktrees"]
+        }
+        self.assertEqual(levels, {"a": "enforced", "b": "advisory"})
+
+
+# ------------------------------------------------------------------ F6 / F7
+
+
+class StatusAndBoundaryTest(Direct):
+    def test_f6_1_status_separates_report_from_observation_and_lists_waiters(self):
+        self.join("a", self.repo, client="claude-code")
+        self.call("a", "update", sid="a", status="working", task="soak")
+        self.clock.advance(40 * 60)
+        self.call("a", "attach", sid="a", native_id="a")
+        status = self.call("", "status")
+        session = status["sessions"][0]
+        self.assertEqual(session["status"], "working")
+        self.assertEqual(session["updated_ago"], "40 min")
+        self.assertEqual(session["seen_ago"], "0 sec")
+        self.assertEqual(
+            session["capabilities"], {"notify": "push", "enforcement": "enforced"}
+        )
+        self.assertEqual(status["service"]["home"], str(self.home))
+        self.assertIn("retained", status["service"])
+        text = coord.render_status(status)
+        self.assertIn("seen", text)
+        self.assertIn("enforced", text)
+
+    def test_f7_1_a_caller_acts_only_as_its_registered_session(self):
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        grant = self.call("a", "acquire", sid="a", key="rig")
+        with self.assertRaises(coord.CoordError) as ctx:
+            self.call(
+                "b", "release", sid="a", key="rig", generation=grant["generation"]
+            )
+        self.assertEqual(ctx.exception.code, -32001)
+        with self.assertRaises(coord.CoordError):
+            self.call("x", "leave", sid="a")
+        token = self.call("a", "whoami", sid="a")["session"]["token"]
+        self.call("x", "attach", sid="a", token=token)
+        self.call("x", "release", sid="a", key="rig", generation=grant["generation"])
+        with self.assertRaises(coord.CoordError):
+            self.call("y", "attach", sid="a", native_id="wrong")
+
+    def test_f7_3_lost_singleton_race_fails_clearly(self):
+        """4.2 / V2: the second daemon exits non-zero and never opens a second ledger."""
+        daemon = Daemon(self.home)
+        self.addCleanup(daemon.stop)
+        err = io.StringIO()
+        self.assertEqual(coord.serve(self.home, err), 1)
+        self.assertIn("another daemon", err.getvalue())
+
+
+# ------------------------------------------------------------------ scenarios over the wire
+
+
 class Daemon:
     """In-process daemon on a private home; stop() shuts it down and keeps the ledger."""
 
@@ -70,591 +841,322 @@ class Daemon:
         return coord.Client(self.home / "coord.sock", autostart=False)
 
     def stop(self) -> None:
+        if not self.thread.is_alive():
+            return
         client = self.client()
         client.call("shutdown")
         client.close()
         self.thread.join(5)
 
 
-class CoordTest(unittest.TestCase):
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="coord-test-"))
-        self.home = self.tmp / "home"
+class ScenarioTest(Fixture):
+    """Chapter 3 workflow and V1 / V5 / V10 / V12 / V13 over the real transport."""
+
+    def setUp(self) -> None:
+        super().setUp()
         self.daemon = Daemon(self.home)
-        self.addCleanup(self.cleanup)
-        self.repo = make_repo(self.tmp, "repo", "https://github.com/example/repo.git")
-        self.clone = make_repo(self.tmp, "clone", "git@github.com:example/repo.git")
-        self.other = make_repo(self.tmp / "elsewhere", "repo")
-        self.wt = self.tmp / "wt" / "repo" / "feature"
-        git("worktree", "add", "-q", str(self.wt), "-b", "feature", cwd=str(self.repo))
+        self.addCleanup(self.daemon.stop)
 
-    def cleanup(self):
-        if self.daemon.thread.is_alive():
-            self.daemon.stop()
-
-    def join(self, sid: str, cwd: Path, **extra) -> tuple[Any, dict]:
+    def join(self, sid: str, cwd: Path, **extra: Any) -> tuple[Any, dict]:
         client = self.daemon.client()
         self.addCleanup(client.close)
-        return client, client.call(
-            "join", sid=sid, client="test", cwd=str(cwd), **extra
+        joined = client.call(
+            "join", sid=sid, client="test", cwd=str(cwd), native_id=sid, **extra
         )
+        return client, joined
 
-    def unread_texts(self, client: Any, sid: str) -> list[str]:
-        return [
-            e["body"].get("text") or e["kind"]
-            for e in client.call("catchup", sid=sid)["events"]
-        ]
-
-    def test_identity_groups_worktrees_by_common_dir_and_clones_by_project(self):
-        """V1: main checkout + linked worktree share one repo key; clones share the project key; a same-named other repo stays apart."""
-        _, main = self.join("a", self.repo)
-        _, wt = self.join("b", self.wt)
-        _, clone = self.join("c", self.clone)
-        _, other = self.join("d", self.other)
-        self.assertEqual(main["session"]["common_dir"], wt["session"]["common_dir"])
-        self.assertEqual(wt["session"]["branch"], "feature")
-        self.assertEqual(main["session"]["project"], "github.com/example/repo")
-        self.assertEqual(clone["session"]["project"], "github.com/example/repo")
-        self.assertNotEqual(
-            clone["session"]["common_dir"], main["session"]["common_dir"]
+    def test_chapter3_workflow_two_sessions_and_a_user(self):
+        """3.1-3.6 and V1 / V12: enable, register worktrees, contend for a machine, request, release, catch up, hand over."""
+        a, ja = self.join("a", self.repo)
+        b, jb = self.join("b", self.wt)
+        c, jc = self.join("c", self.clone)
+        d, jd = self.join("d", self.other)
+        self.assertEqual(ja["session"]["common_dir"], jb["session"]["common_dir"])
+        self.assertEqual(ja["session"]["project"], "github.com/example/repo")
+        self.assertNotEqual(ja["session"]["common_dir"], jc["session"]["common_dir"])
+        self.assertEqual(ja["session"]["project"], jc["session"]["project"])
+        self.assertNotEqual(ja["session"]["project"], jd["session"]["project"])
+        a.call("update", sid="a", task="soak test")
+        a.call("worktree_claim", sid="a", path=str(self.repo))
+        b.call("worktree_claim", sid="b", path=str(self.wt), enforce=True)
+        user = self.daemon.client()
+        self.addCleanup(user.close)
+        self.assertEqual(
+            {w["owner"] for w in user.call("status")["worktrees"]}, {"a", "b"}
         )
-        self.assertNotEqual(other["session"]["project"], main["session"]["project"])
-        self.assertEqual(os.path.basename(other["session"]["repo_top"]), "repo")
-        self.assertEqual({p["sid"] for p in clone["peers_same_project"]}, {"a", "b"})
+        grant = a.call("acquire", sid="a", key="machine-1", purpose="soak")
+        with self.assertRaises(coord.CoordError):
+            b.call("acquire", sid="b", key="machine-1")
+        req = b.call(
+            "request",
+            sid="b",
+            to="a",
+            subject="machine-1 after you",
+            resource="machine-1",
+        )
+        unread = a.call("catchup", sid="a")["events"]
+        self.assertEqual(unread[-1]["body"]["req_id"], req["req_id"])
+        a.call("release", sid="a", key="machine-1", generation=grant["generation"])
+        self.assertIn(
+            "release", [e["kind"] for e in b.call("catchup", sid="b")["events"]]
+        )
+        b.call("acquire", sid="b", key="machine-1")
+        a.call("resolve", sid="a", req_id=req["req_id"], result="released")
+        self.assertEqual(user.call("status")["resources"][0]["owner"], "b")
+        b.call("worktree_transfer", sid="b", path=str(self.wt), to="c")
+        c.call("worktree_accept", sid="c", path=str(self.wt))
+        owners = {w["path"]: w["owner"] for w in user.call("status")["worktrees"]}
+        self.assertEqual(owners[str(self.wt)], "c")
 
-    def test_scopes_limit_who_reads_a_message(self):
-        """Broadcast scope (repo / project / all / session) decides visibility; own broadcasts are not redelivered, self-addressed ones are."""
+    def test_v5_catchup_recovers_when_the_wake_channel_fails(self):
+        """V5: the wake push fails (no registry entry); the unread survive for catchup and ownership ops never wait."""
         a, _ = self.join("a", self.repo)
-        b, _ = self.join("b", self.wt)
-        c, _ = self.join("c", self.clone)
-        d, _ = self.join("d", self.other)
-        a.call("send", sid="a", to="repo", text="repo only")
-        a.call("send", sid="a", to="project", text="project wide")
-        a.call("send", sid="a", to="all", text="everyone")
-        a.call("send", sid="a", to="c", text="direct")
-        self.assertEqual(
-            self.unread_texts(b, "b"), ["repo only", "project wide", "everyone"]
+        b = self.daemon.client()
+        self.addCleanup(b.close)
+        b.call("join", client="claude-code", native_id="ghost", cwd=str(self.wt))
+        a.call("send", sid="a", to="repo", text="nobody home")
+        a.call("acquire", sid="a", key="rig")
+        events = b.call("catchup", sid="cc-ghost")["events"]
+        self.assertEqual(events[-1]["body"]["text"], "nobody home")
+        self.assertTrue(
+            wait_for(
+                lambda: (
+                    b.call("peek", sid="cc-ghost")["deliveries"][-1]["state"]
+                    == "unavailable"
+                )
+            )
         )
-        self.assertEqual(
-            self.unread_texts(c, "c"), ["project wide", "everyone", "direct"]
-        )
-        self.assertEqual(self.unread_texts(d, "d"), ["everyone"])
-        self.assertEqual(self.unread_texts(a, "a"), [])
-        a.call("send", sid="a", to="self", text="note to self")
-        self.assertEqual(self.unread_texts(a, "a"), ["note to self"])
 
-    def test_acquire_is_exclusive_release_checks_owner_and_generation(self):
-        """V2 + V3: one winner per key, idempotent retry, stale-generation and foreign release rejected, waiter notified."""
-        a, _ = self.join("a", self.repo)
-        b, _ = self.join("b", self.clone)
-        first = a.call(
-            "acquire", sid="a", key="rig-1", purpose="flash", request_id="k1"
-        )
-        self.assertEqual(first["generation"], 1)
-        self.assertEqual(
-            a.call("acquire", sid="a", key="rig-1", purpose="flash", request_id="k1"),
-            first,
-        )
-        self.assertEqual(
-            [e["kind"] for e in a.call("history", sid="a", all=True)["events"]],
-            ["join", "join", "acquire"],
-        )
+    def test_v10_unreachable_daemon_is_diagnosed_without_a_second_ledger(self):
+        self.daemon.stop()
         with self.assertRaises(coord.CoordError) as ctx:
-            b.call("acquire", sid="b", key="rig-1", purpose="test")
-        self.assertEqual(ctx.exception.code, -32010)
-        self.assertEqual(ctx.exception.data["owner"], "a")
-        with self.assertRaises(coord.CoordError):
-            b.call("release", sid="b", key="rig-1")
-        with self.assertRaises(coord.CoordError):
-            a.call("release", sid="a", key="rig-1", generation=0)
-        a.call("release", sid="a", key="rig-1", generation=1)
-        self.assertEqual(
-            [e["kind"] for e in b.call("catchup", sid="b")["events"]], ["release"]
-        )
-        self.assertEqual(b.call("acquire", sid="b", key="rig-1")["generation"], 2)
-        with self.assertRaises(coord.CoordError):
-            a.call("release", sid="a", key="rig-1")
+            coord.Client(self.home / "coord.sock", autostart=False)
+        self.assertIn("not running", str(ctx.exception))
+        self.assertFalse((self.home / "coord.sock").exists())
 
-    def test_restart_keeps_ownership_cursor_and_unread(self):
-        """V4: after a daemon restart ownership, cursors and unread events survive; nothing is auto-released."""
+    def test_v13_restart_keeps_state_and_reports_version(self):
         a, _ = self.join("a", self.repo)
-        b, _ = self.join("b", self.wt)
-        a.call("acquire", sid="a", key="rig-1")
-        a.call("send", sid="a", to="repo", text="one")
-        first = b.call("catchup", sid="b")
-        b.call("ack", sid="b", through=first["last_seq"])
-        a.call("send", sid="a", to="repo", text="two")
+        a.call("acquire", sid="a", key="rig")
         a.close()
-        b.close()
         self.daemon.stop()
         self.daemon.start()
         c = self.daemon.client()
         self.addCleanup(c.close)
-        status = c.call("status")
-        self.assertEqual(
-            [(r["key"], r["owner"]) for r in status["resources"]], [("rig-1", "a")]
-        )
-        self.assertEqual(self.unread_texts(c, "b"), ["two"])
-        self.assertEqual(c.call("peek", sid="b")["cursor"], first["last_seq"])
+        self.assertEqual(c.call("ping")["version"], coord.VERSION)
+        self.assertEqual(c.call("status")["resources"][0]["owner"], "a")
 
-    def test_memory_is_the_current_state_and_sqlite_only_persists(self):
-        """4.2: reads are answered from memory (no SQL), writes reach SQLite before the reply, a rollback reloads memory."""
-        store = coord.Store(self.tmp / "direct" / "ledger.sqlite3")
-        store.transact(
-            store.join, {"sid": "a", "client": "test", "cwd": str(self.repo)}
-        )
-        store.transact(store.send, {"sid": "a", "to": "all", "text": "hello"})
-        statements: list[str] = []
-        store.db.set_trace_callback(statements.append)
-        status = store.transact(store.status, {})
-        verdict = store.transact(store.edit_check, {"sid": "a", "path": str(self.repo)})
-        store.db.set_trace_callback(None)
-        self.assertEqual((status["service"]["events"], verdict["allow"]), (2, True))
-        self.assertFalse(
-            [q for q in statements if q.lstrip().upper().startswith("SELECT")],
-            statements,
-        )
-        durable = store.db.execute(
-            "SELECT cursor FROM sessions WHERE sid='a'"
-        ).fetchone()[0]
-        self.assertEqual(durable, store.session("a")["cursor"])
-
-        def failing_save(table: str, row: dict) -> None:
-            raise sqlite3.OperationalError("disk gone")
-
-        store._save = failing_save  # type: ignore[method-assign]
-        with self.assertRaises(sqlite3.OperationalError):
-            store.transact(store.ack, {"sid": "a", "through": 2})
-        self.assertEqual(
-            store.session("a")["cursor"], durable
-        )  # memory rolled back with the transaction
-
-    def test_delivery_is_per_recipient_not_a_shared_cursor(self):
-        """F2/F3: a direct message and a broadcast are acked independently; nobody's inbox depends on another session's ack."""
-        a, _ = self.join("a", self.repo)
-        b, _ = self.join("b", self.wt)
-        c, _ = self.join("c", self.clone)
-        a.call("send", sid="a", to="repo", text="for b")
-        direct = a.call("send", sid="a", to="c", text="for c")
-        c.call("ack", sid="c", through=direct["seq"])
-        self.assertEqual(self.unread_texts(c, "c"), [])
-        self.assertEqual(self.unread_texts(b, "b"), ["for b"])
-        self.assertEqual(b.call("peek", sid="b")["unread"], 1)
-
-    def test_events_expire_after_ttl_and_newcomers_get_the_last_hour(self):
-        """F2 (use case): undelivered talk lives EVENT_TTL; a newcomer is seeded with JOIN_BACKFILL of its scopes only."""
-        store = coord.Store(self.tmp / "direct" / "ledger.sqlite3")
-        call = lambda method, **p: store.transact(getattr(store, method), p)  # noqa: E731
-        call("join", sid="a", client="test", cwd=str(self.repo))
-        call("join", sid="b", client="test", cwd=str(self.wt))
-        stale = call("send", sid="a", to="project", text="old news")["seq"]
-        call("send", sid="a", to="project", text="fresh")
-        call("send", sid="a", to="b", text="private to b")
-        store._by_seq[stale]["ts"] -= coord.JOIN_BACKFILL + 1
-        call("join", sid="c", client="test", cwd=str(self.clone))
-        self.assertEqual(
-            [e["body"]["text"] for e in call("catchup", sid="c")["events"]], ["fresh"]
-        )
-        self.assertEqual(len(call("catchup", sid="b")["events"]), 3)
-        for event in store._events:
-            event["ts"] -= coord.EVENT_TTL + 1
-        last_seq = store._last_seq
-        self.assertEqual(call("peek", sid="b")["unread"], 0)
-        self.assertEqual(call("status")["service"]["retained"], 0)
-        self.assertEqual(
-            store.db.execute("SELECT count(*) FROM inbox").fetchone()[0], 0
-        )
-        self.assertEqual(
-            call("send", sid="a", to="repo", text="later")["seq"], last_seq + 1
-        )
-
-    def test_backfill_never_repeats_a_delivery_and_is_marked(self):
-        """F2 (use case): a rejoin gets the last hour it missed while away, flagged backfill; acked and pending entries are not delivered twice."""
-        a, _ = self.join("a", self.repo)
-        b, _ = self.join("b", self.wt)
-        seen = b.call("send", sid="b", to="repo", text="seen before leaving")["seq"]
-        a.call("ack", sid="a", through=seen)
-        b.call("send", sid="b", to="repo", text="pending when leaving")
-        a.call("leave", sid="a")
-        b.call("send", sid="b", to="repo", text="posted while away")
-        _, rejoined = self.join("a", self.repo)
-        self.assertEqual(rejoined["unread"], 2)
-        events = a.call("catchup", sid="a")["events"]
-        self.assertEqual(
-            [(e["body"]["text"], e.get("backfill", False)) for e in events],
-            [("pending when leaving", False), ("posted while away", True)],
-        )
-        _, again = self.join("a", self.repo)  # a second join adds nothing
-        self.assertEqual(again["unread"], 2)
-        a.call("ack", sid="a", through=events[-1]["seq"])
-        self.assertEqual(a.call("peek", sid="a")["unread"], 0)
-        history = self.daemon.client().call("history", all=True)["events"]
-        self.assertEqual(
-            [e["kind"] for e in history if e["actor"] == "a"],
-            [
-                "join",
-                "leave",
-                "join",
-            ],  # the rejoin is announced once; the idle re-join is not
-        )
-
-    def test_resolving_your_own_request_does_not_notify_yourself(self):
-        """F3: the requester's own resolve goes to the request's addressees, never back to the requester."""
-        a, _ = self.join("a", self.repo)
-        b, _ = self.join("b", self.wt)
-        req = a.call("request", sid="a", to="repo", subject="rig?")
-        a.call("resolve", sid="a", req_id=req["req_id"], result="never mind")
-        self.assertEqual(self.unread_texts(a, "a"), [])
-        self.assertEqual(self.unread_texts(b, "b"), ["request_open", "request_resolve"])
-
-    def test_subscribers_see_committed_events_only_after_commit(self):
-        """F3/V5: a watch subscriber gets each committed event pushed once; a refused acquire that rolls back pushes nothing."""
+    def test_watch_stream_delivers_every_event_in_order(self):
         a, _ = self.join("a", self.repo)
         watcher = self.daemon.client()
         self.addCleanup(watcher.close)
-        self.assertTrue(watcher.call("subscribe")["subscribed"])
-        watcher.sock.settimeout(5)
-        a.call("send", sid="a", to="repo", text="pushed")
-        pushed = json.loads(watcher.file.readline())
-        self.assertEqual(
-            (pushed["method"], pushed["params"]["body"]["text"]), ("event", "pushed")
-        )
-        with self.assertRaises(coord.CoordError):
-            a.call("release", sid="a", key="never-held")  # rolls back, no event
-        a.call("acquire", sid="a", key="rig")
-        self.assertEqual(
-            json.loads(watcher.file.readline())["params"]["kind"], "acquire"
-        )
+        watcher.call("subscribe")
+        for i in range(3):
+            a.call("send", sid="a", to="all", text=f"e{i}")
+        seen = [
+            json.loads(watcher.file.readline())["params"]["body"]["text"]
+            for _ in range(3)
+        ]
+        self.assertEqual(seen, ["e0", "e1", "e2"])
 
-    def test_catchup_pages_peek_and_status_do_not_consume(self):
-        """V6 + V7: paging never drops events, peek/status leave the cursor alone, ack only moves forward."""
-        a, _ = self.join("a", self.repo)
-        b, _ = self.join("b", self.wt)
-        for i in range(5):
-            a.call("send", sid="a", to="repo", text=f"m{i}")
-        self.assertEqual(b.call("peek", sid="b")["unread"], 5)
-        b.call("status")
-        page = b.call("catchup", sid="b", limit=2)
-        self.assertTrue(page["more"])
-        self.assertEqual([e["body"]["text"] for e in page["events"]], ["m0", "m1"])
-        self.assertEqual(b.call("peek", sid="b")["unread"], 5)
-        rest = b.call("catchup", sid="b", limit=10, ack_through=page["last_seq"])
-        self.assertEqual(
-            [e["body"]["text"] for e in rest["events"]], ["m2", "m3", "m4"]
-        )
-        self.assertFalse(rest["more"])
-        b.call("ack", sid="b", through=rest["last_seq"])
-        b.call("ack", sid="b", through=1)
-        self.assertEqual(b.call("peek", sid="b")["unread"], 0)
-        self.assertIsNone(b.call("nudge", sid="b")["text"])
 
-    def test_nudge_once_per_unread_range(self):
-        """V6: the same unread range is announced once; a new event re-arms the nudge."""
-        a, _ = self.join("a", self.repo)
-        b, _ = self.join("b", self.wt)
-        a.call("send", sid="a", to="repo", text="ping")
-        self.assertIn("1 unread", b.call("nudge", sid="b")["text"])
-        self.assertIsNone(b.call("nudge", sid="b")["text"])
-        a.call("send", sid="a", to="repo", text="pong")
-        self.assertIn("2 unread", b.call("nudge", sid="b")["text"])
+# ------------------------------------------------------------------ adapters: hooks and MCP
 
-    def test_requests_resolve_and_cancel_are_explicit(self):
-        """V12 (request part): release does not resolve a request; only requester cancels; resolution is a separate event."""
-        a, _ = self.join("a", self.repo)
-        b, _ = self.join("b", self.clone)
-        b.call("acquire", sid="b", key="rig-1")
-        req = a.call(
-            "request",
-            sid="a",
-            to="b",
-            subject="please release rig-1",
-            resource="rig-1",
-            request_id="r1",
-        )
-        self.assertEqual(
-            a.call(
-                "request",
-                sid="a",
-                to="b",
-                subject="please release rig-1",
-                request_id="r1",
-            ),
-            req,
-        )
-        seen = b.call("catchup", sid="b")["events"]
-        self.assertEqual(seen[0]["body"]["req_id"], req["req_id"])
-        self.assertEqual(
-            [r["req_id"] for r in b.call("whoami", sid="b")["open_requests"]],
-            [req["req_id"]],
-        )
-        with self.assertRaises(coord.CoordError):
-            b.call("cancel", sid="b", req_id=req["req_id"])
-        b.call("release", sid="b", key="rig-1")
-        self.assertEqual(
-            [r["req_id"] for r in a.call("requests", sid="a")["requests"]],
-            [req["req_id"]],
-        )
-        b.call("resolve", sid="b", req_id=req["req_id"], result="released")
-        self.assertEqual(
-            [e["kind"] for e in a.call("catchup", sid="a")["events"]],
-            ["release", "request_resolve"],
-        )
-        with self.assertRaises(coord.CoordError):
-            a.call("cancel", sid="a", req_id=req["req_id"])
 
-    def test_leave_marks_resources_unconfirmed_and_force_release_needs_reason(self):
-        """F4: leaving never frees a resource; a user force-release must carry a reason."""
-        a, _ = self.join("a", self.repo)
-        b, _ = self.join("b", self.wt)
-        a.call("acquire", sid="a", key="rig-1")
-        self.assertEqual(a.call("leave", sid="a")["resources_marked_unconfirmed"], 1)
-        with self.assertRaises(coord.CoordError) as ctx:
-            b.call("acquire", sid="b", key="rig-1")
-        self.assertEqual(ctx.exception.data["state"], "unconfirmed")
-        with self.assertRaises(coord.CoordError):
-            b.call("force_release", key="rig-1")
-        b.call("force_release", key="rig-1", reason="owner gone, rig idle")
-        self.assertEqual(b.call("acquire", sid="b", key="rig-1")["generation"], 2)
-
-    def test_worktree_claim_transfer_and_enforcement(self):
-        """V8 + V9: one owner per worktree, two-phase transfer, stale owner rejected, enforced edits stay inside the worktree."""
-        a, _ = self.join("a", self.repo)
-        b, _ = self.join("b", self.repo)
-        claim = a.call("worktree_claim", sid="a", path=str(self.wt), enforce=True)
-        self.assertEqual(claim["generation"], 1)
-        with self.assertRaises(coord.CoordError) as ctx:
-            b.call("worktree_claim", sid="b", path=str(self.wt))
-        self.assertEqual(ctx.exception.code, -32010)
-        with self.assertRaises(coord.CoordError):
-            a.call("worktree_claim", sid="a", path=str(self.other))
-        self.assertFalse(
-            a.call("edit_check", sid="a", path=str(self.repo / "README"))["allow"]
-        )
-        self.assertTrue(
-            a.call("edit_check", sid="a", path=str(self.wt / "new.py"))["allow"]
-        )
-        self.assertTrue(
-            a.call("edit_check", sid="a", path="/tmp/elsewhere.txt")["allow"]
-        )
-        self.assertTrue(
-            b.call("edit_check", sid="b", path=str(self.repo / "README"))["allow"]
-        )
-        a.call("worktree_transfer", sid="a", path=str(self.wt), to="b")
-        self.assertEqual(
-            b.call("catchup", sid="b")["events"][0]["kind"], "transfer_propose"
-        )
-        owner = next(
-            w["owner"]
-            for w in a.call("status")["worktrees"]
-            if w["path"] == str(self.wt.resolve())
-        )
-        self.assertEqual(owner, "a")
-        with self.assertRaises(coord.CoordError):
-            b.call("worktree_accept", sid="b", path=str(self.other))
-        accepted = b.call("worktree_accept", sid="b", path=str(self.wt))
-        self.assertEqual(accepted["previous_owner"], "a")
-        with self.assertRaises(coord.CoordError):
-            a.call("worktree_release", sid="a", path=str(self.wt))
-        with self.assertRaises(coord.CoordError):
-            a.call("worktree_transfer", sid="a", path=str(self.wt), to="b")
-        self.assertEqual(
-            a.call("catchup", sid="a")["events"][-1]["kind"], "transfer_accept"
-        )
-        self.assertTrue(
-            a.call("edit_check", sid="a", path=str(self.repo / "README"))["allow"]
-        )
-
-    def test_worktree_create_resume_and_collision(self):
-        """V8 + V11: create claims the new worktree, re-create resumes it, bad names / refs / foreign dirs are refused."""
-        a, _ = self.join("a", self.repo)
-        root = self.tmp / "wtroot"
-        created = a.call(
-            "worktree_create", sid="a", name="issue-1", root=str(root), enforce=True
-        )
-        self.assertTrue(created["created"])
-        self.assertTrue((root / "repo" / "issue-1" / "README").exists())
-        self.assertEqual(
-            git(
-                "rev-parse", "--abbrev-ref", "HEAD", cwd=str(root / "repo" / "issue-1")
-            ),
-            "issue-1",
-        )
-        resumed = a.call("worktree_create", sid="a", name="issue-1", root=str(root))
-        self.assertTrue(resumed["resumed"])
-        self.assertEqual(resumed["generation"], 2)
-        with self.assertRaises(coord.CoordError):
-            a.call("worktree_create", sid="a", name="../evil", root=str(root))
-        with self.assertRaises(coord.CoordError):
-            a.call(
-                "worktree_create",
-                sid="a",
-                name="issue-2",
-                base="no-such-ref",
-                root=str(root),
-            )
-        o, _ = self.join("o", self.other)
-        with self.assertRaises(coord.CoordError) as ctx:
-            o.call("worktree_create", sid="o", name="issue-1", root=str(root))
-        self.assertEqual(ctx.exception.code, -32012)
-
-    def test_mcp_adapter_joins_and_forwards_tools(self):
-        """F8: the stdio adapter keeps no ledger of its own; every tool call lands in the daemon as one session."""
-        client = self.daemon.client()
-        self.addCleanup(client.close)
-        adapter = coord.McpAdapter(client, "mcp-1", str(self.repo))
-        init = adapter.dispatch(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {"protocolVersion": "2025-11-25"},
-            }
-        )
-        self.assertEqual(init["result"]["serverInfo"]["name"], "agent-coord")
-        names = {
-            t["name"]
-            for t in adapter.dispatch(
-                {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
-            )["result"]["tools"]
-        }
-        self.assertIn("catchup", names)
-        self.assertIsNone(
-            adapter.dispatch({"jsonrpc": "2.0", "method": "notifications/initialized"})
-        )
-        sent = adapter.dispatch(
-            {
-                "jsonrpc": "2.0",
-                "id": 3,
-                "method": "tools/call",
-                "params": {
-                    "name": "send",
-                    "arguments": {"text": "hi me", "to": "self"},
-                },
-            }
-        )
-        self.assertFalse(sent["result"]["isError"])
-        got = adapter.dispatch(
-            {
-                "jsonrpc": "2.0",
-                "id": 4,
-                "method": "tools/call",
-                "params": {"name": "catchup", "arguments": {}},
-            }
-        )
-        self.assertIn("hi me", got["result"]["content"][0]["text"])
-        bad = adapter.dispatch(
-            {
-                "jsonrpc": "2.0",
-                "id": 5,
-                "method": "tools/call",
-                "params": {
-                    "name": "worktree",
-                    "arguments": {"action": "claim", "path": "/nowhere"},
-                },
-            }
-        )
-        self.assertTrue(bad["result"]["isError"])
-        self.assertEqual(client.call("sessions")["sessions"][0]["sid"], "mcp-1")
-
-    def test_hooks_join_nudge_and_deny_edits_outside_worktree(self):
-        """F3 + V9 (Claude Code path): SessionStart joins, prompt/tool hooks nudge once, PreToolUse denies edits outside the enforced worktree."""
-        os.environ["AGENT_COORD_HOME"] = str(self.home)
+class HookTest(Fixture):
+    def setUp(self) -> None:
+        super().setUp()
+        self.daemon = Daemon(self.home)
+        self.addCleanup(self.daemon.stop)
         os.environ["AGENT_COORD_NO_AUTOSTART"] = "1"
-        self.addCleanup(os.environ.pop, "AGENT_COORD_HOME")
-        self.addCleanup(os.environ.pop, "AGENT_COORD_NO_AUTOSTART")
+        self.addCleanup(os.environ.pop, "AGENT_COORD_NO_AUTOSTART", None)
+
+    def hook(self, client: str, event: str, payload: dict) -> dict | None:
         out = io.StringIO()
-        coord.hook_main(
-            "SessionStart",
-            io.StringIO(json.dumps({"session_id": "s1", "cwd": str(self.wt)})),
-            out,
+        rc = coord.hook_main(client, event, io.StringIO(json.dumps(payload)), out)
+        self.assertEqual(rc, 0)
+        return json.loads(out.getvalue()) if out.getvalue().strip() else None
+
+    def peer_posts(self, text: str) -> None:
+        peer = self.daemon.client()
+        self.addCleanup(peer.close)
+        peer.call("join", sid="p", client="test", cwd=str(self.repo), native_id="p")
+        peer.call("send", sid="p", to="repo", text=text)
+
+    def test_f8_1_claude_code_hooks_join_nudge_and_deny(self):
+        start = self.hook(
+            "claude-code", "SessionStart", {"session_id": "s1", "cwd": str(self.wt)}
         )
         self.assertIn(
-            "joined as cc-s1",
-            json.loads(out.getvalue())["hookSpecificOutput"]["additionalContext"],
+            "joined as cc-s1", start["hookSpecificOutput"]["additionalContext"]
         )
-        a, _ = self.join("a", self.repo)
-        a.call("send", sid="a", to="repo", text="look")
-        out = io.StringIO()
-        coord.hook_main(
-            "UserPromptSubmit", io.StringIO(json.dumps({"session_id": "s1"})), out
+        self.peer_posts("look")
+        prompt = self.hook(
+            "claude-code", "UserPromptSubmit", {"session_id": "s1", "cwd": str(self.wt)}
         )
-        self.assertIn("1 unread", out.getvalue())
-        out = io.StringIO()
-        coord.hook_main(
-            "PostToolUse", io.StringIO(json.dumps({"session_id": "s1"})), out
-        )
-        self.assertEqual(out.getvalue(), "")
-        a.call("worktree_claim", sid="cc-s1", path=str(self.wt), enforce=True)
-        out = io.StringIO()
-        coord.hook_main(
+        self.assertIn("1 unread", prompt["hookSpecificOutput"]["additionalContext"])
+        self.assertIsNone(self.hook("claude-code", "PostToolUse", {"session_id": "s1"}))
+        me = self.daemon.client()
+        self.addCleanup(me.close)
+        me.call("attach", sid="cc-s1", native_id="s1")
+        me.call("worktree_claim", sid="cc-s1", path=str(self.wt), enforce=True)
+        deny = self.hook(
+            "claude-code",
             "PreToolUse",
-            io.StringIO(
-                json.dumps(
-                    {
-                        "session_id": "s1",
-                        "tool_name": "Edit",
-                        "tool_input": {"file_path": str(self.repo / "README")},
-                    }
-                )
-            ),
-            out,
+            {
+                "session_id": "s1",
+                "tool_name": "Edit",
+                "tool_input": {"file_path": str(self.repo / "README")},
+            },
         )
-        self.assertEqual(
-            json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecision"],
-            "deny",
-        )
-        out = io.StringIO()
-        coord.hook_main(
+        self.assertEqual(deny["hookSpecificOutput"]["permissionDecision"], "deny")
+        allow = self.hook(
+            "claude-code",
             "PreToolUse",
-            io.StringIO(
-                json.dumps(
-                    {
-                        "session_id": "s1",
-                        "tool_name": "Edit",
-                        "tool_input": {"file_path": str(self.wt / "x")},
-                    }
-                )
-            ),
-            out,
+            {
+                "session_id": "s1",
+                "tool_name": "Write",
+                "tool_input": {"file_path": str(self.wt / "new")},
+            },
         )
-        self.assertEqual(out.getvalue(), "")
+        self.assertIsNone(allow)
+        self.hook("claude-code", "SessionEnd", {"session_id": "s1"})
+        self.assertEqual(me.call("whoami", sid="cc-s1")["session"]["status"], "done")
 
-    def test_second_daemon_on_same_home_refuses(self):
-        """V2 (singleton): a second daemon on the same home exits without serving; the first keeps answering."""
-        err = io.StringIO()
-        old = sys.stderr
-        sys.stderr = err
-        try:
-            self.assertEqual(coord.serve(self.home, io.StringIO()), 0)
-        finally:
-            sys.stderr = old
-        self.assertIn("another daemon", err.getvalue())
-        self.assertTrue(self.daemon.client().call("ping")["pong"])
-
-    def test_global_flags_parse_from_anywhere(self):
-        """CLI ergonomics: --json / --as / --no-autostart work before or after the subcommand."""
-        after = coord.parse_cli(["status", "--json", "--as", "x", "--no-autostart"])
-        before = coord.parse_cli(["--json", "--as=x", "--no-autostart", "status"])
-        for args in (after, before):
-            self.assertEqual(
-                (args.sid, args.json, args.no_autostart), ("x", True, True)
-            )
-        plain = coord.parse_cli(["send", "hi", "--to", "all"])
-        self.assertEqual(
-            (plain.sid, plain.json, plain.no_autostart), (None, False, False)
+    def test_f8_1_codex_hooks_parse_apply_patch_paths(self):
+        self.hook("codex", "SessionStart", {"session_id": "t1", "cwd": str(self.wt)})
+        me = self.daemon.client()
+        self.addCleanup(me.close)
+        me.call("attach", sid="codex-t1", native_id="t1")
+        me.call("worktree_claim", sid="codex-t1", path=str(self.wt), enforce=True)
+        patch = (
+            f"*** Begin Patch\n*** Update File: {self.repo / 'README'}\n@@\n-x\n+y\n"
+            "*** End Patch\n"
         )
-        self.assertEqual(plain.to, "all")
+        deny = self.hook(
+            "codex",
+            "PreToolUse",
+            {
+                "session_id": "t1",
+                "cwd": str(self.wt),
+                "tool_name": "apply_patch",
+                "tool_input": {"command": patch},
+            },
+        )
+        self.assertEqual(deny["hookSpecificOutput"]["permissionDecision"], "deny")
+        relative = "*** Begin Patch\n*** Add File: notes.md\n+hi\n*** End Patch\n"
+        allow = self.hook(
+            "codex",
+            "PreToolUse",
+            {
+                "session_id": "t1",
+                "cwd": str(self.wt),
+                "tool_name": "apply_patch",
+                "tool_input": {"command": relative},
+            },
+        )
+        self.assertIsNone(allow)
 
-    def test_remote_normalization(self):
-        """Project key ignores scheme, user, case of host and the .git suffix."""
-        cases = {
-            "https://github.com/H2suzuki/terminal-configs.git": "github.com/H2suzuki/terminal-configs",
-            "git@github.com:h2suzuki/terminal-configs.git": "github.com/h2suzuki/terminal-configs",
-            "ssh://git@GitHub.com/h2suzuki/x/": "github.com/h2suzuki/x",
-            "/srv/git/repo.git": "/srv/git/repo",
+    def test_f8_1_antigravity_hooks_speak_its_own_schema(self):
+        payload = {"conversationId": "c1", "workspacePaths": [str(self.wt)]}
+        first = self.hook(
+            "antigravity", "PreInvocation", {**payload, "invocationNum": 0}
+        )
+        self.assertIn("joined as agy-c1", first["injectSteps"][0]["ephemeralMessage"])
+        me = self.daemon.client()
+        self.addCleanup(me.close)
+        me.call("attach", sid="agy-c1", native_id="c1")
+        me.call("worktree_claim", sid="agy-c1", path=str(self.wt), enforce=True)
+        deny = self.hook(
+            "antigravity",
+            "PreToolUse",
+            {
+                **payload,
+                "toolCall": {
+                    "name": "write_to_file",
+                    "args": {"TargetFile": str(self.repo / "README")},
+                },
+            },
+        )
+        self.assertEqual(deny["decision"], "deny")
+        quiet = self.hook(
+            "antigravity", "PreInvocation", {**payload, "invocationNum": 1}
+        )
+        self.assertEqual(quiet, {})
+        self.peer_posts("look")
+        nudge = self.hook(
+            "antigravity", "PreInvocation", {**payload, "invocationNum": 2}
+        )
+        self.assertIn("1 unread", nudge["injectSteps"][0]["ephemeralMessage"])
+
+
+class McpTest(Fixture):
+    def setUp(self) -> None:
+        super().setUp()
+        self.daemon = Daemon(self.home)
+        self.addCleanup(self.daemon.stop)
+
+    def rpc(
+        self, adapter: Any, req_id: int, method: str, params: dict | None = None
+    ) -> dict:
+        return adapter.dispatch(
+            {"jsonrpc": "2.0", "id": req_id, "method": method, "params": params or {}}
+        )
+
+    def test_mcp_1_adapter_survives_bad_calls_and_keeps_one_identity(self):
+        client = self.daemon.client()
+        self.addCleanup(client.close)
+        adapter = coord.McpAdapter(
+            client, coord.Identity("claude-code", "m1", str(self.wt))
+        )
+        init = self.rpc(adapter, 1, "initialize", {"protocolVersion": "2025-11-25"})
+        self.assertEqual(init["result"]["protocolVersion"], "2025-11-25")
+        tools = {
+            t["name"] for t in self.rpc(adapter, 2, "tools/list")["result"]["tools"]
         }
-        for url, expected in cases.items():
-            self.assertEqual(coord.normalize_remote(url), expected, url)
+        self.assertIn("send", tools)
+        self.assertNotIn("force_release", tools)
+        who = self.rpc(adapter, 3, "tools/call", {"name": "whoami", "arguments": {}})
+        self.assertIn("cc-m1", who["result"]["content"][0]["text"])
+        hijack = self.rpc(
+            adapter,
+            4,
+            "tools/call",
+            {"name": "update", "arguments": {"sid": "someone-else", "status": "done"}},
+        )
+        self.assertFalse(hijack["result"]["isError"])
+        self.assertEqual(
+            client.call("whoami", sid="cc-m1")["session"]["status"], "done"
+        )
+        bad = self.rpc(
+            adapter,
+            5,
+            "tools/call",
+            {
+                "name": "worktree",
+                "arguments": {"action": "force_release", "path": "/x"},
+            },
+        )
+        self.assertTrue(bad["result"]["isError"])
+        odd = self.rpc(
+            adapter,
+            6,
+            "tools/call",
+            {"name": "send", "arguments": {"text": ["not", "a", "string"]}},
+        )
+        self.assertTrue(odd["result"]["isError"])
+        self.assertEqual(self.rpc(adapter, 7, "ping")["result"], {})
+
+
+class DoctorTest(Fixture):
+    def test_f8_2_doctor_separates_the_capability_lanes(self):
+        daemon = Daemon(self.home)
+        self.addCleanup(daemon.stop)
+        out = io.StringIO()
+        identity = coord.Identity("claude-code", "d1", str(self.repo))
+        self.assertEqual(coord.doctor(identity, autostart=False, out=out), 0)
+        text = out.getvalue()
+        for lane in ("connect:", "session:", "notify:", "enforcement:", "sandbox:"):
+            self.assertIn(lane, text)
 
 
 if __name__ == "__main__":

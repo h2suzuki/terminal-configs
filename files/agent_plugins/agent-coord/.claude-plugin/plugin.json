@@ -1,6 +1,10 @@
 {
   "name": "agent-coord",
-  "version": "0.1.0",
-  "description": "Session ledger for agents on this host: messaging with project/repo scopes, resource locks, worktree ownership.",
-  "author": { "name": "terminal-configs" }
+  "version": "0.2.0",
+  "description": "Session ledger for agents on this host: scoped messaging, resource grants, worktree ownership.",
+  "author": {
+    "name": "terminal-configs"
+  },
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json"
 }
