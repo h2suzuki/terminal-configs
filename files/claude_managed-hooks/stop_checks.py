@@ -69,6 +69,15 @@ CONTINUATION_ENDINGS = (
     "作業を続け",
 )
 QUESTION_ENDINGS = ("?", "？", "ますか", "ましょうか", "ください", "でしょうか")
+EITHER_WAY_RE = re.compile(r"どちらでも(?:進め|よい|良い|いい|構いま|可能|OK|大丈夫)")
+PERMISSION_RE = re.compile(r"[てで]も?(?:よろしい|いい|よい|良い|構いません|構わない|OK)(?:ですか|でしょうか)$")
+ACTION_ASK_RE = re.compile(
+    r"(?:し|いき|行き|進め|続け|始め|見|読み|試し|調べ|直し|やり|取り掛かり|書き|作り|入れ|出し|送り|回し|走らせ|流し)"
+    r"(?:ますか|ましょうか)$"
+)
+INFO_ASK_RE = re.compile(r"(?:あり|ござい|ご存じ|ご存知|お持ち|いらっしゃい|分かり|わかり|できてい|ご覧|お使い)ますか$")
+CHOICE_RE = re.compile(r"どちら|どれ|どの|いずれ")  # a choice question belongs to the routing rule
+DESTRUCTIVE_RE = re.compile(r"削除|消し|消去|破棄|上書き|reset|force|push|revert|drop|rm\b|clean", re.IGNORECASE)
 
 
 def _read_tail(path, limit):
@@ -754,6 +763,7 @@ def _offload(turn, normalized, scan):
         re.search(r"(?:するか|しますか).{0,25}(?:するか|しますか)", questions)
         or re.search(r"A\s*にしますか.{0,20}B\s*にしますか", questions, re.IGNORECASE)
         or re.search(r"どちら(?:にしますか|がよいですか)", questions)
+        or EITHER_WAY_RE.search(scan)
     )
     declared = (
         any(name == "Skill" for name in turn["tool_names"])
@@ -761,6 +771,14 @@ def _offload(turn, normalized, scan):
     )
     if routing and not declared:
         reasons.append("二択 routing")
+    asks = [q.rstrip("?？ ") for q in question_lines if not DESTRUCTIVE_RE.search(q)]
+    if any(PERMISSION_RE.search(q) for q in asks):
+        reasons.append("許可質問")
+    if any(
+        ACTION_ASK_RE.search(q) and not INFO_ASK_RE.search(q) and not CHOICE_RE.search(q)
+        for q in asks
+    ):
+        reasons.append("実行確認")
     outside_fences = _strip_fences_and_quotes(normalized)
     if re.search(r"`?!`?\s*を付けて実行してください", outside_fences):
         reasons.append("! prefix 実行依頼")
@@ -1160,14 +1178,14 @@ def _turn_marker(payload, turn):
     return f"{stamp} / Turn #{count} / Context {context} / 経過 {elapsed} 秒"
 
 
-def _warn_json(lines):
+def _warn_json(lines, marker):
     body = "\n\n".join(lines)
     return {
         "hookSpecificOutput": {
             "hookEventName": "Stop",
             "additionalContext": body,
         },
-        "systemMessage": body,
+        "systemMessage": body + ("\n\n" + marker if marker else ""),
     }
 
 
@@ -1237,15 +1255,15 @@ def _emit(payload, turn, blocks, warnings):
         return 2
     if payload.get("stop_hook_active"):
         return 0  # a continuation Stop ends the turn: no warn, no marker
+    marker = _turn_marker(payload, turn)  # every non-continuation Stop is a turn end, warn or not
     if warnings:
-        sys.stdout.write(json.dumps(_warn_json(warnings), ensure_ascii=False) + "\n")
+        sys.stdout.write(json.dumps(_warn_json(warnings, marker), ensure_ascii=False) + "\n")
         waste_prefix = "memory-reminder: prompt に無駄の指摘がある"
         if any(line.startswith(waste_prefix) for line in warnings):
             _record_waste(turn)
         if turn.get("memo_path"):
             _record_memo(turn, turn["memo_path"])
         return 0
-    marker = _turn_marker(payload, turn)
     if marker:
         sys.stdout.write(json.dumps(_marker_json(marker), ensure_ascii=False) + "\n")
     return 0

@@ -23,8 +23,8 @@ test は `stop_checks.test.py` の `test_c<N>_*` に対応させる。
   成立したら全行を出す。指摘 1 件を直して同じ family を同 session で再発させる比率が 59% (transcript 134 本 /
   401 block の実測) ゆえ、修復指示は指摘箇所でなく class を対象にする。
 - **warn / context**: exit 0 / stdout に 1 行の JSON
-  `{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":<本文>},"systemMessage":<同じ本文>}`。
-  本文は family 行を `"\n\n"` で連結。stderr は空。
+  `{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":<本文>},"systemMessage":<同じ本文 + turn-marker>}`。
+  本文は family 行を `"\n\n"` で連結。`systemMessage` は本文の後に `"\n\n"` と turn-marker 行 (C17) を続ける。stderr は空。
 - **pass**: exit 0 / stdout は turn-marker (C17) のみ / stderr 空。
 
 `stop_hook_active` が真の Stop では block を warn へ降格し (advise-once)、行頭に
@@ -180,10 +180,12 @@ test 方針: 5 規則それぞれの陽性 1 件と陰性 1 件 (計 10 case)。
 
 入力: `final_text` (fence 除去後。ただし host-command-format は fence の有無そのものを見るので fence 除去前の本文を使う)。
 - **block** (`offload-to-user`): (1) 順序質問 (「どちらを先に」「どの順で」)、(2) 二択確認 / routing (「A にしますか B にしますか」
-  「どちらにしますか」「どちらがよいですか」)、(3) `!` prefix 実行の依頼 — (1)(2) は `?` / `？` / `ますか` / `ましょうか` / `ください` /
-  `でしょうか` で終わる行 (user への問い掛け) だけを対象にし、「自分で判断しました」のような平叙文は対象外。「ください」で
-  終わる行でも、順序・二択の句が「〜かは」「〜かについては」で主題化された報告・案内文 (「どの順で実行したかは報告書を
-  確認してください」) は対象外。
+  「どちらにしますか」「どちらがよいですか」、および選択を user に委ねる平叙文「どちらでも進められます」)、(3) `!` prefix 実行の依頼、
+  (4) 許可質問 (「再開してよろしいですか」「してもいいですか」)、(5) 実行確認 (「読みにいきますか」「進めましょうか」のように自分の
+  次の行動の可否を問う) — (1)(2)(4)(5) は `?` / `？` / `ますか` / `ましょうか` / `ください` / `でしょうか` で終わる行 (user への
+  問い掛け) だけを対象にし ((2) の平叙文を除く)、「自分で判断しました」のような平叙文は対象外。「ください」で終わる行でも、
+  順序・二択の句が「〜かは」「〜かについては」で主題化された報告・案内文 (「どの順で実行したかは報告書を確認してください」)
+  は対象外。(4)(5) は破壊的操作 (削除 / 上書き / reset / push 等) の事前確認と、情報を尋ねる「ありますか」「ご存じですか」を対象外とする。
   (2) は turn 内に `declare-and-proceed` skill の invoke があれば pass。
 - **warn** (`host-command-format`, family 15): host コマンドを user に手動実行させる文脈で、コマンドが独立した fenced block に
   なっていない (prose の inline code に混ざる)、または fenced でも path 引数が絶対 path でも `/` を含む repo root 起点の
@@ -243,14 +245,16 @@ test 方針: `when: prompt` のみの entry が出ないこと、固定文言が
 
 ### C17 turn-marker (systemMessage)
 
-入力: block も warn / context も無い pass 時のみ。
+入力: block の無い turn 終了時 (warn / context の有無を問わない。`stop_hook_active` の continuation Stop は除く)。
 出力: `<transcript>.turns` の counter を 1 増やし、`"<count> <last_stop_epoch>"` の 1 行で書き戻す。
-stdout に `systemMessage` だけを持つ JSON を 1 行出す (`additionalContext` は付けない = model には不可視)。
+pass 時は stdout に `systemMessage` だけを持つ JSON を 1 行出す (`additionalContext` は付けない = model には不可視)。
+warn 時は warn JSON の `systemMessage` 末尾に marker 行を足し、`additionalContext` には入れない。
 本文は `<ISO 時刻 (local timezone / offset 付き)> / Turn #<count> / Context <used>% / 経過 <秒> 秒`。`<used>` は
 `$XDG_CACHE_HOME/claude-tui-statusline/<session_id>.json` (既定 `$HOME/.cache/…`) の `stdin.context_window.used_percentage`
 (`stdin` は dict、JSON 文字列なら parse する)、経過の基点は同 file の `session_started_epoch`。cache が無い / 読めない場合は
 `Context -` とし、経過は前回 Stop の epoch (`.turns` の 2 列目) から数える。counter file が読めない場合は marker を出さず exit 0。
-test 方針: 連続 2 回の pass で `Turn #1` → `Turn #2`、warn が出た Stop では counter が動かないこと。
+test 方針: 連続 2 回の pass で `Turn #1` → `Turn #2`、warn が出た Stop でも counter が動き marker が systemMessage に載ること、
+continuation Stop では counter が動かないこと。
 
 ### C18 決定性と純度
 
@@ -722,9 +726,9 @@ class ProtocolTest(StopChecksTest):
         self.assertEqual(len(proc.stdout.splitlines()), 1, proc.stdout)
         data = json.loads(proc.stdout.splitlines()[0])
         self.assertEqual(data["hookSpecificOutput"]["hookEventName"], "Stop")
-        self.assertEqual(
-            data["hookSpecificOutput"]["additionalContext"], data["systemMessage"]
-        )
+        body, turn_marker = data["systemMessage"].rsplit("\n\n", 1)
+        self.assertEqual(data["hookSpecificOutput"]["additionalContext"], body)
+        self.assertIn("Turn #1", turn_marker)
 
     def test_c1_pass_emits_only_the_turn_marker(self):
         self.fx.turn(say("調査しました"))
@@ -1910,9 +1914,18 @@ class TurnMarkerTest(StopChecksTest):
         self.assertIn("Turn #1", marker(run_hook(self.fx, self.CLEAN)))
         self.assertIn("Turn #2", marker(run_hook(self.fx, self.CLEAN)))
 
-    def test_c17_warn_stop_does_not_bump_the_counter(self):
+    def test_c17_warn_stop_bumps_the_counter_and_shows_the_marker(self):
         self.assertIn("Turn #1", marker(run_hook(self.fx, self.CLEAN)))
-        run_hook(self.fx, "該当なしです。")
+        proc = run_hook(self.fx, "該当なしです。")
+        data = json.loads(proc.stdout.splitlines()[0])
+        self.assertIn("Turn #2", data["systemMessage"])
+        self.assertNotIn("Turn #", data["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("Turn #3", marker(run_hook(self.fx, self.CLEAN)))
+
+    def test_c17_continuation_stop_does_not_bump_the_counter(self):
+        self.assertIn("Turn #1", marker(run_hook(self.fx, self.CLEAN)))
+        proc = run_hook(self.fx, self.CLEAN, stop_hook_active=True)
+        self.assertEqual(proc.stdout, "")
         self.assertIn("Turn #2", marker(run_hook(self.fx, self.CLEAN)))
 
     def test_c17_marker_stamp_is_local_time(self):
@@ -1982,10 +1995,17 @@ class PurityTest(StopChecksTest):
         self.assertFalse(seen - ALLOWED_FAMILIES, sorted(seen - ALLOWED_FAMILIES))
 
     def test_c18_identical_input_yields_identical_output(self):
+        """The turn counter file is state: it is reset between the two runs, and the marker carries the clock."""
         self.fx.turn(say("報告します"))
         first = run_hook(self.fx, "該当なしです。")
+        os.remove(self.fx.transcript[: -len(".jsonl")] + ".turns")
         second = run_hook(self.fx, "該当なしです。")
-        self.assertEqual(first.stdout, second.stdout)
+        outputs = []
+        for proc in (first, second):
+            data = json.loads(proc.stdout)
+            data["systemMessage"] = data["systemMessage"].rsplit("\n\n", 1)[0]
+            outputs.append(data)
+        self.assertEqual(outputs[0], outputs[1])
         self.assertEqual(first.stderr, second.stderr)
         self.assertEqual(first.returncode, second.returncode)
 
@@ -2284,6 +2304,35 @@ class CorpusRoutingQuestionTest(StopChecksTest):
         self.fx.turn(call("Skill", skill="declare-and-proceed"), say("整理しました"))
         text = "(A) 今すぐ始める、(B) 取り込みまで待つ、のどちらにしますか？"
         self.assertNotBlocked(run_hook(self.fx, text), self.FAMILY)
+
+    def test_c13_either_way_statement_blocks(self):
+        """C13 rule 2: handing the choice over in a plain sentence is still routing."""
+        self.fx.turn(say("整理しました"))
+        text = "A 案は速く、B 案は安全です。どちらでも進められます。" + TAIL
+        self.assertBlocks(run_hook(self.fx, text), self.FAMILY)
+
+    def test_c13_permission_and_action_questions_block(self):
+        """C13 rules 4 and 5 (2026-09-11 corpus): asking leave to act, or whether to act at all."""
+        for text in (
+            "調査は済みました。再開してよろしいですか?",
+            "hook の設定を読みにいきますか？",
+            "次の項目に進めましょうか?",
+            "設定を確認してもいいでしょうか？",
+        ):
+            with self.subTest(text=text):
+                self.fx.turn(say("整理しました"))
+                self.assertBlocks(run_hook(self.fx, text), self.FAMILY)
+
+    def test_c13_destructive_and_information_questions_pass(self):
+        """C13 rules 4 and 5 leave destructive pre-approval and fact-finding questions alone."""
+        for text in (
+            "作業 branch を削除してよろしいですか?",
+            "origin へ push しますか？",
+            "別 session の handoff 資料はありますか？",
+        ):
+            with self.subTest(text=text):
+                self.fx.turn(say("整理しました"))
+                self.assertNotBlocked(run_hook(self.fx, text), self.FAMILY)
 
 
 class ReviewCorrectionTest(StopChecksTest):
