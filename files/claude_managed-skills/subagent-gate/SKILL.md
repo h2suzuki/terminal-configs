@@ -17,6 +17,14 @@ subagent 起動には context 切り替え / 結果統合 / token コストの o
 - **(c) 探索範囲が不明瞭で 3 query 以上の試行錯誤を要する**: どこに何があるか分からず、 複数 grep / Read を組み合わせる必要があるとき。 Explore subagent の出番。
 - **(d) 専門 agent の領域**: 例 Explore / security-review / code-reviewer など、 専門 agent が prompt 設計上 main thread より優れている領域。
 
+### Choose the model before spawning
+
+起動する時は `model` を毎回明示する。 未指定は親 model の無検討継承 (最高コスト model で search / review を回す) になる。
+
+- search / grep 集約 / 要約 / 形式的 review: `haiku` か `sonnet`
+- 設計判断や難しい root-cause 解析など判断が要る仕事: `opus` 以上、 検討の結果 親と同じ model を選ぶのも可 (その場合も名前を明示する)
+- fork (`subagent_type: "fork"`) は親 model 固定なので指定不要
+
 ## What to leave out
 
 - 単一ファイルの Read (file path が分かっている)
@@ -26,4 +34,4 @@ subagent 起動には context 切り替え / 結果統合 / token コストの o
 ## Related
 
 - **Legacy:** org CLAUDE.md ワークフローの統制 § 4. サブエージェント より
-- **Hook 補助:** mechanical proxy 判定は `subagent_gate_warn.py` (PreToolUse:^(Task|Agent)$) / `subagent_gate_suggest.py` (UserPromptSubmit) が補助。 hook reminder を見たら本 skill 4 条件 (a-d) のいずれが該当か verbalize する。
+- **Hook 補助:** mechanical proxy 判定は `subagent_gate_warn.py` (PreToolUse:^(Task|Agent)$) / `subagent_gate_suggest.py` (UserPromptSubmit) が補助し、 `subagent_model_gate.py` (PreToolUse:^(Task|Agent)$) が `model` 未指定の spawn を deny する。 hook reminder を見たら本 skill 4 条件 (a-d) のいずれが該当か verbalize する。
