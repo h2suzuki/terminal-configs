@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import bisect
+import copy
 import fcntl
 import json
 import os
@@ -208,9 +210,7 @@ def rpc_result(req_id: object, result: Json) -> Json:
     return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
 
-def rpc_error(
-    req_id: object, code: int, message: str, data: object = None
-) -> Json:
+def rpc_error(req_id: object, code: int, message: str, data: object = None) -> Json:
     error: Json = {"code": code, "message": message}
     if data is not None:
         error["data"] = data
@@ -251,22 +251,26 @@ CREATE TABLE IF NOT EXISTS requests(
 CREATE TABLE IF NOT EXISTS idempotency(key TEXT PRIMARY KEY, response TEXT, ts REAL);
 """
 
-
-def row_dict(row: sqlite3.Row | None) -> Json | None:
-    return dict(row) if row is not None else None
-
-
-def event_row(row: sqlite3.Row) -> Json:
-    event = dict(row)
-    event["body"] = json.loads(event["body"])
-    return event
-
-
-OPEN_REQUESTS_SQL = "SELECT * FROM requests WHERE state='open' ORDER BY seq"
+# Persisted column order per table; the in-memory rows carry exactly these keys.
+COLUMNS = {
+    "sessions": (
+        "sid client native_id name task status cwd common_dir repo_top checkout branch"
+        " project edit_worktree model joined_at updated_at last_seen left_at cursor notified"
+    ).split(),
+    "events": "seq ts kind actor scope_kind scope_key body".split(),
+    "resources": "key owner purpose generation acquired_at state".split(),
+    "worktrees": (
+        "path common_dir owner generation enforce claimed_at pending_to pending_at"
+    ).split(),
+    "requests": (
+        "req_id seq sender scope_kind scope_key subject body state result resolved_by"
+        " resolved_at created_at"
+    ).split(),
+}
 
 
 class Store:
-    """Authoritative ledger; every public method runs under one lock and one transaction."""
+    """Authoritative ledger held in memory; SQLite is written through so a restart rebuilds it."""
 
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -282,26 +286,72 @@ class Store:
         self.listeners: list[queue.Queue[Json]] = []
         self.pending: list[Json] = []  # events appended by the running transaction
         self.started_at = now()
+        self._load()
+
+    # -- memory <-> sqlite
+    def _load(self) -> None:
+        """Rebuild every in-memory table from the database (startup, or after a rollback)."""
+
+        def rows(table: str) -> list[Json]:
+            return [dict(r) for r in self.db.execute(f"SELECT * FROM {table}")]
+
+        self._sessions = {r["sid"]: r for r in rows("sessions")}
+        self._resources = {r["key"]: r for r in rows("resources")}
+        self._worktrees = {r["path"]: r for r in rows("worktrees")}
+        self._requests = {r["req_id"]: r for r in rows("requests")}
+        self._events = sorted(rows("events"), key=lambda e: e["seq"])
+        for event in self._events:
+            event["body"] = json.loads(event["body"])
+        self._waiters: dict[str, list[str]] = {}
+        for r in self.db.execute("SELECT key, sid FROM waiters ORDER BY rowid"):
+            self._waiters.setdefault(r["key"], []).append(r["sid"])
+        self._idempotency = {
+            r["key"]: json.loads(r["response"])
+            for r in self.db.execute("SELECT key, response FROM idempotency")
+        }
+
+    def _save(self, table: str, row: Json) -> None:
+        cols = COLUMNS[table]
+        values = [row[c] for c in cols]
+        if table == "events":
+            values[cols.index("body")] = json.dumps(row["body"], ensure_ascii=False)
+        self.db.execute(
+            f"INSERT OR REPLACE INTO {table}({','.join(cols)}) VALUES({','.join('?' * len(cols))})",
+            values,
+        )
+
+    def _save_waiters(self, key: str) -> None:
+        self.db.execute("DELETE FROM waiters WHERE key=?", (key,))
+        self.db.executemany(
+            "INSERT INTO waiters(key, sid) VALUES(?,?)",
+            [(key, sid) for sid in self._waiters.get(key, [])],
+        )
 
     # -- transaction helpers
     def transact(self, fn: Any, *args: Any) -> Any:
-        """Run fn in one transaction; committed events reach the listeners afterwards."""
+        """Run fn under the lock in one transaction; memory is reloaded from disk on rollback."""
         with self.lock:
             self.pending = []
             self.db.execute("BEGIN IMMEDIATE")
             try:
                 result = fn(*args)
             except CoordError as error:
-                self.db.execute("COMMIT" if error.keep else "ROLLBACK")
-                if error.keep:
+                if (
+                    error.keep
+                ):  # side effects recorded before the refusal stay (e.g. waiters)
+                    self.db.execute("COMMIT")
                     self.emit_pending()
+                else:
+                    self.db.execute("ROLLBACK")
+                    self._load()
                 raise
             except BaseException:
                 self.db.execute("ROLLBACK")
+                self._load()
                 raise
             self.db.execute("COMMIT")
             self.emit_pending()
-        return result
+            return copy.deepcopy(result)  # callers serialise outside the lock
 
     def emit_pending(self) -> None:
         events, self.pending = self.pending, []
@@ -312,54 +362,40 @@ class Store:
     def append_event(
         self, kind: str, actor: str | None, scope: tuple[str, str], body: Json
     ) -> Json:
-        ts = now()
-        cursor = self.db.execute(
-            "INSERT INTO events(ts, kind, actor, scope_kind, scope_key, body) VALUES(?,?,?,?,?,?)",
-            (ts, kind, actor, scope[0], scope[1], json.dumps(body, ensure_ascii=False)),
-        )
         event = {
-            "seq": cursor.lastrowid,
-            "ts": ts,
+            "seq": self.max_seq() + 1,
+            "ts": now(),
             "kind": kind,
             "actor": actor,
             "scope_kind": scope[0],
             "scope_key": scope[1],
             "body": body,
         }
+        self._events.append(event)
+        self._save("events", event)
         self.pending.append(event)
         return event
 
-    def rows(self, sql: str, params: tuple = ()) -> list[Json]:
-        return [dict(r) for r in self.db.execute(sql, params)]
-
-    def row(self, table: str, key: str, value: object) -> Json | None:
-        return row_dict(
-            self.db.execute(f"SELECT * FROM {table} WHERE {key}=?", (value,)).fetchone()
-        )
-
-    def live_sessions(self, ts: float, order: str) -> list[Json]:
-        return self.rows(
-            f"SELECT * FROM sessions WHERE left_at IS NULL OR left_at>? ORDER BY {order}",
-            (ts - 3600,),
-        )
-
-    def events_after(self, seq: int) -> Any:
-        """Ledger tail in seq order, 500 rows per query, bodies decoded."""
-        while True:
-            rows = self.db.execute(
-                "SELECT * FROM events WHERE seq>? ORDER BY seq LIMIT 500", (seq,)
-            ).fetchall()
-            if not rows:
-                return
-            for row in rows:
-                seq = row["seq"]
-                yield event_row(row)
+    def events_after(self, seq: int) -> list[Json]:
+        start = bisect.bisect_right(self._events, seq, key=lambda e: e["seq"])
+        return self._events[start:]
 
     def max_seq(self) -> int:
-        return self.db.execute("SELECT COALESCE(MAX(seq),0) FROM events").fetchone()[0]
+        return self._events[-1]["seq"] if self._events else 0
+
+    def live_sessions(self, ts: float) -> list[Json]:
+        """Sessions that are present or left within the last hour, newest report first."""
+        return sorted(
+            (
+                s
+                for s in self._sessions.values()
+                if s["left_at"] is None or s["left_at"] > ts - 3600
+            ),
+            key=lambda s: -(s["updated_at"] or 0),
+        )
 
     def session(self, sid: str) -> Json | None:
-        return self.row("sessions", "sid", sid)
+        return self._sessions.get(sid)
 
     def require_session(self, sid: str | None) -> Json:
         if not sid:
@@ -373,22 +409,23 @@ class Store:
             raise CoordError(
                 f"session {sid} has left; join again to participate", -32001
             )
-        self.db.execute("UPDATE sessions SET last_seen=? WHERE sid=?", (now(), sid))
+        session["last_seen"] = now()
+        self._save("sessions", session)
         return session
 
     def resolve_sid(self, ref: str) -> str:
         if self.session(ref):
             return ref
-        rows = self.db.execute(
-            "SELECT sid FROM sessions WHERE name=? AND left_at IS NULL", (ref,)
-        ).fetchall()
-        if len(rows) == 1:
-            return rows[0]["sid"]
-        if not rows:
+        sids = [
+            s["sid"]
+            for s in self._sessions.values()
+            if s["name"] == ref and s["left_at"] is None
+        ]
+        if len(sids) == 1:
+            return sids[0]
+        if not sids:
             raise CoordError(f"no session named or identified by {ref!r}", -32602)
-        raise CoordError(
-            f"name {ref!r} is ambiguous: " + ", ".join(r["sid"] for r in rows), -32602
-        )
+        raise CoordError(f"name {ref!r} is ambiguous: " + ", ".join(sids), -32602)
 
     def scope_for(self, session: Json, to: str | None) -> tuple[str, str]:
         target = (to or "project").strip()
@@ -438,17 +475,13 @@ class Store:
 
     # -- idempotency
     def replay(self, key: str | None) -> Json | None:
-        if not key:
-            return None
-        row = self.db.execute(
-            "SELECT response FROM idempotency WHERE key=?", (key,)
-        ).fetchone()
-        return json.loads(row["response"]) if row else None
+        return self._idempotency.get(key) if key else None
 
     def remember(self, key: str | None, response: Json) -> Json:
         if key:
+            self._idempotency[key] = response
             self.db.execute(
-                "INSERT INTO idempotency(key, response, ts) VALUES(?,?,?)",
+                "INSERT OR REPLACE INTO idempotency(key, response, ts) VALUES(?,?,?)",
                 (key, json.dumps(response, ensure_ascii=False), now()),
             )
         return response
@@ -466,69 +499,70 @@ class Store:
                 f"{p.get('client') or 'agent'}@{os.path.basename(identity['cwd'].rstrip('/'))}"
             )
         )
-        self.db.execute(
-            "INSERT INTO sessions(sid, client, native_id, name, task, status, cwd, common_dir,"
-            " repo_top, checkout, branch, project, model, joined_at, updated_at, last_seen, cursor)"
-            " VALUES(?,?,?,?,?,'unset',?,?,?,?,?,?,?,?,?,?,?)"
-            " ON CONFLICT(sid) DO UPDATE SET client=COALESCE(excluded.client,client),"
-            " native_id=COALESCE(excluded.native_id,native_id), name=excluded.name,"
-            " task=COALESCE(excluded.task,task), cwd=excluded.cwd, common_dir=excluded.common_dir,"
-            " repo_top=excluded.repo_top, checkout=excluded.checkout, branch=excluded.branch,"
-            " project=excluded.project, model=COALESCE(excluded.model,model),"
-            " updated_at=excluded.updated_at, last_seen=excluded.last_seen, left_at=NULL",
-            (
-                sid,
-                p.get("client") or (None if existing else "unknown"),
-                p.get("native_id"),
-                name,
-                p.get("task"),
-                *(identity[k] for k in IDENTITY_COLS),
-                p.get("model"),
-                ts,
-                ts,
-                ts,
-                self.max_seq(),
-            ),
+        session = existing or {
+            "sid": sid,
+            "client": "unknown",
+            "native_id": None,
+            "task": None,
+            "status": "unset",
+            "edit_worktree": None,
+            "model": None,
+            "joined_at": ts,
+            "cursor": self.max_seq(),
+            "notified": 0,
+        }
+        for key in ("client", "native_id", "task", "model"):
+            if p.get(key) is not None:
+                session[key] = p[key]
+        session.update(
+            name=name,
+            updated_at=ts,
+            last_seen=ts,
+            left_at=None,
+            **{k: identity[k] for k in IDENTITY_COLS},
         )
+        self._sessions[sid] = session
+        self._save("sessions", session)
         if not existing:
             self.append_event(
                 "join", sid, ("all", ""), {"name": name, "client": p.get("client")}
             )
         elif existing["left_at"]:
             self.append_event("join", sid, ("all", ""), {"name": name, "rejoin": True})
-        session = cast(Json, self.session(sid))
         return {"session": public_session(session), **self.snapshot(session)}
 
     def snapshot(self, session: Json) -> Json:
         """Current state a newcomer needs: peers, held resources, open requests, unread count."""
         unread, _ = self.unread_for(session)
         peers = [
-            public_session(r)
-            for r in self.rows(
-                "SELECT * FROM sessions WHERE left_at IS NULL AND sid!=? ORDER BY updated_at DESC",
-                (session["sid"],),
+            public_session(s)
+            for s in sorted(
+                self._sessions.values(), key=lambda s: -(s["updated_at"] or 0)
             )
+            if s["left_at"] is None and s["sid"] != session["sid"]
         ]
         return {
             "peers_same_project": [
                 p for p in peers if p["project"] == session["project"]
             ],
             "peers_total": len(peers),
-            "held_resources": self.rows(
-                "SELECT * FROM resources WHERE owner=?", (session["sid"],)
-            ),
+            "held_resources": [
+                r for r in self._resources.values() if r["owner"] == session["sid"]
+            ],
             "owned_worktrees": [
-                r["path"]
-                for r in self.db.execute(
-                    "SELECT path FROM worktrees WHERE owner=?", (session["sid"],)
-                )
+                w["path"]
+                for w in self._worktrees.values()
+                if w["owner"] == session["sid"]
             ],
             "open_requests": self.open_requests(session),
             "unread": len(unread),
         }
 
     def open_requests(self, session: Json | None) -> list[Json]:
-        rows = self.rows(OPEN_REQUESTS_SQL)
+        rows = sorted(
+            (r for r in self._requests.values() if r["state"] == "open"),
+            key=lambda r: r["seq"],
+        )
         if session is None:
             return rows
         return [
@@ -547,31 +581,22 @@ class Store:
             fields.update(git_identity(p["cwd"]))
         if not fields:
             raise CoordError("nothing to update", -32602)
-        fields["updated_at"] = now()
-        assignments = ", ".join(f"{k}=?" for k in fields)
-        self.db.execute(
-            f"UPDATE sessions SET {assignments} WHERE sid=?",
-            (*fields.values(), session["sid"]),
-        )
-        self.append_event(
-            "update",
-            session["sid"],
-            ("all", ""),
-            {k: v for k, v in fields.items() if k != "updated_at"},
-        )
-        return {"session": public_session(cast(Json, self.session(session["sid"])))}
+        session.update(fields, updated_at=now())
+        self._save("sessions", session)
+        self.append_event("update", session["sid"], ("all", ""), fields)
+        return {"session": public_session(session)}
 
     def leave(self, p: Json) -> Json:
         session = self.require_session(p.get("sid"))
         ts = now()
-        self.db.execute(
-            "UPDATE sessions SET left_at=?, updated_at=? WHERE sid=?",
-            (ts, ts, session["sid"]),
-        )
-        held = self.db.execute(
-            "UPDATE resources SET state='unconfirmed' WHERE owner=? AND state='held'",
-            (session["sid"],),
-        ).rowcount
+        session.update(left_at=ts, updated_at=ts)
+        self._save("sessions", session)
+        held = 0
+        for resource in self._resources.values():
+            if resource["owner"] == session["sid"] and resource["state"] == "held":
+                resource["state"] = "unconfirmed"
+                self._save("resources", resource)
+                held += 1
         self.append_event(
             "leave",
             session["sid"],
@@ -588,7 +613,7 @@ class Store:
         me = self.session(p.get("sid") or "")
         scope = p.get("scope") or "all"
         ts = now()
-        rows = self.live_sessions(ts, "updated_at DESC")
+        rows = self.live_sessions(ts)
         if scope in ("project", "repo"):
             if not me:
                 raise CoordError("scope project/repo needs your own session id", -32602)
@@ -621,7 +646,6 @@ class Store:
         session = self.require_session(p.get("sid"))
         if p.get("ack_through") is not None:
             self.ack({"sid": session["sid"], "through": p["ack_through"]})
-            session = cast(Json, self.session(session["sid"]))
         limit = max(1, min(int(p.get("limit") or 20), 200))
         events, more = self.unread_for(session, limit)
         return {
@@ -634,11 +658,9 @@ class Store:
     def ack(self, p: Json) -> Json:
         session = self.require_session(p.get("sid"))
         through = min(int(p.get("through") or 0), self.max_seq())
-        cursor = max(session["cursor"], through)
-        self.db.execute(
-            "UPDATE sessions SET cursor=? WHERE sid=?", (cursor, session["sid"])
-        )
-        return {"cursor": cursor}
+        session["cursor"] = max(session["cursor"], through)
+        self._save("sessions", session)
+        return {"cursor": session["cursor"]}
 
     def peek(self, p: Json) -> Json:
         session = self.require_session(p.get("sid"))
@@ -657,10 +679,8 @@ class Store:
         events, _ = self.unread_for(session)
         if not events or events[-1]["seq"] <= session["notified"]:
             return {"text": None, "unread": len(events)}
-        self.db.execute(
-            "UPDATE sessions SET notified=? WHERE sid=?",
-            (events[-1]["seq"], session["sid"]),
-        )
+        session["notified"] = events[-1]["seq"]
+        self._save("sessions", session)
         senders = sorted(
             {e["body"].get("from_name") or e["actor"] or "?" for e in events}
         )
@@ -702,38 +722,43 @@ class Store:
             "text": p.get("body") or "",
             "from_name": session["name"],
         }
-        req_id = f"R{self.max_seq() + 1}"  # BEGIN IMMEDIATE makes the next seq ours
+        req_id = f"R{self.max_seq() + 1}"
         event = self.append_event(
             "request_open", session["sid"], scope, {**body, "req_id": req_id}
         )
-        self.db.execute(
-            "INSERT INTO requests(req_id, seq, sender, scope_kind, scope_key, subject, body, state, created_at)"
-            " VALUES(?,?,?,?,?,?,?,'open',?)",
-            (
-                req_id,
-                event["seq"],
-                session["sid"],
-                scope[0],
-                scope[1],
-                subject,
-                body["text"],
-                now(),
-            ),
-        )
+        req = {
+            "req_id": req_id,
+            "seq": event["seq"],
+            "sender": session["sid"],
+            "scope_kind": scope[0],
+            "scope_key": scope[1],
+            "subject": subject,
+            "body": body["text"],
+            "state": "open",
+            "result": None,
+            "resolved_by": None,
+            "resolved_at": None,
+            "created_at": now(),
+        }
+        self._requests[req_id] = req
+        self._save("requests", req)
         if scope[0] == "session" and p.get("resource"):
-            self.db.execute(
-                "INSERT OR IGNORE INTO waiters(key, sid) VALUES(?,?)",
-                (p["resource"], session["sid"]),
-            )
+            self._add_waiter(p["resource"], session["sid"])
         return self.remember(
             p.get("request_id"), {"req_id": req_id, "seq": event["seq"]}
         )
 
     def _request(self, req_id: str) -> Json:
-        row = self.row("requests", "req_id", req_id)
-        if row is None:
+        req = self._requests.get(req_id)
+        if req is None:
             raise CoordError(f"unknown request {req_id}", -32602)
-        return row
+        return req
+
+    def _close_request(
+        self, req: Json, state: str, by: str, result: str | None
+    ) -> None:
+        req.update(state=state, result=result, resolved_by=by, resolved_at=now())
+        self._save("requests", req)
 
     def resolve(self, p: Json) -> Json:
         session = self.require_session(p.get("sid"))
@@ -747,10 +772,7 @@ class Store:
                 "only the requester or an addressee can resolve a request", -32003
             )
         result = str(p.get("result") or "").strip() or "resolved"
-        self.db.execute(
-            "UPDATE requests SET state='resolved', result=?, resolved_by=?, resolved_at=? WHERE req_id=?",
-            (result, session["sid"], now(), req["req_id"]),
-        )
+        self._close_request(req, "resolved", session["sid"], result)
         self.append_event(
             "request_resolve",
             session["sid"],
@@ -773,10 +795,7 @@ class Store:
             raise CoordError(
                 f"request {req['req_id']} is already {req['state']}", -32003
             )
-        self.db.execute(
-            "UPDATE requests SET state='cancelled', resolved_by=?, resolved_at=? WHERE req_id=?",
-            (session["sid"], now(), req["req_id"]),
-        )
+        self._close_request(req, "cancelled", session["sid"], None)
         self.append_event(
             "request_cancel",
             session["sid"],
@@ -794,17 +813,20 @@ class Store:
         return {"requests": self.open_requests(None if p.get("all") else session)}
 
     # -- resources
+    def _add_waiter(self, key: str, sid: str) -> None:
+        waiters = self._waiters.setdefault(key, [])
+        if sid not in waiters:
+            waiters.append(sid)
+            self._save_waiters(key)
+
     def acquire(self, p: Json) -> Json:
         if replay := self.replay(p.get("request_id")):
             return replay
         session = self.require_session(p.get("sid"))
         key = required(p, "key", "resource key")
-        current = self.row("resources", "key", key)
+        current = self._resources.get(key)
         if current and current["owner"] and current["owner"] != session["sid"]:
-            self.db.execute(
-                "INSERT OR IGNORE INTO waiters(key, sid) VALUES(?,?)",
-                (key, session["sid"]),
-            )
+            self._add_waiter(key, session["sid"])
             owner = self.session(current["owner"])
             raise CoordError(
                 f"resource {key!r} is held by {current['owner']} ({owner['name'] if owner else '?'})"
@@ -822,15 +844,19 @@ class Store:
                 keep=True,
             )
         generation = (current["generation"] if current else 0) + 1
-        self.db.execute(
-            "INSERT INTO resources(key, owner, purpose, generation, acquired_at, state) VALUES(?,?,?,?,?,'held')"
-            " ON CONFLICT(key) DO UPDATE SET owner=excluded.owner, purpose=excluded.purpose,"
-            " generation=excluded.generation, acquired_at=excluded.acquired_at, state='held'",
-            (key, session["sid"], p.get("purpose"), generation, now()),
-        )
-        self.db.execute(
-            "DELETE FROM waiters WHERE key=? AND sid=?", (key, session["sid"])
-        )
+        resource = {
+            "key": key,
+            "owner": session["sid"],
+            "purpose": p.get("purpose"),
+            "generation": generation,
+            "acquired_at": now(),
+            "state": "held",
+        }
+        self._resources[key] = resource
+        self._save("resources", resource)
+        if session["sid"] in self._waiters.get(key, []):
+            self._waiters[key].remove(session["sid"])
+            self._save_waiters(key)
         self.append_event(
             "acquire",
             session["sid"],
@@ -844,7 +870,7 @@ class Store:
     def release(self, p: Json) -> Json:
         session = self.require_session(p.get("sid"))
         key = str(p.get("key") or "").strip()
-        current = self.row("resources", "key", key)
+        current = self._resources.get(key)
         if not current or not current["owner"]:
             raise CoordError(f"resource {key!r} is not held", -32011)
         if current["owner"] != session["sid"]:
@@ -859,22 +885,19 @@ class Store:
                 f"stale generation {p['generation']} (current {current['generation']})",
                 -32011,
             )
-        self._do_release(key, session["sid"], session["name"], "release", None)
-        return {"key": key, "released_generation": current["generation"]}
+        generation = current["generation"]
+        self._do_release(current, session["sid"], session["name"], "release", None)
+        return {"key": key, "released_generation": generation}
 
     def _do_release(
-        self, key: str, actor: str, actor_name: str, kind: str, reason: str | None
+        self, resource: Json, actor: str, actor_name: str, kind: str, reason: str | None
     ) -> None:
         """Record the free state once; notify each waiter directly so nobody gets it twice."""
-        self.db.execute(
-            "UPDATE resources SET owner=NULL, purpose=NULL, acquired_at=NULL, state='free' WHERE key=?",
-            (key,),
-        )
-        waiters = [
-            r["sid"]
-            for r in self.db.execute("SELECT sid FROM waiters WHERE key=?", (key,))
-        ]
-        self.db.execute("DELETE FROM waiters WHERE key=?", (key,))
+        key = resource["key"]
+        resource.update(owner=None, purpose=None, acquired_at=None, state="free")
+        self._save("resources", resource)
+        waiters = self._waiters.pop(key, [])
+        self._save_waiters(key)
         body = {"key": key, "from_name": actor_name, "reason": reason}
         self.append_event("resource_free", actor, ("all", ""), {**body, "kind": kind})
         for waiter in waiters:
@@ -886,21 +909,24 @@ class Store:
     def force_release(self, p: Json) -> Json:
         key = str(p.get("key") or "").strip()
         reason = required(p, "reason", "a reason for force release is")
-        current = self.row("resources", "key", key)
+        current = self._resources.get(key)
         if not current or not current["owner"]:
             raise CoordError(f"resource {key!r} is not held", -32011)
+        previous = current["owner"]
         actor = self.actor_for(p)
-        self._do_release(key, actor, p.get("name") or actor, "force_release", reason)
+        self._do_release(
+            current, actor, p.get("name") or actor, "force_release", reason
+        )
         self.append_event(
             "force_release",
             actor,
-            ("session", current["owner"]),
+            ("session", previous),
             {"key": key, "reason": reason, "previous_owner": True},
         )
-        return {"key": key, "previous_owner": current["owner"]}
+        return {"key": key, "previous_owner": previous}
 
     def resources(self, p: Json) -> Json:
-        return {"resources": self.rows("SELECT * FROM resources ORDER BY key")}
+        return {"resources": [self._resources[k] for k in sorted(self._resources)]}
 
     def actor_for(self, p: Json) -> str:
         """Force paths are user-initiated CLI actions: an unregistered caller acts as 'user'."""
@@ -910,15 +936,9 @@ class Store:
     def _repo_worktrees(self, session: Json) -> list[Json]:
         if not session["common_dir"]:
             raise CoordError("this session is not inside a git repo", -32602)
-        registered = {
-            r["path"]: r
-            for r in self.rows(
-                "SELECT * FROM worktrees WHERE common_dir=?", (session["common_dir"],)
-            )
-        }
         items = list_worktrees(session["common_dir"])
         for item in items:
-            item["ownership"] = registered.get(item["path"])
+            item["ownership"] = self._worktrees.get(item["path"])
         return items
 
     def worktree_list(self, p: Json) -> Json:
@@ -937,35 +957,45 @@ class Store:
             )
         return real
 
+    def _set_edit_worktree(self, session: Json, path: str | None) -> None:
+        session.update(edit_worktree=path, updated_at=now())
+        self._save("sessions", session)
+
     def worktree_claim(self, p: Json) -> Json:
         session = self.require_session(p.get("sid"))
         path = self._verify_member(session, p.get("path") or session["checkout"])
-        current = self.row("worktrees", "path", path)
+        current = self._worktrees.get(path)
         if current and current["owner"] and current["owner"] != session["sid"]:
             owner = self.session(current["owner"])
             raise CoordError(
                 f"{path} is owned by {current['owner']} ({owner['name'] if owner else '?'}) since {fmt_time(current['claimed_at'])}",
                 -32010,
             )
-        generation = (current["generation"] if current else 0) + 1
         enforce = 1 if p.get("enforce") else 0
-        self.db.execute(
-            "INSERT INTO worktrees(path, common_dir, owner, generation, enforce, claimed_at) VALUES(?,?,?,?,?,?)"
-            " ON CONFLICT(path) DO UPDATE SET owner=excluded.owner, generation=excluded.generation,"
-            " enforce=excluded.enforce, claimed_at=excluded.claimed_at, pending_to=NULL, pending_at=NULL",
-            (path, session["common_dir"], session["sid"], generation, enforce, now()),
-        )
-        self.db.execute(
-            "UPDATE sessions SET edit_worktree=?, updated_at=? WHERE sid=?",
-            (path, now(), session["sid"]),
-        )
+        worktree = {
+            "path": path,
+            "common_dir": session["common_dir"],
+            "owner": session["sid"],
+            "generation": (current["generation"] if current else 0) + 1,
+            "enforce": enforce,
+            "claimed_at": now(),
+            "pending_to": None,
+            "pending_at": None,
+        }
+        self._worktrees[path] = worktree
+        self._save("worktrees", worktree)
+        self._set_edit_worktree(session, path)
         self.append_event(
             "worktree_claim",
             session["sid"],
             ("repo", session["common_dir"]),
             {"path": path, "enforce": bool(enforce)},
         )
-        return {"path": path, "generation": generation, "enforce": bool(enforce)}
+        return {
+            "path": path,
+            "generation": worktree["generation"],
+            "enforce": bool(enforce),
+        }
 
     def worktree_create(self, p: Json) -> Json:
         session = self.require_session(p.get("sid"))
@@ -1030,72 +1060,70 @@ class Store:
             "base": base_sha[:12],
         }
 
-    def _owned(self, session: Json, p: Json) -> str:
-        """Path argument (default: the session's edit worktree) that this session owns."""
+    def _owned(self, session: Json, p: Json) -> Json:
+        """Worktree row (default: the session's edit worktree) that this session owns."""
         path = canon_path(p.get("path") or session["edit_worktree"])
-        current = self.row("worktrees", "path", path)
+        current = self._worktrees.get(path)
         if not current or current["owner"] != session["sid"]:
             raise CoordError(f"{path} is not owned by {session['sid']}", -32011)
-        return path
+        return current
 
-    def _drop_owner(self, path: str) -> None:
+    def _drop_owner(self, worktree: Json) -> None:
         """One state transition shared by release, force-release and accept."""
-        self.db.execute(
-            "UPDATE worktrees SET owner=NULL, pending_to=NULL, pending_at=NULL WHERE path=?",
-            (path,),
-        )
-        self.db.execute(
-            "UPDATE sessions SET edit_worktree=NULL WHERE edit_worktree=?", (path,)
-        )
+        worktree.update(owner=None, pending_to=None, pending_at=None)
+        self._save("worktrees", worktree)
+        for session in self._sessions.values():
+            if session["edit_worktree"] == worktree["path"]:
+                session["edit_worktree"] = None
+                self._save("sessions", session)
 
     def worktree_release(self, p: Json) -> Json:
         session = self.require_session(p.get("sid"))
-        path = self._owned(session, p)
-        self._drop_owner(path)
+        worktree = self._owned(session, p)
+        self._drop_owner(worktree)
         self.append_event(
             "worktree_release",
             session["sid"],
             ("repo", session["common_dir"]),
-            {"path": path},
+            {"path": worktree["path"]},
         )
-        return {"path": path, "owner": None}
+        return {"path": worktree["path"], "owner": None}
 
     def worktree_transfer(self, p: Json) -> Json:
         session = self.require_session(p.get("sid"))
-        path = self._owned(session, p)
+        worktree = self._owned(session, p)
         to = self.resolve_sid(str(p.get("to") or ""))
         if to == session["sid"]:
             raise CoordError("cannot transfer to yourself", -32602)
-        self.db.execute(
-            "UPDATE worktrees SET pending_to=?, pending_at=? WHERE path=?",
-            (to, now(), path),
-        )
+        worktree.update(pending_to=to, pending_at=now())
+        self._save("worktrees", worktree)
         self.append_event(
             "transfer_propose",
             session["sid"],
             ("session", to),
-            {"path": path, "from_name": session["name"], "note": p.get("note")},
+            {
+                "path": worktree["path"],
+                "from_name": session["name"],
+                "note": p.get("note"),
+            },
         )
-        return {"path": path, "pending_to": to}
+        return {"path": worktree["path"], "pending_to": to}
 
     def worktree_accept(self, p: Json) -> Json:
         session = self.require_session(p.get("sid"))
         path = canon_path(p.get("path"))
-        current = self.row("worktrees", "path", path)
+        current = self._worktrees.get(path)
         if not current or current["pending_to"] != session["sid"]:
             raise CoordError(
                 f"no transfer of {path} is pending for {session['sid']}", -32011
             )
         previous = current["owner"]
-        self._drop_owner(path)
-        self.db.execute(
-            "UPDATE worktrees SET owner=?, generation=generation+1, claimed_at=? WHERE path=?",
-            (session["sid"], now(), path),
+        self._drop_owner(current)
+        current.update(
+            owner=session["sid"], generation=current["generation"] + 1, claimed_at=now()
         )
-        self.db.execute(
-            "UPDATE sessions SET edit_worktree=?, updated_at=? WHERE sid=?",
-            (path, now(), session["sid"]),
-        )
+        self._save("worktrees", current)
+        self._set_edit_worktree(session, path)
         self.append_event(
             "transfer_accept",
             session["sid"],
@@ -1107,18 +1135,19 @@ class Store:
     def worktree_force_release(self, p: Json) -> Json:
         path = canon_path(p.get("path"))
         reason = required(p, "reason", "a reason for force release is")
-        current = self.row("worktrees", "path", path)
+        current = self._worktrees.get(path)
         if not current or not current["owner"]:
             raise CoordError(f"{path} has no owner", -32011)
-        self._drop_owner(path)
+        previous = current["owner"]
+        self._drop_owner(current)
         actor = self.actor_for(p)
         self.append_event(
             "worktree_force_release",
             actor,
-            ("session", current["owner"]),
+            ("session", previous),
             {"path": path, "reason": reason},
         )
-        return {"path": path, "previous_owner": current["owner"]}
+        return {"path": path, "previous_owner": previous}
 
     def edit_check(self, p: Json) -> Json:
         """Deny edits that land in another checkout of the repo the session claimed with enforce."""
@@ -1126,7 +1155,7 @@ class Store:
         target = canon_path(p.get("path"))
         if not session or not session["edit_worktree"]:
             return {"allow": True, "reason": "no enforced worktree"}
-        claim = self.row("worktrees", "path", session["edit_worktree"])
+        claim = self._worktrees.get(session["edit_worktree"])
         if not claim or claim["owner"] != session["sid"] or not claim["enforce"]:
             return {"allow": True, "reason": "claim inactive or not enforced"}
         if path_within(target, claim["path"]):
@@ -1143,7 +1172,7 @@ class Store:
     def status(self, p: Json) -> Json:
         ts = now()
         sessions = []
-        for row in self.live_sessions(ts, "project, updated_at DESC"):
+        for row in sorted(self.live_sessions(ts), key=lambda s: s["project"] or ""):
             item = public_session(row, self.connections, ts)
             item["unread"] = len(self.unread_for(row)[0])
             sessions.append(item)
@@ -1157,13 +1186,17 @@ class Store:
                 "connections": len(self.connections),
             },
             "sessions": sessions,
-            "resources": self.rows(
-                "SELECT * FROM resources WHERE owner IS NOT NULL ORDER BY key"
-            ),
-            "worktrees": self.rows(
-                "SELECT * FROM worktrees WHERE owner IS NOT NULL OR pending_to IS NOT NULL ORDER BY path"
-            ),
-            "requests": self.rows(OPEN_REQUESTS_SQL),
+            "resources": [
+                self._resources[k]
+                for k in sorted(self._resources)
+                if self._resources[k]["owner"]
+            ],
+            "worktrees": [
+                self._worktrees[k]
+                for k in sorted(self._worktrees)
+                if self._worktrees[k]["owner"] or self._worktrees[k]["pending_to"]
+            ],
+            "requests": self.open_requests(None),
         }
 
 

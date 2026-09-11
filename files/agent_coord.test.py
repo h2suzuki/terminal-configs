@@ -7,6 +7,7 @@ import importlib.machinery
 import importlib.util
 import io
 import json
+import sqlite3
 import os
 import subprocess
 import sys
@@ -195,6 +196,38 @@ class CoordTest(unittest.TestCase):
         )
         self.assertEqual(self.unread_texts(c, "b"), ["two"])
         self.assertEqual(c.call("peek", sid="b")["cursor"], first["last_seq"])
+
+    def test_memory_is_the_current_state_and_sqlite_only_persists(self):
+        """4.2: reads are answered from memory (no SQL), writes reach SQLite before the reply, a rollback reloads memory."""
+        store = coord.Store(self.tmp / "direct" / "ledger.sqlite3")
+        store.transact(
+            store.join, {"sid": "a", "client": "test", "cwd": str(self.repo)}
+        )
+        store.transact(store.send, {"sid": "a", "to": "all", "text": "hello"})
+        statements: list[str] = []
+        store.db.set_trace_callback(statements.append)
+        status = store.transact(store.status, {})
+        verdict = store.transact(store.edit_check, {"sid": "a", "path": str(self.repo)})
+        store.db.set_trace_callback(None)
+        self.assertEqual((status["service"]["events"], verdict["allow"]), (2, True))
+        self.assertFalse(
+            [q for q in statements if q.lstrip().upper().startswith("SELECT")],
+            statements,
+        )
+        durable = store.db.execute(
+            "SELECT cursor FROM sessions WHERE sid='a'"
+        ).fetchone()[0]
+        self.assertEqual(durable, store.session("a")["cursor"])
+
+        def failing_save(table: str, row: dict) -> None:
+            raise sqlite3.OperationalError("disk gone")
+
+        store._save = failing_save  # type: ignore[method-assign]
+        with self.assertRaises(sqlite3.OperationalError):
+            store.transact(store.ack, {"sid": "a", "through": 2})
+        self.assertEqual(
+            store.session("a")["cursor"], durable
+        )  # memory rolled back with the transaction
 
     def test_catchup_pages_peek_and_status_do_not_consume(self):
         """V6 + V7: paging never drops events, peek/status leave the cursor alone, ack only moves forward."""
