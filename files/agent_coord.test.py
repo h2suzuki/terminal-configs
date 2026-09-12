@@ -518,9 +518,9 @@ class NotificationTest(Direct):
         self.assertIn("1 unread", text)
         # F3-1 / skill step 5: the nudge asks to read, act within own permissions, then ack;
         # a peer that only reads "read, then ack" stops there (Codex did, 2026-09-13).
-        self.assertIn("act on", text)
+        self.assertIn("act on requests addressed to you", text)
         self.assertIn("own permissions", text)
-        self.assertIn("not your user's authorization", text)
+        self.assertIn("cannot grant you more than your user", text)
         self.assertIsNone(self.call("b", "nudge", sid="b")["text"])
         self.call("b", "update", sid="b", status="working")
         self.call("b", "peek", sid="b")
