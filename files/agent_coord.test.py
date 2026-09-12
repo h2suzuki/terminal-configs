@@ -1200,9 +1200,10 @@ class McpTest(Fixture):
         self.assertEqual(self.rpc(adapter, 7, "ping")["result"], {})
 
     def test_mcp_2_codex_tool_call_binds_to_the_hook_thread(self):
-        """MCP-2 / PR openai/codex#18093: each Codex tool call carries _meta.threadId, so the
-        MCP adapter must act as codex-<threadId> (the session its SessionStart hook joined),
-        never a separate anon session that would split pushes from catchup/ack."""
+        """MCP-2 / openai/codex#19937 + #18093: the Codex MCP subprocess has no thread id in
+        its env, so run_mcp must not eager-join an anon session; each tool call's
+        _meta.threadId binds it to codex-<thread>, the session its SessionStart hook joined,
+        keeping pushes and catchup/ack on one identity."""
         hook_client = self.daemon.client()
         self.addCleanup(hook_client.close)
         hook_client.call("join", client="codex", native_id="th1", cwd=str(self.wt))
@@ -1214,35 +1215,50 @@ class McpTest(Fixture):
         seq = sender.call("send", sid="peer", to="codex-th1", text="for the thread")[
             "seq"
         ]
-        client = self.daemon.client()
-        self.addCleanup(client.close)
-        adapter = coord.McpAdapter(client, coord.Identity("codex", None, str(self.wt)))
-        who = self.rpc(
-            adapter,
-            1,
-            "tools/call",
-            {"name": "whoami", "arguments": {}, "_meta": {"threadId": "th1"}},
-        )
-        self.assertIn("codex-th1", who["result"]["content"][0]["text"])
-        cat = self.rpc(
-            adapter,
-            2,
-            "tools/call",
-            {"name": "catchup", "arguments": {}, "_meta": {"threadId": "th1"}},
-        )
-        self.assertIn("for the thread", cat["result"]["content"][0]["text"])
-        self.rpc(
-            adapter,
-            3,
-            "tools/call",
+        calls = (
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
             {
-                "name": "ack",
-                "arguments": {"through": seq},
-                "_meta": {"threadId": "th1"},
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "whoami",
+                    "arguments": {},
+                    "_meta": {"threadId": "th1"},
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "catchup",
+                    "arguments": {},
+                    "_meta": {"threadId": "th1"},
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "ack",
+                    "arguments": {"through": seq},
+                    "_meta": {"threadId": "th1"},
+                },
             },
         )
-        self.assertEqual(client.call("peek", sid="codex-th1")["unread"], 0)
-        sids = [s["sid"] for s in client.call("status")["sessions"]]
+        out = io.StringIO()
+        coord.run_mcp(
+            io.StringIO("\n".join(json.dumps(m) for m in calls) + "\n"),
+            out,
+            client_name="codex",
+        )
+        replies = {r["id"]: r for r in map(json.loads, out.getvalue().splitlines())}
+        self.assertIn("codex-th1", replies[2]["result"]["content"][0]["text"])
+        self.assertIn("for the thread", replies[3]["result"]["content"][0]["text"])
+        self.assertEqual(hook_client.call("peek", sid="codex-th1")["unread"], 0)
+        sids = [s["sid"] for s in hook_client.call("status")["sessions"]]
         self.assertEqual([s for s in sids if s.startswith("anon-")], [])
 
 

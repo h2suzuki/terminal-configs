@@ -2549,10 +2549,12 @@ def run_mcp(stdin: TextIO, stdout: TextIO, client_name: str | None = None) -> in
         print(f"agent_coord mcp: {error}", file=sys.stderr)
         return 1
     adapter = McpAdapter(client, identity)
-    try:
-        adapter.ensure_joined()
-    except CoordError as error:
-        print(f"agent_coord mcp: join failed: {error}", file=sys.stderr)
+    # Codex has no native id in env; it defers to the first call's _meta.threadId
+    if identity.native_id:
+        try:
+            adapter.ensure_joined()
+        except CoordError as error:
+            print(f"agent_coord mcp: join failed: {error}", file=sys.stderr)
     for line in stdin:
         try:
             message = json.loads(line)
