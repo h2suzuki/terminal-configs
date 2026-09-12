@@ -65,7 +65,8 @@ Exit Criteria:
 - [x] `/usr/local/bin/agent_coord` と managed settings の `excludedCommands` (`agent_coord *`) が deploy され、sandbox の Bash から `agent_coord doctor` が host daemon (0.2.0) に接続した (2026-09-11 実測)
 - [ ] `install_claude_extensions` 実行後の新規 Claude Code session で、SessionStart hook の join 文と plugin 由来の agent_coord MCP tool が使える
 - [ ] Codex session (plugin `agent-coord` の mcp.json / hooks) から同じ daemon に join し、Claude Code session と send / catchup / acquire 競合 / worktree transfer→accept (検証シナリオ V12) が通る
-- [ ] idle の Claude Code session が inbox socket 経由で、Codex session が `codex queue` 経由で起きることを実測し、REQUIREMENTS_AND_DESIGN.ja.md (untracked、第 11 章) の対応表に記録する (busy な Claude Code session への push と PostToolUse hook の注入は 2026-09-11 に実測済み)
+- [ ] idle の Claude Code session が inbox socket 経由で、Codex session が `codex queue` 経由で起きることを実測し、REQUIREMENTS_AND_DESIGN.ja.md (untracked、第 11 章) の対応表に記録する (busy な Claude Code session への push と PostToolUse hook の注入は 2026-09-11 に実測済み。 2026-09-13 実測: idle Claude Code は 6 種の送信先すべてで起きた。 Codex は初回 prompt 後に hook が thread id 付きで join し `codex queue` で起きたが、MCP tool が `approval_policy = "never"` に拒否され catchup できず → `files/codex_config.toml` に approve 追記、deploy 未)
+- [ ] Codex の MCP 経由 join (anon-*、thread id 無し、起こせない) と hook 経由 join (codex-<thread>) が別 session として台帳に並ぶ問題を解消する (2026-09-13 実測: 起動直後は anon のみで `codex queue` も rollout 未作成で拒否)
 - [ ] Antigravity session で hooks が発火し、編集 tool の path 引数名が `TargetFile` 系で合っているかを確認する
 Work file: REQUIREMENTS_AND_DESIGN.ja.md (untracked、第 11 章 実装判断), files/agent_coord.test.py (要件 claim 単位の test 46 件)
 sandbox からは `/etc/claude-code` と `/usr/local/bin` に書けないため、deploy は host 端末で `ubuntu2404-wsl.sh` と `install_claude_extensions` を実行する。
