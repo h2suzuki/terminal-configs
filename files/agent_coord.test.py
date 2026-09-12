@@ -48,6 +48,7 @@ Claim map (ID -> requirement):
   F8-2   F8 doctor separates CLI/MCP, host/sandbox, notification, enforcement capability
   F8-3   F8 SessionEnd leaves the ledger, so a finished session stops being a name or a recipient
   MCP-1  the stdio adapter never dies on a bad tool call and strips reserved arguments
+  MCP-2  a Codex tool call's _meta.threadId binds the adapter to the hook's session, not an anon one
 """
 
 from __future__ import annotations
@@ -1197,6 +1198,52 @@ class McpTest(Fixture):
         )
         self.assertTrue(odd["result"]["isError"])
         self.assertEqual(self.rpc(adapter, 7, "ping")["result"], {})
+
+    def test_mcp_2_codex_tool_call_binds_to_the_hook_thread(self):
+        """MCP-2 / PR openai/codex#18093: each Codex tool call carries _meta.threadId, so the
+        MCP adapter must act as codex-<threadId> (the session its SessionStart hook joined),
+        never a separate anon session that would split pushes from catchup/ack."""
+        hook_client = self.daemon.client()
+        self.addCleanup(hook_client.close)
+        hook_client.call("join", client="codex", native_id="th1", cwd=str(self.wt))
+        sender = self.daemon.client()
+        self.addCleanup(sender.close)
+        sender.call(
+            "join", sid="peer", client="test", native_id="peer", cwd=str(self.wt)
+        )
+        seq = sender.call("send", sid="peer", to="codex-th1", text="for the thread")[
+            "seq"
+        ]
+        client = self.daemon.client()
+        self.addCleanup(client.close)
+        adapter = coord.McpAdapter(client, coord.Identity("codex", None, str(self.wt)))
+        who = self.rpc(
+            adapter,
+            1,
+            "tools/call",
+            {"name": "whoami", "arguments": {}, "_meta": {"threadId": "th1"}},
+        )
+        self.assertIn("codex-th1", who["result"]["content"][0]["text"])
+        cat = self.rpc(
+            adapter,
+            2,
+            "tools/call",
+            {"name": "catchup", "arguments": {}, "_meta": {"threadId": "th1"}},
+        )
+        self.assertIn("for the thread", cat["result"]["content"][0]["text"])
+        self.rpc(
+            adapter,
+            3,
+            "tools/call",
+            {
+                "name": "ack",
+                "arguments": {"through": seq},
+                "_meta": {"threadId": "th1"},
+            },
+        )
+        self.assertEqual(client.call("peek", sid="codex-th1")["unread"], 0)
+        sids = [s["sid"] for s in client.call("status")["sessions"]]
+        self.assertEqual([s for s in sids if s.startswith("anon-")], [])
 
 
 class DoctorTest(Fixture):

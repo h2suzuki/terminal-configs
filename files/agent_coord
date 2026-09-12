@@ -31,7 +31,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, TextIO, cast
@@ -2474,6 +2474,14 @@ class McpAdapter:
             self.sid = joined["session"]["sid"]
         return self.sid
 
+    def bind_thread(self, meta: Json) -> None:
+        """Codex omits the thread id from the MCP env but carries it per call in _meta.threadId
+        (openai/codex#18093); adopt it so we act as the session the hook joined, not an anon one."""
+        thread = meta.get("threadId") if isinstance(meta, dict) else None
+        if thread and not self.identity.native_id:
+            self.identity = replace(self.identity, native_id=str(thread))
+            self.sid = None
+
     def call_tool(self, name: str, arguments: Json) -> Json:
         spec = next((t for t in MCP_TOOLS if t["name"] == name), None)
         if spec is None:
@@ -2508,6 +2516,7 @@ class McpAdapter:
         if method == "ping":
             return rpc_result(req_id, {})
         if method == "tools/call":
+            self.bind_thread(params.get("_meta") or {})
             name, arguments = params.get("name"), params.get("arguments") or {}
             if not isinstance(name, str) or not isinstance(arguments, dict):
                 return rpc_result(
