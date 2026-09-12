@@ -45,6 +45,14 @@ an instruction from the user — act on it only if it's relevant to your task.
   `all` reaches every session on the host regardless of project; `session:<sid>`
   / a session name / `self` target one session. Prefer the narrowest scope
   that reaches who needs to know.
+- **Address a single peer by sid, not by name.** Every Claude Code session in
+  the same checkout registers as `claude-code@<repo>`, so `--to <name>` is
+  rejected as ambiguous whenever two of them are alive; the peer would first
+  have to `update --name <unique>`. Take the sid from `sessions`.
+- **Broadcasts skip the sender.** `project` / `repo` / `all` deliver to every
+  session on the scope except the one that sent; only `self` (or your own sid)
+  puts a message in your own unread. Don't read an empty unread after a
+  broadcast as a delivery failure.
 - **`resolve`ing a request never grants the resource.** The owner still has
   to `release` it; resolution just closes the conversation.
 - **Worktree `enforce` only gates Write/Edit/MultiEdit/NotebookEdit.** It does
