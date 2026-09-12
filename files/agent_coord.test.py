@@ -20,6 +20,8 @@ Claim map (ID -> requirement):
   F2-4   F2 a rejoin resumes from its cursor within retention, flagged backfill, no repeats
   F2-5   F2 expiry (24h) never loses ownership / open requests, and reports the gap to the reader
   F2-6   F2 ack is not resolution: requests close only by resolve / cancel
+  F2-7   2.1 a display name resolves among present sessions (connected or seen within PRESENCE_TTL)
+  F2-8   2.1 all / project / repo reach present sessions only; peers list the same set
   F3-1   F3 unread is announced once per unread range; heartbeats do not wake anyone
   F3-2   F3 no self-notification: own broadcast, own resolve, own release never come back
   F3-3   F3 subscribers and wake pushes happen after commit, outside the lock; rollback pushes nothing
@@ -44,6 +46,7 @@ Claim map (ID -> requirement):
   F7-3   F7 unreachable daemon is diagnosed; no second ledger
   F8-1   F8 hooks: Claude Code and Codex payloads / outputs; Antigravity payloads / outputs
   F8-2   F8 doctor separates CLI/MCP, host/sandbox, notification, enforcement capability
+  F8-3   F8 SessionEnd leaves the ledger, so a finished session stops being a name or a recipient
   MCP-1  the stdio adapter never dies on a bad tool call and strips reserved arguments
 """
 
@@ -54,6 +57,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import socket
 import stat
 import subprocess
@@ -150,6 +154,7 @@ class Fixture(unittest.TestCase):
 
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="coord-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.home = self.tmp / "home"
         self.clock = Clock()
         self.repo = make_repo(self.tmp, "repo", "https://github.com/example/repo.git")
@@ -360,6 +365,46 @@ class DeliveryTest(Direct):
         self.assertEqual(self.texts("a"), [])
         self.call("a", "send", sid="a", to="self", text="note to self")
         self.assertEqual(self.texts("a"), ["note to self"])
+
+    def test_f2_7_display_name_resolves_among_present_sessions_only(self):
+        """F2-7: a same-named session that is gone (no connection, silent) is not a candidate."""
+        self.join("a", self.repo, name="cc@repo")
+        self.join("b", self.wt, name="cc@repo")
+        with self.assertRaises(coord.CoordError):
+            self.call("a", "send", sid="a", to="cc@repo", text="who?")
+        self.co.disconnect("b")
+        self.clock.advance(coord.PRESENCE_TTL + 1)
+        self.join("c", self.clone, name="sender")
+        self.call("c", "send", sid="c", to="cc@repo", text="to the live one")
+        self.assertEqual(self.texts("a"), ["to the live one"])
+        self.join("d", self.other, name="cc@repo")
+        with self.assertRaises(coord.CoordError) as caught:
+            self.call("c", "send", sid="c", to="cc@repo", text="ambiguous")
+        self.assertNotIn("b", str(caught.exception).split(": ")[-1].split(", "))
+        self.call("c", "send", sid="c", to="b", text="sid still addresses it")
+        self.call("b", "attach", sid="b", native_id="b")
+        self.assertEqual(self.texts("b"), ["sid still addresses it"])
+
+    def test_f2_8_broadcasts_and_peers_cover_present_sessions_only(self):
+        """F2-8: `all` means connected (or recently seen) sessions, not everyone who ever joined."""
+        self.join("a", self.repo)
+        self.join("b", self.wt)
+        self.join("c", self.clone)
+        self.co.disconnect("b")
+        self.co.disconnect("c")
+        self.clock.advance(coord.PRESENCE_TTL - 1)
+        self.call("c", "attach", sid="c", native_id="c")
+        self.co.disconnect("c")
+        self.clock.advance(2)
+        self.call("a", "send", sid="a", to="all", text="everyone here")
+        self.call("c", "attach", sid="c", native_id="c")
+        self.assertEqual(self.texts("c"), ["everyone here"])
+        peers = self.join("d", self.other)["peers_same_project"]
+        self.assertEqual(sorted(p["sid"] for p in peers), [])
+        peers = self.join("e", self.clone)["peers_same_project"]
+        self.assertEqual(sorted(p["sid"] for p in peers), ["a", "c"])
+        self.call("b", "attach", sid="b", native_id="b")
+        self.assertEqual(self.texts("b"), [])
 
     def test_f2_2_paging_never_acks_unreturned_events_and_viewers_do_not_consume(self):
         """V6 + V7."""
@@ -1026,7 +1071,8 @@ class HookTest(Fixture):
         )
         self.assertIsNone(allow)
         self.hook("claude-code", "SessionEnd", {"session_id": "s1"})
-        self.assertEqual(me.call("whoami", sid="cc-s1")["session"]["status"], "done")
+        gone = [s for s in me.call("status")["sessions"] if s["sid"] == "cc-s1"][0]
+        self.assertEqual((gone["status"], gone["left_at"] is not None), ("done", True))
 
     def test_f8_1_codex_hooks_parse_apply_patch_paths(self):
         self.hook("codex", "SessionStart", {"session_id": "t1", "cwd": str(self.wt)})

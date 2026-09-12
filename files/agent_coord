@@ -40,6 +40,7 @@ VERSION = "0.2.0"
 MCP_PROTOCOL_VERSION = "2025-11-25"
 EVENT_TTL = 24 * 3600  # undelivered talk outlives any real session by then
 JOIN_BACKFILL = 3600  # a newcomer sees the last hour on its scopes
+PRESENCE_TTL = 3600  # unconnected and silent this long: absent for names / broadcasts
 REPLAY_TTL = 3600  # how long a lost reply can still be retried by id
 NOTIFY_KINDS = frozenset(
     {
@@ -765,10 +766,8 @@ class Ledger:
             return [event["scope_key"]] if event["scope_key"] in self.sessions else []
         return [
             s["sid"]
-            for s in self.sessions.values()
-            if s["left_at"] is None
-            and s["sid"] != event["actor"]
-            and self.visible(event, s)
+            for s in self.present_sessions()
+            if s["sid"] != event["actor"] and self.visible(event, s)
         ]
 
     def deliver(self, sid: str, seq: int, backfill: bool = False) -> None:
@@ -866,14 +865,21 @@ class Ledger:
         self.touch("sessions", session)
         return session
 
+    def present_sessions(self) -> list[Json]:
+        """Sessions that can be addressed: not left, and connected or seen within PRESENCE_TTL."""
+        connected = set(self.bound.values())
+        horizon = self.now() - PRESENCE_TTL
+        return [
+            s
+            for s in self.sessions.values()
+            if s["left_at"] is None
+            and (s["sid"] in connected or (s["last_seen"] or 0) >= horizon)
+        ]
+
     def resolve_sid(self, ref: str) -> str:
         if ref in self.sessions:
             return ref
-        sids = [
-            s["sid"]
-            for s in self.sessions.values()
-            if s["name"] == ref and s["left_at"] is None
-        ]
+        sids = [s["sid"] for s in self.present_sessions() if s["name"] == ref]
         if len(sids) == 1:
             return sids[0]
         if not sids:
@@ -1014,9 +1020,9 @@ class Ledger:
         peers = [
             self.public(s)
             for s in sorted(
-                self.sessions.values(), key=lambda s: -(s["updated_at"] or 0)
+                self.present_sessions(), key=lambda s: -(s["updated_at"] or 0)
             )
-            if s["left_at"] is None and s["sid"] != session["sid"]
+            if s["sid"] != session["sid"]
         ]
         return {
             "peers_same_project": [
@@ -2620,6 +2626,7 @@ def hook_dispatch(
     ensure_session(client, identity)
     if role == "end":
         client.call("update", sid=sid, status="done")
+        client.call("leave", sid=sid)
         return adapter.hook_silence(event)
     if role == "gate":
         for path in adapter.hook_edit_paths(payload):
