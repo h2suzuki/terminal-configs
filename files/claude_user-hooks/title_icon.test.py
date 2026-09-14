@@ -59,8 +59,13 @@ class TitleIconTest(unittest.TestCase):
         out = self.emit("Stop")
         self.assertIn("💬", out)
 
-    def test_stop_with_shell_only_is_wait(self):
+    def test_stop_with_shell_only_is_bg_icon(self):
         out = self.emit("Stop", background_tasks=[{"type": "shell"}])
+        self.assertIn("🔄💬", out)
+
+    def test_session_start_re_emits_over_stored_wait(self):
+        self.emit("Stop")
+        out = self.emit("SessionStart", source="resume")
         self.assertIn("💬", out)
 
     def test_stop_with_non_list_bg_tasks_does_not_crash(self):

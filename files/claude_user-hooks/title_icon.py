@@ -10,7 +10,7 @@ from pathlib import Path
 
 ICON = {"run": "", "bg": "🔄💬", "wait": "💬", "ask": "❓", "perm": "⚠️"}  # この行で差替可  # fmt: skip
 BELL = {"ask", "perm"}  # 突入時に BEL を鳴らす状態 (Windows Terminal のタブ点滅用)
-BG_RUN_TYPES = {"workflow", "subagent"}  # 稼働中とみなす background_tasks の type
+BG_RUN_TYPES = {"workflow", "subagent", "shell", "monitor"}  # 稼働中とみなす type
 STATE_DIR = Path.home() / ".claude" / "title-icon-state"
 SESS_DIR = Path.home() / ".claude" / "sessions"
 SUMMARY_LEN = 24
@@ -150,7 +150,10 @@ def main():
         elif st["state"] != "run":  # 回答・承認・stop-feedback 続行の復帰
             new = "run"
 
-    if new is None or (new == st["state"] and ev != "UserPromptSubmit"):
+    # SessionStart は resume 復帰でタイトルが失われているので、状態が同じでも出し直す
+    if new is None or (
+        new == st["state"] and ev not in ("UserPromptSubmit", "SessionStart")
+    ):
         return
     bell = new in BELL and new != st["state"]
     st["state"] = new
