@@ -408,8 +408,8 @@ def _deny_symbol() -> None:
     _emit_deny(
         f"{SENTINEL} この Grep は code の symbol / 定義検索に見えます (type/glob/path が "
         f"code を指し、 pattern が識別子・定義形)。 codegraph は定義を verbatim source "
-        f"付きで返すので、 `mcp__codegraph__codegraph_search` (位置) か "
-        f"`mcp__codegraph__codegraph_explore` (関連 source 群) を使ってください。 "
+        f"付きで返すので、 `mcp__codegraph__codegraph_explore` (関連 source 群) を "
+        f"使ってください。 "
         f"literal text の検索だった / codegraph が未 index の repo なら、 同じ Grep を "
         f"そのまま再実行すれば通ります (本 gate は 1 turn に 1 回だけ案内します)。"
     )
@@ -429,7 +429,7 @@ def _advisory_grep() -> None:
     _emit_advisory(
         f"{SENTINEL} この Grep は code symbol 検索の可能性があります (glob/path が code)。 "
         f"Grep はこのまま実行されますが、 定義・呼出を辿るなら "
-        f"`mcp__codegraph__codegraph_explore` / `codegraph_search` の方が verbatim "
+        f"`mcp__codegraph__codegraph_explore` の方が verbatim "
         f"source を絞って返します。 次回の探索で検討してください。"
     )
 
@@ -562,7 +562,7 @@ class GateTest(unittest.TestCase):
     # --- Grep deny (certain) ---
     def test_grep_deny_symbol_with_type(self):
         r = self._deny(self._run("Grep", {"pattern": "parseConfig", "type": "py"}))
-        self.assertIn("codegraph_search", r)
+        self.assertIn("codegraph_explore", r)
         self.assertIn(SENTINEL, r)
 
     def test_grep_deny_call_with_type(self):
