@@ -57,6 +57,32 @@ git 履歴 (`git log -p -- todos.md`) と Work file にあり、ここには書�
 
 ## High
 
+### tab icon regression (質問中 / background 実行中) の復旧
+
+起票: user 2026-09-15
+
+Goal: Claude Code の terminal タブに状態アイコン (❓ ask / 🔄💬 bg / 💬 wait) が再び表示される状態へ戻す。
+
+Exit Criteria:
+
+- [ ] hook 出力から端末表示までのどの区間で落ちているかを実測で切り分ける (端末が生の OSC 0 を
+  適用するかどうかの host 側テストで、Claude Code 内部か端末側かを決める)
+- [ ] 特定した区間に対する修正または回避を deploy し、実タブで ❓ と 🔄💬 が見えることを H.S. が確認する
+- [ ] 原因が Claude Code 本体なら SendFeedback で報告し、暫定回避 (version 固定 / hook 側の代替経路) を決める
+
+実測 (2026-09-15):
+- `files/claude_user-hooks/title_icon.py` は 172b124 (2026-07-10) 以降 無変更、test 13 件 pass、
+  手動実行で `\x1b]0;❓ …\x07\x07` を正しく出力 [事実]
+- `~/.claude/settings.json` の 8 event 登録は `files/claude_user-extensions.json` と一致 [事実]
+- 本 session の PreToolUse(AskUserQuestion) で hook_success に ❓ 付き sequence が記録されたが、
+  H.S. はタブに ❓ を確認できなかった [事実]
+- transcript 上の icon 送出は 2.1.269 の 2026-09-13T00:05Z (bg 🔄💬) が最後。claude は
+  2026-09-13 08:22 に 2.1.270 へ更新 (dpkg.log) [事実]
+- 2.1.270 でも terminalSequence の schema と OSC allowlist (0/1/2/9/99/777 + BEL) は健在で、
+  CC 自身の title 書き込みは `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1` で無効のまま [事実]
+
+Work file: なし (調査ログはこの block)
+
 ### agent_coord (session 台帳) を host に配備し 2 環境で疎通させる
 
 起票: fable-5 2026-09-10
