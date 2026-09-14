@@ -57,30 +57,34 @@ git 履歴 (`git log -p -- todos.md`) と Work file にあり、ここには書�
 
 ## High
 
-### tab icon regression (質問中 / background 実行中) の復旧
+### tab icon regression の原因分析と、同型の掃き出し
 
 起票: user 2026-09-15
 
-Goal: Claude Code の terminal タブに状態アイコン (❓ ask / 🔄💬 bg / 💬 wait) が、実際に起きる
-状態で見える状態へ戻す。
+Goal: 今回の欠陥がどこで入ったかを事実で確定し、同じ「platform の値域を決め打ちした集合」を
+repo 全体から出し切って、実害のあるものを塞ぐ。
 
 Exit Criteria:
 
-- [x] hook から端末までの経路が生きていることを実測 (Stop の `💬 <要約>` が H.S. のタブに出ている)
-- [ ] 直した `title_icon.py` を deploy し、背景 Bash を走らせた Stop で 🔄💬 が出ることを H.S. が確認する
-- [ ] ❓ は AskUserQuestion が呼ばれた時しか出ない。質問を抑える gate 群と両立する扱いを決める
-  (アイコンを別状態へ割り当てる / 質問方針を緩める / 現状維持、のいずれか)
+- [x] 埋め込み地点の特定 — bg 除外は e1bd3fc (2026-07-10 00:40:04 +0900)、SessionStart の
+  emit 抑止は 4efa99e (2026-07-03 15:47:27 +0900) [事実: git log -S]
+- [x] 当時すでに誤りだったことの確認 — 背景 Bash は v2.1.0 (2026-01-07)、`background_tasks`
+  field は v2.1.145 (2026-05-19) から存在 [事実: 公式 changelog 由来の findings cache]
+- [x] 実害のある同型 2 件を修正 — NotebookEdit が read_before_edit に届いていない /
+  codegraph_first_gate が存在しない tool 名を案内
+- [ ] `MultiEdit` の死に名を matcher 5 箇所から掃除する (binary に説明文が無く、tool 一覧にも
+  不在 [事実]。実害は無いが同じ病理の残骸)
+- [ ] PostToolUse の並行実行に対する title_icon の state file 競合を塞ぐ (platform 記述:
+  "PostToolUse fires per-tool and may run concurrently for parallel tool calls" [事実])
+- [ ] ❓ ask アイコンの扱いを決める — AskUserQuestion は transcript 31 本で 0 回 [事実] で、
+  質問を抑える gate 群と両立しない。別状態へ割り当てる / 方針を緩める / 現状維持 のどれか
 
-実測 (2026-09-15):
-- `title_icon.py` は 172b124 (2026-07-10) 以降 無変更、登録も `files/claude_user-extensions.json` と一致 [事実]
-- 本 session の PreToolUse(AskUserQuestion) は ❓ 付き sequence を出していた [事実]。probe が
-  「回答した瞬間に PostToolUse が消す」設計だったため、出ていないことの証拠にはならない
-- AskUserQuestion の呼び出しは transcript 31 本 (8/19〜) で 0 回 [事実]。gate は
-  declare_and_proceed_gate (2026-05-31 deny 化) と declare-and-proceed skill (2026-05-27)
-- 🔄💬 は subagent が走った Stop で 4 回送出 (9/11 に 3・9/13 に 1) [事実]。subagent 自体は
-  1d1577f (2026-09-11) で deny gate 追加
-- 直した 2 点 (commit 済、deploy 未): bg 判定に `shell` / `monitor` を追加、SessionStart は
-  状態同値でも emit (resume 後に無アイコンで固まる穴)
+埋め込み方法 (事実の積み上げ):
+1. `background_tasks` の type 値域を確認せず、欲しい 2 値 (`workflow` / `subagent`) だけを列挙した
+2. 同じ commit で `test_stop_with_shell_only_is_wait` を書き、誤判定を仕様として凍結した
+   (実装と test が同時 = red を経ていない)
+3. SessionStart 側は「遷移時のみ更新」を全 event へ一律適用し、SessionEnd で既定タイトルへ
+   戻す自分の仕様と突き合わせなかった。resume を通る test が無かった
 
 Work file: なし (調査ログはこの block)
 
