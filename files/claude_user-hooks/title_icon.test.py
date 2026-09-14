@@ -59,6 +59,10 @@ class TitleIconTest(unittest.TestCase):
         out = self.emit("Stop")
         self.assertIn("💬", out)
 
+    def test_stop_with_monitor_only_is_bg_icon(self):
+        out = self.emit("Stop", background_tasks=[{"type": "monitor"}])
+        self.assertIn("🔄💬", out)
+
     def test_stop_with_shell_only_is_bg_icon(self):
         out = self.emit("Stop", background_tasks=[{"type": "shell"}])
         self.assertIn("🔄💬", out)
