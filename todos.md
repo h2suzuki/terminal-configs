@@ -61,41 +61,28 @@ git 履歴 (`git log -p -- todos.md`) と Work file にあり、ここには書�
 
 起票: user 2026-09-15
 
-Goal: Claude Code の terminal タブに状態アイコン (❓ ask / 🔄💬 bg / 💬 wait) が再び表示される状態へ戻す。
+Goal: Claude Code の terminal タブに状態アイコン (❓ ask / 🔄💬 bg / 💬 wait) が、実際に起きる
+状態で見える状態へ戻す。
 
 Exit Criteria:
 
-- [ ] hook 出力から端末表示までのどの区間で落ちているかを実測で切り分ける (端末が生の OSC 0 を
-  適用するかどうかの host 側テストで、Claude Code 内部か端末側かを決める)
-- [ ] 特定した区間に対する修正または回避を deploy し、実タブで ❓ と 🔄💬 が見えることを H.S. が確認する
-- [ ] 原因が Claude Code 本体なら SendFeedback で報告し、暫定回避 (version 固定 / hook 側の代替経路) を決める
+- [x] hook から端末までの経路が生きていることを実測 (Stop の `💬 <要約>` が H.S. のタブに出ている)
+- [ ] 直した `title_icon.py` を deploy し、背景 Bash を走らせた Stop で 🔄💬 が出ることを H.S. が確認する
+- [ ] ❓ は AskUserQuestion が呼ばれた時しか出ない。質問を抑える gate 群と両立する扱いを決める
+  (アイコンを別状態へ割り当てる / 質問方針を緩める / 現状維持、のいずれか)
 
 実測 (2026-09-15):
-- `files/claude_user-hooks/title_icon.py` は 172b124 (2026-07-10) 以降 無変更、test 13 件 pass、
-  手動実行で `\x1b]0;❓ …\x07\x07` を正しく出力 [事実]
-- `~/.claude/settings.json` の 8 event 登録は `files/claude_user-extensions.json` と一致 [事実]
-- 本 session の PreToolUse(AskUserQuestion) で hook_success に ❓ 付き sequence が記録されたが、
-  H.S. はタブに ❓ を確認できなかった [事実]
-- transcript 上の icon 送出は 2.1.269 の 2026-09-13T00:05Z (bg 🔄💬) が最後。claude は
-  2026-09-13 08:22 に 2.1.270 へ更新 (dpkg.log) [事実]
-- 2.1.270 でも terminalSequence の schema と OSC allowlist (0/1/2/9/99/777 + BEL) は健在で、
-  CC 自身の title 書き込みは `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1` で無効のまま [事実]
+- `title_icon.py` は 172b124 (2026-07-10) 以降 無変更、登録も `files/claude_user-extensions.json` と一致 [事実]
+- 本 session の PreToolUse(AskUserQuestion) は ❓ 付き sequence を出していた [事実]。probe が
+  「回答した瞬間に PostToolUse が消す」設計だったため、出ていないことの証拠にはならない
+- AskUserQuestion の呼び出しは transcript 31 本 (8/19〜) で 0 回 [事実]。gate は
+  declare_and_proceed_gate (2026-05-31 deny 化) と declare-and-proceed skill (2026-05-27)
+- 🔄💬 は subagent が走った Stop で 4 回送出 (9/11 に 3・9/13 に 1) [事実]。subagent 自体は
+  1d1577f (2026-09-11) で deny gate 追加
+- 直した 2 点 (commit 済、deploy 未): bg 判定に `shell` / `monitor` を追加、SessionStart は
+  状態同値でも emit (resume 後に無アイコンで固まる穴)
 
 Work file: なし (調査ログはこの block)
-
-### agent_coord (session 台帳) を host に配備し 2 環境で疎通させる
-
-起票: fable-5 2026-09-10
-Goal: 再実装済みの agent_coord (daemon / CLI / MCP adapter / client 別 hooks) を host 側に配備し、Claude Code と Codex の 2 環境から同じ台帳に参加して連絡・起こし通知・資源取得・引き継ぎが通ることを確認する。
-Exit Criteria:
-- [x] `/usr/local/bin/agent_coord` と managed settings の `excludedCommands` (`agent_coord *`) が deploy され、sandbox の Bash から `agent_coord doctor` が host daemon (0.2.0) に接続した (2026-09-11 実測)
-- [ ] `install_claude_extensions` 実行後の新規 Claude Code session で、SessionStart hook の join 文と plugin 由来の agent_coord MCP tool が使える
-- [ ] Codex session (plugin `agent-coord` の mcp.json / hooks) から同じ daemon に join し、Claude Code session と send / catchup / acquire 競合 / worktree transfer→accept (検証シナリオ V12) が通る (2026-09-13 実測: send / catchup / acquire 競合 (seq 75-81、待機者への解放通知と再取得まで) は通過。worktree transfer→accept が未)
-- [ ] idle の Claude Code session が inbox socket 経由で、Codex session が `codex queue` 経由で起きることを実測し、REQUIREMENTS_AND_DESIGN.ja.md (untracked、第 11 章) の対応表に記録する (busy な Claude Code session への push と PostToolUse hook の注入は 2026-09-11 に実測済み。 2026-09-13 実測: idle Claude Code は 6 種の送信先すべてで起きた。 Codex は初回 prompt 後に hook が thread id 付きで join し `codex queue` で起きたが、MCP tool が `approval_policy = "never"` に拒否され catchup できず → `files/codex_config.toml` に approve 追記、deploy 未)
-- [x] Codex 実機で MCP 経由の catchup / ack / send が hook の codex-<thread> session に一致し、anon-* の二重 session が生じないことを確認する (2026-09-13 実測: thread `codex-01a097a8` が seq 56 を catchup / ack し seq 57 を send、台帳の actor が同 sid、anon 行は増えず)
-- [ ] Antigravity session で hooks が発火し、編集 tool の path 引数名が `TargetFile` 系で合っているかを確認する
-Work file: last-session-handoff.md (同名 section), REQUIREMENTS_AND_DESIGN.ja.md (untracked、第 11 章 実装判断), files/agent_coord.test.py (要件 claim 単位の test 49 件)
-sandbox からは `/etc/claude-code` と `/usr/local/bin` に書けないため、deploy は host 端末で `ubuntu2404-wsl.sh` と `install_claude_extensions` を実行する。
 
 ### lessons-learned repo を public / private に分離する
 
