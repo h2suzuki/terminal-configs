@@ -43,6 +43,10 @@ check "commit: bg push reached remote branch" '[[ -n "$(git -C "$S/remote.git" r
 check "commit: fix_perms opened entry file (666)" '[[ "$(stat -c %a "$S/clone/user/alice/feedback_t.md")" == 666 ]]'
 check "commit: fix_perms opened scope dir (777)" '[[ "$(stat -c %a "$S/clone/user/alice")" == 777 ]]'
 check "commit: fix_perms keeps clone top at 755" '[[ "$(stat -c %a "$S/clone")" == 755 ]]'
+check "commit: clone shares .git with every local user (0666)" '[[ "$(git -C "$S/clone" config core.sharedRepository)" == 0666 ]]'
+check "commit: fix_perms opened every .git dir (o+w)" '[[ -z "$(find "$S/clone/.git" -type d ! -perm -0777)" ]]'
+check "commit: fix_perms opened .git non-object files (o+w)" '[[ -z "$(find "$S/clone/.git" -type f ! -path "*/objects/*" ! -perm -0666)" ]]'
+check "commit: fix_perms keeps objects readable by all" '[[ -z "$(find "$S/clone/.git/objects" -type f ! -perm -0444)" ]]'
 
 # 3. pull applies A/M/D from a second clone
 git clone --quiet "$S/remote.git" "$S/b" 2>/dev/null

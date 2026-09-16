@@ -125,7 +125,7 @@ fi
         # Salvage a missing-.git leftover instead of deleting it
         [ -e "$MEMORY_REPO" ] && run mv "$MEMORY_REPO" "$MEMORY_REPO.broken.$(date +%s)"
         # 9<&-: a long-lived child (credential daemon etc) must not inherit the lock fd
-        if GIT_TERMINAL_PROMPT=0 timeout 300 git clone -c core.sharedRepository=all \
+        if GIT_TERMINAL_PROMPT=0 timeout 300 git clone -c core.sharedRepository=0666 \
             https://github.com/h2suzuki/claude-lessons-learned.git "$MEMORY_REPO" 9<&-; then
             # An empty repo clones with an unborn HEAD; pin the branch name
             git -C "$MEMORY_REPO" rev-parse -q --verify HEAD >/dev/null \

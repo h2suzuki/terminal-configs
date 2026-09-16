@@ -256,23 +256,30 @@ def full_index() -> int:
 
 def fix_perms() -> None:
     """Re-open the clone contents — checkout/Write create files with the writer's umask."""
+    # "all" grants only group write, so root-made object dirs locked out other users; a non-owner's failure is expected.
+    run_git("config", "core.sharedRepository", "0666")
+    git_dir = os.path.join(REPO_DIR, ".git")
+    objects_dir = os.path.join(git_dir, "objects")
     for root, dirs, files in os.walk(REPO_DIR):
-        if root == REPO_DIR:
-            dirs[:] = [
-                d for d in dirs if d != ".git"
-            ]  # .git modes: core.sharedRepository
+        in_git = root == git_dir or root.startswith(git_dir + os.sep)
         for name in dirs:
             p = os.path.join(root, name)
             if os.path.islink(p):  # never chmod through a symlink (escapes the clone)
                 continue
             with contextlib.suppress(OSError):
-                os.chmod(p, 0o777)
+                keep = os.stat(p).st_mode & 0o7000 if in_git else 0
+                os.chmod(p, keep | 0o777)
         for name in files:
             p = os.path.join(root, name)
             if os.path.islink(p):
                 continue
             with contextlib.suppress(OSError):
-                os.chmod(p, 0o777 if os.access(p, os.X_OK) else 0o666)
+                if root.startswith(objects_dir):
+                    os.chmod(p, os.stat(p).st_mode & 0o7777 | 0o444)
+                elif in_git:
+                    os.chmod(p, os.stat(p).st_mode & 0o7777 | 0o666)
+                else:
+                    os.chmod(p, 0o777 if os.access(p, os.X_OK) else 0o666)
     # Top stays 0755: new top-level dirs (a future org/) land via an owner-run pull.
     with contextlib.suppress(OSError):
         os.chmod(REPO_DIR, 0o755)
