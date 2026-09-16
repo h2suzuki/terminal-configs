@@ -215,6 +215,24 @@ Exit Criteria:
 
 Work file: なし
 
+### (要相談) drafts/ の commit と、永続文書からの drafts/ 参照を機構で止める
+
+起票: user 2026-09-16 (「hook で禁止したい」)
+
+Goal: drafts/ 配下の file が commit されず、repo 管理下の文書・code が drafts/ の具体 file を指さない状態を、
+Claude・codex・人間のどの経路でも機構で保つ。
+
+Exit Criteria:
+
+- [ ] 提案中の 3 段 (共通 ignore / git pre-commit / Claude hook) のどれを入れるか、ユーザーが決めた
+  (2026-09-16 時点「もう少し考えます」)
+- [ ] 決めた段を実装し、`add -f` 後の commit・`commit -a`・path 指定 commit・`--no-verify`・
+  Edit での drafts/ 参照がそれぞれ止まることを実行して確認した
+- [ ] 配備先に入り、この repo で実発火を確認した
+
+Work file: 3 段の設計案と使い捨て repo での実測は、この block を起票した commit の message
+(`git log -S'drafts/ の commit と、永続文書' -- todos.md`)
+
 ### 試行: 一次ソース確認の指示を codex と同じ形で置いてみる
 
 起票: opus-5 2026-08-29 (ユーザー許可「無駄かもしれないが、悪化はしないだろう。という想定
