@@ -183,7 +183,7 @@ _PIXEL_RES = [
         r"(?<!\d)1\s?px(?![a-z0-9])",  # 11px/21px/1pxel は除外、和文接続 (1pxずれ) は許可
         r"ピクセル(?:パーフェクト)?",
         r"ずれて(?:い|る|ます)",
-        r"見た目が(?:ずれ|違|ちが)",  # §C-5 明記 trigger「見た目がずれ」(語尾なし) を含む
+        r"見た目が(?:ずれ|違|ちが)",  # 語尾なしの「見た目がずれ」も拾う
     )
 ]
 
@@ -1926,7 +1926,7 @@ class PixelL4InjectTest(unittest.TestCase):
 
         return os.path.join(tempfile.mkdtemp(), "idx.sqlite3")
 
-    # §C-5 明記 trigger 全部 + regex 各 branch (table-driven)
+    # 発火すべき trigger 語 + regex 各 branch (table-driven)
     _POSITIVE = (
         "1pxずれの知見についても気をつけましょう",
         "1px 問題かも",

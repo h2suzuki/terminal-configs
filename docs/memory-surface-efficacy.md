@@ -1,8 +1,8 @@
 # memory surface の有効性 — transcript 実測 (2026-08-27)
 
 計測日 2026-08-27。対象 = transcript 120 file (2026-07-01〜2026-08-27)、surface event の母数 1,459 (prompt 時 355 /
-Stop 時 930 / 対照 174)、判定標本 508、反証対象 91、entry 87、判定 model = opus (judge 25 / refuter 16 / taxonomy 1)。
-再計測は同じ script と rubric で行い、この段落の母数と日付を併記して差分を読む。
+Stop 時 930 / 対照 174)、判定標本 508、反証対象 91、entry 87、判定 model = opus (judge 25 / refuter 16 / taxonomy 1)、計 42 agent・3.44M token・73 分。
+再計測は「方法」節と同じ手順と rubric で行い、この段落の母数と日付を併記して差分を読む。
 
 ## 問い
 
@@ -14,7 +14,7 @@ Stop 時 surface を削除した (`11005b1`、2026-08-26)。効いた advise は
 
 - 対象: 全 transcript 120 file (2026-07〜2026-08-27) の surface event **1,459 件** — prompt 時 (UserPromptSubmit) 355 /
   Stop 時 930 / 対照 174 (retrieval は当たったが model tag 不一致で表示されなかった event)。entry 87 (退役済み含む)
-- 抽出: 決定的 script (`drafts/corpus-tools/extract.py`)。event ごとに reminder 文、直前の assistant 本文、直後の assistant
+- 抽出: 決定的 script。event ごとに reminder 文、直前の assistant 本文、直後の assistant
   本文と tool 呼び出し (次の user prompt まで) を window とする
 - 判定 (ultracode、opus): 508 件 (entry ごとに prompt 時 4 / Stop 時 4 / 対照 3 を時系列の分位 (= 時系列を等分した位置) で抽出 + entry path を引数に
   含む tool 呼び出しがある 4 件 + 「教訓どおり / 教訓に従い / まさに効く」の句がある 21 件を全件同梱) を 25 agent が判定:
@@ -133,10 +133,4 @@ Stop 時 225 件のうち 141 件は出力不変、126 件は定型文のみ。�
    prompt 時 0/164、対照比 +20 pt vs +8 pt
 5. 「抵触しないか確認せよ」型の文言は定型文を誘う — fable-5 85% / opus-5 17%。「抵触するなら修正してから完了、
    しなければ何も書かない」と書く
-6. 再計測は同じ script (`drafts/corpus-tools/` の extract / sample / aggregate) と同じ rubric で行い、母数と日付を併記する
-
-## 素材
-
-- event 全件 / 判定 / 分類: scratchpad `msurf/` (`events.jsonl` 1,459、`judged_rows.json` 508、`taxonomy.json` 74)
-- script: `drafts/corpus-tools/extract.py` / `sample.py` / `aggregate.py`
-- workflow: `wf_7c1fdf2e-eae` (42 agent、3.44M token、73 分、2026-08-27)
+6. 再計測は「方法」節と同じ抽出・標本抽出・集計の手順と同じ rubric で行い、母数と日付を併記する
