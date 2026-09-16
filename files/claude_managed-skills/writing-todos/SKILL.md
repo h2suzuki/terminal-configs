@@ -25,13 +25,16 @@ repo top の `todos.md` は、 session を跨いで引き継ぐ未完了作業�
 | その作業の詳細 (状態・次の action・必読・注意) | repo top の `last-session-handoff.md` (handoff skill が書く) |
 | GitHub issue が使える repo の作業 | issue に起こして正本にしてよい。 todos.md は issue 番号と再開点の 1 行にする。 GitHub は使えるとは限らないので必須にしない |
 | 設計メモ・計測結果・判断の経緯 | commit message / issue / `last-session-handoff.md` |
-| 教訓・注意書き | memory entry か skill |
+| 全 session が作業前に知るべき重大な注意 (CAVEAT) | todos.md 冒頭の `CAVEAT:` block。 ユーザーの指示なしに削除・移動・要約しない |
+| それ以外の教訓 | memory entry か skill |
 | 完了した作業 | どこにも残さない (項目を削除する。 記録は git 履歴と commit message) |
 
 ### 項目の書式
 
 ```markdown
 # Todos
+
+CAVEAT: <全 session が作業前に知るべき重大な注意。 長さは自由>
 
 - drafts/ 対策の git 側 — 再開点: 共通 ignore と pre-commit の採否をユーザーが判断
 - #42 タブアイコン退行 — 再開点: 修正案 2 の実機確認から
@@ -40,7 +43,8 @@ repo top の `todos.md` は、 session を跨いで引き継ぐ未完了作業�
 ```
 
 - 1 項目は `- <作業名 または #issue 番号> — 再開点: <一言>`。 続きの行は 2 字下げで、 1 項目 3 行まで
-- ファイル全体で 30 行まで。 優先度の節・Goal・Exit Criteria・checkbox・起票行・Work file 欄は使わない
+- `CAVEAT:` block を除いてファイル全体で 30 行まで。 優先度の節・Goal・Exit Criteria・checkbox・起票行・Work file 欄は使わない
+- `CAVEAT:` block は長さの制限を受けない。 既存の CAVEAT は、 別の場所に同じ内容があるように見えても消さない
 - 判断を書くなら、 決裁 / 承認 / 合意 / 採用 を含む項目に「…」のユーザー発話の引用か「提案中」等の非決定 marker を添える
 - 上の 3 点は `todos_structure_gate.py` hook が todos.md の commit 時に検査する
 
@@ -49,4 +53,4 @@ repo top の `todos.md` は、 session を跨いで引き継ぐ未完了作業�
 - `handoff` — `last-session-handoff.md` の書式と、 持ち越し項目を todos.md へ置く手順
 - `commit-discipline` — todos.md の更新を含む commit の粒度とタイミング
 - `verify-before-claim` — 「終わった」と判断して項目を消す前の確認
-- `todos_structure_gate.py` hook (PreToolUse:Bash) — todos.md を commit する時にファイル行数・項目行数・判断の引用を検査する
+- `todos_structure_gate.py` hook (PreToolUse:Bash) — todos.md を commit する時に CAVEAT 以外の行数・項目行数・判断の引用を検査する

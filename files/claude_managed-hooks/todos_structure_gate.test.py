@@ -25,6 +25,9 @@ Contract (each claim maps to one test):
       entries; units without a new line are untouched
   C10 the negated forms double as satisfiers: a unit whose only decision word sits inside 不採用 /
       未承認 etc. passes
+  C11 CAVEAT blocks are kept in todos.md: lines from a line starting with `CAVEAT:` up to the next entry
+      line, `CAVEAT:` line, or `#` heading do not count toward MAX_FILE_LINES; entry lines and other
+      prose still count
 """
 
 from __future__ import annotations
@@ -228,6 +231,24 @@ class GateTest(unittest.TestCase):
         self.repo.stage_todos(todos(entry("A"), NEGATED_ENTRY))
         out = run_hook(self.repo.root, COMMIT)
         self.assertEqual(out.returncode, 0, out.stderr)
+
+    def test_c11_caveat_lines_do_not_count(self) -> None:
+        """C11: important CAVEATs stay in todos.md however long they are."""
+        caveat = "CAVEAT: long warning\n" + "detail\n" * 20 + "\n参考 link\n\n"
+        text = HEAD + caveat + "CAVEAT: second\n" + "more\n" * 20 + "\n"
+        self.repo.stage_todos(text + "".join(entry(f"e{n}") for n in range(20)) + TAIL)
+        out = run_hook(self.repo.root, COMMIT)
+        self.assertEqual(out.returncode, 0, out.stderr)
+
+    def test_c11_prose_and_entries_outside_caveats_still_count(self) -> None:
+        """C11: only CAVEAT blocks are exempt; notes and entries keep the limit."""
+        self.repo.stage_todos(HEAD + "note\n" * 40 + entry("A") + TAIL)
+        self.assertEqual(run_hook(self.repo.root, COMMIT).returncode, 2)
+        caveat = "CAVEAT: short\ndetail\n\n"
+        self.repo.stage_todos(
+            HEAD + caveat + "".join(entry(f"e{n}") for n in range(40))
+        )
+        self.assertEqual(run_hook(self.repo.root, COMMIT).returncode, 2)
 
     def test_c9_unreadable_baseline_skips_consent_only(self) -> None:
         self.repo.stage_todos(todos(entry("A"), DECISION_ENTRY))

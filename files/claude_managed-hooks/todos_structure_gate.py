@@ -92,12 +92,28 @@ def units(lines: list[str]) -> list[list[str]]:
     return result
 
 
+def counted_lines(lines: list[str]) -> int:
+    """Number of lines outside CAVEAT blocks, which stay in todos.md whatever their length."""
+    count = 0
+    in_caveat = False
+    for line in lines:
+        if line.startswith("CAVEAT:"):
+            in_caveat = True
+        elif line.startswith(("- ", "#")):
+            in_caveat = False
+        count += not in_caveat
+    return count
+
+
 def lint(text: str) -> list[str]:
     """Return deterministic descriptions of todos.md size violations."""
     lines = text.splitlines()
     violations: list[str] = []
-    if len(lines) > MAX_FILE_LINES:
-        violations.append(f"file: {len(lines)} lines (max {MAX_FILE_LINES})")
+    counted = counted_lines(lines)
+    if counted > MAX_FILE_LINES:
+        violations.append(
+            f"file: {counted} lines outside CAVEAT blocks (max {MAX_FILE_LINES})"
+        )
     for unit in units(lines):
         if unit[0].startswith("- ") and len(unit) > MAX_ENTRY_LINES:
             violations.append(
@@ -166,7 +182,7 @@ def _run(payload: object) -> int:
     sys.stderr.write("todos-structure:\n")
     sys.stderr.write("".join(f"- {violation}\n" for violation in violations))
     sys.stderr.write(
-        "todos.md は session を跨ぐ作業の概要だけ (1 作業 1 項目 3 行まで、全体 30 行まで)。"
+        "todos.md は session を跨ぐ作業の概要だけ (1 作業 1 項目 3 行まで、CAVEAT を除き全体 30 行まで)。"
         "詳細は last-session-handoff.md に書き、GitHub が使えるなら issue に起こして番号を 1 行で置いてもよい。"
         "session 内で終わる作業は Task で管理し、todos.md に書かない\n"
     )
