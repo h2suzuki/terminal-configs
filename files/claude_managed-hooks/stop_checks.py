@@ -17,6 +17,7 @@ LEDGER_MIN_EDITS = 3
 TASK_TOOLS = {"TaskCreate", "TaskUpdate", "TodoWrite"}
 SCHEMA_TOOLS = {"ToolSearch"}
 EVIDENCE_TOOLS = {"Read", "Grep", "Glob", "WebSearch", "WebFetch"}
+SCAN_TOOLS = EVIDENCE_TOOLS | {"Bash"}  # auto mode では検索も Bash で走る
 PERSISTENCE_WORDS = ("memory", "skills", "hooks", "CLAUDE.md", "SKILL.md")
 DECISION_WORDS = ("決裁", "裁定", "判断待ち", "承認待ち", "要確認")
 EXECUTABLE_SUFFIXES = (".py", ".sh", ".mjs", ".js")
@@ -67,6 +68,17 @@ CONTINUATION_ENDINGS = (
     "直します",
     "自走を続け",
     "作業を続け",
+)
+IMPOSSIBLE_RE = re.compile(
+    r"(?:実装|実現|対応|修正|再現)(?:は|が|も)?(?:不能|不可能|不可)"
+    r"|(?:実装|実現|対応|修正|再現)(?:は|が|も)?できま?せん"
+    r"|(?:リポジトリ|レポジトリ|repo(?:sitory)?|scope|スコープ|管轄|担当)\s*(?:の)?外"
+)
+SURFACE_RE = re.compile(
+    r"[\w.-]+/[\w./-]+"
+    r"|[\w-]+\.(?:py|sh|mjs|js|ts|tsx|jsx|json|md|ya?ml|toml|rb|go|rs|java|c|h|cpp|sql)\b"
+    r"|\b(?:grep|rg|find|glob|codegraph)\b",
+    re.IGNORECASE,
 )
 QUESTION_ENDINGS = ("?", "？", "ますか", "ましょうか", "ください", "でしょうか")
 EITHER_WAY_RE = re.compile(r"どちらでも(?:進め|よい|良い|いい|構いま|可能|OK|大丈夫)")
@@ -844,6 +856,22 @@ def _claim_without_evidence(turn, scan):
     return []
 
 
+def _impossibility(turn, normalized, scan):
+    if not IMPOSSIBLE_RE.search(scan):
+        return []
+    if SURFACE_RE.search(normalized) and any(
+        name in SCAN_TOOLS for name in turn["tool_names"]
+    ):
+        return []
+    return [
+        _line(
+            "impossibility-claim",
+            "できない / 管轄外の断定に走査範囲の裏付けがない",
+            "探した path と pattern を本文に書くか、repo 内の該当コードを確かめ直す",
+        )
+    ]
+
+
 def _emoji_char(char):
     code = ord(char)
     return (
@@ -1239,6 +1267,7 @@ def _evaluate(payload, turn):
         (_ruling, (turn, normalized)),
         (_self_report, (turn, scan)),
         (_offload, (turn, normalized, scan)),
+        (_impossibility, (turn, normalized, scan)),
     )
     for function, args in block_calls:
         blocks.extend(_safe_family(function, *args))

@@ -290,6 +290,20 @@ CLI は test 内で生成する stub で足りる (実 parser の契約は claud
 mytask store は `$CLAUDE_PROJECT_DIR` と payload の `cwd` 起点で解決する。
 test 方針: memory root を空 dir に向けた Stop で memory-reminder が 0 件、entry を置いた dir に
 向けた Stop で 1 件。temp HOME の task store が C7 の pairing に効くこと。
+
+### C20 impossibility-claim (block)
+
+入力: 最終本文に「実装不能」「対応できません」「リポジトリ外」「scope 外」など、できない / 管轄外
+という断定がある turn。判定は scan (fence・引用・code span を除いた本文) に対して行うので、他者の
+結論の引用は発火しない。
+出力: 走査範囲の提示が本文に無い、または根拠 tool (`EVIDENCE_TOOLS` + `Bash`。auto mode では検索も
+Bash で走る) を 1 つも使っていない turn を block。走査範囲の提示とは normalized 本文 (code span を
+含む) に現れる具体的 artifact — slash を含む path、既知拡張子を持つ file 名、`grep` / `rg` / `find` /
+`Glob` / `codegraph` の走査条件 — のいずれか。
+Why: repo に該当コードがあるのに「要件全体が repo 外ゆえ実装不能」と宣言した実例がある。できない
+宣言は走査範囲とセットでなければ、読み手が反証も追試もできない。
+test 方針: 裸の「実装不能」は block、path を挙げて Grep した turn は通す、code span 内の引用は発火
+しない、path はあるが根拠 tool 0 の turn は block。
 """
 
 from __future__ import annotations
@@ -325,6 +339,7 @@ ALLOWED_FAMILIES = frozenset(
         "offload-to-user",
         "claim-without-evidence",
         "communication-lint",
+        "impossibility-claim",
         "memory-reminder",
         "turn-marker",
         "host-command-format",
@@ -1905,6 +1920,38 @@ class MemoryReminderTest(StopChecksTest):
             "origin 由来の entry を確認せよ",
             warn_body(run_hook(self.fx, "調査を終えました。" + TAIL)),
         )
+
+
+class ImpossibilityClaimTest(StopChecksTest):
+    """C20: できない / 管轄外の断定は、走査範囲の提示と根拠 tool を伴う時だけ通る。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.fx.turn(say("調べました"))
+
+    def test_c20_bare_impossibility_claim_blocks(self):
+        text = "要件全体がリポジトリ外のため実装不能です。" + TAIL
+        self.assertBlocks(run_hook(self.fx, text), "impossibility-claim")
+
+    def test_c20_cited_surface_with_evidence_tool_passes(self):
+        self.fx.turn(call("Grep", pattern="handler", path="."), tool_result("0 hits"))
+        text = "src/handler.ts を grep した範囲に該当がなく、対応できません。" + TAIL
+        self.assertNotBlocked(run_hook(self.fx, text), "impossibility-claim")
+
+    def test_c20_reading_without_naming_the_surface_blocks(self):
+        """実例と同じ形: file を読んでいても、どこを探したかが本文に無ければ裏付けにならない。"""
+        self.fx.turn(read("/repo/src/handler.ts"), tool_result("export const handler"))
+        text = "要件全体がリポジトリ外のため実装不能です。" + TAIL
+        self.assertBlocks(run_hook(self.fx, text), "impossibility-claim")
+
+    def test_c20_quoted_verdict_does_not_fire(self):
+        text = "前任 session の `実装不能` という結論を確認しました。" + TAIL
+        self.assertNotBlocked(run_hook(self.fx, text), "impossibility-claim")
+
+    def test_c20_citation_without_any_evidence_tool_blocks(self):
+        """走査範囲を書いても、この turn で何も見ていないなら断定の裏付けにならない。"""
+        text = "src/handler.ts は repo 外なので対応できません。" + TAIL
+        self.assertBlocks(run_hook(self.fx, text), "impossibility-claim")
 
 
 class TurnMarkerTest(StopChecksTest):
