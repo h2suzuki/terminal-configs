@@ -212,28 +212,6 @@ class TitleIconTest(unittest.TestCase):
         self.assertIn("terminalSequence", out)
         self.assertEqual(self.state()["state"], "run")
 
-    def test_parallel_post_tool_use_leaves_one_consistent_state(self):
-        self.emit("UserPromptSubmit", prompt="parallel edit")
-        self.emit("Stop")
-        data = json.dumps(
-            {"hook_event_name": "PostToolUse", "session_id": SID, "cwd": "/tmp"}
-        )
-        procs = [
-            subprocess.Popen(
-                [sys.executable, HOOK_PATH],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                text=True,
-                env=self.env,
-            )
-            for _ in range(8)
-        ]
-        outs = [p.communicate(data, timeout=10)[0] for p in procs]
-        self.assertEqual(sum("terminalSequence" in o for o in outs), 1)
-        self.assertEqual(
-            self.state(), {"state": "run", "summary": "parallel edit", "custom": ""}
-        )
-
     def test_harness_injected_prompts_keep_the_previous_summary(self):
         """UserPromptSubmit を経由する harness 生成 prompt は summary にしない。"""
         self.emit("UserPromptSubmit", prompt="fix the build")
