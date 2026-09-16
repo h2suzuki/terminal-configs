@@ -7,22 +7,6 @@ repo) is a local buffer every session reads and writes. This CLI owns all git
 plumbing; index writes stay in the per-user memory_surface.py hook, driven
 here via its --upsert / --delete / --rebuild / --wipe-scope subcommands.
 
-Clone layout (scope = the index DB's project_id):
-
-  org/<entry>.md                   -> NULL (shared with every user)
-  user/<login>/<entry>.md          -> user-<login>
-  project/<project-id>/<entry>.md  -> <project-id> (origin-URL slug; cwd-encode fallback)
-
-Subcommands (each fails open: network/auth loss degrades to the buffer):
-
-  --pull        rebase-pull, then index only the pulled diff (A/M/D/R)
-  --commit <p>  upsert <p>, commit the whole clone, detach a push
-  --retire <p>  git rm <p>, commit, detach a push, drop <p> from the index
-  --full        wipe the NULL scope, then per-scope --rebuild of the clone
-  --status      human-readable clone/index state (fetches, best-effort)
-  --reach       list never-reached and hot entries in the index
-  --push-bg     internal detached push helper
-
 The clone is created by the installer (install_claude_extensions); while it
 is missing or broken the write paths report and bail, and recovery is to
 re-run that installer step. The clone contents are world-writable for
@@ -36,6 +20,7 @@ path and the index CLI so smoke tests can run against a file:// fixture.
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import fcntl
 import os
@@ -45,13 +30,12 @@ import subprocess
 import sys
 import time
 
-REPO_DIR = (
-    os.environ.get("CLAUDE_MEMORY_REPO")
-    or "/var/lib/claude-rag-memory/claude-lessons-learned"
-)
+DEFAULT_REPO_DIR = "/var/lib/claude-rag-memory/claude-lessons-learned"
+DEFAULT_SURFACE_CLI = "~/.claude/hooks/memory_surface.py"
+REPO_DIR = os.environ.get("CLAUDE_MEMORY_REPO") or DEFAULT_REPO_DIR
 STATE_DIR = os.path.dirname(REPO_DIR)
 SURFACE_CLI = os.environ.get("CLAUDE_MEMORY_SURFACE") or os.path.expanduser(
-    "~/.claude/hooks/memory_surface.py"
+    DEFAULT_SURFACE_CLI
 )
 DB_PATH = os.path.join(STATE_DIR, "memory_index.sqlite3")
 REACH_DAYS = 30
@@ -397,11 +381,7 @@ def main_pull(drain: bool = True) -> int:
         return 1 if errs else 0
 
 
-def main_commit(argv: list[str]) -> int:
-    if not argv:
-        note("usage: --commit <abs_path>")
-        return 1
-    path = os.path.abspath(argv[0])
+def main_commit(path: str) -> int:
     scope = entry_scope(os.path.relpath(path, REPO_DIR))
     errs = 0
     if scope is not SKIP and os.path.exists(path):
@@ -429,11 +409,7 @@ def main_commit(argv: list[str]) -> int:
     return 1 if errs else 0
 
 
-def main_retire(argv: list[str]) -> int:
-    if not argv:
-        note("usage: --retire <abs_path>")
-        return 1
-    path = os.path.abspath(argv[0])
+def main_retire(path: str) -> int:
     rel = os.path.relpath(path, REPO_DIR)
     scope = entry_scope(rel)
     if scope is SKIP:
@@ -465,6 +441,20 @@ def main_retire(argv: list[str]) -> int:
         fix_perms()
     spawn_push()
     errs = surface("--delete", path, *([] if scope is None else [str(scope)]))
+    return 1 if errs else 0
+
+
+def main_full() -> int:
+    if not repo_ok():
+        note("clone missing/broken; nothing to index (%s)" % INSTALL_HINT)
+        return 1
+    with lock():
+        errs = full_index()
+    # the one lifecycle marker: initial ingestion after clone / recovery reindex
+    logline(
+        "full index: %d entries, %d error(s)"
+        % (sum(n for _, n in _disk_counts()), errs)
+    )
     return 1 if errs else 0
 
 
@@ -594,36 +584,76 @@ def main_reach() -> int:
     return 0
 
 
+EPILOG = """\
+clone layout (scope = the index DB's project_id):
+  org/<entry>.md                    -> NULL (shared with every user)
+  user/<login>/<entry>.md           -> user-<login>
+  project/<project-id>/<entry>.md   -> <project-id> (origin-URL slug; cwd-encode fallback)
+
+env overrides:
+  CLAUDE_MEMORY_REPO      clone path (default %s)
+  CLAUDE_MEMORY_SURFACE   index CLI path (default %s)
+
+every command fails open: network/auth loss degrades to the local buffer.
+""" % (DEFAULT_REPO_DIR, DEFAULT_SURFACE_CLI)
+
+
 def main() -> int:
     os.umask(0o002)  # group-writable clone/state artifacts (matches the DB convention)
-    argv = sys.argv[1:]
-    cmd = argv[0] if argv else "--status"
-    if cmd == "--pull":
+    parser = argparse.ArgumentParser(
+        prog="claude_memory_sync",
+        description=__doc__.splitlines()[0],
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    cmd = parser.add_mutually_exclusive_group()
+    cmd.add_argument(
+        "--pull",
+        action="store_true",
+        help="rebase-pull from origin, then index only the pulled diff",
+    )
+    cmd.add_argument(
+        "--commit",
+        metavar="PATH",
+        help="upsert PATH into the index, commit the clone, push in the background",
+    )
+    cmd.add_argument(
+        "--retire",
+        metavar="PATH",
+        help="git rm PATH, commit, push in the background, drop it from the index",
+    )
+    cmd.add_argument(
+        "--full",
+        action="store_true",
+        help="rebuild the whole index from the clone (disaster recovery)",
+    )
+    cmd.add_argument(
+        "--status",
+        action="store_true",
+        help="print clone / index state (default; fetches best-effort)",
+    )
+    cmd.add_argument(
+        "--reach",
+        action="store_true",
+        help="list never-reached and hot entries in the index",
+    )
+    cmd.add_argument(
+        "--push-bg", action="store_true", help="internal detached push helper"
+    )
+    args = parser.parse_args()
+    if args.pull:
         return main_pull()
-    if cmd == "--commit":
-        return main_commit(argv[1:])
-    if cmd == "--retire":
-        return main_retire(argv[1:])
-    if cmd == "--full":
-        if not repo_ok():
-            note("clone missing/broken; nothing to index (%s)" % INSTALL_HINT)
-            return 1
-        with lock():
-            errs = full_index()
-        # the one lifecycle marker: initial ingestion after clone / recovery reindex
-        logline(
-            "full index: %d entries, %d error(s)"
-            % (sum(n for _, n in _disk_counts()), errs)
-        )
-        return 1 if errs else 0
-    if cmd == "--status":
-        return main_status()
-    if cmd == "--reach":
+    if args.commit is not None:
+        return main_commit(os.path.abspath(args.commit))
+    if args.retire is not None:
+        return main_retire(os.path.abspath(args.retire))
+    if args.full:
+        return main_full()
+    if args.reach:
         return main_reach()
-    if cmd == "--push-bg":
+    if args.push_bg:
         return main_push_bg()
-    note("unknown command: %s" % cmd)
-    return 1
+    return main_status()  # default with no flags, and explicit --status
 
 
 if __name__ == "__main__":
