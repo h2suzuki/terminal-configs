@@ -78,6 +78,8 @@ Exit Criteria:
   "PostToolUse fires per-tool and may run concurrently for parallel tool calls" [事実])
 - [ ] ❓ ask アイコンの扱いを決める — AskUserQuestion は transcript 31 本で 0 回 [事実] で、
   質問を抑える gate 群と両立しない。別状態へ割り当てる / 方針を緩める / 現状維持 のどれか
+- [ ] /rename したタブ名が後続の prompt で上書きされない (ff9ff72) ことを実タブで確かめる —
+  unit / mutation は通したが、タブの実表示は未観測
 
 埋め込み方法 (事実の積み上げ):
 1. `background_tasks` の type 値域を確認せず、欲しい 2 値 (`workflow` / `subagent`) だけを列挙した
@@ -196,6 +198,22 @@ Work file: `last-session-handoff.md` (再開手順)、`~/.claude/hooks/memory_su
 `/var/lib/claude-rag-memory/memory_index.sqlite3` の `inject_log` (emit / mismatch の実測)
 
 ## Medium
+
+### 2026-09-16 の hook / installer 変更を未反映の環境へ入れる
+
+起票: opus-5 2026-09-16
+
+Goal: この日 commit した hook 5 件と installer 1 件が、まだ配っていない配備先にも入る。
+
+Exit Criteria:
+
+- [ ] もう 1 台のマシンで pull + 配備 — 対象は 441a836 / ccac0eb / d608274 / ff9ff72 / 9af1ec0
+  (turn 終了時刻の記録・Task うながしの発火条件・「できない」断定の差し戻し・調査の判定・
+  /rename したタブ名の保持)。この repo を使う機では配備済み [事実: 配備先と source の diff 一致]
+- [ ] `install_claude_extensions` の root 用 `--no-sandbox` (3b862be) を配備先へ入れ、root で
+  playwright MCP を登録し直す。この機でも未配備 (2026-09-16 時点でユーザーが配備を保留)
+
+Work file: なし
 
 ### 試行: 一次ソース確認の指示を codex と同じ形で置いてみる
 
