@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """
-UserPromptSubmit hook: while the session tracks no open work item, remind the
-model to upsert a Task before its first working tool call (org CLAUDE.md
-「計画と遂行」).
+UserPromptSubmit hook: remind the model to upsert a Task — a new item, or the
+in_progress flip of one it already tracks — before its first working tool call
+(org CLAUDE.md 「計画と遂行」).
 
 Why UserPromptSubmit (not Stop): stop_checks.py's task-plan-first family is a
 Stop-time block, so an ordering miss is only ever reported after the tools have
 already run — the rework it costs is exactly what this nudge prevents.
 
 Contract (each claim maps to one test):
-  N1  no open task -> the nudge rides additionalContext
-  N2  an open task -> silence (a session already tracking work is not nagged)
-  N3  every task closed -> the nudge returns (closed == none for this purpose)
+  N1  a real prompt -> the nudge rides additionalContext
+  N2  an open task -> the nudge still rides (its status flip is the upsert the
+      Stop gate asks for, so tracked work is no reason to stay silent)
+  N3  N2 through the real store: an open item never reaches this hook at all
   N4  synthetic <task-notification> re-entry -> silence (not a real prompt turn)
   N5  Task tools gated off for the session -> silence (nothing to upsert with)
   N6  systemMessage is never written (a model-only nudge, invisible to the user)
@@ -33,16 +34,10 @@ import tempfile
 import unittest
 from unittest import mock
 
-# open-task reader は sibling UserPromptSubmit hook が単一 source
-# (same deployed dir; absent/broken hook → 本 hook は沈黙 = fail-open)。
-try:
-    import check_uncommitted_at_handoff as _tasks_mod
-except Exception:
-    _tasks_mod = None  # fail-open sentinel, guarded by `is not None`
-
 NUDGE = (
     "task-plan-first: この turn で作業 tool を使うなら、最初の tool より前に Task を "
-    "upsert せよ (Stop 側の gate は事後 block ゆえ手戻りになる)。 Task tool の schema が "
+    "upsert せよ — 新規登録でも、既に開いている Task の in_progress 化でもよい "
+    "(Stop 側の gate は事後 block ゆえ手戻りになる)。 Task tool の schema が "
     "未読込なら ToolSearch だけを単独で撃て — 同 block に作業 tool を並べると違反になる"
 )
 SYNTHETIC_PREFIX = "<task-notification>"
@@ -70,13 +65,7 @@ def _nudge_wanted(payload: dict) -> bool:
         return False
     if prompt.lstrip().startswith(SYNTHETIC_PREFIX):
         return False
-    if _tasks_mod is None or _tasks_gated_off():
-        return False
-    session = payload.get("session_id")
-    cwd = payload.get("cwd")
-    if not isinstance(session, str) or not session:
-        return False
-    return not _tasks_mod.open_tasks(session, cwd if isinstance(cwd, str) else "")
+    return not _tasks_gated_off()
 
 
 def _emit_context(msg: str) -> None:
@@ -107,32 +96,29 @@ class NudgeTest(unittest.TestCase):
 
     SID = "s1"
 
-    def _emit(self, prompt: str, tasks: list[str], *, gated: bool = False) -> list[str]:
+    def _emit(self, prompt: str, *, gated: bool = False) -> list[str]:
         sent: list[str] = []
         module = sys.modules[__name__]
         with (
-            mock.patch.object(
-                module, "_tasks_mod", mock.Mock(open_tasks=lambda *_: tasks)
-            ),
             mock.patch.object(module, "_tasks_gated_off", lambda: gated),
             mock.patch.object(module, "_emit_context", sent.append),
         ):
             _run({"prompt": prompt, "cwd": "/tmp", "session_id": self.SID})
         return sent
 
-    def test_n1_no_open_task_nudges(self):
-        self.assertEqual(self._emit("hook を直してください", []), [NUDGE])
+    def test_n1_a_real_prompt_nudges(self):
+        self.assertEqual(self._emit("hook を直してください"), [NUDGE])
 
-    def test_n2_open_task_is_silent(self):
-        self.assertEqual(self._emit("hook を直してください", ["#1 作業"]), [])
+    def test_n2_open_task_does_not_silence_the_nudge(self):
+        """開いた Task を持つ turn こそ in_progress 化が要る: Stop gate は order を見る。"""
+        self.assertEqual(self._emit("hook を直してください"), [NUDGE])
+        self.assertIn("in_progress", NUDGE)
 
     def test_n4_synthetic_reentry_is_silent(self):
-        self.assertEqual(
-            self._emit(SYNTHETIC_PREFIX + "\n<task-id>x</task-id>", []), []
-        )
+        self.assertEqual(self._emit(SYNTHETIC_PREFIX + "\n<task-id>x</task-id>"), [])
 
     def test_n5_gated_off_session_is_silent(self):
-        self.assertEqual(self._emit("hook を直してください", [], gated=True), [])
+        self.assertEqual(self._emit("hook を直してください", gated=True), [])
 
     def test_n6_channel_is_additional_context_only(self):
         buf = []
@@ -144,41 +130,25 @@ class NudgeTest(unittest.TestCase):
 
 
 class StoreTest(unittest.TestCase):
-    """N2 / N3 を sibling の実 store reader 越しに固定する (status 判定は sibling が単一 source)。"""
+    """N3: 実 store に開いた item がある session でも nudge は出る (store を読まない)。"""
 
     SID = "s1"
 
-    def _emit(self, tasks: list[dict]) -> list[str]:
-        if _tasks_mod is None:
-            self.skipTest("sibling hook not importable")
+    def test_n3_pending_task_in_the_store_still_nudges(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         store = os.path.join(tmp.name, "drafts", "tasks")
         os.makedirs(store)
         with open(os.path.join(store, self.SID + ".json"), "w", encoding="utf-8") as f:
-            json.dump(tasks, f)
+            json.dump([{"id": 1, "content": "作業", "status": "pending"}], f)
         sent: list[str] = []
         module = sys.modules[__name__]
         with (
             mock.patch.object(module, "_tasks_gated_off", lambda: False),
             mock.patch.object(module, "_emit_context", sent.append),
-            mock.patch.object(_tasks_mod, "NATIVE_TASKS_DIR", tmp.name),
         ):
             _run({"prompt": "hook を直して", "cwd": tmp.name, "session_id": self.SID})
-        return sent
-
-    def test_n2_pending_task_in_the_store_is_silent(self):
-        self.assertEqual(
-            self._emit([{"id": 1, "content": "作業", "status": "pending"}]), []
-        )
-
-    def test_n3_closed_tasks_nudge_again(self):
-        for status in ("completed", "cancelled"):
-            with self.subTest(status=status):
-                self.assertEqual(
-                    self._emit([{"id": 1, "content": "作業", "status": status}]),
-                    [NUDGE],
-                )
+        self.assertEqual(sent, [NUDGE])
 
 
 class GateOffTest(unittest.TestCase):
