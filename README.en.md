@@ -43,6 +43,36 @@ When you add a user to an already set-up machine, there is no need to re-run the
 
 This sets up the per-user portion of the base setup (Bash and Git configuration, Node.js, Claude Code with its extensions, the Codex CLI, and so on) for that user.
 
+### Redeploying after editing `files/`
+
+The canonical copy of every setting lives under `files/`. What sits in `/etc/claude-code/`, `~/.claude/`
+and `/usr/local/bin/` is the output of the scripts, so make your change in `files/` and deploy it again.
+
+The most reliable way is to re-run the same script you used for the base setup, as root.
+
+    # ./debian12.sh          # or ./ubuntu2404-wsl.sh
+
+Unchanged files are reported as "already installed" and skipped; only files that differ are overwritten.
+The script ends by running `setup_user_environment` as the login user, so per-user destinations such as
+`~/.claude/hooks/` and `~/.claude/skills/` are refreshed in the same run.
+
+Per destination:
+
+| What you edited | Deploy command |
+|---|---|
+| Anything under `files/` | `sudo ./debian12.sh` (or `sudo ./ubuntu2404-wsl.sh`) |
+| `files/claude_user-hooks/`, `files/claude_user-skills/` | Run the script above, then other users each run `install_claude_extensions` |
+| `files/voicevox_*`, `files/claude_managed-voicevox.json` | `sudo ./extra/voicevox.sh` |
+| `files/signoz_*`, `files/claude_env.sh` | `sudo ./extra/signoz.sh` |
+
+To push a single file in a hurry, find its destination on the `copy` line in the script and copy it directly.
+
+    $ grep -n 'copy.*<file>' debian12.sh extra/*.sh
+    # cp files/<file> <destination>
+
+None of this can run from inside a Claude Code session: the destinations are owned by root and the Bash
+sandbox does not pass sudo through. Run it from a regular terminal.
+
 
 ## What the Base Setup Does
 

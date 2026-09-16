@@ -43,6 +43,36 @@ MCP・CLI はすべて通常どおり導入されます。リポジトリの own
 
 基本セットアップの内容のうちユーザーごとの部分（Bash・Git の設定、Node.js、Claude Code とその拡張、Codex CLI など）が、そのユーザーの環境に整います。
 
+### `files/` を編集した後の再配備
+
+設定の正本は `files/` 配下です。`/etc/claude-code/` や `~/.claude/`、`/usr/local/bin/` に置かれているものは
+スクリプトの出力なので、変更は `files/` 側に加えてから配備し直します。
+
+最も確実なのは、基本セットアップと同じスクリプトを root で再実行することです。
+
+    # ./debian12.sh          # または ./ubuntu2404-wsl.sh
+
+変更のないファイルは「already installed」と表示されてスキップされ、差分のあるものだけが上書きされます。
+末尾でログインユーザーの `setup_user_environment` まで走るので、`~/.claude/hooks/` や `~/.claude/skills/`
+のようなユーザー側の配備先も同時に更新されます。
+
+配備先ごとの手順は次のとおりです。
+
+| 編集した場所 | 配備コマンド |
+|---|---|
+| `files/` 全般 | `sudo ./debian12.sh`（または `sudo ./ubuntu2404-wsl.sh`） |
+| `files/claude_user-hooks/`, `files/claude_user-skills/` | 上のスクリプトを実行後、別ユーザーは各自 `install_claude_extensions` を実行 |
+| `files/voicevox_*`, `files/claude_managed-voicevox.json` | `sudo ./extra/voicevox.sh` |
+| `files/signoz_*`, `files/claude_env.sh` | `sudo ./extra/signoz.sh` |
+
+1 ファイルだけを急いで反映したい場合は、スクリプト内の `copy` 行で配備先を確認し、直接コピーします。
+
+    $ grep -n 'copy.*<ファイル名>' debian12.sh extra/*.sh
+    # cp files/<ファイル名> <配備先>
+
+いずれの操作も、Claude Code のセッション内では実行できません（配備先は root 所有で、Bash サンドボックスは
+sudo を通しません）。通常のターミナルから実行してください。
+
 
 ## 基本セットアップの内容
 
