@@ -1156,12 +1156,15 @@ def _statusline(payload, fallback_epoch):
     return label, epoch
 
 
-def _turn_marker(payload, turn):
+def _record_turn_end(payload, turn):
+    """Stop の時刻を counter file に刻む。戻り値は marker 用の (count, 前回 epoch, now)。"""
     transcript = turn["transcript_path"]
     if not transcript:
-        return ""
+        return None
     path = _counter_path(transcript)
     now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+    identity = turn["prompt_identity"]
+    continuation = payload.get("stop_hook_active")
     try:
         with open(path, "a+", encoding="utf-8") as stream:
             fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
@@ -1169,13 +1172,24 @@ def _turn_marker(payload, turn):
             content = stream.read().split()
             previous_count = int(content[0]) if content else 0
             previous_epoch = int(content[1]) if len(content) > 1 else now
-            count = previous_count + 1
+            counted = content[2] if len(content) > 2 else ""
+            # 数え済みの turn に続く継続 Stop なら、時刻だけ進めて数え直さない
+            repeat = continuation and identity and identity == counted
+            count = previous_count if repeat else previous_count + 1
             stream.seek(0)
             stream.truncate()
-            stream.write(f"{count} {now}\n")
+            line = " ".join(filter(None, (str(count), str(now), identity)))
+            stream.write(line + "\n")
             stream.flush()
     except (OSError, ValueError, TypeError):
+        return None
+    return count, previous_epoch, now
+
+
+def _turn_marker(payload, record):
+    if not record:
         return ""
+    count, previous_epoch, now = record
     context, started_epoch = _statusline(payload, previous_epoch)
     elapsed = max(0, now - started_epoch)
     stamp = datetime.datetime.fromtimestamp(now).astimezone().isoformat()
@@ -1250,16 +1264,17 @@ def _evaluate(payload, turn):
 
 
 def _emit(payload, turn, blocks, warnings):
-    if blocks:
-        if payload.get("stop_hook_active"):
+    continuation = payload.get("stop_hook_active")
+    if blocks and not continuation:
+        sys.stderr.write("\n".join(blocks) + "\n")
+        return 2  # block した Stop は turn の終わりではない
+    record = _record_turn_end(payload, turn)  # ここに届く Stop はすべて turn の終わり
+    if continuation:
+        if blocks:
             prefix = "advise-once (block demoted to pass): "
             sys.stderr.write("\n".join(prefix + line for line in blocks) + "\n")
-            return 0
-        sys.stderr.write("\n".join(blocks) + "\n")
-        return 2
-    if payload.get("stop_hook_active"):
-        return 0  # a continuation Stop ends the turn: no warn, no marker
-    marker = _turn_marker(payload, turn)  # every non-continuation Stop is a turn end, warn or not
+        return 0  # additionalContext を返すと harness が model を再起動する
+    marker = _turn_marker(payload, record)
     if warnings:
         sys.stdout.write(json.dumps(_warn_json(warnings, marker), ensure_ascii=False) + "\n")
         waste_prefix = "memory-reminder: prompt に無駄の指摘がある"

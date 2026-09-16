@@ -249,8 +249,10 @@ test 方針: `when: prompt` のみの entry が出ないこと、固定文言が
 
 ### C17 turn-marker (systemMessage)
 
-入力: block の無い turn 終了時 (warn / context の有無を問わない。`stop_hook_active` の continuation Stop は除く)。
-出力: `<transcript>.turns` の counter を 1 増やし、`"<count> <last_stop_epoch>"` の 1 行で書き戻す。
+入力: turn が終わる Stop (warn / context の有無を問わない。block を返した Stop は turn が続くので除き、
+`stop_hook_active` の continuation Stop は turn の終わりなので含む)。
+出力: `<transcript>.turns` を `"<count> <last_stop_epoch> <prompt boundary identity>"` の 1 行で書き戻す。counter は
+continuation Stop で identity が同じ (= その turn を数え済み) の時だけ据え置き、他は 1 増やす。2 列の旧 file も読める。
 pass 時は stdout に `systemMessage` だけを持つ JSON を 1 行出す (`additionalContext` は付けない = model には不可視)。
 warn 時は warn JSON の `systemMessage` 末尾に marker 行を足し、`additionalContext` には入れない。
 本文は `<ISO 時刻 (local timezone / offset 付き)> / Turn #<count> / Context <used>% / 経過 <秒> 秒`。`<used>` は
@@ -258,7 +260,7 @@ warn 時は warn JSON の `systemMessage` 末尾に marker 行を足し、`addit
 (`stdin` は dict、JSON 文字列なら parse する)、経過の基点は同 file の `session_started_epoch`。cache が無い / 読めない場合は
 `Context -` とし、経過は前回 Stop の epoch (`.turns` の 2 列目) から数える。counter file が読めない場合は marker を出さず exit 0。
 test 方針: 連続 2 回の pass で `Turn #1` → `Turn #2`、warn が出た Stop でも counter が動き marker が systemMessage に載ること、
-continuation Stop では counter が動かないこと。
+continuation Stop では stdout も counter も動かず last_stop_epoch だけ今に進むこと、block された turn は continuation Stop で数えられること。
 
 ### C18 決定性と純度
 
@@ -1932,6 +1934,29 @@ class TurnMarkerTest(StopChecksTest):
         self.assertEqual(proc.stdout, "")
         self.assertIn("Turn #2", marker(run_hook(self.fx, self.CLEAN)))
 
+    def test_c17_continuation_stop_records_the_blocked_turn_end(self):
+        """block された turn の終わりは continuation Stop にしかない。ここで書かねば
+        次 prompt の「前回 Stop からの経過」が block された turn の長さだけ過大になる。"""
+        self.assertIn("Turn #1", marker(run_hook(self.fx, self.CLEAN)))
+        self.fx.write([prompt("次の依頼です。", uid="prompt-2"), say("報告します")])
+        self.assertEqual(run_hook(self.fx, "この後 実装を進めます。").returncode, 2)
+        self.assertEqual(self.fx.read_turns().split()[0], "1", "block した Stop は書かない")
+        before = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        proc = run_hook(self.fx, "この後 実装を進めます。", stop_hook_active=True)
+        self.assertEqual(proc.stdout, "")
+        count, epoch, identity = self.fx.read_turns().split()
+        self.assertEqual((count, identity), ("2", "prompt-2"))
+        self.assertGreaterEqual(int(epoch), before)
+
+    def test_c17_continuation_stop_refreshes_only_the_stop_epoch(self):
+        """数え済みの turn (別 hook が block した場合) を二重に数えず、終了時刻だけ今にする。"""
+        self.fx.turns_file("1 1000 prompt-1\n")
+        proc = run_hook(self.fx, self.CLEAN, stop_hook_active=True)
+        self.assertEqual(proc.stdout, "")
+        count, epoch, identity = self.fx.read_turns().split()
+        self.assertEqual((count, identity), ("1", "prompt-1"))
+        self.assertGreater(int(epoch), 1000)
+
     def test_c17_marker_stamp_is_local_time(self):
         msg = marker(run_hook(self.fx, self.CLEAN, env_extra={"TZ": "Asia/Tokyo"}))
         stamp = datetime.datetime.fromisoformat(msg.split(" / ")[0])
@@ -1952,9 +1977,10 @@ class TurnMarkerTest(StopChecksTest):
     def test_c17_existing_turns_file_format_is_preserved(self):
         self.fx.turns_file("7 1000\n")
         self.assertIn("Turn #8", marker(run_hook(self.fx, self.CLEAN)))
-        count, epoch = self.fx.read_turns().split()
+        count, epoch, identity = self.fx.read_turns().split()
         self.assertEqual(count, "8")
         self.assertGreater(int(epoch), 1000)
+        self.assertEqual(identity, "prompt-1")
 
 
 class PurityTest(StopChecksTest):

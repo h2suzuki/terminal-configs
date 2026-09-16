@@ -1387,8 +1387,8 @@ class TurnMarkerTest(unittest.TestCase):
     """UserPromptSubmit turn-marker tests. Run: python3 -m unittest memory_surface"""
 
     @staticmethod
-    def _with_turns(count, last):
-        # Seed .turns as the Stop hook writes it ("count last_stop").
+    def _with_turns(count, last, line=None):
+        # Seed .turns as the Stop hook writes it ("count last_stop prompt_identity").
         import tempfile
 
         p = os.path.join(tempfile.mkdtemp(), "s.jsonl")
@@ -1397,13 +1397,23 @@ class TurnMarkerTest(unittest.TestCase):
         cp = _counter_path(payload)
         assert cp is not None
         with open(cp, "w", encoding="utf-8") as f:
-            f.write("%d %d\n" % (count, last))
+            f.write(line if line else "%d %d prompt-1\n" % (count, last))
         return payload
 
     def test_idle_gap_since_last_stop(self):
         from unittest import mock
 
         payload = self._with_turns(1, 2_000_000)
+        with mock.patch.object(time, "time", lambda: 2_000_300):
+            msg = _turn_marker(payload)
+        assert msg is not None
+        self.assertIn("Turn #2 starting", msg)
+        self.assertIn("5 min passed since the last stop", msg)
+
+    def test_legacy_two_column_counter_still_reads(self):
+        from unittest import mock
+
+        payload = self._with_turns(0, 0, line="1 2000000\n")
         with mock.patch.object(time, "time", lambda: 2_000_300):
             msg = _turn_marker(payload)
         assert msg is not None
