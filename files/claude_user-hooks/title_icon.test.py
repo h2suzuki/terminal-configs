@@ -7,6 +7,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import fcntl
+import time
 
 HOOK_PATH = os.path.join(os.path.dirname(__file__), "title_icon.py")
 SID = "sess-1"
@@ -185,6 +187,52 @@ class TitleIconTest(unittest.TestCase):
         self.emit("Stop")
         out = self.emit("Stop")
         self.assertEqual(out, "")
+
+    def test_concurrent_post_tool_use_waits_for_the_state_lock(self):
+        """PostToolUse の並列実行は state file の lock で直列化される。"""
+        self.emit("Stop")  # state = wait
+        stdin = os.path.join(self.tmp.name, "stdin.json")
+        with open(stdin, "w") as f:
+            json.dump({"hook_event_name": "PostToolUse", "session_id": SID}, f)
+        with open(self.state_file() + ".lock", "w") as lock, open(stdin) as fin:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            p = subprocess.Popen(
+                [sys.executable, HOOK_PATH],
+                stdin=fin,
+                stdout=subprocess.PIPE,
+                text=True,
+                env=self.env,
+            )
+            time.sleep(0.5)
+            self.assertIsNone(p.poll(), "hook must block while another holds the lock")
+            self.assertEqual(self.state()["state"], "wait")
+            fcntl.flock(lock, fcntl.LOCK_UN)
+        out, _ = p.communicate(timeout=5)
+        self.assertEqual(p.returncode, 0)
+        self.assertIn("terminalSequence", out)
+        self.assertEqual(self.state()["state"], "run")
+
+    def test_parallel_post_tool_use_leaves_one_consistent_state(self):
+        self.emit("UserPromptSubmit", prompt="parallel edit")
+        self.emit("Stop")
+        data = json.dumps(
+            {"hook_event_name": "PostToolUse", "session_id": SID, "cwd": "/tmp"}
+        )
+        procs = [
+            subprocess.Popen(
+                [sys.executable, HOOK_PATH],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                text=True,
+                env=self.env,
+            )
+            for _ in range(8)
+        ]
+        outs = [p.communicate(data, timeout=10)[0] for p in procs]
+        self.assertEqual(sum("terminalSequence" in o for o in outs), 1)
+        self.assertEqual(
+            self.state(), {"state": "run", "summary": "parallel edit", "custom": ""}
+        )
 
 
 if __name__ == "__main__":

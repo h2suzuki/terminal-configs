@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """状態別ターミナルタブアイコン (遷移時のみ更新・/rename 追従・終了時に既定タイトルへ復元)."""
 
+import fcntl
 import getpass
 import json
 import os
@@ -154,6 +155,13 @@ def main():
     ev = data.get("hook_event_name", "")
     sid = data.get("session_id", "")
     state_file = STATE_DIR / (sid or "default")
+    # 並列 tool call の PostToolUse は同時に走るので read→write→emit を直列化
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        lock = open(state_file.with_suffix(".lock"), "w")
+        fcntl.flock(lock, fcntl.LOCK_EX)
+    except OSError:
+        pass
     st = load_state(state_file)
 
     if ev == "SessionEnd":
@@ -161,10 +169,11 @@ def main():
             title = default_title(data.get("cwd"))
             seq = f"\x1b]0;{title}\x07"
             print(json.dumps({"terminalSequence": seq}))
-            try:
-                state_file.unlink(missing_ok=True)
-            except OSError:
-                pass
+            for f in (state_file, state_file.with_suffix(".lock")):
+                try:
+                    f.unlink(missing_ok=True)
+                except OSError:
+                    pass
         return
 
     # rename は turn の合間にしか起きない
@@ -206,7 +215,6 @@ def main():
     bell = new in BELL and new != st["state"]
     st["state"] = new
     try:
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
         state_file.write_text(json.dumps(st))
     except OSError:
         pass

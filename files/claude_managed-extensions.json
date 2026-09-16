@@ -2,11 +2,11 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "^(Read|Edit|MultiEdit|NotebookEdit)$",
+        "matcher": "^(Read|Edit|NotebookEdit)$",
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/read_before_edit.py check" } ]
       },
       {
-        "matcher": "^(Write|Edit|MultiEdit)$",
+        "matcher": "^(Write|Edit)$",
         "hooks": [
           { "type": "command", "command": "/etc/claude-code/hooks/check_dangling_refs.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/memory_routing_gate.py guard" },
@@ -75,11 +75,11 @@
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/skill_reminder_gate.py record-skill" } ]
       },
       {
-        "matcher": "^(Read|Write|Edit|MultiEdit|NotebookEdit)$",
+        "matcher": "^(Read|Write|Edit|NotebookEdit)$",
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/read_before_edit.py record" } ]
       },
       {
-        "matcher": "^(Write|Edit|MultiEdit)$",
+        "matcher": "^(Write|Edit)$",
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/check_skill_writing.py" } ]
       },
       {
