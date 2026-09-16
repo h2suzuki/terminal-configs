@@ -24,6 +24,9 @@ Contract (each claim maps to one test):
       heredoc bodies is ignored by every rule
   C8  fail-open: non-Bash tool, unreadable payload, or unreadable settings → exit 0 (the roster rule is
       skipped; the other rules still apply)
+  C9  git hook bypass: `--no-verify` on `git commit` / `push` / `merge` / `rebase` / `am` / `cherry-pick` /
+      `revert` / `pull`, and `-n` (alone or inside a short-option cluster) on `git commit`, are denied under
+      the rule name "git-no-verify"; `-n` on other subcommands and the words outside a git command are allowed
 """
 
 from __future__ import annotations
@@ -197,6 +200,34 @@ class GateTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as empty:
             self.assertEqual(run_hook("cd /r && codex exec x", empty).returncode, 0)
             self.assertEqual(run_hook("pkill x", empty).returncode, 2)
+
+    def test_c9_git_hook_bypass(self) -> None:
+        """C9: skipping git hooks would let a drafts/ leak past a pre-commit check."""
+        for command in (
+            "git commit --no-verify -m x -- a.md",
+            "git -C /r commit -m x --no-verify -- a.md",
+            "git commit -n -m x -- a.md",
+            "git commit -nm x -- a.md",
+            "git push --no-verify origin main",
+            "git merge --no-verify topic",
+            "git rebase --no-verify main",
+            "git am --no-verify p.patch",
+            "git cherry-pick --no-verify abc123",
+            "git revert --no-verify abc123",
+            "git pull --no-verify",
+        ):
+            with self.subTest(command=command):
+                self.deny(command, "git-no-verify")
+        for command in (
+            "git push -n origin main",
+            "git merge -n topic",
+            "git commit -m 'drop --no-verify from docs' -- a.md",
+            "git commit -m x -- a.md",
+            "grep -rn -- --no-verify files/",
+            "echo --no-verify",
+        ):
+            with self.subTest(command=command):
+                self.allow(command)
 
 
 if __name__ == "__main__":

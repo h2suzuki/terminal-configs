@@ -30,6 +30,7 @@
           { "type": "command", "command": "/etc/claude-code/hooks/tmpdir_scratch_gate.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/deny_compound_git_add.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/deny_compound_git_commit.py" },
+          { "type": "command", "command": "/etc/claude-code/hooks/deny_drafts_commit.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/todos_structure_gate.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/deny_command_patterns.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/skill_reminder_gate.py commit-gate" },

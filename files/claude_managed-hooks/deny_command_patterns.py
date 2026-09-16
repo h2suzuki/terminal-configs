@@ -113,6 +113,7 @@ KILL_REASON = "host のプロセスが死ぬ。launcher 裸名で止めるか放
 LOOP_REASON = "期待時間の 3 倍の timeout か試行回数上限を入れる"
 AUTOSQUASH_REASON = "`GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash` にする"
 LOOPBACK_REASON = "`--loopback` を引数の早い位置に付ける"
+NO_VERIFY_REASON = "git の hook を飛ばさない。hook が止めた原因を直し、`--no-verify` / `-n` なしで実行する"
 SANDBOX_REASON = (
     "除外 command は裸名で command の先頭に置く (先頭一致で sandbox を外れる)"
 )
@@ -141,12 +142,47 @@ AUTOSQUASH_HIT = partial(without, AUTOSQUASH_RE, INTERACTIVE_RE)
 KILL_HIT = partial(program_hit, KILL_RE)
 VOICEVOX_HIT = partial(program_hit, VOICEVOX_RE, exception=LOOPBACK_RE)
 
+GIT_VALUE_OPTIONS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
+VERIFY_SUBCOMMANDS = frozenset(
+    {"commit", "push", "merge", "rebase", "am", "cherry-pick", "revert", "pull"}
+)
+COMMIT_VALUE_SHORTS = frozenset("mFCct")
+
+
+def no_verify_probe(tokens: list[str], _program: str, target: str | None) -> bool:
+    words = tokens[tokens.index(target, 1) :] if target else tokens
+    if os.path.basename(words[0]) != "git":
+        return False
+    rest = words[1:]
+    while rest and rest[0].startswith("-"):
+        rest = rest[2:] if rest[0] in GIT_VALUE_OPTIONS else rest[1:]
+    if not rest or rest[0] not in VERIFY_SUBCOMMANDS:
+        return False
+    args = rest[1 : rest.index("--")] if "--" in rest else rest[1:]
+    if "--no-verify" in args:
+        return True
+    if rest[0] != "commit":
+        return False
+    for arg in args:
+        if not arg.startswith("-") or arg.startswith("--"):
+            continue
+        for char in arg[1:]:
+            if char in COMMIT_VALUE_SHORTS:
+                break
+            if char == "n":
+                return True
+    return False
+
+
+NO_VERIFY_HIT = partial(sandbox_violation, heads=frozenset(), probe=no_verify_probe)
+
 
 RULES = (
     ("kill-by-port", KILL_HIT, KILL_REASON),
     ("unbounded-loop", LOOP_HIT, LOOP_REASON),
     ("noninteractive-autosquash", AUTOSQUASH_HIT, AUTOSQUASH_REASON),
     ("voicevox-loopback", VOICEVOX_HIT, LOOPBACK_REASON),
+    ("git-no-verify", NO_VERIFY_HIT, NO_VERIFY_REASON),
     ("sandbox-invocation", sandbox_violation, SANDBOX_REASON),
 )
 
