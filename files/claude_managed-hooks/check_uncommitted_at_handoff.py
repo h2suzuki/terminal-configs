@@ -381,8 +381,9 @@ def _run(payload: dict) -> int:
         sections.append(
             f"open な Task が {len(tasks)} 件残っています:\n{_listing(tasks, MAX_TASKS_LISTED)}\n\n"
             "セッション終了示唆を検出。 handoff skill の Task 残処理に従い、 "
-            "次 session へ持ち越す項目は todos.md の parent block へ転記 "
-            "(詳細があれば handoff doc も更新) し、 全 open Task を close してください。"
+            "次 session へ持ち越す項目は詳細を last-session-handoff.md に書き、 "
+            "todos.md には未完了の概要を 1 行で置いて (GitHub が使えるなら issue 番号でもよい)、 "
+            "全 open Task を close してください。"
         )
     if not sections:
         return 0

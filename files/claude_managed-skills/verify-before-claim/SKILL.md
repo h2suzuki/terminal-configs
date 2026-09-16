@@ -33,7 +33,7 @@ claim を発する前に根拠 (primary source / 実体 code / 参照ポイン�
 - **handoff の primary entry / provenance**: 入口 file 1 本だけでなく、 そこが参照する provenance file 群すべて
 - **INDEX が指す全 file**: 上位 INDEX 1 行だけでなく、 各 entry の body file 本体
 - **目次の named section 全部**: 1 セクションだけでなく、 named されている全 section
-- **todos.md の `参照保持` 節**: 列挙された複数 file 全部
+- **last-session-handoff.md の `必読` 節**: 列挙された複数 file 全部
 
 positive 断定形 (「reasonable default」 等) の場合は、 何を根拠にその claim を出しているかを 1 文 verbalize する。 根拠なしなら 「観測値のみ」「単一サンプル」「公式 doc では未記載」「未確認」 を明示する。
 

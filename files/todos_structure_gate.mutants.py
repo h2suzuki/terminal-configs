@@ -19,12 +19,9 @@ TESTS = os.path.join(HOOKS, "todos_structure_gate.test.py")
 REPO_TODOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "todos.md")
 
 MUTANTS = {
-    "m1-block-limit-removed": ("MAX_BLOCK_LINES = 40", "MAX_BLOCK_LINES = 4000"),
+    "m1-file-limit-removed": ("MAX_FILE_LINES = 30", "MAX_FILE_LINES = 3000"),
     "m2-dash-c-ignored": ('if token == "-C":', 'if token == "-Z":'),
-    "m3-goal-not-required": (
-        'REQUIRED_KEYS = ("起票:", "Goal:", "Exit Criteria:")',
-        'REQUIRED_KEYS = ("起票:",)',
-    ),
+    "m3-entry-limit-removed": ("MAX_ENTRY_LINES = 3", "MAX_ENTRY_LINES = 300"),
     "m4-never-triggers": (
         "target = todos_commit_target(command, cwd)",
         "target = None",

@@ -1,7 +1,7 @@
 ---
 name: handoff
 description: Produce a session-boundary handoff document with fixed schema so next-me can resume within 5 minutes.
-when_to_use: TRIGGER when user signals session end ("handoff" / "セッションリセット" / "お疲れさま" etc) AND 作業が途中で次 session で再開必要 (= todos.md に open task block がある)。 SKIP for mid-session task updates / todos.md progress flips / 完結し再開不要な session 終了。
+when_to_use: TRIGGER when user signals session end ("handoff" / "セッションリセット" / "お疲れさま" etc) AND 作業が途中で次 session で再開必要 (= todos.md に未完了の項目を残す)。 SKIP for mid-session Task updates / 完結し再開不要な session 終了。
 ---
 
 # Session Handoff
@@ -10,7 +10,7 @@ session 境界で context を時間軸越しに伝達し、 next-me が handoff 
 
 ## 目的を絞る
 
-handoff は **作業再開** のためにだけ書く。 1 handoff section は **1 todos.md parent task block** に対応 (1-to-1)、 lifecycle 同期。 作業再開に役立たない情報は書かない:
+handoff は **作業再開** のためにだけ書く。 1 handoff section は **todos.md の 1 項目** に対応 (1-to-1)、 lifecycle 同期。 todos.md には概要 1 項目だけを置き、 詳細はすべて handoff section に書く。 作業再開に役立たない情報は書かない:
 
 - git log で取れる commit list / 履歴記録
 - 既に CLAUDE.md / memory entry / commit message body / code comment に書かれた rationale
@@ -18,19 +18,18 @@ handoff は **作業再開** のためにだけ書く。 1 handoff section は *
 - 受動的 observation (課金 spike 観察待ち等、 次 session で action しない項目)
 - 「念のため書いておく」 系の boilerplate
 
-session 終了時に作業が完結し次 session 再開不要なら、 該当 task の handoff section を書かない / 削除する。 todos.md に対応 task block が無いなら handoff section も持たない。
+session 終了時に作業が完結し次 session 再開不要なら、 該当 task の handoff section を書かない / 削除する。 todos.md に対応する項目が無いなら handoff section も持たない。
 
 ## Process
 
 ### 1. Pre-handoff checks
 
-1. **作業途中判定**: 次 session で再開が必要か? 完了済なら handoff section 不要、 todos.md と commit log で充分
+1. **作業途中判定**: 次 session で再開が必要か? 完了済なら handoff section も todos.md の項目も不要、 commit log で充分
 2. `git status` で working tree clean か確認、 未 commit は `commit-discipline` skill で処理
-3. **Task 残処理**: TaskList (Task tool が gate off の session は mytask MCP) で open 項目を列挙し、 ゼロにする — 次 session へ持ち越す項目は todos.md parent task block へ移してから close、 持ち越さない項目はその場で close。 session 終了で Task list は死蔵され次 session から見えない。 open Task を残した wind-down は stop_checks hook (open-tasks-at-wind-down) が block する
+3. **Task 残処理**: TaskList (Task tool が gate off の session は mytask MCP) で open 項目を列挙し、 ゼロにする — 次 session へ持ち越す項目は、 詳細を handoff section に書き、 todos.md に「未完了」の概要を 1 項目置いて (GitHub issue が使えるなら issue に起こして番号の 1 行でもよい) から close、 持ち越さない項目はその場で close。 session 終了で Task list は死蔵され次 session から見えない。 open Task を残した wind-down は stop_checks hook (open-tasks-at-wind-down) が block する
 4. **background 残処理**: 本 session で起動した Agent / Workflow / Monitor / `run_in_background` の Bash が完了通知を返したかを確かめる。 返っていなければ **完了を待ち合わせる** (成果が要る) か **TaskStop で止める** (要らない) のどちらかを選び、 未回収のまま閉じない。 残したまま終了すると harness が「Background work is running」で終了を阻む
-5. `todos.md` の Critical / High / Medium に対応 parent task block が登録済か確認 (`writing-todos` skill format: Goal + Exit Criteria + `Work file:`)。 task block が無いまま handoff section だけ書くのは禁止 (lifecycle 紐付けが切れる)
+5. `todos.md` に、 持ち越す作業ごとの 1 項目 (`- <作業名 または #issue 番号> — 再開点: <一言>`、 書式は `writing-todos` skill) があるか確認。 項目が無いまま handoff section だけ書くのは禁止 (lifecycle 紐付けが切れる)
 6. 本 session で触れた canonical doc (`.claude/CLAUDE.md` / `~/.claude/CLAUDE.md` / `/etc/claude-code/CLAUDE.md`) に新規 rule が反映済か確認 — rule 追加分は当該 file に書き、 handoff には pointer のみ
-7. 該当 task block の `Work file:` フィールドに handoff doc path が記載されているか確認、 無ければ追加
 
 ### 2. Project-specific extension (optional)
 
@@ -40,18 +39,17 @@ session 終了時に作業が完結し次 session 再開不要なら、 該当 t
 
 **書き込み先と方式**:
 
-- 一般的なセッション境界: `last-session-handoff.md` (repo top、 `.gitignore` 対象)
-- task-lineage が長期化・分離している作業: `drafts/<task-slug>-handoff.md` (`drafts/` も `.gitignore` 対象、 必要なら作成)
-- doc 名と置き場は上記規約に固定 (`handoff.md` / `*-handoff.md` / `*_handoff.md`、 repo top か `drafts/`): hook 群はこの規約 path だけを handoff doc として観測するため、 規約外 path は enforcement と次 session の中断検出から漏れる
+- 書き込み先は `last-session-handoff.md` (repo top、 `.gitignore` 対象) の 1 file に固定する。 作業ごとの区別は section で行う
+- hook 群は規約 path だけを handoff doc として観測するため、 別名・別置き場に書くと enforcement と次 session の中断検出から漏れる
 - handoff doc への書込は本 skill 発動下でのみ通る: `skill_reminder_gate` hook が書込経路不問 (Edit / Bash heredoc / python 等) で handoff skill の invoke を要求する
-- **section header = todos.md parent task name** (1-to-1 紐付け、 例 `## feature-cache-rename — bg dispatch verify`)
+- **section header = todos.md の項目の作業名 (または #issue 番号)** (1-to-1 紐付け、 例 `## feature-cache-rename`)
 - **update**: 同名 section が既にあれば該当 section を **overwrite** (最新進捗のみ保持、 history は残さない)、 無ければ **file 冒頭に append**
 - 既存の異 task section は触らない (並行 task の handoff section を破壊しない安全策)
 
 **section schema (該当無い節は省略)**:
 
 ````markdown
-## <task-name> (todos.md と一致)
+## <作業名> (todos.md の項目と一致)
 
 > 1-2 行 — 今どこで、 次は何をするか
 
@@ -79,7 +77,7 @@ handoff を書いた後 1 拍 verbalize:
 - Status (Stable/Watcher/Unstable) が現状を正しく表現しているか?
 - Action に Contingency が網羅されているか (単なる todo list で終わっていないか)?
 - **削った情報は本当に作業再開に不要か?** 「念のため」 で膨らませていないか?
-- 対応する todos.md task block の `Work file:` が本 doc を指しているか? section header が task name と一致しているか?
+- todos.md に対応する 1 項目があり、 section header がその作業名と一致しているか?
 
 ### 5. Cross-check readback (執筆側)
 
@@ -96,15 +94,15 @@ next-me は handoff の該当 section を read 後 1 拍 verbalize する: Statu
 
 ### 7. Consume cleanup (task 完了時)
 
-`writing-todos` の block-level deletion (commit B、 parent task block 削除) と **同じ commit** で、 handoff の対応 section も削除する。 file が空になれば file ごと削除可。 lifecycle が todos.md task block と handoff section で同期する。
+作業が終わったら、 todos.md の項目を削除する commit と **同時に** handoff の対応 section も削除する (`last-session-handoff.md` は `.gitignore` 対象なので commit には入らない)。 file が空になれば file ごと削除可。 lifecycle が todos.md の項目と handoff section で同期する。
 
 ## Rules
 
 - **作業再開に役立たないことは書かない**: git log / 履歴記録 / 完了済 cleanup の経緯 / 受動的 observation / 既に CLAUDE.md・memory・commit body・code comment に書かれた rationale は省く。 詳細は当該 file に書く、 handoff は pointer のみ
-- **完結 section は書かない・残さない**: 作業途中じゃない / 次 session 再開不要 = 該当 task が closed なら、 handoff section は持たない。 todos.md block 削除と同期して section も削除
-- **1 task = 1 section の 1-to-1 紐付け**: section header は todos.md parent task name と完全一致。 異なる name で複数 section を持たない。 異 task の section は互いに独立 (並行 task の context が混ざらない)
+- **完結 section は書かない・残さない**: 作業途中じゃない / 次 session 再開不要 = 該当 task が closed なら、 handoff section は持たない。 todos.md の項目削除と同期して section も削除
+- **1 task = 1 section の 1-to-1 紐付け**: section header は todos.md の項目の作業名と完全一致。 異なる name で複数 section を持たない。 異 task の section は互いに独立 (並行 task の context が混ざらない)
 - **既存 section を破壊しない**: 同名 section があれば該当 section だけ overwrite、 異名 section は触らない。 file 全体上書きは禁止 (並行 task の section が消える regression)
-- **lifecycle 同期 (todos.md と handoff)**: task block 作成時は `Work file:` に handoff doc を記載。 task block 削除と handoff section 削除を同 commit に揃える
+- **lifecycle 同期 (todos.md と handoff)**: todos.md の項目と handoff section は同時に作り、 同時に消す
 - **同一 task の並行 session は user 運用で回避**: 同じ task を 2 session で同時進行すると section overwrite で進捗ロスト risk あり。 「1 task 1 active session」 ルールで回避 (skill が race 検出する機構は持たない)
 - **Memory / rule 更新は当該 file に書き handoff には pointer のみ**: `~/.claude/CLAUDE.md` や memory entry に rule 追加した場合は当該 file 本体に書き、 handoff Caveat には「rule X 追加 (@<file>)」 形式の参照だけ
 - **Intent retention は当該 commit / comment / rule file に**: 「なぜそうしたか」 は commit message body / code comment / rule file に残す (Commander's Intent)。 handoff にダブって書かない
@@ -113,16 +111,16 @@ next-me は handoff の該当 section を read 後 1 拍 verbalize する: Statu
 
 ## Output
 
-- `last-session-handoff.md` または `drafts/<task-slug>-handoff.md` に新 section を append または既存 section を overwrite (作業途中で再開必要な場合のみ、 そうでなければ skip)
-- open Task 0 件 (持ち越しは todos.md へ転記済み・全 Task close 済み)
+- `last-session-handoff.md` に新 section を append または既存 section を overwrite (作業途中で再開必要な場合のみ、 そうでなければ skip)
+- open Task 0 件 (持ち越しは handoff section と todos.md の 1 項目へ移し済み・全 Task close 済み)
 - cross-check readback を最低 1 round 実施 (section を書いた場合のみ。 blocking questions 0 件、 または残 question を Caveat に明記)
-- `todos.md` 対応 parent task block の `Work file:` フィールドに handoff doc path を記載・維持
+- 持ち越す作業ごとに `todos.md` の 1 項目がある
 - session 内の commit 完了 (`commit-discipline`)
 - handoff 実施時は session-end message 冒頭に resume マーカー行 (`~~~~ … Handoff (sid) ~~~~`) を出力 (次 session の handoff 済み判定 anchor)
 
 ## Related
 
-- `writing-todos` — todos.md parent task block format (Goal + Exit Criteria + Work file)、 block-level deletion 規律 (commit A / B 分離)。 handoff section の lifecycle は本 skill の block-level deletion と同期
+- `writing-todos` — todos.md の書式 (1 作業 1 項目・再開点を一言) と、 session 内の作業は Task で管理する振り分け。 handoff section の lifecycle は todos.md の項目と同期
 - `commit-discipline` — pre-handoff の commit 整理、 session-end の uncommitted 残禁止
 - `writing-skills` — 本 skill や project-local `handoff-extension` を書く時の format reference
 - `verbalize-before-action` — self-audit / next-me readback の verbalize 義務の基盤

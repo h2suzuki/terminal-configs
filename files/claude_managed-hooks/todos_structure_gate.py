@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash) hook: keep working-tree todos.md structurally compact.
+"""PreToolUse(Bash) hook: keep working-tree todos.md a short cross-session handoff summary.
 
 Purpose
 =======
-Before a git commit naming todos.md, validate the working-tree file's block size,
-checkbox item size, and required metadata keys.
-Decision-bearing added paragraphs also require consent evidence or a non-decision marker.
+Before a git commit naming todos.md, validate the working-tree file's total size and entry size.
+Decision-bearing added units also require consent evidence or a non-decision marker.
 
 Exit:
   0: command is outside scope or working-tree todos.md passes
@@ -22,9 +21,8 @@ import shlex
 import subprocess
 import sys
 
-MAX_BLOCK_LINES = 40
-MAX_ITEM_LINES = 6
-REQUIRED_KEYS = ("起票:", "Goal:", "Exit Criteria:")
+MAX_FILE_LINES = 30
+MAX_ENTRY_LINES = 3
 DECISION_WORDS = ("決裁", "承認", "合意", "採用")
 CONSENT_MARKERS = ("提案中", "発話証跡なし", "要確認", "未承認", "無承認", "承認不備", "不採用")  # fmt: skip
 GIT_OPTIONS_WITH_VALUES = {
@@ -76,43 +74,35 @@ def todos_commit_target(command: str, cwd: str) -> str | None:
     return target if target in paths else None
 
 
+def units(lines: list[str]) -> list[list[str]]:
+    """Split lines into entries (`- ` line plus indented continuation) and other non-blank runs."""
+    result: list[list[str]] = []
+    current: list[str] = []
+    in_entry = False
+    for line in [*lines, ""]:
+        continues = in_entry and line.startswith("  ") and bool(line.strip())
+        if current and (
+            not line.strip() or line.startswith("- ") or in_entry != continues
+        ):
+            result.append(current)
+            current = []
+        if line.strip():
+            current.append(line)
+        in_entry = line.startswith("- ") or continues
+    return result
+
+
 def lint(text: str) -> list[str]:
-    """Return deterministic descriptions of todos.md structural violations."""
+    """Return deterministic descriptions of todos.md size violations."""
     lines = text.splitlines()
     violations: list[str] = []
-    index = 0
-    while index < len(lines):
-        if not lines[index].startswith("### "):
-            index += 1
-            continue
-        name = lines[index][4:].strip()
-        start = index
-        index += 1
-        while index < len(lines) and not (
-            lines[index].startswith("### ") or lines[index].startswith("## ")
-        ):
-            index += 1
-        block = lines[start:index]
-        if len(block) > MAX_BLOCK_LINES:
-            violations.append(f"block {name!r}: {len(block)} lines")
-        for key in REQUIRED_KEYS:
-            if not any(line.startswith(key) for line in block):
-                violations.append(f"block {name!r}: missing {key}")
-        item_index = 1
-        while item_index < len(block):
-            if not block[item_index].startswith(("- [ ]", "- [x]")):
-                item_index += 1
-                continue
-            item = block[item_index]
-            item_lines = 1
-            item_index += 1
-            while item_index < len(block) and block[item_index].startswith("  "):
-                item_lines += 1
-                item_index += 1
-            if item_lines > MAX_ITEM_LINES:
-                violations.append(
-                    f"block {name!r}: item {item[:30]!r}: {item_lines} lines"
-                )
+    if len(lines) > MAX_FILE_LINES:
+        violations.append(f"file: {len(lines)} lines (max {MAX_FILE_LINES})")
+    for unit in units(lines):
+        if unit[0].startswith("- ") and len(unit) > MAX_ENTRY_LINES:
+            violations.append(
+                f"entry {unit[0][:30]!r}: {len(unit)} lines (max {MAX_ENTRY_LINES})"
+            )
     return violations
 
 
@@ -138,28 +128,19 @@ def _consent_violations(text: str, repo_root: str) -> list[str]:
     head_lines = baseline.stdout.splitlines()
     added = set(work_lines) - set(head_lines)
     violations: list[str] = []
-    paragraph_lines: list[str] = []
-    for current in [*work_lines, ""]:
-        if current.strip():
-            paragraph_lines.append(current)
-            continue
-        if not paragraph_lines:
-            continue
-        paragraph = "\n".join(paragraph_lines)
+    for unit in units(work_lines):
+        paragraph = "\n".join(unit)
         if (
-            any(item in added for item in paragraph_lines)
+            any(item in added for item in unit)
             and any(word in paragraph for word in DECISION_WORDS)
             and not _consent_satisfied(paragraph)
         ):
             line = next(
-                line
-                for line in paragraph_lines
-                if any(word in line for word in DECISION_WORDS)
+                line for line in unit if any(word in line for word in DECISION_WORDS)
             )
             violations.append(
                 f"consent {line[:40]!r}: needs a 「…」 quote or an explicit non-decision marker"
             )
-        paragraph_lines = []
     return violations
 
 
@@ -185,8 +166,9 @@ def _run(payload: object) -> int:
     sys.stderr.write("todos-structure:\n")
     sys.stderr.write("".join(f"- {violation}\n" for violation in violations))
     sys.stderr.write(
-        "経緯は commit message か git 履歴へ、block は 起票 / Goal / "
-        "Exit Criteria / Work file だけにする\n"
+        "todos.md は session を跨ぐ作業の概要だけ (1 作業 1 項目 3 行まで、全体 30 行まで)。"
+        "詳細は last-session-handoff.md に書き、GitHub が使えるなら issue に起こして番号を 1 行で置いてもよい。"
+        "session 内で終わる作業は Task で管理し、todos.md に書かない\n"
     )
     return 2
 

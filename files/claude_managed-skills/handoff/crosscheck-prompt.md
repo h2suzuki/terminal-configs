@@ -7,12 +7,12 @@ handoff skill の Cross-check readback step が Agent tool で spawn する時�
 あなたは次 session の Claude (next-me) の模擬です。 直前 session の記憶は一切ありません。 以下だけを情報源として、 作業を再開できるか判定してください:
 
 - handoff doc: {{HANDOFF_PATH}} の section 「{{SECTION_NAME}}」
-- {{TODOS_PATH}} (repo top の todos.md) の対応 parent task block
+- {{TODOS_PATH}} (repo top の todos.md) の対応する 1 項目
 - repo の実物 (git log / doc が指す file の Read は自由)
 
 手順:
 
-1. handoff の対象 section と todos.md の対応 block を Read する
+1. handoff の対象 section と todos.md の対応する項目を Read する
 2. **Readback**: Status / 次の action / その理由を自分の言葉で説明する (原文の写しは不可)
 3. **再開手順**: どの file をどの順で読み、 最初の作業が何かを実行順で宣言する
 4. **敵対的検査**: 各 step に「実行に必要な情報が doc 内 (または doc が指す file) にあるか」を問う。 書かれていないことは知らない前提を徹底し、 推測で埋めた箇所は assumption と明示、 不足は blocking question として列挙する

@@ -1,111 +1,52 @@
 ---
 name: writing-todos
-description: Format and operate todos.md (priority-bucketed task ledger at the repo root) — Goal + Exit Criteria per parent task, block-level deletion on completion, verify-before-flip, three-question gate before any scope reduction.
-when_to_use: TRIGGER when about to Read / Edit / Write todos.md, flip a checkbox to "[x]", delete / shrink a parent block, or utter scope-reduction phrases ("終わり" / "scope 外" etc). SKIP for projects without todos.md or TODO comments in source code.
+description: Keep todos.md a short summary of unfinished work that spans sessions — one line per work item with its resume point; details live in last-session-handoff.md (or a GitHub issue when available), in-session work lives in Tasks.
+when_to_use: TRIGGER when about to Read / Edit / Write todos.md, record work that will continue in a later session, or write carry-over items while closing open Tasks at handoff. SKIP for projects without todos.md or TODO comments in source code.
 ---
 
 # Todo Writing
 
-repo top の `todos.md` を Critical・High・Medium 優先度別の task ledger として運用するための format と進捗管理 rule。 親タスクは Goal + Exit Criteria で objective 化し、 完了は block 単位削除で git 履歴に残す。
-
-## Structure
-
-### Priority buckets
-
-todos.md は **Critical**, **High**, **Medium** の 3 つの優先度 section で構成する。 他の section (旧 「修正済」「Done」 等) は作らない。 完了タスクは中間 section に残さず削除する (詳細は Process)。
-
-### Parent task: Goal + Exit Criteria
-
-各親タスクは見出し直後に以下を置く:
-
-- **起票**: `起票: <model 短形式 | user> <YYYY-MM-DD>` の 1 行 (例: `起票: fable-5 2026-08-20`、 ユーザー本人の起票は `user`)。 誰がいつ積んだかを残し、 既定却下 (Adding tasks 参照) の適用を機械的に可能にする。 既存 block への遡及は不要 (新規から適用)
-- **Goal**: 達成する outcome を 1 文で
-- **Exit Criteria**: Goal の各句を客観的・観測可能な acceptance 条件へ分解した checkbox 群
-
-Exit Criteria は Goal の主張と **1:1 で連動** させる:
-
-- Goal が「機構を組込む」 なら Exit Criteria は「組込まれ起動することの確認」
-- Goal が「観測を経て判断」 なら Exit Criteria は「観測データ収集」 と 「結論記録」 の確認
-
-Exit Criteria に「全子項目完了」 を completeness 補助として 1 行まで書くことはできるが、 本筋の Exit 条件にしない。 個々の sub-task ID も列挙しない。
-
-### Progress checkbox vs Exit Criteria
-
-Goal に紐づく関連作業の進捗は Exit Criteria と別の checkbox として記載できる。 ただし親タスクの削除判断 (後述 Three-question gate の Q1) は Exit Criteria の客観評価で行い、 進捗 checkbox の主観評価で代えない。
-
-### Work file reference
-
-タスクに関連する work file (progress base file・framework table・途中成果物 等) がある場合、 必ず todos.md から言及する。 さもないと、 次のセッションで work file が lost する。
+repo top の `todos.md` は、 session を跨いで引き継ぐ未完了作業の概要だけを置く場所。 台帳・backlog・設計メモ置き場にすると肥大化してゴミ溜めになるので、 詳細は別の場所へ置く。
 
 ## Process
 
-### Adding tasks
-
-ユーザーが明示的に依頼していない task の自発起票は**既定却下** — まず chat で提案し、 採用された場合のみ登録する。 ユーザー依頼の作業から派生する deferred 項目の登録は従来通り可。
-
-1. 追記前に Critical・High・Medium 以外の section (旧 「修正済」 等) の残存を確認。 あれば先に掃除 commit を入れる
-2. 新しい残課題は適切な優先度 section に追記する
-3. 関連 work file があれば task entry 内で path を言及する
-4. 起票行 (`起票: <model 短形式 | user> <YYYY-MM-DD>`) を block に必ず入れる
-
-誤記・記載不足・参照誤りなど判断容易なものは直接修正して commit。 判断要素が残るものは `(要相談)` 付きで積み、 議論を経て反映する。
-
-### Verifying before `[x]` flip
-
-`[x]` でマークする前に、 その Exit Criterion / sub-task の達成根拠を **実機で確認する**。 todos.md の隣接記述や記憶だけで盲目的に flip しない。 盲目的 `[x]` 化は虚偽 closure の温床。
-
-確認手順の例:
-
-- 根拠 file が実在するか — `ls path/to/spec` で存在確認
-- 根拠 file の内容が Exit Criterion を満たしているか — 該当節を `grep` または Read で確認
-- 完了 commit が referenced されているなら、 その commit が実際にその変更を含むか — `git show <hash> --stat`
-
-verify を経た上で `[x]` flip を含む commit A を land する。
-
-### Defining task completion
-
-タスクの完了とは、 Exit Criteria も含めた **全 checkbox がチェックされ、 かつ、 その状態で commit までされた** ことをいう。
-
-保留中の受入条件 (人手レビュー承認・外部確認 待ち 等) は prose の Note に書かず、 必ず未チェックの `- [ ]` Exit Criterion として表す。 こうすれば「全 checkbox `[x]`」 が「削除可能」 を一意に意味し、 完了に見える block を prose 都合で残す曖昧さが消える (= 後述 backstop hook の判定基準とも一致する)。
-
-### Block-level deletion
-
-完了タスクは block 単位で削除する。 commit により全 checkbox のチェックが記録されているので、 履歴は git log で辿れて safe — 削除して良い。 「修正済」「Done」 等の中間 section に完了記録を残すスタイルは禁止。 削除のみ。
-
-削除タイミングは完了 commit の **直後の commit** で行う。 次セッションへ持ち越すと「意図的に残した記録」 に見えて削除されない。
-
-この削除タイミングは PostToolUse:Bash の backstop hook が機構的に補強する: todos.md を commit した直後、 全 checkbox `[x]` の block が残っていれば reminder が stdout に出る。 reminder を見たら (a) 完了なら次 commit で block 削除、 (b) 保留作業が残るなら `- [ ]` Exit Criterion 化、 のどちらかで応じる。
-
-親タスク block の削除判断は、 後述 Three-question gate の 3 質問を verbalize してから行う。
-
-### Separating `[x]` flip and block deletion commits
-
-`[x]` flip と block 削除は別 commit に分ける。 `[ ]` のまま block を削除すると、 git log の diff には「`[ ]` の行が消えた」 とだけ記録され、 closure transition の granular 履歴が残らない。
-
-必ず次の順で land する:
-
-1. **commit A — state record**: 対象の sub-task / Exit Criterion の `[x]` flip と、 完了根拠の 1-2 行追記
-2. **commit B — closure**: block 全体の削除 (parent task closure 時のみ。 sub-task close 単独なら commit A だけで終わる)
-
-ショートカットして 1 commit に纏めると、 後で「いつ何が closed したか」 を git log で追えなくなる。 block 削除は state record の上に立てる二段建てが原則。
+1. **session 中**: 作業は Task で追う。 todos.md には触らない
+2. **handoff で open Task を閉じる時**: 次 session へ持ち越す作業ごとに、 詳細を `last-session-handoff.md` の節へ書き、 todos.md に「未完了」の概要を 1 項目置く (既にあれば再開点を更新する)。 GitHub が使えるなら issue に起こして番号で置いてもよい
+3. **作業が終わった時**: 成果物・テスト結果・commit を実際に確かめてから、 todos.md の項目を削除して commit し、 `last-session-handoff.md` の対応節も同時に削除する (`last-session-handoff.md` は gitignore 対象なので commit には入らない)
 
 ## Rules
 
-### Three-question gate before scope reduction
+### 置き場所の振り分け
 
-todos.md 親タスク entry、 work file (progress base file・framework table)、 handoff 引き継ぎ情報 を「終わり」「素材化済」「scope 外」「役割終了」 と判断する前に、 次の 3 点を text 本文に verbalize する。 内部 thinking で済まさない。
+| 内容 | 置き場所 |
+|---|---|
+| session 内で終わる作業 | Task (TaskCreate / TaskUpdate。 Task tool が gate off なら mytask MCP)。 todos.md に書かない |
+| session を跨ぐ未完了作業の概要 | todos.md に 1 項目 |
+| その作業の詳細 (状態・次の action・必読・注意) | repo top の `last-session-handoff.md` (handoff skill が書く) |
+| GitHub issue が使える repo の作業 | issue に起こして正本にしてよい。 todos.md は issue 番号と再開点の 1 行にする。 GitHub は使えるとは限らないので必須にしない |
+| 設計メモ・計測結果・判断の経緯 | commit message / issue / `last-session-handoff.md` |
+| 教訓・注意書き | memory entry か skill |
+| 完了した作業 | どこにも残さない (項目を削除する。 記録は git 履歴と commit message) |
 
-1. **親タスクの定義済みゴールが達成されたか** — todos.md の Goal 文を引用し、 達成を示す客観的根拠 (成果物・テスト結果・確認ログ) を挙げる。 「完了したと思う」 等の主観表明は不可
-2. **保持して追従更新する case が本当に無いか** — 反例を 1 つ挙げるよう試みる
-3. **自分の「労力削減」 衝動が混じっていないか** — 「捨てると作業が減る」 誘惑があれば認める
+### 項目の書式
 
-3 つすべて clear (1 が Yes 確定、 2 が反例無し、 3 が衝動無し) でない限り、 削除・静的化・scope 縮小を選択肢に入れず、 **保持 + catch-up 更新を default** として提案する。
+```markdown
+# Todos
+
+- drafts/ 対策の git 側 — 再開点: 共通 ignore と pre-commit の採否をユーザーが判断
+- #42 タブアイコン退行 — 再開点: 修正案 2 の実機確認から
+
+詳細は last-session-handoff.md
+```
+
+- 1 項目は `- <作業名 または #issue 番号> — 再開点: <一言>`。 続きの行は 2 字下げで、 1 項目 3 行まで
+- ファイル全体で 30 行まで。 優先度の節・Goal・Exit Criteria・checkbox・起票行・Work file 欄は使わない
+- 判断を書くなら、 決裁 / 承認 / 合意 / 採用 を含む項目に「…」のユーザー発話の引用か「提案中」等の非決定 marker を添える
+- 上の 3 点は `todos_structure_gate.py` hook が todos.md の commit 時に検査する
 
 ## Related
 
-- `commit-discipline` — commit A / B 分離など本 skill の commit 粒度規律の基盤
-- `handoff` — task block の Work file として handoff doc を参照する場合、 handoff section header は parent task name と一致させ、 block-level deletion (commit B) と handoff section 削除を同 commit に揃える (lifecycle 同期)
-- `verbalize-before-action` — Three-question gate の verbalize 義務の基盤
-- `verify-before-claim` — `[x]` flip 前の verify 義務の基盤
-- `writing-code` — work file 参照を扱う際の「No dangling-prone references in persistent files」 が依拠
-- `check_todo_completion.py` hook (PostToolUse:Bash) — todos.md commit 直後に全 `[x]` の未削除 block を検出し reminder する、 block-level deletion 規律の機構的 backstop
+- `handoff` — `last-session-handoff.md` の書式と、 持ち越し項目を todos.md へ置く手順
+- `commit-discipline` — todos.md の更新を含む commit の粒度とタイミング
+- `verify-before-claim` — 「終わった」と判断して項目を消す前の確認
+- `todos_structure_gate.py` hook (PreToolUse:Bash) — todos.md を commit する時にファイル行数・項目行数・判断の引用を検査する
