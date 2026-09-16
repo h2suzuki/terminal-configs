@@ -77,6 +77,7 @@ ACTION_ASK_RE = re.compile(
 )
 INFO_ASK_RE = re.compile(r"(?:あり|ござい|ご存じ|ご存知|お持ち|いらっしゃい|分かり|わかり|できてい|ご覧|お使い)ますか$")
 CHOICE_RE = re.compile(r"どちら|どれ|どの|いずれ")  # a choice question belongs to the routing rule
+ORDER_FROM_RE = re.compile(r"(?:どれ|どちら|どの[^。\n]{0,8}|いずれ|どこ|何)から")  # the starting point is routing too
 DESTRUCTIVE_RE = re.compile(r"削除|消し|消去|破棄|上書き|reset|force|push|revert|drop|rm\b|clean", re.IGNORECASE)
 
 
@@ -757,12 +758,19 @@ def _offload(turn, normalized, scan):
         if stripped.endswith(QUESTION_ENDINGS):
             question_lines.append(stripped)
     questions = "\n".join(question_lines)
-    if re.search(r"どちらを先に|どの順で", questions):
+    asks = [q.rstrip("?？ ") for q in question_lines if not DESTRUCTIVE_RE.search(q)]
+    next_action = [
+        q for q in asks if ACTION_ASK_RE.search(q) and not INFO_ASK_RE.search(q)
+    ]
+    if re.search(r"どちらを先に|どの順で", questions) or any(
+        ORDER_FROM_RE.search(q) for q in next_action
+    ):
         reasons.append("順序質問")
     routing = bool(
         re.search(r"(?:するか|しますか).{0,25}(?:するか|しますか)", questions)
         or re.search(r"A\s*にしますか.{0,20}B\s*にしますか", questions, re.IGNORECASE)
         or re.search(r"どちら(?:にしますか|がよいですか)", questions)
+        or any(CHOICE_RE.search(q) for q in next_action)
         or EITHER_WAY_RE.search(scan)
     )
     declared = (
@@ -771,13 +779,9 @@ def _offload(turn, normalized, scan):
     )
     if routing and not declared:
         reasons.append("二択 routing")
-    asks = [q.rstrip("?？ ") for q in question_lines if not DESTRUCTIVE_RE.search(q)]
     if any(PERMISSION_RE.search(q) for q in asks):
         reasons.append("許可質問")
-    if any(
-        ACTION_ASK_RE.search(q) and not INFO_ASK_RE.search(q) and not CHOICE_RE.search(q)
-        for q in asks
-    ):
+    if any(not CHOICE_RE.search(q) for q in next_action):
         reasons.append("実行確認")
     outside_fences = _strip_fences_and_quotes(normalized)
     if re.search(r"`?!`?\s*を付けて実行してください", outside_fences):

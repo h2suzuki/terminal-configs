@@ -179,14 +179,18 @@ test 方針: 5 規則それぞれの陽性 1 件と陰性 1 件 (計 10 case)。
 ### C13 offload-to-user (block) と host-command-format (warn)
 
 入力: `final_text` (fence 除去後。ただし host-command-format は fence の有無そのものを見るので fence 除去前の本文を使う)。
-- **block** (`offload-to-user`): (1) 順序質問 (「どちらを先に」「どの順で」)、(2) 二択確認 / routing (「A にしますか B にしますか」
-  「どちらにしますか」「どちらがよいですか」、および選択を user に委ねる平叙文「どちらでも進められます」)、(3) `!` prefix 実行の依頼、
+- **block** (`offload-to-user`): (1) 順序質問 (「どちらを先に」「どの順で」、および着手点を user に選ばせる問い
+  「どれから着手しますか」「どこから進めますか」= 選択語 (どれ / どちら / どの〜 / いずれ / どこ / 何) + 「から」 + 自分の次の行動を
+  問う語尾)、(2) 二択確認 / routing (「A にしますか B にしますか」
+  「どちらにしますか」「どちらがよいですか」、選択語 + 行動語尾の open choice「どの案を採用しますか」、
+  および選択を user に委ねる平叙文「どちらでも進められます」)、(3) `!` prefix 実行の依頼、
   (4) 許可質問 (「再開してよろしいですか」「してもいいですか」)、(5) 実行確認 (「読みにいきますか」「進めましょうか」のように自分の
   次の行動の可否を問う) — (1)(2)(4)(5) は `?` / `？` / `ますか` / `ましょうか` / `ください` / `でしょうか` で終わる行 (user への
   問い掛け) だけを対象にし ((2) の平叙文を除く)、「自分で判断しました」のような平叙文は対象外。「ください」で終わる行でも、
   順序・二択の句が「〜かは」「〜かについては」で主題化された報告・案内文 (「どの順で実行したかは報告書を確認してください」)
-  は対象外。(4)(5) は破壊的操作 (削除 / 上書き / reset / push 等) の事前確認と、情報を尋ねる「ありますか」「ご存じですか」を対象外とする。
-  (2) は turn 内に `declare-and-proceed` skill の invoke があれば pass。
+  は対象外。(1) の着手点問い / (2) の open choice / (4)(5) は破壊的操作 (削除 / 上書き / reset / push 等) の事前確認と、
+  情報を尋ねる「ありますか」「ご存じですか」を対象外とする。
+  (2) は turn 内に `declare-and-proceed` skill の invoke があれば pass。(1) は作業順の決定自体が model の仕事ゆえ skill でも pass しない。
 - **warn** (`host-command-format`, family 15): host コマンドを user に手動実行させる文脈で、コマンドが独立した fenced block に
   なっていない (prose の inline code に混ざる)、または fenced でも path 引数が絶対 path でも `/` を含む repo root 起点の
   相対 path でもない裸の basename である。inline command は同じ文字列が fence 内にも現れる場合だけ打ち消す
@@ -2549,6 +2553,48 @@ class RecheckCorrectionTest(StopChecksTest):
             with self.subTest(text=text):
                 self.fx.turn(say("報告します"))
                 self.assertNotBlocked(run_hook(self.fx, text + TAIL), "offload-to-user")
+
+
+class WorkOrderQuestionTest(StopChecksTest):
+    """C13 rule 1 (2026-09-16 corpus): an open choice of where to start, in any phrasing."""
+
+    FAMILY = "offload-to-user"
+
+    def test_c13_open_starting_point_question_blocks(self):
+        for text in (
+            "どれから着手しますか?",
+            "どの項目から着手しますか？",
+            "どれから進めますか?",
+            "どこから直しますか?",
+            "いずれから始めますか?",
+            "何から進めましょうか?",
+            "\U0001f537 [質問] どれから着手しますか?",
+        ):
+            with self.subTest(text=text):
+                self.fx.turn(say("整理しました"))
+                self.assertBlocks(run_hook(self.fx, text), self.FAMILY)
+
+    def test_c13_starting_point_question_blocks_after_the_skill(self):
+        """Rule 1 keeps no skill escape: the work order is the model's own call."""
+        self.fx.turn(call("Skill", skill="declare-and-proceed"), say("整理しました"))
+        self.assertBlocks(run_hook(self.fx, "どれから着手しますか?"), self.FAMILY)
+
+    def test_c13_open_choice_without_a_starting_point_stays_routing(self):
+        """With no starting-point marker rule 2 owns the line, so the skill still passes it."""
+        text = "どの案を採用しますか?"
+        self.fx.turn(say("整理しました"))
+        self.assertBlocks(run_hook(self.fx, text), self.FAMILY)
+        self.fx.turn(call("Skill", skill="declare-and-proceed"), say("整理しました"))
+        self.assertNotBlocked(run_hook(self.fx, text), self.FAMILY)
+
+    def test_c13_destructive_and_information_starting_points_pass(self):
+        for text in (
+            "どの branch から削除しますか?",
+            "どの資料から着手したか分かりますか?",
+        ):
+            with self.subTest(text=text):
+                self.fx.turn(say("整理しました"))
+                self.assertNotBlocked(run_hook(self.fx, text), self.FAMILY)
 
 
 if __name__ == "__main__":
