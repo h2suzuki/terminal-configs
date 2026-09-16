@@ -48,7 +48,10 @@
       },
       {
         "matcher": "^AskUserQuestion$",
-        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/declare_and_proceed_gate.py" } ]
+        "hooks": [
+          { "type": "command", "command": "/etc/claude-code/hooks/declare_and_proceed_gate.py" },
+          { "type": "command", "command": "/etc/claude-code/hooks/question_research_gate.py" }
+        ]
       },
       {
         "matcher": "^SendMessage$",
@@ -124,6 +127,7 @@
     ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/stop_checks.py" } ] },
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/question_research_gate.py" } ] },
       { "hooks": [ { "type": "command", "command": "/usr/local/bin/claude_court_guard --hook" } ] }
     ],
     "SessionEnd": [
