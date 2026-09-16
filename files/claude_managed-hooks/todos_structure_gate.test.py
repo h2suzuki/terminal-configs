@@ -19,7 +19,7 @@ Contract (each claim maps to one test):
   C8  fail-open: not a git repo, no todos.md in the working tree, or unreadable payload → exit 0
   C9  consent: against the HEAD:todos.md baseline (git show; unreadable baseline → the consent check is
       skipped, the other checks still run), a unit holding a working-tree line absent from the baseline
-      and containing 決裁 / 承認 / 合意 / 採用 is denied as "consent" unless that unit also holds a 「…」
+      and containing 決裁 / 承認 / 合意 / 採用 / 保留 / 判断 is denied as "consent" unless that unit also holds a 「…」
       utterance quote or an explicit non-decision marker (提案中 / 発話証跡なし / 要確認 / 未承認 /
       無承認 / 承認不備 / 不採用). A unit is one entry, or one run of contiguous non-blank lines outside
       entries; units without a new line are untouched
@@ -225,6 +225,23 @@ class GateTest(unittest.TestCase):
         out = run_hook(self.repo.root, COMMIT)
         self.assertEqual(out.returncode, 2, out.stderr)
         self.assertIn("consent", out.stderr)
+
+    def test_c9_hold_or_pending_decision_claims_need_quote(self) -> None:
+        """C9: a claimed user hold or pending user decision must cite the user's words."""
+        commit_todos(self.repo, todos(entry("A")))
+        for item in (
+            "- MCP の再登録 — 再開点: ユーザーが配備を保留\n",
+            "- git 側 — 再開点: 入れるかをユーザーが判断\n",
+        ):
+            self.repo.stage_todos(todos(entry("A"), item))
+            out = run_hook(self.repo.root, COMMIT)
+            self.assertEqual(out.returncode, 2, f"{item!r}: {out.stderr}")
+            self.assertIn("consent", out.stderr)
+        quoted = (
+            "- git 側 — 再開点: 入れるかをユーザーが判断「まずは状況調査をしたい」\n"
+        )
+        self.repo.stage_todos(todos(entry("A"), quoted))
+        self.assertEqual(run_hook(self.repo.root, COMMIT).returncode, 0)
 
     def test_c10_negated_decision_word_passes(self) -> None:
         commit_todos(self.repo, todos(entry("A")))

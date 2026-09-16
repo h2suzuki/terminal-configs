@@ -23,7 +23,7 @@ import sys
 
 MAX_FILE_LINES = 30
 MAX_ENTRY_LINES = 3
-DECISION_WORDS = ("決裁", "承認", "合意", "採用")
+DECISION_WORDS = ("決裁", "承認", "合意", "採用", "保留", "判断")
 CONSENT_MARKERS = ("提案中", "発話証跡なし", "要確認", "未承認", "無承認", "承認不備", "不採用")  # fmt: skip
 GIT_OPTIONS_WITH_VALUES = {
     "-C",

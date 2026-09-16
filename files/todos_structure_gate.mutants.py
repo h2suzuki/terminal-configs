@@ -27,8 +27,8 @@ MUTANTS = {
         "target = None",
     ),
     "m5-kessai-not-a-decision-word": (
-        'DECISION_WORDS = ("決裁", "承認", "合意", "採用")',
-        'DECISION_WORDS = ("承認", "合意", "採用")',
+        'DECISION_WORDS = ("決裁", "承認", "合意", "採用", "保留", "判断")',
+        'DECISION_WORDS = ("承認", "合意", "採用", "保留", "判断")',
     ),
     "m6-consent-always-satisfied": (
         '    return "「" in paragraph or any(marker in paragraph for marker in CONSENT_MARKERS)',
