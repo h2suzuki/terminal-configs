@@ -53,7 +53,6 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 session を跨いで引き継ぐ未完了作業の概要。詳細は last-session-handoff.md の同名節、経緯は git 履歴。
 
 - tab icon 退行の同型掃き出し — 再開点: hook matcher 5 箇所の MultiEdit 死に名の掃除から (残り 4 件)
-- 2026-09-16 の hook / installer 変更の配備 — 再開点: この機で todos 検査の語彙追加を再配備、もう 1 台は pull して base setup を再実行
 - memory surface 到達率の判定 — 再開点: 2026-09-25 に claude_memory_sync --reach を再実行
 - 一次ソース確認 nudge の効果判定 — 再開点: 2026-10-10 に claude_unverified_claims を実行
 - agent_coord の 2 環境疎通 — 再開点: worktree transfer→accept を Codex と試す (完了したかは未確認)
