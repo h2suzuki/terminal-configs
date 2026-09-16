@@ -234,6 +234,25 @@ class TitleIconTest(unittest.TestCase):
             self.state(), {"state": "run", "summary": "parallel edit", "custom": ""}
         )
 
+    def test_harness_injected_prompts_keep_the_previous_summary(self):
+        """UserPromptSubmit を経由する harness 生成 prompt は summary にしない。"""
+        self.emit("UserPromptSubmit", prompt="fix the build")
+        for prompt in (
+            'Another Claude session sent a message:\n<agent-message from="x">hi</agent-message>',
+            "<task-notification>\n<task-id>abc</task-id>",
+            "This session is being continued from a previous conversation.",
+            "[Request interrupted by user]",
+            "  <local-command-stdout>Set model</local-command-stdout>",
+        ):
+            self.emit("Stop")
+            out = self.emit("UserPromptSubmit", prompt=prompt)
+            self.assertIn("fix the build", out, prompt)
+        self.assertEqual(self.state()["summary"], "fix the build")
+
+    def test_user_prompt_mentioning_a_tag_is_still_summarized(self):
+        self.emit("UserPromptSubmit", prompt="タブに <agent-message が出る")
+        self.assertEqual(self.state()["summary"], "タブに <agent-message が出る")
+
 
 if __name__ == "__main__":
     unittest.main()

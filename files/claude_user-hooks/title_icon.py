@@ -21,10 +21,11 @@ RENAME_MARKER = b"<command-name>/rename</command-name>"
 RENAME_RE = re.compile(
     r"<command-name>/rename</command-name>.*?<command-args>(.*?)</command-args>", re.S
 )
-SYNTHETIC = (
-    "<task-notification>",
-    "This session is being continued",
-)  # 合成再入は summary 化しない
+# harness が UserPromptSubmit に流す合成 prompt (tag / [notice] / 定型文) は summary 化しない
+SYNTHETIC_RE = re.compile(
+    r"<[a-z][\w-]*[\s>]|\[[A-Z]|This session is being continued"
+    r"|Another Claude session sent a message"
+)
 
 
 def parent_pid(pid):
@@ -185,7 +186,7 @@ def main():
         new = "wait"
     elif ev == "UserPromptSubmit":
         prompt = data.get("prompt") or ""
-        if prompt and not prompt.lstrip().startswith(SYNTHETIC):
+        if prompt and not SYNTHETIC_RE.match(prompt.lstrip()):
             st["summary"] = summarize(prompt)
         new = "run"
     elif ev == "Stop":
