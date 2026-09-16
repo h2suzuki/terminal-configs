@@ -17,7 +17,6 @@ LEDGER_MIN_EDITS = 3
 TASK_TOOLS = {"TaskCreate", "TaskUpdate", "TodoWrite"}
 SCHEMA_TOOLS = {"ToolSearch"}
 EVIDENCE_TOOLS = {"Read", "Grep", "Glob", "WebSearch", "WebFetch"}
-SCAN_TOOLS = EVIDENCE_TOOLS | {"Bash"}  # auto mode では検索も Bash で走る
 PERSISTENCE_WORDS = ("memory", "skills", "hooks", "CLAUDE.md", "SKILL.md")
 DECISION_WORDS = ("決裁", "裁定", "判断待ち", "承認待ち", "要確認")
 EXECUTABLE_SUFFIXES = (".py", ".sh", ".mjs", ".js")
@@ -68,6 +67,12 @@ CONTINUATION_ENDINGS = (
     "直します",
     "自走を続け",
     "作業を続け",
+)
+READ_COMMAND_RE = re.compile(  # auto mode では読む / 探す操作が Bash で走る
+    r"\b(?:cat|bat|head|tail|sed|awk|less|more|grep|egrep|fgrep|rg|ag|find|fd|ls|tree"
+    r"|wc|diff|stat|file|jq|yq|python3?|node|codegraph"
+    r"|git\s+(?:log|show|diff|blame|grep|status|ls-files|cat-file)"
+    r"|gh\s+(?:issue|pr|search|api))\b"
 )
 IMPOSSIBLE_RE = re.compile(
     r"(?:実装|実現|対応|修正|再現)(?:は|が|も)?(?:不能|不可能|不可)"
@@ -836,6 +841,13 @@ def _host_command(normalized):
     return []
 
 
+def _inspected(turn):
+    """この turn で実際に読む / 探す操作をしたか (書き込み command はここに数えない)。"""
+    if any(name in EVIDENCE_TOOLS for name in turn["tool_names"]):
+        return True
+    return any(READ_COMMAND_RE.search(command) for command in turn["bash_commands"])
+
+
 def _claim_without_evidence(turn, scan):
     patterns = (
         r"不明|該当なし|存在しません|できません",
@@ -843,9 +855,7 @@ def _claim_without_evidence(turn, scan):
         r"非対話では実行できません",
         r"網羅した|全て確認し",
     )
-    if any(re.search(pattern, scan) for pattern in patterns) and not any(
-        name in EVIDENCE_TOOLS for name in turn["tool_names"]
-    ):
+    if any(re.search(pattern, scan) for pattern in patterns) and not _inspected(turn):
         return [
             _line(
                 "claim-without-evidence",
@@ -859,9 +869,7 @@ def _claim_without_evidence(turn, scan):
 def _impossibility(turn, normalized, scan):
     if not IMPOSSIBLE_RE.search(scan):
         return []
-    if SURFACE_RE.search(normalized) and any(
-        name in SCAN_TOOLS for name in turn["tool_names"]
-    ):
+    if SURFACE_RE.search(normalized) and _inspected(turn):
         return []
     return [
         _line(

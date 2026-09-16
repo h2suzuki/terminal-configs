@@ -202,9 +202,12 @@ test 方針: 3 block 規則の陽性 / skill invoke による pass / 整形済�
 
 入力: `final_text`。否定断定 (「不明」「該当なし」「存在しません」「できません」)、規模・影響評価語 (「大改造」「影響大」)、
 既知可能操作への不可断定、網羅・完了の self-claim (「網羅した」「全て確認した」) のいずれか。
-出力: turn 内に根拠 tool (`Read` / `Grep` / `Glob` / `WebSearch` / `WebFetch`) の呼び出しが 1 件も無ければ warn 1 行。
-**block しない** (K3)。根拠 tool が 1 件でもあれば pass。
+出力: turn 内に「見る操作」が 1 件も無ければ warn 1 行。**block しない** (K3)。
+見る操作とは 根拠 tool (`Read` / `Grep` / `Glob` / `WebSearch` / `WebFetch`) の呼び出しか、読む・探す Bash command
+(`cat` / `head` / `tail` / `sed` / `grep` / `rg` / `find` / `ls` / `jq` / `python` / `git log|show|diff|blame|grep` 等)。
+`cp` / `mv` のような書き込み command は、read-only で失敗しても成功しても 見る操作に数えない。
 test 方針: 4 種の検出語 × 根拠 tool 有無 = 8 case。全 case で exit 0 であることも assert。
+加えて Bash 経由の grep が pass し、Bash 経由の cp が warn になること。
 
 ### C15 communication-lint (warn)
 
@@ -296,8 +299,8 @@ test 方針: memory root を空 dir に向けた Stop で memory-reminder が 0 
 入力: 最終本文に「実装不能」「対応できません」「リポジトリ外」「scope 外」など、できない / 管轄外
 という断定がある turn。判定は scan (fence・引用・code span を除いた本文) に対して行うので、他者の
 結論の引用は発火しない。
-出力: 走査範囲の提示が本文に無い、または根拠 tool (`EVIDENCE_TOOLS` + `Bash`。auto mode では検索も
-Bash で走る) を 1 つも使っていない turn を block。走査範囲の提示とは normalized 本文 (code span を
+出力: 走査範囲の提示が本文に無い、または C14 と同じ「見る操作」が 1 件も無い turn を block。
+走査範囲の提示とは normalized 本文 (code span を
 含む) に現れる具体的 artifact — slash を含む path、既知拡張子を持つ file 名、`grep` / `rg` / `find` /
 `Glob` / `codegraph` の走査条件 — のいずれか。
 Why: repo に該当コードがあるのに「要件全体が repo 外ゆえ実装不能」と宣言した実例がある。できない
@@ -1693,6 +1696,16 @@ class ClaimWithoutEvidenceTest(StopChecksTest):
                 self.fx.turn(read("/etc/hosts"), say("読みました"))
                 self.assertNotWarned(run_hook(self.fx, claim + TAIL), self.FAMILY)
 
+    def test_c14_reading_through_bash_is_evidence(self):
+        """auto mode では cat / grep が Bash で走るので、それも根拠に数える。"""
+        self.fx.turn(bash("grep -n handler src/app.ts"), say("読みました"))
+        self.assertNotWarned(run_hook(self.fx, "該当なしです。" + TAIL), self.FAMILY)
+
+    def test_c14_a_write_command_is_not_evidence(self):
+        """read-only で弾かれた cp は探索ではない: tool を 1 つ使った事実では免罪されない。"""
+        self.fx.turn(bash("cp files/a.py /etc/claude-code/hooks/a.py"), say("配ります"))
+        self.assertWarnsFamily(run_hook(self.fx, "該当なしです。" + TAIL), self.FAMILY)
+
     def test_c14_never_blocks(self):
         for claim in self.CLAIMS:
             for entries in ([say("報告します")], [read("/etc/hosts")]):
@@ -1942,6 +1955,16 @@ class ImpossibilityClaimTest(StopChecksTest):
         """実例と同じ形: file を読んでいても、どこを探したかが本文に無ければ裏付けにならない。"""
         self.fx.turn(read("/repo/src/handler.ts"), tool_result("export const handler"))
         text = "要件全体がリポジトリ外のため実装不能です。" + TAIL
+        self.assertBlocks(run_hook(self.fx, text), "impossibility-claim")
+
+    def test_c20_searching_through_bash_passes(self):
+        self.fx.turn(bash("grep -rn handler src/"), say("探しました"))
+        text = "src/handler.ts を grep した範囲に無く、対応できません。" + TAIL
+        self.assertNotBlocked(run_hook(self.fx, text), "impossibility-claim")
+
+    def test_c20_a_write_command_is_not_a_scan(self):
+        self.fx.turn(bash("cp a.py /etc/claude-code/hooks/a.py"), say("配ります"))
+        text = "src/handler.ts は repo 外なので対応できません。" + TAIL
         self.assertBlocks(run_hook(self.fx, text), "impossibility-claim")
 
     def test_c20_quoted_verdict_does_not_fire(self):
