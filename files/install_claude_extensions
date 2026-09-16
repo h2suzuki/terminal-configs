@@ -194,8 +194,12 @@ run agent-browser install --with-deps
 run npx -y skills add vercel-labs/agent-browser --skill agent-browser --agent claude-code --global --yes
 
 # Playwright MCP
+PLAYWRIGHT_ROOT_ARGS=
+if [ "$(id -u)" -eq 0 ]; then
+    PLAYWRIGHT_ROOT_ARGS=--no-sandbox   # chrome's own sandbox refuses to start as uid 0
+fi
 claude mcp remove playwright --scope user
-run claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated
+run claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated $PLAYWRIGHT_ROOT_ARGS
 
 # Codex plugin
 run claude plugin marketplace add openai/codex-plugin-cc
