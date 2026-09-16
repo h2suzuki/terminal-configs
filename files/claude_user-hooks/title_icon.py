@@ -5,6 +5,7 @@ import getpass
 import json
 import os
 import platform
+import re
 import sys
 from pathlib import Path
 
@@ -14,6 +15,11 @@ BG_RUN_TYPES = {"workflow", "subagent", "shell", "monitor"}  # 稼働中とみ�
 STATE_DIR = Path.home() / ".claude" / "title-icon-state"
 SESS_DIR = Path.home() / ".claude" / "sessions"
 SUMMARY_LEN = 24
+WINDOW_BYTES = 256 * 1024  # transcript の先頭 / 末尾それぞれの走査量
+RENAME_MARKER = b"<command-name>/rename</command-name>"
+RENAME_RE = re.compile(
+    r"<command-name>/rename</command-name>.*?<command-args>(.*?)</command-args>", re.S
+)
 SYNTHETIC = (
     "<task-notification>",
     "This session is being continued",
@@ -56,14 +62,48 @@ def session_entry(sid):
     return None
 
 
-def resolve_title(sid, summary, cwd):
+def last_rename(chunk):
+    if RENAME_MARKER not in chunk:
+        return ""
+    for line in reversed(chunk.splitlines()):
+        if RENAME_MARKER not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        # 会話本文に同じ文字列が現れても rename ではない
+        if not isinstance(entry, dict) or entry.get("subtype") != "local_command":
+            continue
+        found = RENAME_RE.search(entry.get("content") or "")
+        if found and found.group(1).strip():
+            return found.group(1).strip()
+    return ""
+
+
+def renamed_title(path, cached):
+    """transcript の末尾と先頭に残る /rename 引数 (registry に rename が届かない時の保険)。"""
+    if not path:
+        return cached
+    try:
+        with open(path, "rb") as f:
+            head = f.read(WINDOW_BYTES)
+            f.seek(0, os.SEEK_END)
+            f.seek(max(len(head), f.tell() - WINDOW_BYTES))
+            tail = f.read()
+    except OSError:
+        return cached
+    return last_rename(tail) or last_rename(head) or cached
+
+
+def resolve_title(sid, summary, cwd, custom):
     """優先度: /rename・AI 命名 > 直近プロンプト要約 > derived 名 > cwd basename。"""
     entry = session_entry(sid) or {}
     name = entry.get("name")
     # 2.1.199 実測: /rename は name を書き nameSource を消す (derived 時のみ明示)
     if name and entry.get("nameSource") != "derived":
         return name
-    return summary or name or os.path.basename(cwd or "") or "claude"
+    return custom or summary or name or os.path.basename(cwd or "") or "claude"
 
 
 def summarize(prompt):
@@ -76,9 +116,13 @@ def summarize(prompt):
 def load_state(path):
     try:
         d = json.loads(path.read_text())
-        return {"state": d.get("state", ""), "summary": d.get("summary", "")}
+        return {
+            "state": d.get("state", ""),
+            "summary": d.get("summary", ""),
+            "custom": d.get("custom", ""),
+        }
     except (OSError, ValueError):
-        return {"state": "", "summary": ""}
+        return {"state": "", "summary": "", "custom": ""}
 
 
 def default_title(cwd):
@@ -123,6 +167,10 @@ def main():
                 pass
         return
 
+    # rename は turn の合間にしか起きない
+    if ev in ("UserPromptSubmit", "SessionStart"):
+        st["custom"] = renamed_title(data.get("transcript_path"), st["custom"])
+
     new = None
     if ev == "SessionStart":
         new = "wait"
@@ -162,7 +210,11 @@ def main():
         state_file.write_text(json.dumps(st))
     except OSError:
         pass
-    emit(ICON[new], resolve_title(sid, st["summary"], data.get("cwd")), bell)
+    emit(
+        ICON[new],
+        resolve_title(sid, st["summary"], data.get("cwd"), st["custom"]),
+        bell,
+    )
 
 
 main()

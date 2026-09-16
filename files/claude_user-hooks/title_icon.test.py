@@ -43,6 +43,60 @@ class TitleIconTest(unittest.TestCase):
         data.update(extra)
         return self.run_hook(data)
 
+    RENAME = {
+        "type": "system",
+        "subtype": "local_command",
+        # 実 transcript の verbatim 形 (2.1.272 で採取)
+        "content": "<command-name>/rename</command-name>\n"
+        "            <command-message>rename</command-message>\n"
+        "            <command-args>ディスク圧迫解消</command-args>",
+    }
+
+    def transcript(self, *entries, name="session.jsonl"):
+        path = os.path.join(self.tmp.name, name)
+        with open(path, "w", encoding="utf-8") as f:
+            for e in entries:
+                f.write(json.dumps(e, ensure_ascii=False) + "\n")
+        return path
+
+    def test_rename_in_transcript_beats_the_prompt_summary(self):
+        """registry に rename が届かなくても、transcript の記録でタブ名を保つ。"""
+        path = self.transcript(self.RENAME)
+        out = self.emit("UserPromptSubmit", prompt="依頼文です", transcript_path=path)
+        self.assertIn("ディスク圧迫解消", out)
+        self.assertNotIn("依頼文です", out)
+
+    def test_rename_sticks_after_it_leaves_the_tail(self):
+        path = self.transcript(self.RENAME)
+        self.emit("UserPromptSubmit", prompt="一度目", transcript_path=path)
+        later = self.transcript(
+            {"type": "user", "message": {"role": "user", "content": "二度目"}},
+            name="later.jsonl",
+        )
+        out = self.emit("UserPromptSubmit", prompt="二度目", transcript_path=later)
+        self.assertIn("ディスク圧迫解消", out)
+
+    def test_rename_at_the_session_start_survives_a_long_transcript(self):
+        """最初の prompt が /rename の形 (実報告): 後続の会話で末尾から押し出されても残る。"""
+        filler = {"type": "user", "message": {"role": "user", "content": "x" * 900}}
+        path = self.transcript(self.RENAME, *[filler] * 400)
+        self.assertGreater(os.path.getsize(path), 256 * 1024)
+        out = self.emit("UserPromptSubmit", prompt="依頼文です", transcript_path=path)
+        self.assertIn("ディスク圧迫解消", out)
+
+    def test_rename_echoed_outside_a_local_command_is_ignored(self):
+        """会話本文に現れた同じ文字列は rename ではない (tool 出力の引用など)。"""
+        echo = {  # system entry も top-level content を持つ (hook feedback 等)
+            "type": "system",
+            "subtype": "info",
+            "content": "hook: <command-name>/rename</command-name>"
+            "<command-args>偽の名前</command-args> を検出",
+        }
+        path = self.transcript(echo)
+        out = self.emit("UserPromptSubmit", prompt="依頼文です", transcript_path=path)
+        self.assertNotIn("偽の名前", out)
+        self.assertIn("依頼文です", out)
+
     def test_stop_with_workflow_bg_task_is_bg_icon(self):
         out = self.emit("Stop", background_tasks=[{"type": "workflow"}])
         self.assertIn("🔄💬", out)
