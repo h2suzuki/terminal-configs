@@ -224,14 +224,18 @@ Claude・codex・人間のどの経路でも機構で保つ。
 
 Exit Criteria:
 
-- [ ] 提案中の 3 段 (共通 ignore / git pre-commit / Claude hook) のどれを入れるか、ユーザーが決めた
-  (2026-09-16 時点「もう少し考えます」)
-- [ ] 決めた段を実装し、`add -f` 後の commit・`commit -a`・path 指定 commit・`--no-verify`・
-  Edit での drafts/ 参照がそれぞれ止まることを実行して確認した
-- [ ] 配備先に入り、この repo で実発火を確認した
+- [x] Claude hook の段を入れると決めた (2026-09-16「claude hook は行います」)
+- [x] Claude hook の段を実装した (def5e1f) — `git add` の drafts/ path、staged・`-- PATH`・`-a` の commit が
+  記録する drafts/ path と追加行の参照、`--no-verify`、Write / Edit の参照が止まることを
+  受け入れテスト 13 / 7 / 9 件の実行で確認
+- [ ] Claude hook の段がこの機の配備先 (`/etc/claude-code/hooks/`) に入り、実発火を確認した
+- [ ] git 側の 2 段 (共通 ignore / pre-commit) を入れるか、ユーザーが決めた
+  (2026-09-16「まずは状況調査をしたいです」→ 調査済み)
+- [ ] 決めた git 側の段を実装し、配備先で実発火を確認した
 
-Work file: 3 段の設計案と使い捨て repo での実測は、この block を起票した commit の message
-(`git log -S'drafts/ の commit と、永続文書' -- todos.md`)
+Work file: 3 段の設計案と使い捨て repo での実測は起票 commit の message
+(`git log -S'drafts/ の commit と、永続文書' -- todos.md`)、git 側の状況調査は
+`git log -S'まずは状況調査' -- todos.md` の commit message
 
 ### 試行: 一次ソース確認の指示を codex と同じ形で置いてみる
 
