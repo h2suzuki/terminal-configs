@@ -258,7 +258,7 @@ test 方針: `when: prompt` のみの entry が出ないこと、固定文言が
 continuation Stop で identity が同じ (= その turn を数え済み) の時だけ据え置き、他は 1 増やす。2 列の旧 file も読める。
 pass 時は stdout に `systemMessage` だけを持つ JSON を 1 行出す (`additionalContext` は付けない = model には不可視)。
 warn 時は warn JSON の `systemMessage` 末尾に marker 行を足し、`additionalContext` には入れない。
-本文は `<ISO 時刻 (local timezone / offset 付き)> / Turn #<count> / Context <used>% / 経過 <秒> 秒`。`<used>` は
+本文は `<ISO 時刻 (local timezone / offset 付き)> / Turn #<count> / Context <used>% / 経過 <N hr M min | M min | S sec>`。`<used>` は
 `$XDG_CACHE_HOME/claude-tui-statusline/<session_id>.json` (既定 `$HOME/.cache/…`) の `stdin.context_window.used_percentage`
 (`stdin` は dict、JSON 文字列なら parse する)、経過の基点は同 file の `session_started_epoch`。cache が無い / 読めない場合は
 `Context -` とし、経過は前回 Stop の epoch (`.turns` の 2 列目) から数える。counter file が読めない場合は marker を出さず exit 0。
@@ -2594,6 +2594,26 @@ class ReviewCorrectionTest(StopChecksTest):
         self.assertIn(
             "Context 48%", marker(run_hook(self.fx, "調査を終えました。" + TAIL))
         )
+
+    def test_c17_marker_elapsed_switches_units_by_length(self):
+        """C17: 経過は秒の生値でなく、長さに応じて hr / min / sec に切り替える。"""
+        cache_dir = os.path.join(self.fx.cache, "claude-tui-statusline")
+        os.makedirs(cache_dir, exist_ok=True)
+        started = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        for offset, expected in (
+            (7500, "経過 2 hr 5 min"),
+            (150, "経過 2 min"),
+            (5, "経過 5 sec"),  # a second may tick during the run, so only " sec" is checked
+        ):
+            with open(
+                os.path.join(cache_dir, SESSION + ".json"), "w", encoding="utf-8"
+            ) as stream:
+                json.dump({"session_started_epoch": started - offset}, stream)
+            self.fx.turn(say("報告します"))
+            text = marker(run_hook(self.fx, "調査を終えました。" + TAIL))
+            self.assertIn(expected.rsplit(" ", 2)[0] if offset < 60 else expected, text)
+            self.assertTrue(text.endswith(" sec") if offset < 60 else True, text)
+            self.assertNotIn("秒", text)
 
     def test_c17_marker_without_a_cache_shows_a_dash(self):
         self.fx.turn(say("報告します"))

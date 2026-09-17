@@ -1227,9 +1227,17 @@ def _turn_marker(payload, record):
         return ""
     count, previous_epoch, now = record
     context, started_epoch = _statusline(payload, previous_epoch)
-    elapsed = max(0, now - started_epoch)
+    elapsed = _gap(max(0, now - started_epoch))
     stamp = datetime.datetime.fromtimestamp(now).astimezone().isoformat()
-    return f"{stamp} / Turn #{count} / Context {context} / 経過 {elapsed} 秒"
+    return f"{stamp} / Turn #{count} / Context {context} / 経過 {elapsed}"
+
+
+def _gap(seconds):
+    if seconds >= 3600:
+        return f"{seconds // 3600} hr {seconds % 3600 // 60} min"
+    if seconds >= 60:
+        return f"{seconds // 60} min"
+    return f"{seconds} sec"
 
 
 def _warn_json(lines, marker):
