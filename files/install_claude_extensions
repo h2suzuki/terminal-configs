@@ -263,8 +263,9 @@ if command -v agy >/dev/null; then
     run agy plugin install /usr/local/share/agent_plugins/agent-coord-antigravity
 fi
 
-# Vercel CLI
+# Vercel CLI; keep the official Codex plugin and remove the duplicate on upgrades.
 run npm install -g @vercel/vc-native
+run codex plugin remove vercel-plugin@plugins-cli
 
 
 run claude mcp list

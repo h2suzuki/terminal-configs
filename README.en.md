@@ -184,6 +184,10 @@ The codex plugin is authenticated with `!codex login`, verified with `/codex:set
 
 ### 9. Codex and Shared Worktrees
 
+When installing Vercel CLI, `install_claude_extensions` removes the duplicate Codex
+plugin `vercel-plugin@plugins-cli`, retaining the installed official catalog version.
+This also applies when rerunning setup. Restart Codex to load the changes.
+
 `setup_user_environment` installs Codex CLI. Both OS setup scripts install
 `files/codex_config.toml` at `/etc/codex/config.toml`. These are overridable system
 defaults: user/project configuration and CLI options take precedence. Check the

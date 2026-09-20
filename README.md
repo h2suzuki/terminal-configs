@@ -184,6 +184,10 @@ codex プラグインは `!codex login` で認証し、`/codex:setup` で疎通�
 
 ### 9. Codex と共通 worktree
 
+`install_claude_extensions` は Vercel CLI の導入時に、Codex の重複プラグイン
+`vercel-plugin@plugins-cli` を削除し、導入済みの公式カタログ版を残します。
+セットアップの再実行でも適用されます。反映には Codex の再起動が必要です。
+
 Codex CLI は `setup_user_environment` で導入し、両 OS のセットアップで
 `files/codex_config.toml` を `/etc/codex/config.toml` に配置します。
 これは上書き可能なシステム既定値です。ユーザー設定・プロジェクト設定・起動オプションが
