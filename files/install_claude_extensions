@@ -212,11 +212,9 @@ if [ "$(id -u)" -eq 0 ]; then
 fi
 claude mcp remove chrome-devtools --scope user
 run claude mcp add --scope user chrome-devtools -- npx -y chrome-devtools-mcp@latest --headless --isolated --memory-debugging --no-usage-statistics --no-performance-crux $CHROME_DEVTOOLS_ROOT_ARGS
-if command -v codex >/dev/null; then
-    codex mcp remove playwright
-    codex mcp remove chrome-devtools
-    run codex mcp add chrome-devtools -- npx -y chrome-devtools-mcp@latest --headless --isolated --memory-debugging --no-usage-statistics --no-performance-crux $CHROME_DEVTOOLS_ROOT_ARGS
-fi
+codex mcp remove playwright
+codex mcp remove chrome-devtools
+run codex mcp add chrome-devtools -- npx -y chrome-devtools-mcp@latest --headless --isolated --memory-debugging --no-usage-statistics --no-performance-crux $CHROME_DEVTOOLS_ROOT_ARGS
 
 # Codex plugin
 run claude plugin marketplace add openai/codex-plugin-cc
@@ -244,10 +242,8 @@ run claude mcp add mytask --scope user -- claude_mytask_mcp
 # agent-coord plugin (host-wide session ledger; the CLI ships with the base setup)
 run claude plugin marketplace add /usr/local/share/agent_plugins
 run claude plugin install agent-coord@terminal-configs
-if command -v codex >/dev/null; then
-    run codex plugin marketplace add /usr/local/share/agent_plugins
-    run codex plugin add agent-coord@terminal-configs
-fi
+run codex plugin marketplace add /usr/local/share/agent_plugins
+run codex plugin add agent-coord@terminal-configs
 if command -v agy >/dev/null; then
     run agy plugin install /usr/local/share/agent_plugins/agent-coord-antigravity
 fi

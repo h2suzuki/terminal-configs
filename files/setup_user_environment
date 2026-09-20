@@ -115,6 +115,10 @@ run nodejs_clean_installer
 . $HOME/.nvm/nvm.sh   # installer ran as a child; source so the root-shell npm calls below resolve
 
 
+# Codex CLI (https://github.com/openai/codex, needs Node.js 18+)
+run npm install -g @openai/codex
+
+
 # Claude Code
 npm uninstall -g @anthropic-ai/claude-code || true  # Old one
 rm -rf ~/.local/bin/claude ~/.local/share/claude
@@ -133,9 +137,6 @@ run install --mode 0644 /etc/skel/.inputrc  ~/.inputrc
 
 # Sandbox seccomp helper: enables Unix-domain-socket blocking in the Bash sandbox
 run npm install -g @anthropic-ai/sandbox-runtime
-
-# Codex CLI (https://github.com/openai/codex, needs Node.js 18+)
-run npm install -g @openai/codex
 
 # Shared worktree parent for Claude Code and Codex; each task uses <repo>/<name>.
 # Recommended <name>: branch name or issue-<number>; naming is not enforced.
