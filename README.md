@@ -76,6 +76,9 @@ sudo を通しません）。通常のターミナルから実行してくださ
 
 ## 基本セットアップの内容
 
+Claude Code / Codex の共通 `drafts/`・TMPDIR・worktree 規約と、配置・有効化の確認方法は
+[workspace hygiene](docs/workspace-hygiene.md) を参照してください。
+
 主な内容は、以下のとおりです。
 
 ### 1. Bash 環境の設定

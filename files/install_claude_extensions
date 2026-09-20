@@ -56,7 +56,6 @@ run()
 pushd /etc/claude-code/skel/hooks/ >/dev/null
 
 run install --directory ~/.claude/hooks/
-run find ~/.claude/hooks/ -maxdepth 1 -type f -delete '||' true
 run install check_commit_author.py    ~/.claude/hooks/check_commit_author.py
 run install check_push_prompting.py   ~/.claude/hooks/check_push_prompting.py
 run install memory_surface.py         ~/.claude/hooks/memory_surface.py
@@ -71,12 +70,15 @@ popd >/dev/null
 pushd /etc/claude-code/skel/skills/ >/dev/null
 
 run install --directory ~/.claude/skills/
-run find ~/.claude/skills/ -maxdepth 1 -xtype l -delete '||' true
 for skill_dir in *; do
     [ -n "$skill_dir" ] || continue
     [ -d "$skill_dir" ] || continue
-    rm -rf ~/.claude/skills/"$skill_dir"
-    run cp -r --preserve=mode "$skill_dir" ~/.claude/skills/
+    if [ -L "$HOME/.claude/skills/$skill_dir" ]; then
+        echo "Preserving conflicting skill symlink: $skill_dir" >&2
+        exit 1
+    fi
+    run install --directory "$HOME/.claude/skills/$skill_dir"
+    run cp -r --preserve=mode "$skill_dir/." "$HOME/.claude/skills/$skill_dir/"
 done
 
 popd >/dev/null
@@ -88,11 +90,24 @@ pushd /etc/claude-code/skills/ >/dev/null
 for skill_dir in *; do
     [ -n "$skill_dir" ] || continue
     [ -d "$skill_dir" ] || continue
-    rm -rf ~/.claude/skills/"${skill_dir}"
-    run ln -sfn "/etc/claude-code/skills/$skill_dir" ~/.claude/skills/
+    target="$HOME/.claude/skills/$skill_dir"
+    expected="/etc/claude-code/skills/$skill_dir"
+    if [ -e "$target" ] || [ -L "$target" ]; then
+        [ "$(readlink "$target")" = "$expected" ] || {
+            echo "Preserving conflicting $target; shared skill link was not installed" >&2
+            exit 1
+        }
+    else
+        run ln -s "$expected" "$target"
+    fi
 done
 
 popd >/dev/null
+
+
+# Share browser verification guidance with Codex
+run install --directory ~/.agents/skills/
+run ln -sfn /etc/claude-code/skills/browser-verification ~/.agents/skills/
 
 
 # Initialize the RAG memory for this user
