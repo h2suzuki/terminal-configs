@@ -110,6 +110,16 @@ copy_dir()
     done
 }
 
+merge_dir()
+{
+    local source_dir="${1%/}" target_dir="${2%/}" item relative
+    while IFS= read -r -d '' item; do
+        relative="${item#"$TOP_DIR/files/$source_dir/"}"
+        copy "$source_dir/$relative" "$target_dir/$relative"
+    done < <(find "$TOP_DIR/files/$source_dir" -type f ! -path '*/__pycache__/*' -print0)
+}
+
+
 copy_tree()
 {
     # Like copy_dir, but dot entries come too (plugin manifests live in dot dirs)
@@ -310,40 +320,29 @@ if [ -r "$USERNS_FLAG" ] && [ "$(< "$USERNS_FLAG")" = "1" ]; then
 fi
 
 
-# Reset the managed tree but keep project drop-ins (managed-settings.d/*.json)
-if [ -d /etc/claude-code/ ]; then
-    find /etc/claude-code -depth -mindepth 1 \
-        ! -path /etc/claude-code/managed-settings.d \
-        ! -path '/etc/claude-code/managed-settings.d/*.json' \
-        -delete
-fi
+# Update owned files without deleting peer hooks, skills, or project drop-ins.
 copy claude_statusline.sh                       /etc/claude-code/statusline.sh
 copy claude_managed-CLAUDE.md                   /etc/claude-code/CLAUDE.md
 copy claude_managed-settings.json               /etc/claude-code/managed-settings.json
 
-copy_dir claude_managed-skills/                 /etc/claude-code/skills/
-copy_dir claude_managed-hooks/                  /etc/claude-code/hooks/
+merge_dir claude_managed-skills/                 /etc/claude-code/skills/
+merge_dir claude_managed-hooks/                  /etc/claude-code/hooks/
 copy claude_managed-extensions.json             /etc/claude-code/managed-settings.d/extensions.json
 
 # Per-user template
 copy claude_user-CLAUDE.md                      /etc/claude-code/skel/CLAUDE.md
 copy claude_user-settings.json                  /etc/claude-code/skel/settings.json
 
-copy_dir claude_user-skills                     /etc/claude-code/skel/skills/
-copy_dir claude_user-hooks                      /etc/claude-code/skel/hooks/
+merge_dir claude_user-skills                     /etc/claude-code/skel/skills/
+merge_dir claude_user-hooks                      /etc/claude-code/skel/hooks/
 copy claude_user-extensions.json                /etc/claude-code/skel/extensions.json   # To be installed by claude_user_hooks
 
 
 #  Codex configs; setup_user_environment installs CLI
-# Reset the managed tree but keep user drop-ins (rules/*)
-if [ -d /etc/codex/ ]; then
-    find /etc/codex -depth -mindepth 1 \
-        ! -path /etc/codex/rules \
-        ! -path '/etc/codex/rules/*' \
-        -delete
-fi
+# Preserve unrelated admin skills, hooks, and rules.
 copy codex_config.toml                          /etc/codex/config.toml
 copy codex_sandbox_exclusions.rules             /etc/codex/rules/terminal-configs-sandbox-exclusions.rules
+run python3 "$TOP_DIR/files/install_workspace_hygiene.py"
 
 
 # Antigravity CLI

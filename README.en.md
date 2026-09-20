@@ -76,6 +76,9 @@ sandbox does not pass sudo through. Run it from a regular terminal.
 
 ## What the Base Setup Does
 
+See [workspace hygiene](docs/workspace-hygiene.md) for shared Claude Code / Codex
+drafts, TMPDIR and worktree rules, installation, and activation checks.
+
 The main pieces are:
 
 ### 1. Bash environment
