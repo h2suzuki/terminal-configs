@@ -95,6 +95,11 @@ done
 popd >/dev/null
 
 
+# Share browser verification guidance with Codex
+run install --directory ~/.agents/skills/
+run ln -sfn /etc/claude-code/skills/browser-verification ~/.agents/skills/
+
+
 # Initialize the RAG memory for this user
 run install --mode 0755 --directory ~/.claude/hooks/state
 
