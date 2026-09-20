@@ -193,6 +193,11 @@ This also applies when rerunning setup. Restart Codex to load the changes.
 defaults: user/project configuration and CLI options take precedence. Check the
 effective configuration with `/status` and `/permissions` after starting Codex.
 
+The shared config disables Figma and Canva app tools and their 22 current bundled
+skills to reduce the skill catalog. Connections and installations are retained.
+Remote catalog plugins use account-managed enablement, so the config targets app
+IDs and skill names. Update the names if a plugin upgrade introduces more skills.
+
 - `sandbox_mode = "workspace-write"`: allows writes in the workspace and temporary directories.
 - `approval_policy = "never"`: operations outside the boundary without an explicit allow rule fail without an approval prompt.
 - `network_access = true`: allows network access for sandboxed commands.
