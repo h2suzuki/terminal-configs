@@ -191,15 +191,26 @@ run claude plugin update figma@claude-plugins-official
 # Agent-browser
 run CI=1 npm install -g agent-browser
 run agent-browser install --with-deps
-run npx -y skills add vercel-labs/agent-browser --skill agent-browser --agent claude-code --global --yes
+run npx -y skills add vercel-labs/agent-browser --skill agent-browser --agent claude-code codex --global --yes
 
-# Playwright MCP
-PLAYWRIGHT_ROOT_ARGS=
+# Playwright CLI (Playwright Test belongs in each application's devDependencies)
+run npm install -g @playwright/cli@latest
+run npx -y skills add microsoft/playwright-cli --skill playwright-cli --agent claude-code codex --global --yes
+
+claude mcp remove playwright --scope user    # Browser operations now use CLI + skills
+
+# Chrome DevTools MCP
+CHROME_DEVTOOLS_ROOT_ARGS=
 if [ "$(id -u)" -eq 0 ]; then
-    PLAYWRIGHT_ROOT_ARGS=--no-sandbox   # chrome's own sandbox refuses to start as uid 0
+    CHROME_DEVTOOLS_ROOT_ARGS=--chrome-arg=--no-sandbox   # chrome's own sandbox refuses to start as uid 0
 fi
-claude mcp remove playwright --scope user
-run claude mcp add --scope user playwright -- npx -y @playwright/mcp@latest --browser chrome --headless --isolated $PLAYWRIGHT_ROOT_ARGS
+claude mcp remove chrome-devtools --scope user
+run claude mcp add --scope user chrome-devtools -- npx -y chrome-devtools-mcp@latest --headless --isolated --memory-debugging --no-usage-statistics --no-performance-crux $CHROME_DEVTOOLS_ROOT_ARGS
+if command -v codex >/dev/null; then
+    codex mcp remove playwright
+    codex mcp remove chrome-devtools
+    run codex mcp add chrome-devtools -- npx -y chrome-devtools-mcp@latest --headless --isolated --memory-debugging --no-usage-statistics --no-performance-crux $CHROME_DEVTOOLS_ROOT_ARGS
+fi
 
 # Codex plugin
 run claude plugin marketplace add openai/codex-plugin-cc

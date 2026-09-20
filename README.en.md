@@ -157,9 +157,13 @@ Adds Claude Code's "trust-building" machinery plus external tool integrations.
 
 - **User-side hooks**: commit author check, push-prompting detection, memory surfacing, and subagent gate are installed into `~/.claude/hooks/`, and a per-user RAG memory index is built.
 - **LSP**: language servers (clangd via APT in the base setup; typescript-language-server / pyright via npm) and their plugins (clangd-lsp / typescript-lsp / pyright-lsp).
-- **MCP servers (scope=user)**: Playwright (browser), CodeGraph (code knowledge graph), Cloud Run, Toolbox (BigQuery)
+- **MCP servers (scope=user)**: Chrome DevTools (performance and memory investigation; also registered with Codex), CodeGraph (code knowledge graph), Cloud Run, Toolbox (BigQuery)
 - **Plugins**: security-guidance (disabled by default), figma, codex (delegation to OpenAI Codex / code review)
-- **CLI**: agent-browser (Vercel Labs), Vercel CLI
+- **CLI**: agent-browser (everyday page checks), Playwright CLI (test authoring and reproduction), Vercel CLI. Official browser skills are installed for Claude Code and Codex, and the old Playwright MCP registration is removed.
+
+Chrome DevTools MCP enables headless, isolated, and memory-debugging modes, with usage statistics and URL submission to CrUX disabled. It uses Linux Chrome installed by the base setup.
+
+For repeatable automated tests, install Playwright Test as a development dependency in each target app. If absent, run `npm init playwright@latest` then `npx playwright install --with-deps` in the app directory, configure the target URL, browsers, and expected results, and verify with `npx playwright test`. Preserve existing configuration and package management; keep the configuration, tests, and lockfile in the app.
 
 After setup, complete the authentication / initial setup below (only the MCP servers registered here; `claude mcp list` also shows MCP servers configured elsewhere).
 

@@ -157,9 +157,13 @@ Claude Code に「信頼を高めるための仕組み」と外部ツール連�
 
 - **ユーザー側フック**: commit 著者確認・push 催促検出・memory surface・subagent gate を `~/.claude/hooks/` に配置し、ユーザーごとの RAG memory インデックスを構築します。
 - **LSP**: 言語サーバー（clangd は基本セットアップで APT 導入、typescript-language-server / pyright を npm 導入）と対応プラグイン（clangd-lsp / typescript-lsp / pyright-lsp）。
-- **MCP サーバー（scope=user）**: Playwright（ブラウザ操作）, CodeGraph（コード知識グラフ）, Cloud Run, Toolbox（BigQuery）
+- **MCP サーバー（scope=user）**: Chrome DevTools（性能・メモリー調査。Codex にも登録）, CodeGraph（コード知識グラフ）, Cloud Run, Toolbox（BigQuery）
 - **プラグイン**: security-guidance（既定で無効）, figma, codex（OpenAI Codex への委譲・コードレビュー）
-- **CLI**: agent-browser（Vercel Labs）, Vercel CLI
+- **CLI**: agent-browser（日常の画面確認）, Playwright CLI（テスト作成・再現調査）, Vercel CLI。ブラウザ操作の公式 Skill は Claude Code と Codex に配置し、旧 Playwright MCP 登録は削除します。
+
+Chrome DevTools MCP は headless・isolated・memory-debugging を有効にし、利用統計と CrUX への URL 送信を無効にします。Chrome は基本セットアップで導入した Linux 版を使います。
+
+繰り返す自動テストには、対象アプリごとに Playwright Test を開発用依存関係として導入します。未導入ならアプリのディレクトリで `npm init playwright@latest` → `npx playwright install --with-deps` を実行し、対象 URL・ブラウザ・期待結果を設定して `npx playwright test` で確認します。既存の設定・パッケージ管理方法を優先し、設定・テスト・lockfile はアプリ側で管理します。
 
 セットアップ後、以下の認証 / 初期設定を済ませてください（ここで登録される MCP のみの一覧です。`claude mcp list` には他の手段で設定した MCP も表示されます）。
 
