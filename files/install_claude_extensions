@@ -196,6 +196,12 @@ run npx -y skills add vercel-labs/agent-browser --skill agent-browser --agent cl
 # Playwright CLI (Playwright Test belongs in each application's devDependencies)
 run npm install -g @playwright/cli@latest
 run npx -y skills add microsoft/playwright-cli --skill playwright-cli --agent claude-code codex --global --yes
+if [ "$(id -u)" -eq 0 ]; then
+    run install --directory ~/.playwright/
+    [ -f ~/.playwright/cli.config.json ] || run "echo '{}' > ~/.playwright/cli.config.json"
+    run "jq '.browser.launchOptions.chromiumSandbox = false' ~/.playwright/cli.config.json > ~/.playwright/cli.config.json.tmp"
+    run mv ~/.playwright/cli.config.json.tmp ~/.playwright/cli.config.json
+fi
 
 claude mcp remove playwright --scope user    # Browser operations now use CLI + skills
 
