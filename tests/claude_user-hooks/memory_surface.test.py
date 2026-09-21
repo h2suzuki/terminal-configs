@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import sqlite3
 import sys
@@ -215,6 +216,45 @@ class WhenDispatchTest(unittest.TestCase):
         code, out = self._subagent([])
         self.assertEqual(code, 0)
         self.assertEqual(out, "")
+
+
+class CodexHookTest(unittest.TestCase):
+    def run_hook(self, payload, result):
+        out = io.StringIO()
+        with (
+            mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))),
+            mock.patch.object(ms, "_memory_surface", return_value=result) as surface,
+            contextlib.redirect_stdout(out),
+        ):
+            code = ms._main_codex()
+        return code, out.getvalue(), surface
+
+    def test_memory_hit_adds_context_without_blocking(self):
+        payload = {"prompt": "agent_coord", "model": "gpt-6-astra", "session_id": "s1"}
+        code, output, surface = self.run_hook(payload, "Review purpose first")
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            json.loads(output),
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": "Review purpose first",
+                }
+            },
+        )
+        surface.assert_called_once_with(payload, "gpt-6-astra")
+
+    def test_no_hit_is_silent(self):
+        code, output, _ = self.run_hook({"prompt": "hello"}, None)
+        self.assertEqual((code, output), (0, ""))
+
+    def test_coord_queue_prompt_does_not_trigger_memory_surface(self):
+        code, output, surface = self.run_hook(
+            {"prompt": "[agent-coord wake v1 1 signature] Catch up"},
+            "unrelated reminder",
+        )
+        self.assertEqual((code, output), (0, ""))
+        surface.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -318,6 +318,7 @@ copy claude_user-extensions.json                /etc/claude-code/skel/extensions
 #  Codex configs; setup_user_environment installs CLI
 # Preserve unrelated admin skills, hooks, and rules.
 copy codex_config.toml                          /etc/codex/config.toml
+merge_dir codex_managed-skills/                 /etc/codex/skills/
 copy codex_sandbox_exclusions.rules             /etc/codex/rules/terminal-configs-sandbox-exclusions.rules
 run python3 "$TOP_DIR/files/install_workspace_hygiene.py"
 

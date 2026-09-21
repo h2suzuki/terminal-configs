@@ -257,6 +257,7 @@ run claude mcp add mytask --scope user -- claude_mytask_mcp
 # agent-coord plugin (host-wide session ledger; the CLI ships with the base setup)
 run claude plugin marketplace add /usr/local/share/agent_plugins
 run claude plugin install agent-coord@terminal-configs
+run claude plugin update agent-coord@terminal-configs
 run codex plugin marketplace add /usr/local/share/agent_plugins
 run codex plugin add agent-coord@terminal-configs
 if command -v agy >/dev/null; then

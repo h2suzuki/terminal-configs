@@ -35,6 +35,9 @@ Modes:
 - `--search <text> [project_id]` — cross-model ranked lookup for
   /memory-routing (no model filter, no throttle, no inject_log rows).
   Prints `score<TAB>models<TAB>path<TAB>reminder` per hit.
+- `--codex` — Codex UserPromptSubmit adapter. Uses the same index, project
+  scope, model tags, score floors and throttle; returns additionalContext only.
+  Empty/error results are silent and never block the prompt.
 
 Besides the CLI modes, `surface_for_text()` is importable so other hooks (e.g. the
 Stop hook) run the same hybrid retrieval against an arbitrary text source, not just
@@ -1192,6 +1195,38 @@ def _main_query() -> int:
     return 0
 
 
+def _main_codex() -> int:
+    """Codex UserPromptSubmit: model-visible memory context, never a decision."""
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+        if not isinstance(payload, dict):
+            return 0
+        prompt = payload.get("prompt")
+        if isinstance(prompt, str) and prompt.lstrip().startswith(
+            ("[agent-coord wake v1 ", "[agent-coord] ")
+        ):
+            return 0
+        model = payload.get("model")
+        model = _normalize_model(model) if isinstance(model, str) and model else None
+        additional = _memory_surface(payload, model)
+        if additional:
+            sys.stdout.write(
+                json.dumps(
+                    {
+                        "hookSpecificOutput": {
+                            "hookEventName": "UserPromptSubmit",
+                            "additionalContext": additional,
+                        }
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    except Exception:
+        return 0
+    return 0
+
+
 def _main_subagent(payload: dict) -> int:
     """SubagentStop handler — after-subagent route の 1 件を plain text + exit 2 (asyncRewake) で親 agent へ渡す。 additionalContext は SubagentStop では親に届かないため使わない。"""
     try:
@@ -1379,6 +1414,8 @@ def main() -> int:
         return _main_search(argv[1:])
     if cmd == "--project-id":
         return _main_project_id(argv[1:])
+    if cmd == "--codex":
+        return _main_codex()
     sys.stderr.write(f"unknown command: {cmd}\n")
     return 1
 

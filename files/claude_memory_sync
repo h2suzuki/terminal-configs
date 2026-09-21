@@ -23,15 +23,18 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import importlib.util
 import os
 import re
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 
 DEFAULT_REPO_DIR = "/var/lib/claude-rag-memory/claude-lessons-learned"
 DEFAULT_SURFACE_CLI = "~/.claude/hooks/memory_surface.py"
+GATE_PATH = "/etc/claude-code/hooks/memory_routing_gate.py"
 REPO_DIR = os.environ.get("CLAUDE_MEMORY_REPO") or DEFAULT_REPO_DIR
 STATE_DIR = os.path.dirname(REPO_DIR)
 SURFACE_CLI = os.environ.get("CLAUDE_MEMORY_SURFACE") or os.path.expanduser(
@@ -409,6 +412,81 @@ def main_commit(path: str) -> int:
     return 1 if errs else 0
 
 
+def main_write(path: str) -> int:
+    """Validated stdin write for clients whose sandbox cannot edit the shared clone."""
+    path = os.path.realpath(path)
+    root = os.path.realpath(REPO_DIR)
+    if os.path.commonpath((root, path)) != root:
+        note("--write target is outside the memory clone")
+        return 1
+    rel = os.path.relpath(path, root)
+    scope = entry_scope(rel)
+    if scope is SKIP or not os.path.basename(path).startswith(
+        ("feedback_", "reference_")
+    ):
+        note("--write target is not a memory entry")
+        return 1
+    if not repo_ok():
+        note("clone missing/broken; cannot write (%s)" % INSTALL_HINT)
+        return 1
+    try:
+        spec = importlib.util.spec_from_file_location("memory_routing_gate", GATE_PATH)
+        if spec is None or spec.loader is None:
+            raise OSError("memory routing gate unavailable")
+        gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gate)
+    except (OSError, ImportError) as exc:
+        note("memory routing gate unavailable: %s" % exc)
+        return 1
+    content = sys.stdin.read()
+    problem = gate._content_problem(path, content)
+    if problem:
+        note(problem)
+        return 1
+    parent = os.path.dirname(path)
+    committed = False
+    try:
+        with lock():
+            os.makedirs(parent, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(prefix=".memory-write-", dir=parent)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as output:
+                    output.write(content)
+                    output.flush()
+                    os.fchmod(output.fileno(), 0o666)
+                os.replace(tmp_path, path)
+            finally:
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(tmp_path)
+            if surface("--upsert", path, *([] if scope is None else [str(scope)])):
+                note("entry written but index update failed; see --status")
+                return 1
+            r = run_git("add", "--", rel)
+            if r.returncode != 0:
+                note("git add failed after entry write; see --status")
+                return 1
+            if run_git("diff", "--cached", "--quiet", "--", rel).returncode != 0:
+                r = run_git(
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    "memory: Update %s" % os.path.basename(path),
+                    "--",
+                    rel,
+                )
+                if r.returncode != 0:
+                    note("git commit failed after entry write; see --status")
+                    return 1
+                committed = True
+            fix_perms()
+    except OSError as exc:
+        note("entry write failed: %s" % exc)
+        return 1
+    if committed:
+        spawn_push()
+    return 0
+
+
 def main_retire(path: str) -> int:
     rel = os.path.relpath(path, REPO_DIR)
     scope = entry_scope(rel)
@@ -618,6 +696,11 @@ def main() -> int:
         help="upsert PATH into the index, commit the clone, push in the background",
     )
     cmd.add_argument(
+        "--write",
+        metavar="PATH",
+        help="validate stdin as one memory entry, write it, index, commit and push",
+    )
+    cmd.add_argument(
         "--retire",
         metavar="PATH",
         help="git rm PATH, commit, push in the background, drop it from the index",
@@ -645,6 +728,8 @@ def main() -> int:
         return main_pull()
     if args.commit is not None:
         return main_commit(os.path.abspath(args.commit))
+    if args.write is not None:
+        return main_write(os.path.abspath(args.write))
     if args.retire is not None:
         return main_retire(os.path.abspath(args.retire))
     if args.full:

@@ -1,5 +1,5 @@
 {
   "$schema": "https://antigravity.google/schemas/v1/plugin.json",
   "name": "agent-coord",
-  "description": "Session ledger for agents on this host: scoped messaging, resource grants, worktree ownership."
+  "description": "Session ledger for agents on this host: scoped messaging and resource grants."
 }
