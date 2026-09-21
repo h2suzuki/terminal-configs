@@ -438,6 +438,11 @@ class HygieneTest(unittest.TestCase):
             )
             self.assertNotIn("find /etc/codex -depth", source)
             self.assertNotIn("find /etc/claude-code -depth", source)
+            for client in ("codex", "claude-code"):
+                self.assertIn(
+                    f"copy shared-skills/sandbox-host-recovery/SKILL.md /etc/{client}/skills/sandbox-host-recovery/SKILL.md",
+                    source,
+                )
         config = tomllib.loads((FILES / "codex_config.toml").read_text())
         self.assertEqual(
             config["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
@@ -450,6 +455,10 @@ class HygieneTest(unittest.TestCase):
         self.assertEqual(
             config["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
             "python3 /etc/claude-code/skel/hooks/memory_surface.py --codex",
+        )
+        self.assertEqual(
+            config["hooks"]["Stop"][0]["hooks"][0]["command"],
+            "python3 /etc/claude-code/skel/hooks/memory_surface.py --codex-stop",
         )
 
 

@@ -38,6 +38,11 @@ Modes:
 - `--codex` — Codex UserPromptSubmit adapter. Uses the same index, project
   scope, model tags, score floors and throttle; returns additionalContext only.
   Empty/error results are silent and never block the prompt.
+- `--codex-stop` — Codex Stop adapter for an assistant claim that a file cannot
+  be written. Reads the specific Stop-routed lesson from the shared clone and
+  requests one continuation so the agent can correct its invocation before
+  handing the work to the user.
+  Empty results, unrelated text, and an already-continued Stop pass silently.
 
 Besides the CLI modes, `surface_for_text()` is importable so other hooks (e.g. the
 Stop hook) run the same hybrid retrieval against an arbitrary text source, not just
@@ -115,6 +120,14 @@ MODELS_DEFAULT = "opus-4.8"
 # `when:` 欠落 entry の既定 route (memory_routing_gate と同契約)
 WHEN_DEFAULT = "prompt"
 WHEN_AFTER_SUBAGENT = "after-subagent"
+WRITE_FAILURE_CLAIM = re.compile(
+    r"書き込め(?:ない|ません)|書け(?:ない|ません)|書き込み(?:できない|できません)"
+    r"|(?:can't|cannot|unable to) write",
+    re.IGNORECASE,
+)
+HOST_RECOVERY_MEMORY = os.path.join(
+    MEMORY_REPO_DIR, "org", "feedback_try_host_ops_before_delegating.md"
+)
 # 1m 等の context-window 表記だけを落とす。 中身を問わず bracket を捨てると、
 # 将来の別 variant (safety-eval 等) まで同じ model へ潰してしまう。
 CONTEXT_WINDOW_SUFFIX = re.compile(r"\[\d+[kmg]\]")
@@ -1250,6 +1263,59 @@ def _main_codex() -> int:
     return 0
 
 
+def _host_recovery_check(model: str | None) -> str | None:
+    """Read the canonical Stop check, not an inferred or embedded substitute."""
+    try:
+        if os.stat(HOST_RECOVERY_MEMORY).st_size > MAX_ENTRY_SIZE:
+            return None
+        with open(HOST_RECOVERY_MEMORY, encoding="utf-8") as stream:
+            entry = stream.read()
+    except (OSError, UnicodeError):
+        return None
+    check = re.search(r"(?m)^check:[ \t]*(.+)$", entry)
+    when = re.search(r"(?m)^when:[ \t]*(.+)$", entry)
+    models = re.search(r"(?m)^models:[ \t]*(.+)$", entry)
+    if not check or not when or "stop" not in when.group(1).lower().split():
+        return None
+    if not model or not models or _normalize_model(model) not in models.group(1).split():
+        return None
+    return check.group(1).strip() or None
+
+
+def _codex_stop_result(payload: dict) -> dict | None:
+    """Continue once only when a write-failure claim finds the Stop lesson."""
+    if payload.get("hook_event_name") != "Stop" or payload.get("stop_hook_active"):
+        return None
+    final = payload.get("last_assistant_message")
+    if not isinstance(final, str) or not WRITE_FAILURE_CLAIM.search(final):
+        return None
+    model = payload.get("model")
+    check = _host_recovery_check(model if isinstance(model, str) else None)
+    if not check:
+        return None
+    return {
+        "decision": "block",
+        "reason": (
+            f"[memory-surface] {check} (details: {HOST_RECOVERY_MEMORY}). "
+            "Read /etc/codex/skills/sandbox-host-recovery/SKILL.md. "
+            "Check the failed command, current policy, and authorized invocation; "
+            "retry and verify if permitted, then finish the original task. "
+            "Do not repeat this Stop reminder after the continuation."
+        ),
+    }
+
+
+def _main_codex_stop() -> int:
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+        result = _codex_stop_result(payload) if isinstance(payload, dict) else None
+        if result:
+            sys.stdout.write(json.dumps(result, ensure_ascii=False) + "\n")
+    except Exception:
+        pass  # a memory failure must never stop a turn
+    return 0
+
+
 def _main_subagent(payload: dict) -> int:
     """SubagentStop handler — after-subagent route の 1 件を plain text + exit 2 (asyncRewake) で親 agent へ渡す。 additionalContext は SubagentStop では親に届かないため使わない。"""
     try:
@@ -1439,8 +1505,67 @@ def main() -> int:
         return _main_project_id(argv[1:])
     if cmd == "--codex":
         return _main_codex()
+    if cmd == "--codex-stop":
+        return _main_codex_stop()
     sys.stderr.write(f"unknown command: {cmd}\n")
     return 1
+
+
+class CodexStopSurfaceTest(unittest.TestCase):
+    def test_write_failure_claim_continues_once_with_retrieved_memory(self):
+        from unittest import mock
+
+        payload = {
+            "hook_event_name": "Stop",
+            "session_id": "session-1",
+            "cwd": "/tmp",
+            "model": "gpt-6-astra",
+            "last_assistant_message": "Read-only file system なので書き込めません。",
+        }
+        with mock.patch(f"{__name__}._host_recovery_check", return_value="実行形を照合せよ") as retrieve:
+            result = _codex_stop_result(payload)
+        self.assertEqual(result["decision"], "block")
+        self.assertIn("実行形を照合せよ", result["reason"])
+        retrieve.assert_called_once_with("gpt-6-astra")
+        with mock.patch(f"{__name__}._host_recovery_check") as retrieve:
+            self.assertIsNone(_codex_stop_result({**payload, "stop_hook_active": True}))
+            retrieve.assert_not_called()
+
+    def test_unrelated_and_missing_memory_pass_without_block(self):
+        from unittest import mock
+
+        payload = {
+            "hook_event_name": "Stop",
+            "last_assistant_message": "変更を保存しました。",
+        }
+        with mock.patch(f"{__name__}._host_recovery_check") as retrieve:
+            self.assertIsNone(_codex_stop_result(payload))
+            self.assertIsNone(
+                _codex_stop_result(
+                    {**payload, "last_assistant_message": "Read-only file system を確認し、実行形を直して同期しました。"}
+                )
+            )
+            retrieve.assert_not_called()
+        with mock.patch(f"{__name__}._host_recovery_check", return_value=None):
+            self.assertIsNone(
+                _codex_stop_result({**payload, "last_assistant_message": "書き込めない"})
+            )
+
+    def test_canonical_memory_requires_stop_route_and_matching_model(self):
+        from unittest import mock
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "lesson.md")
+            with open(path, "w", encoding="utf-8") as stream:
+                stream.write("check: 実行形を照合せよ\nwhen: prompt stop\nmodels: gpt-6-astra\n")
+            with mock.patch(f"{__name__}.HOST_RECOVERY_MEMORY", path):
+                self.assertEqual(_host_recovery_check("gpt-6-astra"), "実行形を照合せよ")
+                self.assertIsNone(_host_recovery_check(None))
+                self.assertIsNone(_host_recovery_check("opus-5"))
+                with open(path, "w", encoding="utf-8") as stream:
+                    stream.write("check: 実行形を照合せよ\nwhen: prompt\nmodels: gpt-6-astra\n")
+                self.assertIsNone(_host_recovery_check("gpt-6-astra"))
 
 
 class TurnMarkerTest(unittest.TestCase):

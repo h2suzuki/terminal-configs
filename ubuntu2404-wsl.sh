@@ -326,6 +326,7 @@ copy claude_managed-CLAUDE.md                   /etc/claude-code/CLAUDE.md
 copy claude_managed-settings.json               /etc/claude-code/managed-settings.json
 
 merge_dir claude_managed-skills/                 /etc/claude-code/skills/
+copy shared-skills/sandbox-host-recovery/SKILL.md /etc/claude-code/skills/sandbox-host-recovery/SKILL.md
 merge_dir claude_managed-hooks/                  /etc/claude-code/hooks/
 copy claude_managed-extensions.json             /etc/claude-code/managed-settings.d/extensions.json
 
@@ -342,6 +343,7 @@ copy claude_user-extensions.json                /etc/claude-code/skel/extensions
 # Preserve unrelated admin skills, hooks, and rules.
 copy codex_config.toml                          /etc/codex/config.toml
 merge_dir codex_managed-skills/                 /etc/codex/skills/
+copy shared-skills/sandbox-host-recovery/SKILL.md /etc/codex/skills/sandbox-host-recovery/SKILL.md
 copy codex_sandbox_exclusions.rules             /etc/codex/rules/terminal-configs-sandbox-exclusions.rules
 run python3 "$TOP_DIR/files/install_workspace_hygiene.py"
 
