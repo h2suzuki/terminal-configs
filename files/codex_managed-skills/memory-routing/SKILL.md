@@ -9,6 +9,8 @@ Claude Code and Codex share the entry store at
 `/var/lib/claude-rag-memory/claude-lessons-learned`. The GitHub repository behind
 that clone is canonical. Codex's own local memories are separate; this skill
 uses the shared store deliberately.
+Recording a correction does not authorize a new skill. Create one only when
+the user explicitly asks for it.
 
 1. Search before writing:
    `python3 /etc/claude-code/skel/hooks/memory_surface.py --search "<lesson>"`.
