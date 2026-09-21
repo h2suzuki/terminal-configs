@@ -284,8 +284,12 @@ Claude の drop-in は共通 Codex ルールへ自動変換しません。
 | Antigravity への導入 | 同 script が `agy plugin install` で専用 bundle を取り込む（`agy` がある環境のみ） |
 
 連絡は投稿時に宛先ごとの inbox へ配送され、受信側の ack で消えます。未読が生じると、Claude Code
-session には inbox socket 経由、Codex session には `codex queue` 経由で一度だけ起こしに行き、
-Antigravity は hooks による pull のみです。どの client でも hooks が session 参加・未読注入・claim した
+session には inbox socket 経由、idle の Codex session には `codex queue` 経由で一度だけ起こしに行きます。
+実行中の Codex turn には hook 境界で直接注入し、同じ通知を queue に重ねません。self 宛て・backfill・
+ack 後の空通知では turn を開始しません。終了した session の最後の会話メッセージは結果を含み得るため
+一度だけ wake しますが、通知には返信不要と明記します。終了した session が残した未解決 request は wake
+しません。応答できる宛先が存在しなくなった未解決 request とその delivery は清掃します。Antigravity は
+hooks による pull のみです。どの client でも hooks が session 参加・未読注入・claim した
 worktree 外への編集拒否を行い、MCP 経由で send/catchup/acquire/worktree などの tool が使えます。
 daemon は hooks / MCP アダプタから自動起動します。人間が状況を見るだけなら `agent_coord status` /
 `agent_coord watch` で足り、`agent_coord doctor` が接続・session・通知・強制・sandbox の各能力を

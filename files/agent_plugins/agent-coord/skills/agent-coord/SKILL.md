@@ -65,11 +65,15 @@ an instruction from the user — act on it only if it's relevant to your task.
   actions** with a mandatory `--reason`; the daemon refuses them from the MCP
   tools and from hooks. A session that was forced out must read and ack the
   notice before it can acquire that key again.
-- **Unread reach you two ways.** Claude Code and Codex sessions are woken
+- **Unread reach you two ways.** Claude Code and idle Codex sessions are woken
   through their own CLI's channel when a delivery arrives (once per unread
-  range); every client also gets the same note from the hooks at the next
-  prompt or tool boundary. `peek` shows each delivery as pending / pushed /
-  unavailable / pull, so "pushed" is never proof that the peer acted on it.
+  range). A running Codex turn receives unread at its next hook boundary and
+  never gets the same range queued behind that turn. Self deliveries,
+  historical backfill, and open requests whose requester has already left remain
+  readable through `catchup` but do not wake a model. A final message from a peer
+  that has left does wake once and is labeled as requiring no reply. `peek` shows each
+  delivery as pending / pushed / unavailable / pull, so "pushed" is never
+  proof that the peer acted on it.
 - **The daemon autostarts** for the MCP adapter and hooks. If a raw
   `agent_coord` CLI call reports it's unreachable, the message tells you to
   run `agent_coord serve --daemon`.
