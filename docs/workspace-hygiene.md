@@ -105,9 +105,9 @@ fixtures from discovering the enclosing checkout when temp lives under drafts.
 mkdir -p drafts/hygiene-checks
 export TMPDIR="$PWD/drafts/hygiene-checks"
 export GIT_CEILING_DIRECTORIES="$TMPDIR"
-python3 files/workspace_hygiene.test.py
-python3 files/claude_managed-hooks/deny_drafts_commit.test.py
-python3 files/claude_managed-hooks/check_dangling_refs.test.py
+python3 tests/workspace_hygiene.test.py
+python3 tests/claude_managed-hooks/deny_drafts_commit.test.py
+python3 tests/claude_managed-hooks/check_dangling_refs.test.py
 bash -n debian12.sh
 bash -n ubuntu2404-wsl.sh
 bash -n files/install_claude_extensions
