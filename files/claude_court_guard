@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Detect high-confidence Claude court/count transcript contamination."""
+# Test from repo root: python3 -c 'import runpy, types, unittest; unittest.main(module=types.SimpleNamespace(**runpy.run_path("files/claude_court_guard")))'
 
 from __future__ import annotations
 
