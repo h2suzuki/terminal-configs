@@ -66,6 +66,13 @@ command = "/usr/local/bin/workspace_hygiene hook"
 timeout = 30
 
 # Shared memory reminders; an empty match exits 0 silently and never blocks.
+[[hooks.SessionStart]]
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "/usr/local/bin/claude_memory_sync --pull"
+timeout = 35
+
 [[hooks.UserPromptSubmit]]
 
 [[hooks.UserPromptSubmit.hooks]]

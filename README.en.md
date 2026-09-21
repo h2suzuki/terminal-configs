@@ -164,6 +164,12 @@ Adds Claude Code's "trust-building" machinery plus external tool integrations.
 - **Plugins**: security-guidance (disabled by default), figma, codex (delegation to OpenAI Codex / code review)
 - **CLI**: agent-browser (everyday page checks), Playwright CLI (test authoring and reproduction), Vercel CLI. Official browser skills are installed for Claude Code and Codex, and the old Playwright MCP registration is removed.
 
+Claude Code and Codex share the memory-entry index. Codex refreshes the shared
+clone at `SessionStart`, then its `UserPromptSubmit` hook passes matching lessons
+for the active model as context without blocking the prompt. Installing only the
+agent-coord plugin does not install these system hooks; the base setup copies
+`files/codex_config.toml` and the memory hook to their system locations.
+
 Chrome DevTools MCP enables headless, isolated, and memory-debugging modes, with usage statistics and URL submission to CrUX disabled. It uses Linux Chrome installed by the base setup.
 
 For repeatable automated tests, install Playwright Test as a development dependency in each target app. If absent, run `npm init playwright@latest` then `npx playwright install --with-deps` in the app directory, configure the target URL, browsers, and expected results, and verify with `npx playwright test`. Preserve existing configuration and package management; keep the configuration, tests, and lockfile in the app.

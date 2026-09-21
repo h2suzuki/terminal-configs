@@ -443,6 +443,14 @@ class HygieneTest(unittest.TestCase):
             config["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
             "/usr/local/bin/workspace_hygiene hook",
         )
+        self.assertEqual(
+            config["hooks"]["SessionStart"][0]["hooks"][0]["command"],
+            "/usr/local/bin/claude_memory_sync --pull",
+        )
+        self.assertEqual(
+            config["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+            "python3 /etc/claude-code/skel/hooks/memory_surface.py --codex",
+        )
 
 
 if __name__ == "__main__":
