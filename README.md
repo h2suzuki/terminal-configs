@@ -164,6 +164,13 @@ Claude Code に「信頼を高めるための仕組み」と外部ツール連�
 - **プラグイン**: security-guidance（既定で無効）, figma, codex（OpenAI Codex への委譲・コードレビュー）
 - **CLI**: agent-browser（日常の画面確認）, Playwright CLI（テスト作成・再現調査）, Vercel CLI。ブラウザ操作の公式 Skill は Claude Code と Codex に配置し、旧 Playwright MCP 登録は削除します。
 
+共有 memory clone は Claude Code と Codex の両方で使います。Codex には `memory-routing` と
+`feature-value-answer` を `/etc/codex/skills/` に配置し、`UserPromptSubmit` hook が
+Claude Code と同じ index を検索して、実行中の Codex モデルに合う教訓だけを文脈として渡します。
+該当なし・検索失敗なら無出力で、プロンプトを block しません。Codex から entry を保存する場合は
+`claude_memory_sync --write <entry path>` に全文を標準入力で渡し、書式検証・index 更新・commit・push を行います。
+この設定は次に起動する Codex session から適用されます。
+
 Chrome DevTools MCP は headless・isolated・memory-debugging を有効にし、利用統計と CrUX への URL 送信を無効にします。Chrome は基本セットアップで導入した Linux 版を使います。
 
 繰り返す自動テストには、対象アプリごとに Playwright Test を開発用依存関係として導入します。未導入ならアプリのディレクトリで `npm init playwright@latest` → `npx playwright install --with-deps` を実行し、対象 URL・ブラウザ・期待結果を設定して `npx playwright test` で確認します。既存の設定・パッケージ管理方法を優先し、設定・テスト・lockfile はアプリ側で管理します。
@@ -240,7 +247,7 @@ Claude Code の共通 `excludedCommands` を個別に確認した対応は以下
 | `claude_memory_sync *` | 同名 CLI を許可。共有 memory clone と index を workspace 外で更新。Codex から共有メモリを操作する場合にも必要。 |
 | `docker *` | `docker` を許可。ホストの Docker daemon への接続。 |
 | `codex *` | `codex` を許可。子 CLI が自身の sandbox とユーザー状態を管理。 |
-| `agent_coord *` | `agent_coord` を許可。host 側の台帳 daemon に接続し、worktree 作成などの Git 操作を host 権限で行う。 |
+| `agent_coord *` | `agent_coord` を許可。host 側の台帳 daemon に接続して、session 間のメッセージと resource grant を扱う。 |
 | `node *codex-companion.mjs*` | 共通ルールには移さない。prefix rule は引数内の glob に非対応。必要な環境で `node` と companion の絶対パスを指定する個別ルールを登録する。`node` 全体は許可しない。 |
 | `codex_broker_reap*` | 実在する `codex_broker_reap` のみ許可。ホストのプロセス表を見ないと稼働中 broker を誤判定する。名前の前方一致は移さない。 |
 | `agent-browser *` | `agent-browser` を許可。ホストのブラウザ・セッション・開発サーバーへのアクセス。 |
@@ -270,9 +277,12 @@ Claude の drop-in は共通 Codex ルールへ自動変換しません。
 
 `agent_coord` は、同じ OS ユーザーで動く Claude Code / Codex / Antigravity などの agent session を
 横断して調整する、ホスト単位の CLI + daemon + MCP アダプタです。session 一覧、project/repo/all scope の
-メッセージング、排他的な resource grant、worktree の所有権を daemon のメモリ上にある 1 つの ledger に
+メッセージングと排他的な resource grant を daemon のメモリ上にある 1 つの ledger に
 集約します（SQLite へ write-through で永続化し、再起動時に再構築。保存先 `~/.local/state/agent_coord/`）。
 導入は基本セットアップが行い、手動の手順はありません。
+既存の `ledger.sqlite3` はそのまま更新します。起動時の schema migration で旧 worktree 表と
+session の旧 worktree 列を削除しますが、未読メッセージ・session・配送記録は同じ DB に残り、
+新着メッセージも同じ DB に書き込みます。未読がゼロになるのを待って DB ファイルを切り替える処理はありません。
 
 | 構成要素 | 配置 |
 |---|---|
@@ -284,15 +294,38 @@ Claude の drop-in は共通 Codex ルールへ自動変換しません。
 | Antigravity への導入 | 同 script が `agy plugin install` で専用 bundle を取り込む（`agy` がある環境のみ） |
 
 連絡は投稿時に宛先ごとの inbox へ配送され、受信側の ack で消えます。未読が生じると、Claude Code
-session には inbox socket 経由、idle の Codex session には `codex queue` 経由で一度だけ起こしに行きます。
+session には inbox socket 経由、idle の Codex session には `codex queue` 経由で起こしに行きます。
+ここで idle は session が終了した意味ではなく、次の入力を待っている状態です。その間は turn 内の
+`PostToolUse` / `Stop` が発火しないため、`codex queue --thread ... --message ...` でその session に
+「inbox を確認して」という次の入力を登録します。queue は別種の連絡を保存する場所ではなく、
+inbox の未読を知らせる呼び鈴です。
+Codex の queue へ登録済みの通知が残っている間は次を積まず、その通知が実行されるときに新着の未読もまとめて渡します。
 実行中の Codex turn には hook 境界で直接注入し、同じ通知を queue に重ねません。self 宛て・backfill・
-ack 後の空通知では turn を開始しません。終了した session の最後の会話メッセージは結果を含み得るため
+ack 後に残った空通知では hook が何も出力せず、プロンプトを block しません。
+終了した session の最後の会話メッセージは結果を含み得るため
 一度だけ wake しますが、通知には返信不要と明記します。終了した session が残した未解決 request は wake
 しません。応答できる宛先が存在しなくなった未解決 request とその delivery は清掃します。Antigravity は
-hooks による pull のみです。どの client でも hooks が session 参加・未読注入・claim した
-worktree 外への編集拒否を行い、MCP 経由で send/catchup/acquire/worktree などの tool が使えます。
-daemon は hooks / MCP アダプタから自動起動します。人間が状況を見るだけなら `agent_coord status` /
-`agent_coord watch` で足り、`agent_coord doctor` が接続・session・通知・強制・sandbox の各能力を
+`PreInvocation` / `Stop` hooks による pull のみです。Codex と Claude Code の hooks は session 参加・未読注入・
+通知の注入を行います。Antigravity の hook は session 参加・未読注入・終了時の一度だけの継続要求を行います。
+どの client でも MCP 経由で send/catchup/acquire などの tool が使えます。
+
+通知の正本は ack まで残る inbox です。wake は未読を知らせる手段です。`UserPromptSubmit` / `PostToolUse` /
+`PreInvocation` は未読がある場合だけ案内を注入し、プロンプトや tool を block しません。未読がなければ
+通知用の出力をしません。`Stop` では実際に処理可能な未読が残っている場合だけ、catchup と ack のための
+継続を要求します。同じ未読範囲では最大一度とし、その範囲が未 ack の間に新着があっても再継続しません。
+継続後の `Stop` と未読のない `Stop` は通します。
+Codex の queue 登録中は同じ session へ重ねて積まず、登録中に
+daemon が再起動した場合は再試行します。登録済みの通知が処理されるとき、新着の未読も同じ通知で
+知らせます。ack 後に残った queue のプロンプト自体は取り消せないため、空の turn が始まる可能性は
+ありますが、hook が block を繰り返すことはありません。
+
+hook ごとの公式仕様、agent-coord の方針、block の条件と出典は
+[agent-coord hook policy](files/agent_plugins/agent-coord/skills/agent-coord/references/hook-policy.md)
+にまとめています。
+repo の配送範囲の判定には Git の common-dir を使います。agent-coord は worktree の担当や編集権限を扱いません。
+daemon は通常の hooks / MCP アダプタから自動起動します。終了・中断時の後片付け hook は起動しません。
+人間が状況を見るだけなら `agent_coord status` /
+`agent_coord watch` で足り、`agent_coord doctor` が接続・session・通知・sandbox の各能力を
 分けて表示します（LLM 不要）。
 
 

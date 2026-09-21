@@ -23,6 +23,7 @@ CLI = os.path.join(HERE, "claude_memory_sync")
 COMMANDS = (
     "--pull",
     "--commit",
+    "--write",
     "--retire",
     "--full",
     "--status",
@@ -76,7 +77,7 @@ class CliTest(unittest.TestCase):
         self.assertIn("--bogus", out.stderr)
 
     def test_c4_missing_path(self) -> None:
-        for cmd in ("--commit", "--retire"):
+        for cmd in ("--commit", "--write", "--retire"):
             out = self.run_cli(cmd)
             self.assertEqual(out.returncode, 2, cmd)
             self.assertIn("expected one argument", out.stderr)

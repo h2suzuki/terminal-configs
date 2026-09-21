@@ -1,5 +1,5 @@
 {
-  "description": "agent-coord: join the ledger, surface unread once per range, keep enforced edits inside the claimed worktree.",
+  "description": "agent-coord: join the ledger and surface unread once per range.",
   "hooks": {
     "SessionStart": [
       {
@@ -17,8 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "agent_coord hook --client claude-code SessionEnd",
-            "timeout": 10
+            "command": "agent_coord hook --client claude-code SessionEnd"
           }
         ]
       }
@@ -45,13 +44,12 @@
         ]
       }
     ],
-    "PreToolUse": [
+    "Stop": [
       {
-        "matcher": "^(Write|Edit|NotebookEdit)$",
         "hooks": [
           {
             "type": "command",
-            "command": "agent_coord hook --client claude-code PreToolUse",
+            "command": "agent_coord hook --client claude-code Stop",
             "timeout": 10
           }
         ]

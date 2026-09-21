@@ -54,7 +54,7 @@ session を跨いで引き継ぐ未完了作業の概要。詳細は last-sessio
 
 - memory surface 到達率の判定 — 再開点: 2026-09-25 に claude_memory_sync --reach を再実行
 - 一次ソース確認 nudge の効果判定 — 再開点: 2026-10-10 に claude_unverified_claims を実行
-- agent_coord の 2 環境疎通 — 再開点: worktree transfer→accept を Codex と試す (完了したかは未確認)
+- agent_coord の 2 環境疎通 — 再開点: session 間の send/catchup/ack と resource transfer→accept を Codex と試す (完了したかは未確認)
 - lessons-learned repo の public / private 分離 — 再開点: 別マシンで branch wip/lessons-learned-split を探す (保留)
 - report-in-plain-words skill の仕上げ — 再開点: 上と同じ branch 待ち (保留)
 - 教訓「自分が回す loop の停止判断」の memory entry 化 — 再開点: 別マシンの transcript ff720c04 を読む (保留)

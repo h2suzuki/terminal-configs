@@ -64,3 +64,11 @@ matcher = "^(Bash|exec_command|shell_command|apply_patch|Write|Edit|MultiEdit|No
 type = "command"
 command = "/usr/local/bin/workspace_hygiene hook"
 timeout = 30
+
+# Shared memory reminders; an empty match exits 0 silently and never blocks.
+[[hooks.UserPromptSubmit]]
+
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "python3 /etc/claude-code/skel/hooks/memory_surface.py --codex"
+timeout = 10

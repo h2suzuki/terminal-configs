@@ -34,18 +34,11 @@ Claim map (ID -> requirement):
   F4-4   F4 a forced-out owner cannot re-take the resource until it has read the force notice
   F4-5   F4 resources hand over by transfer -> accept, in one step at accept
   F4-6   F4 a use declaration is recorded without taking the exclusive grant
-  F5-1   F5 claim rejects a foreign owner; the same worktree is never owned by two sessions
-  F5-2   F5 create plans base and target before running git, refuses a same-named foreign dir
-  F5-3   F5 partial failure deletes nothing and is resumable
-  F5-4   F5 worktree transfer -> accept flips the owner once; the old owner's late change is refused
-  F5-5   F5 the edit gate denies only same-repo foreign checkouts and never guesses a relative path
-  F5-6   F5 the enforcement level shown follows the client's verified capability, not the flag
   F6-1   F6 status shows self-report and observation separately, waiters, capabilities, service
   F7-1   F7 a caller acts only as the session it registered on this connection (or by token)
-  F7-2   F7 no path / ref passthrough: worktree root is confined, refs go after --
   F7-3   F7 unreachable daemon is diagnosed; no second ledger
   F8-1   F8 hooks: Claude Code and Codex payloads / outputs; Antigravity payloads / outputs
-  F8-2   F8 doctor separates CLI/MCP, host/sandbox, notification, enforcement capability
+  F8-2   F8 doctor separates CLI/MCP, host/sandbox and notification capability
   F8-3   F8 SessionEnd leaves the ledger, so a finished session stops being a name or a recipient
   MCP-1  the stdio adapter never dies on a bad tool call and strips reserved arguments
   MCP-2  a Codex tool call's _meta.threadId binds the adapter to the hook's session, not an anon one
@@ -177,7 +170,6 @@ class Fixture(unittest.TestCase):
         self.env = {
             "AGENT_COORD_HOME": str(self.home),
             "AGENT_COORD_CLAUDE_REGISTRY": str(self.registry),
-            "AGENT_COORD_WORKTREE_ROOT": str(self.tmp / "worktrees"),
             "PATH": f"{self.bin}:{os.environ.get('PATH', '')}",
         }
         self.saved = {k: os.environ.get(k) for k in self.env}
@@ -241,10 +233,15 @@ class LedgerTest(Direct):
         legacy = self.tmp / "legacy-ledger.sqlite3"
         db = coord.sqlite3.connect(legacy)
         old_schema = coord.SCHEMA.replace(
-            "  edit_worktree TEXT, model TEXT, parent_sid TEXT,\n"
+            "  model TEXT, parent_sid TEXT,\n"
             "  turn_active INTEGER NOT NULL DEFAULT 0, turn_id TEXT,\n"
             "  token TEXT, joined_at REAL, updated_at REAL,",
-            "  edit_worktree TEXT, model TEXT, token TEXT, joined_at REAL, updated_at REAL,",
+            "  model TEXT, token TEXT, joined_at REAL, updated_at REAL,",
+        ).replace(
+            "  nudged INTEGER NOT NULL DEFAULT 0, queued_through INTEGER NOT NULL DEFAULT 0,\n"
+            "  stop_blocked_through INTEGER NOT NULL DEFAULT 0,\n"
+            "  gap_through INTEGER, gap_reason TEXT);",
+            "  nudged INTEGER NOT NULL DEFAULT 0, gap_through INTEGER, gap_reason TEXT);",
         )
         db.executescript(old_schema)
         db.execute("PRAGMA user_version=1")
@@ -263,11 +260,77 @@ class LedgerTest(Direct):
         self.assertIn("parent_sid", columns)
         self.assertIn("turn_active", columns)
         self.assertIn("turn_id", columns)
+        self.assertIn("queued_through", columns)
+        self.assertIn("stop_blocked_through", columns)
         row = journal.db.execute(
-            "SELECT sid, parent_sid, turn_active, turn_id "
+            "SELECT sid, parent_sid, turn_active, turn_id, queued_through, stop_blocked_through "
             "FROM sessions WHERE sid='old-session'"
         ).fetchone()
-        self.assertEqual(tuple(row), ("old-session", None, 0, None))
+        self.assertEqual(tuple(row), ("old-session", None, 0, None, 0, 0))
+
+    def test_retired_worktree_storage_is_dropped_without_losing_messages(self):
+        legacy = self.tmp / "old-worktrees.sqlite3"
+        db = coord.sqlite3.connect(legacy)
+        db.executescript(coord.SCHEMA)
+        db.execute("ALTER TABLE sessions ADD COLUMN edit_worktree TEXT")
+        db.execute("CREATE TABLE worktrees(path TEXT PRIMARY KEY, owner TEXT)")
+        db.execute(
+            "INSERT INTO sessions(sid, edit_worktree) VALUES('old-session', '/old/path')"
+        )
+        db.execute(
+            "INSERT INTO worktrees(path, owner) VALUES('/old/path', 'old-session')"
+        )
+        db.execute(
+            "INSERT INTO events(seq, kind, actor, scope_kind, scope_key, body) "
+            "VALUES(1, 'message', 'peer', 'session', 'old-session', '{\"text\":\"pending\"}')"
+        )
+        db.execute(
+            "INSERT INTO deliveries(sid, seq, state) VALUES('old-session', 1, 'pending')"
+        )
+        db.execute("INSERT INTO meta(key, value) VALUES('last_seq', 1)")
+        db.execute("PRAGMA user_version=5")
+        db.commit()
+        db.close()
+
+        journal = coord.Journal(legacy)
+        self.addCleanup(journal.close)
+        tables = {
+            row[0]
+            for row in journal.db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        self.assertNotIn("worktrees", tables)
+        columns = {row[1] for row in journal.db.execute("PRAGMA table_info(sessions)")}
+        self.assertNotIn("edit_worktree", columns)
+        loaded = journal.load()
+        self.assertEqual(loaded["events"][0]["body"]["text"], "pending")
+        self.assertEqual(loaded["deliveries"][0]["state"], "pending")
+        self.assertEqual(loaded["last_seq"], 1)
+        journal.begin()
+        journal.commit(
+            [
+                (
+                    "events",
+                    {
+                        "seq": 2,
+                        "ts": 2.0,
+                        "kind": "message",
+                        "actor": "peer",
+                        "scope_kind": "session",
+                        "scope_key": "old-session",
+                        "body": {"text": "new"},
+                    },
+                ),
+                (
+                    "deliveries",
+                    {"sid": "old-session", "seq": 2, "backfill": 0, "state": "pending"},
+                ),
+            ],
+            [],
+            2,
+        )
+        self.assertEqual(len(journal.load()["deliveries"]), 2)
 
     def test_unknown_newer_schema_is_refused_before_tables_are_changed(self):
         future = self.tmp / "future-ledger.sqlite3"
@@ -443,6 +506,41 @@ class LedgerTest(Direct):
             turn_id="turn-old",
         )
         self.assertTrue(stale["turn_active"])
+
+    def test_stop_continuation_limit_survives_daemon_restart(self):
+        self.join("sender", self.repo)
+        self.join("receiver", self.repo, client="claude-code")
+        self.call("sender", "send", sid="sender", to="receiver", text="first")
+        self.assertIn(
+            "1 unread",
+            self.call("receiver", "stop_nudge", sid="receiver")["text"],
+        )
+
+    def test_expired_unacked_batch_does_not_suppress_new_stop_nudge(self):
+        self.join("sender", self.repo)
+        self.join("receiver", self.repo, client="claude-code")
+        self.call("sender", "send", sid="sender", to="receiver", text="first")
+        self.assertIn(
+            "1 unread", self.call("receiver", "stop_nudge", sid="receiver")["text"]
+        )
+        self.clock.advance(coord.EVENT_TTL + 1)
+        self.call("sender", "send", sid="sender", to="receiver", text="second")
+        self.assertIn(
+            "1 unread", self.call("receiver", "stop_nudge", sid="receiver")["text"]
+        )
+        self.co.close()
+        self.co = coord.Coordinator(self.home, clock=self.clock)
+        self.call("receiver", "attach", sid="receiver", native_id="receiver")
+        self.assertIsNone(self.call("receiver", "stop_nudge", sid="receiver")["text"])
+        self.call("sender", "attach", sid="sender", native_id="sender")
+        self.call("sender", "send", sid="sender", to="receiver", text="second")
+        self.assertIsNone(self.call("receiver", "stop_nudge", sid="receiver")["text"])
+        self.call("receiver", "ack", sid="receiver", through=self.co.ledger.last_seq)
+        self.call("sender", "send", sid="sender", to="receiver", text="third")
+        self.assertIn(
+            "1 unread",
+            self.call("receiver", "stop_nudge", sid="receiver")["text"],
+        )
 
     def test_c42_2_retry_is_scoped_to_session_and_method(self):
         """V3: a lost reply is retried with the same id; the id must not leak across methods or sessions."""
@@ -791,6 +889,133 @@ class NotificationTest(Direct):
         self.co._wake_pending()
         self.assertEqual(self.codex_log.read_text().count("--message "), 1)
 
+    def test_stop_continuation_does_not_queue_the_same_unacked_unread(self):
+        self.co.wakes.put(False)
+        self.co.waker.join(5)
+        self.join("sender", self.repo)
+        self.join("receiver", self.repo, client="codex")
+        self.call("receiver", "activity", sid="receiver", active=True, turn_id="turn-1")
+        self.call("sender", "send", sid="sender", to="receiver", text="late")
+        self.assertIn(
+            "1 unread",
+            self.call("receiver", "stop_nudge", sid="receiver", turn_id="turn-1")[
+                "text"
+            ],
+        )
+        self.call(
+            "receiver", "activity", sid="receiver", active=False, turn_id="turn-1"
+        )
+        self.co._wake_pending()
+        self.assertFalse(self.codex_log.exists())
+        self.assertEqual(self.call("receiver", "peek", sid="receiver")["unread"], 1)
+        self.assertIn(
+            "1 unread", self.call("receiver", "nudge", sid="receiver")["text"]
+        )
+
+        self.call("sender", "send", sid="sender", to="receiver", text="new")
+        self.co._wake_pending()
+        self.assertEqual(self.codex_log.read_text().count("--message "), 1)
+
+    def test_queue_reservation_survives_immediate_submit_and_releases_on_failure(self):
+        self.co.wakes.put(False)
+        self.co.waker.join(5)
+        self.join("sender", self.repo)
+        self.join("receiver", self.repo, client="codex")
+        self.call("sender", "send", sid="sender", to="receiver", text="first")
+        calls = []
+
+        def immediate_submit(session, prompt):
+            calls.append(prompt)
+            result = self.call(
+                "receiver",
+                "nudge",
+                sid="receiver",
+                wake_prompt=prompt,
+                activate_turn=True,
+                turn_id="wake-turn",
+            )
+            self.assertIn("1 unread", result["text"])
+            self.assertTrue(self.co.ledger.sessions["receiver"]["turn_active"])
+            self.call(
+                "receiver",
+                "ack",
+                sid="receiver",
+                through=self.call("receiver", "peek", sid="receiver")["last_seq"],
+            )
+            return True
+
+        with patch.object(
+            coord.ADAPTERS["codex"], "wake", side_effect=immediate_submit
+        ):
+            self.co._wake_pending()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.co.ledger.sessions["receiver"]["queued_through"], 0)
+        self.call(
+            "receiver", "activity", sid="receiver", active=False, turn_id="wake-turn"
+        )
+
+        self.call("sender", "send", sid="sender", to="receiver", text="second")
+        with patch.object(coord.ADAPTERS["codex"], "wake", return_value=False):
+            self.co._wake_pending()
+        self.assertEqual(self.co.ledger.sessions["receiver"]["queued_through"], 0)
+        self.call("sender", "send", sid="sender", to="receiver", text="third")
+        with patch.object(coord.ADAPTERS["codex"], "wake", return_value=True) as wake:
+            self.co._wake_pending()
+        wake.assert_called_once()
+
+    def test_queued_codex_wake_remains_reserved_after_daemon_restart(self):
+        self.co.wakes.put(False)
+        self.co.waker.join(5)
+        self.join("sender", self.repo)
+        self.join("receiver", self.repo, client="codex")
+        self.call("sender", "send", sid="sender", to="receiver", text="first")
+        self.co._wake_pending()
+        prompt = self.codex_log.read_text().split("--message ", 1)[1].strip()
+        queued_through = self.co.ledger.sessions["receiver"]["queued_through"]
+        self.assertGreater(queued_through, 0)
+
+        self.co.close()
+        self.co = coord.Coordinator(self.home, clock=self.clock)
+        self.co._wake_pending()
+        self.assertEqual(self.codex_log.read_text().count("--message "), 1)
+        self.assertEqual(
+            self.co.ledger.sessions["receiver"]["queued_through"], queued_through
+        )
+        self.call("receiver", "attach", sid="receiver", native_id="receiver")
+        admitted = self.call(
+            "receiver",
+            "nudge",
+            sid="receiver",
+            wake_prompt=prompt,
+            activate_turn=True,
+            turn_id="wake-turn",
+        )
+        self.assertIn("1 unread", admitted["text"])
+        self.assertEqual(self.co.ledger.sessions["receiver"]["queued_through"], 0)
+
+    def test_unfinished_queue_reservation_is_retried_after_daemon_restart(self):
+        self.co.wakes.put(False)
+        self.co.waker.join(5)
+        self.join("sender", self.repo)
+        self.join("receiver", self.repo, client="codex")
+        self.call("sender", "send", sid="sender", to="receiver", text="recover me")
+        plan = self.co.transact(lambda: self.co.ledger.plan_wake("receiver"))
+        self.assertIsNotNone(plan)
+        self.assertLess(self.co.ledger.sessions["receiver"]["queued_through"], 0)
+        self.assertFalse(self.codex_log.exists())
+
+        self.co.close()
+        self.co = coord.Coordinator(self.home, clock=self.clock)
+        self.assertTrue(
+            wait_for(
+                lambda: (
+                    self.codex_log.exists()
+                    and self.codex_log.read_text().count("--message ") == 1
+                )
+            )
+        )
+        self.assertGreater(self.co.ledger.sessions["receiver"]["queued_through"], 0)
+
     def test_wake_rechecks_each_recipient_after_a_slow_transport(self):
         self.co.wakes.put(False)
         self.co.waker.join(5)
@@ -968,10 +1193,8 @@ class NotificationTest(Direct):
         caps = {
             s["sid"]: s["capabilities"] for s in self.call("", "status")["sessions"]
         }
-        self.assertEqual(
-            caps["codex-T-1"], {"notify": "push", "enforcement": "advisory"}
-        )
-        self.assertEqual(caps["agy-C-1"], {"notify": "pull", "enforcement": "advisory"})
+        self.assertEqual(caps["codex-T-1"], {"notify": "push"})
+        self.assertEqual(caps["agy-C-1"], {"notify": "pull"})
 
 
 # ------------------------------------------------------------------ F4 resources
@@ -1079,116 +1302,6 @@ class ResourceTest(Direct):
         self.call("b", "acquire", sid="b", key="rig")
 
 
-# ------------------------------------------------------------------ F5 worktrees
-
-
-class WorktreeTest(Direct):
-    def test_f5_1_claim_is_exclusive_and_membership_checked(self):
-        """V8 first half."""
-        self.join("a", self.repo)
-        self.join("b", self.wt)
-        self.join("d", self.other)
-        self.call("a", "worktree_claim", sid="a", path=str(self.wt), enforce=True)
-        with self.assertRaises(coord.CoordError):
-            self.call("b", "worktree_claim", sid="b", path=str(self.wt))
-        with self.assertRaises(coord.CoordError):
-            self.call("d", "worktree_claim", sid="d", path=str(self.wt))
-        with self.assertRaises(coord.CoordError):
-            self.call("a", "worktree_claim", sid="a", path="relative/path")
-
-    def test_f5_2_create_plans_first_and_refuses_a_foreign_dir(self):
-        self.join("a", self.repo)
-        plan = self.call("a", "worktree_create", sid="a", name="x1", dry_run=True)
-        self.assertEqual(plan["target"], str(self.tmp / "worktrees" / "repo" / "x1"))
-        self.assertEqual(plan["base"], git("rev-parse", "HEAD", cwd=str(self.repo)))
-        self.assertFalse(os.path.exists(plan["target"]))
-        created = self.call("a", "worktree_create", sid="a", name="x1")
-        self.assertTrue(created["created"])
-        self.assertEqual(created["base"], plan["base"])
-        self.assertEqual(git("rev-parse", "HEAD", cwd=created["path"]), plan["base"])
-        with self.assertRaises(coord.CoordError):
-            self.call(
-                "a",
-                "worktree_create",
-                sid="a",
-                name="x9",
-                root=str(self.tmp / "anywhere"),
-            )
-        with self.assertRaises(coord.CoordError):
-            self.call(
-                "a", "worktree_create", sid="a", name="x9", base="--output=/tmp/x"
-            )
-        foreign = self.tmp / "worktrees" / "repo" / "taken"
-        foreign.mkdir(parents=True)
-        with self.assertRaises(coord.CoordError):
-            self.call("a", "worktree_create", sid="a", name="taken")
-        self.assertTrue(foreign.exists())
-
-    def test_f5_2_existing_branch_reports_its_real_tip(self):
-        self.join("a", self.repo)
-        git("branch", "old", "HEAD", cwd=str(self.repo))
-        (self.repo / "later").write_text("y\n")
-        git("add", "later", cwd=str(self.repo))
-        git("commit", "-q", "-m", "later", cwd=str(self.repo))
-        old_tip = git("rev-parse", "old", cwd=str(self.repo))
-        with self.assertRaises(coord.CoordError):
-            self.call("a", "worktree_create", sid="a", name="old", base="HEAD")
-        created = self.call("a", "worktree_create", sid="a", name="old")
-        self.assertEqual(created["base"], old_tip)
-
-    def test_f5_3_partial_failure_deletes_nothing_and_resumes(self):
-        """V11."""
-        self.join("a", self.repo)
-        target = self.tmp / "worktrees" / "repo" / "x2"
-        git("branch", "x2", cwd=str(self.repo))
-        git("worktree", "add", "-q", str(target), "x2", cwd=str(self.repo))
-        resumed = self.call("a", "worktree_create", sid="a", name="x2")
-        self.assertEqual((resumed["created"], resumed["resumed"]), (False, True))
-        self.assertTrue((target / "README").exists())
-
-    def test_f5_4_transfer_accept_flips_once_and_the_old_owner_is_refused(self):
-        """V8 second half."""
-        self.join("a", self.repo)
-        self.join("b", self.wt)
-        self.call("a", "worktree_claim", sid="a", path=str(self.wt))
-        self.call(
-            "a", "worktree_transfer", sid="a", path=str(self.wt), to="b", note="yours"
-        )
-        self.assertEqual(self.call("", "status")["worktrees"][0]["owner"], "a")
-        accepted = self.call("b", "worktree_accept", sid="b", path=str(self.wt))
-        self.assertEqual(accepted["previous_owner"], "a")
-        with self.assertRaises(coord.CoordError):
-            self.call("a", "worktree_release", sid="a", path=str(self.wt))
-        self.assertEqual(
-            self.call("b", "whoami", sid="b")["session"]["edit_worktree"], str(self.wt)
-        )
-        self.assertIsNone(self.call("a", "whoami", sid="a")["session"]["edit_worktree"])
-
-    def test_f5_5_edit_gate_denies_same_repo_foreign_checkouts_only(self):
-        """V9."""
-        self.join("a", self.repo, client="claude-code")
-        self.call("a", "worktree_claim", sid="a", path=str(self.wt), enforce=True)
-
-        def allowed(path: str) -> bool:
-            return self.call("a", "edit_check", sid="a", path=path)["allow"]
-
-        self.assertFalse(allowed(str(self.repo / "README")))
-        self.assertTrue(allowed(str(self.wt / "README")))
-        self.assertTrue(allowed("/tmp/scratch.txt"))
-        self.assertTrue(allowed(str(self.other / "README")))
-        self.assertFalse(allowed("README"))
-
-    def test_f5_6_enforcement_level_follows_the_client_capability(self):
-        self.join("a", self.repo, client="claude-code")
-        self.join("b", self.wt, client="codex")
-        self.call("a", "worktree_claim", sid="a", path=str(self.repo), enforce=True)
-        self.call("b", "worktree_claim", sid="b", path=str(self.wt), enforce=True)
-        levels = {
-            w["owner"]: w["enforcement"] for w in self.call("", "status")["worktrees"]
-        }
-        self.assertEqual(levels, {"a": "enforced", "b": "advisory"})
-
-
 # ------------------------------------------------------------------ F6 / F7
 
 
@@ -1203,14 +1316,11 @@ class StatusAndBoundaryTest(Direct):
         self.assertEqual(session["status"], "working")
         self.assertEqual(session["updated_ago"], "40 min")
         self.assertEqual(session["seen_ago"], "0 sec")
-        self.assertEqual(
-            session["capabilities"], {"notify": "push", "enforcement": "enforced"}
-        )
+        self.assertEqual(session["capabilities"], {"notify": "push"})
         self.assertEqual(status["service"]["home"], str(self.home))
         self.assertIn("retained", status["service"])
         text = coord.render_status(status)
         self.assertIn("seen", text)
-        self.assertIn("enforced", text)
 
     def test_f7_1_a_caller_acts_only_as_its_registered_session(self):
         self.join("a", self.repo)
@@ -1286,7 +1396,7 @@ class ScenarioTest(Fixture):
         return client, joined
 
     def test_chapter3_workflow_two_sessions_and_a_user(self):
-        """3.1-3.6 and V1 / V12: enable, register worktrees, contend for a machine, request, release, catch up, hand over."""
+        """Sessions in linked worktrees share repo scope; messages and resource grants work without claims."""
         a, ja = self.join("a", self.repo)
         b, jb = self.join("b", self.wt)
         c, jc = self.join("c", self.clone)
@@ -1297,13 +1407,6 @@ class ScenarioTest(Fixture):
         self.assertEqual(ja["session"]["project"], jc["session"]["project"])
         self.assertNotEqual(ja["session"]["project"], jd["session"]["project"])
         a.call("update", sid="a", task="soak test")
-        a.call("worktree_claim", sid="a", path=str(self.repo))
-        b.call("worktree_claim", sid="b", path=str(self.wt), enforce=True)
-        user = self.daemon.client()
-        self.addCleanup(user.close)
-        self.assertEqual(
-            {w["owner"] for w in user.call("status")["worktrees"]}, {"a", "b"}
-        )
         grant = a.call("acquire", sid="a", key="machine-1", purpose="soak")
         with self.assertRaises(coord.CoordError):
             b.call("acquire", sid="b", key="machine-1")
@@ -1322,14 +1425,10 @@ class ScenarioTest(Fixture):
         )
         b.call("acquire", sid="b", key="machine-1")
         a.call("resolve", sid="a", req_id=req["req_id"], result="released")
-        self.assertEqual(user.call("status")["resources"][0]["owner"], "b")
-        b.call("worktree_transfer", sid="b", path=str(self.wt), to="c")
-        c.call("worktree_accept", sid="c", path=str(self.wt))
-        owners = {w["path"]: w["owner"] for w in user.call("status")["worktrees"]}
-        self.assertEqual(owners[str(self.wt)], "c")
+        self.assertEqual(b.call("status")["resources"][0]["owner"], "b")
 
     def test_v5_catchup_recovers_when_the_wake_channel_fails(self):
-        """V5: the wake push fails (no registry entry); the unread survive for catchup and ownership ops never wait."""
+        """V5: the wake push fails (no registry entry); unread survives for catchup."""
         a, _ = self.join("a", self.repo)
         b = self.daemon.client()
         self.addCleanup(b.close)
@@ -1390,6 +1489,38 @@ class HookTest(Fixture):
         os.environ["AGENT_COORD_NO_AUTOSTART"] = "1"
         self.addCleanup(os.environ.pop, "AGENT_COORD_NO_AUTOSTART", None)
 
+    def test_codex_and_claude_hook_manifests_match_the_registered_roles(self):
+        hooks_dir = REPO_ROOT / "files/agent_plugins/agent-coord/hooks"
+        codex = json.loads((hooks_dir / "codex.json").read_text())["hooks"]
+        claude = json.loads((hooks_dir / "claude-code.json").read_text())["hooks"]
+        self.assertEqual(
+            set(codex),
+            {
+                "SessionStart",
+                "SessionEnd",
+                "SubagentStart",
+                "SubagentStop",
+                "Stop",
+                "Interrupt",
+                "UserPromptSubmit",
+                "PostToolUse",
+            },
+        )
+        self.assertEqual(
+            set(claude),
+            {
+                "SessionStart",
+                "SessionEnd",
+                "Stop",
+                "UserPromptSubmit",
+                "PostToolUse",
+            },
+        )
+        for event in ("SessionEnd", "Interrupt"):
+            self.assertLessEqual(codex[event][0]["hooks"][0]["timeout"], 3)
+        self.assertNotIn("PreToolUse", codex)
+        self.assertNotIn("PreToolUse", claude)
+
     def hook(self, client: str, event: str, payload: dict) -> dict | None:
         out = io.StringIO()
         env = (
@@ -1428,6 +1559,141 @@ class HookTest(Fixture):
         self.assertIn("Interrupt", hooks)
         self.assertFalse((plugin / "hooks" / "hooks.json").exists())
 
+    def test_nested_codex_hook_uses_payload_thread_over_inherited_parent_env(self):
+        payload = {"session_id": "nested-thread", "cwd": str(self.wt)}
+        started = self.codex_hook_as("outer-thread", "SessionStart", payload)
+        self.assertIn(
+            "joined as codex-nested-thread",
+            started["hookSpecificOutput"]["additionalContext"],
+        )
+        me = self.daemon.client()
+        self.addCleanup(me.close)
+        nested = next(
+            session
+            for session in me.call("sessions")["sessions"]
+            if session["sid"] == "codex-nested-thread"
+        )
+        self.assertIsNone(nested["parent_sid"])
+        self.assertIsNone(
+            self.codex_hook_as(
+                "outer-thread",
+                "UserPromptSubmit",
+                {**payload, "turn_id": "nested-turn", "prompt": "work"},
+            )
+        )
+        self.peer_posts("message for nested process")
+        surfaced = self.codex_hook_as(
+            "outer-thread",
+            "PostToolUse",
+            {**payload, "turn_id": "nested-turn", "tool_name": "Bash"},
+        )
+        self.assertIn(
+            "1 unread", surfaced["hookSpecificOutput"]["additionalContext"]
+        )
+        stop = {**payload, "turn_id": "nested-turn"}
+        self.assertEqual(
+            self.codex_hook_as("outer-thread", "Stop", stop)["decision"], "block"
+        )
+        self.assertEqual(
+            self.codex_hook_as("outer-thread", "Stop", stop), {"continue": True}
+        )
+
+    def test_codex_hook_missing_payload_id_does_not_block_parent_unread(self):
+        parent = self.daemon.client()
+        self.addCleanup(parent.close)
+        parent.call("join", client="codex", native_id="outer-thread", cwd=str(self.repo))
+        self.peer_posts("parent still has unread")
+        self.assertEqual(
+            self.codex_hook_as(
+                "outer-thread", "Stop", {"cwd": str(self.repo), "turn_id": "unknown"}
+            ),
+            {"continue": True},
+        )
+        self.assertEqual(parent.call("peek", sid="codex-outer-thread")["unread"], 1)
+
+    def test_empty_inbox_never_blocks_repeated_stop_hooks(self):
+        codex = {"session_id": "quiet-codex", "cwd": str(self.wt)}
+        claude = {"session_id": "quiet-claude", "cwd": str(self.wt)}
+        antigravity = {
+            "conversationId": "quiet-antigravity",
+            "workspacePaths": [str(self.wt)],
+            "fullyIdle": True,
+            "terminationReason": "model_stop",
+        }
+        self.hook("codex", "SessionStart", codex)
+        self.hook("claude-code", "SessionStart", claude)
+        self.hook("antigravity", "PreInvocation", antigravity)
+        for _ in range(10):
+            self.assertEqual(self.hook("codex", "Stop", codex), {"continue": True})
+            self.assertIsNone(self.hook("claude-code", "Stop", claude))
+            self.assertEqual(
+                self.hook("antigravity", "Stop", antigravity),
+                {"decision": "stop"},
+            )
+
+    def test_codex_interrupt_only_clears_the_interrupted_turn(self):
+        payload = {"session_id": "interrupted", "cwd": str(self.wt)}
+        self.hook("codex", "SessionStart", payload)
+        me = self.daemon.client()
+        self.addCleanup(me.close)
+        me.call("attach", sid="codex-interrupted", native_id="interrupted")
+        self.hook(
+            "codex",
+            "UserPromptSubmit",
+            {**payload, "turn_id": "turn-one", "prompt": "work"},
+        )
+        self.assertTrue(
+            me.call("whoami", sid="codex-interrupted")["session"]["turn_active"]
+        )
+        self.peer_posts("pending when the user interrupts")
+        time.sleep(0.1)
+        self.assertFalse(self.codex_log.exists())
+        surfaced = self.hook(
+            "codex",
+            "PostToolUse",
+            {**payload, "turn_id": "turn-one", "tool_name": "Bash"},
+        )
+        self.assertIn("catchup", surfaced["hookSpecificOutput"]["additionalContext"])
+        self.assertIsNone(
+            self.hook("codex", "Interrupt", {**payload, "turn_id": "turn-one"})
+        )
+        self.assertFalse(
+            me.call("whoami", sid="codex-interrupted")["session"]["turn_active"]
+        )
+        time.sleep(0.1)
+        self.assertFalse(self.codex_log.exists())
+
+        resumed = self.hook(
+            "codex",
+            "UserPromptSubmit",
+            {**payload, "turn_id": "turn-two", "prompt": "new work"},
+        )
+        self.assertIn("catchup", resumed["hookSpecificOutput"]["additionalContext"])
+        self.assertIsNone(
+            self.hook("codex", "Interrupt", {**payload, "turn_id": "turn-one"})
+        )
+        self.assertTrue(
+            me.call("whoami", sid="codex-interrupted")["session"]["turn_active"]
+        )
+        me.call(
+            "ack",
+            sid="codex-interrupted",
+            through=me.call("peek", sid="codex-interrupted")["last_seq"],
+        )
+        self.assertEqual(
+            self.hook("codex", "Stop", {**payload, "turn_id": "turn-two"}),
+            {"continue": True},
+        )
+        self.peer_posts("new work after the interrupted turn")
+        self.assertTrue(wait_for(self.codex_log.exists))
+        with patch.object(
+            coord, "Client", side_effect=coord.CoordError("offline")
+        ) as client:
+            self.assertIsNone(
+                self.hook("codex", "Interrupt", {**payload, "turn_id": "turn-two"})
+            )
+        client.assert_called_once_with(autostart=False)
+
     def queued_wake(self):
         self.hook(
             "codex", "SessionStart", {"session_id": "wake-test", "cwd": str(self.wt)}
@@ -1464,13 +1730,19 @@ class HookTest(Fixture):
             {"session_id": "wake-test", "cwd": str(self.wt), "prompt": prompt},
         )
 
+    def assert_wake_is_silent(self, prompt):
+        self.assertIsNone(self.submit_wake(prompt))
+
     def test_autonomous_wake_is_admitted_once_and_next_new_message_wakes_again(self):
         me, prompt, seq = self.queued_wake()
         self.assertIn(
             "1 unread",
             self.submit_wake(prompt)["hookSpecificOutput"]["additionalContext"],
         )
-        self.assertEqual(self.submit_wake(prompt)["decision"], "block")
+        self.assertTrue(
+            me.call("whoami", sid="codex-wake-test")["session"]["turn_active"]
+        )
+        self.assert_wake_is_silent(prompt)
         me.call("ack", sid="codex-wake-test", through=seq)
         self.hook(
             "codex",
@@ -1484,8 +1756,8 @@ class HookTest(Fixture):
         next_prompt = (
             self.codex_log.read_text().splitlines()[-1].split("--message ", 1)[1]
         )
-        # Rejecting the old queued prompt must not consume the new notification.
-        self.assertEqual(self.submit_wake(prompt)["decision"], "block")
+        # The old queued prompt must not consume the newer notification.
+        self.assert_wake_is_silent(prompt)
         self.assertIn(
             "1 unread",
             self.submit_wake(next_prompt)["hookSpecificOutput"]["additionalContext"],
@@ -1496,6 +1768,47 @@ class HookTest(Fixture):
             ],
             "push",
         )
+
+    def test_acked_queue_entry_carries_new_unread_without_another_queue_entry(self):
+        me, prompt, seq = self.queued_wake()
+        # The first Codex queue entry is still waiting when another turn reads
+        # and acknowledges its event. New delivery must reuse that entry.
+        me.call("ack", sid="codex-wake-test", through=seq)
+        self.peer_posts("new work while the first wake is queued")
+        self.assertTrue(
+            wait_for(lambda: me.call("peek", sid="codex-wake-test")["unread"] == 1)
+        )
+        time.sleep(0.1)
+        self.assertEqual(self.codex_log.read_text().count("--message "), 1)
+
+        admitted = self.submit_wake(prompt)
+        self.assertIn(
+            "new work while the first wake is queued",
+            coord.render_catchup(me.call("catchup", sid="codex-wake-test")),
+        )
+        self.assertIn("1 unread", admitted["hookSpecificOutput"]["additionalContext"])
+        self.assert_wake_is_silent(prompt)
+
+        me.call(
+            "ack",
+            sid="codex-wake-test",
+            through=me.call("peek", sid="codex-wake-test")["last_seq"] or 0,
+        )
+        self.hook("codex", "Stop", {"session_id": "wake-test", "cwd": str(self.wt)})
+        self.peer_posts("later work")
+        self.assertTrue(
+            wait_for(lambda: self.codex_log.read_text().count("--message ") == 2)
+        )
+
+    def test_duplicate_old_wake_during_active_turn_is_silent(self):
+        me, prompt, _ = self.queued_wake()
+        self.submit_wake(prompt)
+        self.peer_posts("arrived after the queued wake started")
+        self.assertTrue(
+            wait_for(lambda: me.call("peek", sid="codex-wake-test")["unread"] == 2)
+        )
+        self.assert_wake_is_silent(prompt)
+        self.assertEqual(self.codex_log.read_text().count("--message "), 1)
 
     def test_active_turn_uses_hook_context_without_leaving_a_queued_prompt(self):
         self.hook(
@@ -1539,22 +1852,23 @@ class HookTest(Fixture):
             },
         )
         self.assertIn("1 unread", surfaced["hookSpecificOutput"]["additionalContext"])
-        self.assertEqual(
-            self.hook(
-                "codex",
-                "Stop",
-                {
-                    "session_id": "active",
-                    "cwd": str(self.wt),
-                    "turn_id": "turn-active",
-                },
-            ),
-            {"continue": True},
+        stop_payload = {
+            "session_id": "active",
+            "cwd": str(self.wt),
+            "turn_id": "turn-active",
+        }
+        self.assertEqual(self.hook("codex", "Stop", stop_payload)["decision"], "block")
+        self.assertTrue(me.call("whoami", sid="codex-active")["session"]["turn_active"])
+        me.call(
+            "ack",
+            sid="codex-active",
+            through=me.call("peek", sid="codex-active")["last_seq"],
         )
+        self.assertEqual(self.hook("codex", "Stop", stop_payload), {"continue": True})
         time.sleep(0.1)
         self.assertFalse(self.codex_log.exists())
 
-    def test_stop_queues_an_event_that_arrived_after_the_last_turn_hook(self):
+    def test_stop_continues_for_an_event_that_arrived_after_the_last_turn_hook(self):
         self.hook("codex", "SessionStart", {"session_id": "late", "cwd": str(self.wt)})
         me = self.daemon.client()
         self.addCleanup(me.close)
@@ -1572,20 +1886,40 @@ class HookTest(Fixture):
         self.peer_posts("arrived after the last tool")
         time.sleep(0.1)
         self.assertFalse(self.codex_log.exists())
+        stop_payload = {
+            "session_id": "late",
+            "cwd": str(self.wt),
+            "turn_id": "turn-late",
+        }
+        first = self.hook("codex", "Stop", stop_payload)
+        self.assertEqual(first["decision"], "block")
+        self.assertIn("catchup", first["reason"])
+        self.assertFalse(self.codex_log.exists())
+        me.call(
+            "ack",
+            sid="codex-late",
+            through=me.call("peek", sid="codex-late")["last_seq"],
+        )
         self.assertEqual(
-            self.hook(
-                "codex",
-                "Stop",
-                {
-                    "session_id": "late",
-                    "cwd": str(self.wt),
-                    "turn_id": "turn-late",
-                },
-            ),
+            self.hook("codex", "Stop", {**stop_payload, "stop_hook_active": True}),
             {"continue": True},
         )
-        self.assertTrue(wait_for(lambda: self.codex_log.exists()))
-        self.assertEqual(self.codex_log.read_text().count("--message "), 1)
+        self.assertFalse(self.codex_log.exists())
+
+    def test_stop_never_blocks_the_same_unread_range_twice(self):
+        self.hook("codex", "SessionStart", {"session_id": "once", "cwd": str(self.wt)})
+        me = self.daemon.client()
+        self.addCleanup(me.close)
+        me.call("attach", sid="codex-once", native_id="once")
+        self.peer_posts("needs action")
+        stop = {"session_id": "once", "cwd": str(self.wt), "turn_id": "turn-once"}
+        self.assertEqual(self.hook("codex", "Stop", stop)["decision"], "block")
+        self.assertEqual(
+            self.hook("codex", "Stop", {**stop, "stop_hook_active": True}),
+            {"continue": True},
+        )
+        self.assertEqual(self.hook("codex", "Stop", stop), {"continue": True})
+        self.assertEqual(me.call("peek", sid="codex-once")["unread"], 1)
 
     def test_compaction_keeps_the_turn_active_and_surfaces_unread_without_queueing(
         self,
@@ -1621,34 +1955,34 @@ class HookTest(Fixture):
         self.assertTrue(
             me.call("whoami", sid="codex-compact")["session"]["turn_active"]
         )
-        self.assertEqual(
-            self.hook(
-                "codex",
-                "Stop",
-                {
-                    "session_id": "compact",
-                    "cwd": str(self.wt),
-                    "turn_id": "turn-compact",
-                },
-            ),
-            {"continue": True},
+        stop_payload = {
+            "session_id": "compact",
+            "cwd": str(self.wt),
+            "turn_id": "turn-compact",
+        }
+        self.assertEqual(self.hook("codex", "Stop", stop_payload)["decision"], "block")
+        me.call(
+            "ack",
+            sid="codex-compact",
+            through=me.call("peek", sid="codex-compact")["last_seq"],
         )
+        self.assertEqual(self.hook("codex", "Stop", stop_payload), {"continue": True})
         time.sleep(0.1)
         self.assertFalse(self.codex_log.exists())
 
-    def test_ack_after_enqueue_blocks_empty_catchup_before_model_execution(self):
+    def test_ack_after_enqueue_allows_empty_wake_without_requeueing(self):
         me, prompt, seq = self.queued_wake()
         me.call("ack", sid="codex-wake-test", through=seq)
         self.assertEqual(me.call("catchup", sid="codex-wake-test")["events"], [])
-        for _ in range(3):
-            self.assertEqual(self.submit_wake(prompt)["decision"], "block")
+        for _ in range(10):
+            self.assert_wake_is_silent(prompt)
         self.assertEqual(self.codex_log.read_text().count("--message "), 1)
 
-    def test_legacy_queue_backlog_is_blocked_but_quoted_user_text_is_not(self):
+    def test_legacy_queue_backlog_proceeds_and_quoted_user_text_is_unchanged(self):
         me, prompt, seq = self.queued_wake()
         legacy = coord.WAKE_RE.fullmatch(prompt)[3]
         me.call("ack", sid="codex-wake-test", through=seq)
-        self.assertEqual(self.submit_wake(legacy)["decision"], "block")
+        self.assert_wake_is_silent(legacy)
         self.assertIsNone(self.submit_wake("Explain this notification:\n" + legacy))
         self.assertIsNone(self.submit_wake("continue working"))
 
@@ -1668,14 +2002,25 @@ class HookTest(Fixture):
         me.call("ack", sid="codex-wake-test", through=seq)
         self.assertEqual(self.codex_log.read_text().count("--message "), 1)
 
-    def test_unverifiable_wake_is_blocked_without_affecting_normal_prompts(self):
-        _, prompt, _ = self.queued_wake()
-        self.assertEqual(self.submit_wake(prompt + " tampered")["decision"], "block")
+    def test_unverifiable_wake_is_silent_without_affecting_normal_prompts(self):
+        me, prompt, seq = self.queued_wake()
+        self.assert_wake_is_silent(prompt + " tampered")
+        me.call("ack", sid="codex-wake-test", through=seq)
+        self.assert_wake_is_silent(prompt + " tampered")
+        self.assertIsNone(
+            self.hook(
+                "codex", "UserPromptSubmit", {"cwd": str(self.wt), "prompt": prompt}
+            )
+        )
         with patch.object(coord, "Client", side_effect=coord.CoordError("offline")):
-            self.assertEqual(self.submit_wake(prompt)["decision"], "block")
+            self.assertIsNone(self.submit_wake(prompt))
             self.assertIsNone(self.submit_wake("ordinary user instruction"))
+        with patch.object(
+            coord, "hook_dispatch", side_effect=coord.CoordError("bad state")
+        ):
+            self.assertIsNone(self.submit_wake(prompt))
 
-    def test_subagent_hook_uses_child_thread_and_never_consumes_parent_inbox(self):
+    def test_subagent_start_uses_agent_id_and_never_consumes_parent_inbox(self):
         parent = self.daemon.client()
         child = self.daemon.client()
         self.addCleanup(parent.close)
@@ -1686,18 +2031,22 @@ class HookTest(Fixture):
             "send", sid="codex-child", to="codex-parent", text="child result"
         )["seq"]
 
-        # Codex documents that a subagent hook payload reports the parent
-        # session_id. Its process environment carries the actual child thread.
+        # Subagent lifecycle hooks report the parent in session_id and the
+        # child in agent_id. Starting the child must not consume the parent's
+        # unread delivery.
         subagent = self.codex_hook_as(
-            "child",
-            "UserPromptSubmit",
+            "parent",
+            "SubagentStart",
             {
                 "session_id": "parent",
+                "agent_id": "child",
                 "cwd": str(self.repo),
-                "prompt": "ordinary child work",
             },
         )
-        self.assertIsNone(subagent)
+        self.assertIn(
+            "joined as codex-child",
+            subagent["hookSpecificOutput"]["additionalContext"],
+        )
         self.assertEqual(child.call("peek", sid="codex-child")["unread"], 0)
         self.assertEqual(parent.call("peek", sid="codex-parent")["last_seq"], seq)
 
@@ -1811,7 +2160,7 @@ class HookTest(Fixture):
         self.assertEqual(caught["last_seq"], seq)
         self.assertIn("sender offline; no reply expected", coord.render_catchup(caught))
 
-    def test_f8_1_claude_code_hooks_join_nudge_and_deny(self):
+    def test_f8_1_claude_code_hooks_join_and_nudge(self):
         start = self.hook(
             "claude-code", "SessionStart", {"session_id": "s1", "cwd": str(self.wt)}
         )
@@ -1823,70 +2172,39 @@ class HookTest(Fixture):
             "claude-code", "UserPromptSubmit", {"session_id": "s1", "cwd": str(self.wt)}
         )
         self.assertIn("1 unread", prompt["hookSpecificOutput"]["additionalContext"])
+        self.assertIsNone(
+            self.hook(
+                "claude-code",
+                "UserPromptSubmit",
+                {"session_id": "s1", "cwd": str(self.wt)},
+            )
+        )
         self.assertIsNone(self.hook("claude-code", "PostToolUse", {"session_id": "s1"}))
         me = self.daemon.client()
         self.addCleanup(me.close)
         me.call("attach", sid="cc-s1", native_id="s1")
-        me.call("worktree_claim", sid="cc-s1", path=str(self.wt), enforce=True)
-        deny = self.hook(
-            "claude-code",
-            "PreToolUse",
-            {
-                "session_id": "s1",
-                "tool_name": "Edit",
-                "tool_input": {"file_path": str(self.repo / "README")},
-            },
+        stop = self.hook("claude-code", "Stop", {"session_id": "s1"})
+        self.assertEqual(stop["decision"], "block")
+        self.assertIn("catchup", stop["reason"])
+        me.call("ack", sid="cc-s1", through=me.call("peek", sid="cc-s1")["last_seq"])
+        self.assertIsNone(
+            self.hook(
+                "claude-code", "Stop", {"session_id": "s1", "stop_hook_active": True}
+            )
         )
-        self.assertEqual(deny["hookSpecificOutput"]["permissionDecision"], "deny")
-        allow = self.hook(
-            "claude-code",
-            "PreToolUse",
-            {
-                "session_id": "s1",
-                "tool_name": "Write",
-                "tool_input": {"file_path": str(self.wt / "new")},
-            },
-        )
-        self.assertIsNone(allow)
         self.hook("claude-code", "SessionEnd", {"session_id": "s1"})
         gone = [s for s in me.call("status")["sessions"] if s["sid"] == "cc-s1"][0]
         self.assertEqual((gone["status"], gone["left_at"] is not None), ("done", True))
 
-    def test_f8_1_codex_hooks_parse_apply_patch_paths(self):
-        self.hook("codex", "SessionStart", {"session_id": "t1", "cwd": str(self.wt)})
-        me = self.daemon.client()
-        self.addCleanup(me.close)
-        me.call("attach", sid="codex-t1", native_id="t1")
-        me.call("worktree_claim", sid="codex-t1", path=str(self.wt), enforce=True)
-        patch = (
-            f"*** Begin Patch\n*** Update File: {self.repo / 'README'}\n@@\n-x\n+y\n"
-            "*** End Patch\n"
-        )
-        deny = self.hook(
-            "codex",
-            "PreToolUse",
-            {
-                "session_id": "t1",
-                "cwd": str(self.wt),
-                "tool_name": "apply_patch",
-                "tool_input": {"command": patch},
-            },
-        )
-        self.assertEqual(deny["hookSpecificOutput"]["permissionDecision"], "deny")
-        relative = "*** Begin Patch\n*** Add File: notes.md\n+hi\n*** End Patch\n"
-        allow = self.hook(
-            "codex",
-            "PreToolUse",
-            {
-                "session_id": "t1",
-                "cwd": str(self.wt),
-                "tool_name": "apply_patch",
-                "tool_input": {"command": relative},
-            },
-        )
-        self.assertIsNone(allow)
-
     def test_f8_1_antigravity_hooks_speak_its_own_schema(self):
+        manifest = json.loads(
+            (
+                REPO_ROOT / "files/agent_plugins/agent-coord-antigravity/hooks.json"
+            ).read_text()
+        )["agent-coord"]
+        self.assertEqual(set(manifest), {"PreInvocation", "Stop"})
+        self.assertEqual(manifest["PreInvocation"][0]["type"], "command")
+        self.assertEqual(manifest["Stop"][0]["type"], "command")
         payload = {"conversationId": "c1", "workspacePaths": [str(self.wt)]}
         first = self.hook(
             "antigravity", "PreInvocation", {**payload, "invocationNum": 0}
@@ -1895,28 +2213,40 @@ class HookTest(Fixture):
         me = self.daemon.client()
         self.addCleanup(me.close)
         me.call("attach", sid="agy-c1", native_id="c1")
-        me.call("worktree_claim", sid="agy-c1", path=str(self.wt), enforce=True)
-        deny = self.hook(
-            "antigravity",
-            "PreToolUse",
-            {
-                **payload,
-                "toolCall": {
-                    "name": "write_to_file",
-                    "args": {"TargetFile": str(self.repo / "README")},
-                },
-            },
-        )
-        self.assertEqual(deny["decision"], "deny")
         quiet = self.hook(
             "antigravity", "PreInvocation", {**payload, "invocationNum": 1}
         )
         self.assertEqual(quiet, {})
+        # Ending an execution loop does not end the conversation.
+        self.assertEqual(
+            self.hook("antigravity", "Stop", payload), {"decision": "stop"}
+        )
+        self.assertIsNone(me.call("whoami", sid="agy-c1")["session"]["left_at"])
         self.peer_posts("look")
         nudge = self.hook(
             "antigravity", "PreInvocation", {**payload, "invocationNum": 2}
         )
         self.assertIn("1 unread", nudge["injectSteps"][0]["ephemeralMessage"])
+        stop = self.hook("antigravity", "Stop", {**payload, "fullyIdle": True})
+        self.assertEqual(stop["decision"], "continue")
+        self.assertIn("catchup", stop["reason"])
+        self.peer_posts("arrived during the forced continuation")
+        self.assertEqual(
+            self.hook("antigravity", "Stop", {**payload, "fullyIdle": True}),
+            {"decision": "stop"},
+        )
+        me.call("ack", sid="agy-c1", through=me.call("peek", sid="agy-c1")["last_seq"])
+        self.assertEqual(
+            self.hook("antigravity", "Stop", {**payload, "fullyIdle": True}),
+            {"decision": "stop"},
+        )
+        self.peer_posts("new work after the previous batch was acked")
+        self.assertEqual(
+            self.hook("antigravity", "Stop", {**payload, "fullyIdle": True})[
+                "decision"
+            ],
+            "continue",
+        )
 
 
 class McpTest(Fixture):
@@ -1944,6 +2274,7 @@ class McpTest(Fixture):
             t["name"] for t in self.rpc(adapter, 2, "tools/list")["result"]["tools"]
         }
         self.assertIn("send", tools)
+        self.assertNotIn("worktree", tools)
         self.assertNotIn("force_release", tools)
         who = self.rpc(adapter, 3, "tools/call", {"name": "whoami", "arguments": {}})
         self.assertIn("cc-m1", who["result"]["content"][0]["text"])
@@ -1957,16 +2288,6 @@ class McpTest(Fixture):
         self.assertEqual(
             client.call("whoami", sid="cc-m1")["session"]["status"], "done"
         )
-        bad = self.rpc(
-            adapter,
-            5,
-            "tools/call",
-            {
-                "name": "worktree",
-                "arguments": {"action": "force_release", "path": "/x"},
-            },
-        )
-        self.assertTrue(bad["result"]["isError"])
         odd = self.rpc(
             adapter,
             6,
@@ -2048,7 +2369,7 @@ class DoctorTest(Fixture):
         identity = coord.Identity("claude-code", "d1", str(self.repo))
         self.assertEqual(coord.doctor(identity, autostart=False, out=out), 0)
         text = out.getvalue()
-        for lane in ("connect:", "session:", "notify:", "enforcement:", "sandbox:"):
+        for lane in ("connect:", "session:", "notify:", "sandbox:"):
             self.assertIn(lane, text)
 
 
