@@ -165,11 +165,12 @@ Claude Code に「信頼を高めるための仕組み」と外部ツール連�
 - **CLI**: agent-browser（日常の画面確認）, Playwright CLI（テスト作成・再現調査）, Vercel CLI。ブラウザ操作の公式 Skill は Claude Code と Codex に配置し、旧 Playwright MCP 登録は削除します。
 
 共有 memory clone は Claude Code と Codex の両方で使います。Codex には `memory-routing` と
-`feature-value-answer` を `/etc/codex/skills/` に配置し、`UserPromptSubmit` hook が
+`feature-value-answer` を `/etc/codex/skills/` に配置し、`SessionStart` hook が共有 clone を更新し、`UserPromptSubmit` hook が
 Claude Code と同じ index を検索して、実行中の Codex モデルに合う教訓だけを文脈として渡します。
 該当なし・検索失敗なら無出力で、プロンプトを block しません。Codex から entry を保存する場合は
 `claude_memory_sync --write <entry path>` に全文を標準入力で渡し、書式検証・index 更新・commit・push を行います。
 この設定は次に起動する Codex session から適用されます。
+agent-coord プラグインだけを更新しても、これらのシステム hook と memory CLI は更新されません。
 
 Chrome DevTools MCP は headless・isolated・memory-debugging を有効にし、利用統計と CrUX への URL 送信を無効にします。Chrome は基本セットアップで導入した Linux 版を使います。
 

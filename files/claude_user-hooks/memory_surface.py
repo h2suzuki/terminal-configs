@@ -134,6 +134,10 @@ HYBRID_STRONG_FLOOR = 0.55
 # hybrid 全滅時の救済: lexical 無 match でも cos がこれ以上なら top-1 を surface
 # (評価で recall +6pt / precision 不変)
 DENSE_RESCUE_FLOOR = 0.60
+# A short prompt can have an exact lexical match but a diluted embedding.
+# Keep the normal hybrid floor and rescue only a strong BM25 match.
+LEXICAL_RESCUE_BM25_FLOOR = -5.5
+LEXICAL_RESCUE_HYBRID_FLOOR = 0.4
 BM25_CANDIDATES = 10
 _UNK_ID = 1
 _VITERBI_UNK_SCORE = -20.0  # below any real token score; spm uses min_score - 10
@@ -793,21 +797,27 @@ def _record_inject(
     model: str | None = None,
     kind: str = "emit",
 ) -> None:
-    con.execute(
-        "INSERT INTO inject_log(file_path, project_id, session_id, "
-        "ts, score, query_excerpt, model, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            file_path,
-            project_id,
-            session_id,
-            ts,
-            score,
-            prompt[:QUERY_EXCERPT_LEN],
-            model,
-            kind,
-        ),
-    )
-    con.commit()
+    # A read-only index can still retrieve a lesson. Losing the optional emit
+    # history must not turn that lesson into an empty hook response.
+    try:
+        con.execute(
+            "INSERT INTO inject_log(file_path, project_id, session_id, "
+            "ts, score, query_excerpt, model, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                file_path,
+                project_id,
+                session_id,
+                ts,
+                score,
+                prompt[:QUERY_EXCERPT_LEN],
+                model,
+                kind,
+            ),
+        )
+        con.commit()
+    except sqlite3.Error:
+        with contextlib.suppress(sqlite3.Error):
+            con.rollback()
 
 
 def _gap(elapsed: int) -> str:
@@ -1086,9 +1096,22 @@ def _hybrid_picks(
         return None
     scored, cos_by_path = both
     reminders = {fp: r for fp, r, _s in bm_rows}
+    selected = _select_picks(scored, cos_by_path)
+    if not selected:
+        strong = [
+            (fp, scored[fp])
+            for fp, _reminder, bm25 in bm_rows
+            if bm25 is not None
+            and bm25 <= LEXICAL_RESCUE_BM25_FLOOR
+            and fp in scored
+            and scored[fp] >= LEXICAL_RESCUE_HYBRID_FLOOR
+            and (ok is None or ok(fp))
+        ]
+        if strong:
+            selected = [max(strong, key=lambda item: item[1])]
     return [
         (fp, _lookup_reminder(con, project_id, fp, reminders), h)
-        for fp, h in _select_picks(scored, cos_by_path)
+        for fp, h in selected
     ]
 
 

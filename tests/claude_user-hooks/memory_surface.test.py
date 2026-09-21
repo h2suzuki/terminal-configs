@@ -100,6 +100,48 @@ class CapTest(unittest.TestCase):
         after = self.con.execute("SELECT COUNT(*) FROM inject_log").fetchone()[0]
         self.assertEqual(before, after)
 
+    def test_read_only_index_still_surfaces_reminder(self) -> None:
+        # The ledger may be readable to a hook even when its telemetry table
+        # cannot be updated. Retrieval is the user-facing operation.
+        self.con.close()
+        self.con = sqlite3.connect(
+            f"file:{ms.DB_PATH}?mode=ro", uri=True, timeout=2.0
+        )
+        self.assertEqual(self.surface("readonly-session", 1000), ["/m/a.md"])
+        self.assertEqual(
+            self.con.execute("SELECT COUNT(*) FROM inject_log").fetchone()[0], 0
+        )
+
+
+class LexicalRescueTest(unittest.TestCase):
+    def test_short_exact_match_surfaces_without_lowering_global_floor(self) -> None:
+        rows = [("/m/relevant.md", "lesson", -5.8)]
+        scores = ({"/m/relevant.md": 0.437}, {"/m/relevant.md": 0.30})
+        with mock.patch.object(ms, "_hybrid_scored", return_value=scores):
+            self.assertEqual(
+                ms._hybrid_picks(None, "short correction", "proj", rows),
+                [("/m/relevant.md", "lesson", 0.437)],
+            )
+            self.assertEqual(
+                ms._hybrid_picks(
+                    None, "short correction", "proj", rows, lambda _fp: False
+                ),
+                [],
+            )
+
+    def test_weak_lexical_match_stays_silent(self) -> None:
+        scores = ({"/m/relevant.md": 0.437}, {"/m/relevant.md": 0.30})
+        with mock.patch.object(ms, "_hybrid_scored", return_value=scores):
+            self.assertEqual(
+                ms._hybrid_picks(
+                    None,
+                    "weak correction",
+                    "proj",
+                    [("/m/relevant.md", "lesson", -5.0)],
+                ),
+                [],
+            )
+
 
 class WhenDispatchTest(unittest.TestCase):
     """`when:` dispatch, written by the ordering side first.
