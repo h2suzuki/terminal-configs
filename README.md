@@ -90,6 +90,10 @@ Claude Code から Codex を使う場合は、下記の Codex の認証後に Cl
 
 ### Codex
 
+共通の作業指針は `files/codex_user-AGENTS.md` を原本とし、システム導入時に
+`/etc/codex/skel/AGENTS.md`、`setup_user_environment` 実行時に各ユーザーの
+`~/.codex/AGENTS.md` へコピーします。既存の同名ファイルは更新されます。
+
 ```bash
 codex login
 ```

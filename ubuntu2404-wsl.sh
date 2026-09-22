@@ -345,6 +345,7 @@ copy claude_user-extensions.json                /etc/claude-code/skel/extensions
 #  Codex configs; setup_user_environment installs CLI
 # Preserve unrelated admin skills, hooks, and rules.
 copy codex_config.toml                          /etc/codex/config.toml
+copy codex_user-AGENTS.md                       /etc/codex/skel/AGENTS.md
 merge_dir shared_hooks/                          /etc/codex/hooks/
 copy shared_skills/memory-routing/SKILL.md      /etc/codex/skills/memory-routing/SKILL.md
 copy shared_skills/mytask/SKILL.md             /etc/codex/skills/mytask/SKILL.md

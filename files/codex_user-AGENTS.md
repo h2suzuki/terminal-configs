@@ -1,4 +1,4 @@
-# Project guidance for coding agents
+# User guidance for Codex
 
 このファイルは背景情報ではなく、ユーザーからの作業指示として扱う。
 
