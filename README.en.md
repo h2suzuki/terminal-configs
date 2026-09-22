@@ -124,7 +124,11 @@ Use `jev api-key set` to update the key and `jev api-key clear` to remove it. Se
 
 ### CodeGraph
 
-Run `codegraph init -i` in the repository you want to analyze.
+Run this in the repository you want to analyze:
+
+```bash
+codegraph init -i
+```
 
 ### Google Cloud
 

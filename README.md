@@ -124,7 +124,11 @@ jev hello
 
 ### CodeGraph
 
-コードを解析するリポジトリで `codegraph init -i` を実行します。
+コードを解析するリポジトリで実行します。
+
+```bash
+codegraph init -i
+```
 
 ### Google Cloud
 
