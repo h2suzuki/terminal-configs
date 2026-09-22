@@ -58,7 +58,7 @@ def install(source, root):
     wrapper.chmod(0o755)
     for client in ("claude-code", "codex"):
         copy(
-            "shared-skills/workspace-hygiene/SKILL.md",
+            "shared_skills/workspace-hygiene/SKILL.md",
             f"/etc/{client}/skills/workspace-hygiene/SKILL.md",
         )
     copy(

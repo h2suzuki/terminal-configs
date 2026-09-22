@@ -3,7 +3,7 @@
 <!-- dangling-ref-check: allow (documents intentional scratch paths) -->
 
 Claude Code and Codex use the same `files/workspace_hygiene.py` hook and
-`files/shared-skills/workspace-hygiene/SKILL.md`. Agent research notes, temporary
+`files/shared_skills/workspace-hygiene/SKILL.md`. Agent research notes, temporary
 reports and intermediate artifacts belong in ignored `drafts/`; they must not be
 staged, committed or published. Manual worktrees use `~/worktrees/<repo>/<name>`.
 
