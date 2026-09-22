@@ -94,11 +94,16 @@ codex remote-control pair
 
 ### Antigravity
 
+Antigravity は起動時にログインを行います。
+
 ```bash
 agy
 ```
 
-起動後、画面の案内に従って認証します。
+- ローカル端末：自動で開くブラウザーで Google アカウントにログインします。
+- SSH 接続先：端末に表示された認証 URL を手元のブラウザーで開いてログインし、発行された認証コードを SSH 端末に貼り付けます。
+
+保存済みの有効な認証情報がある場合は自動ログインします。[公式の認証手順](https://antigravity.google/docs/cli/install#authentication-workflows)も参照してください。
 
 ### GitHub CLI
 

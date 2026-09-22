@@ -94,11 +94,16 @@ Use the code displayed by `pair` to pair your client. See [Remote connections](h
 
 ### Antigravity
 
+Antigravity signs you in at startup:
+
 ```bash
 agy
 ```
 
-Follow the authentication prompts after startup.
+- Local terminal: sign in to your Google account in the browser that opens automatically.
+- Over SSH: open the authorization URL printed in the terminal in your local browser, sign in, then paste the resulting authorization code into the SSH terminal.
+
+A valid saved session signs you in automatically. See the [official authentication instructions](https://antigravity.google/docs/cli/install#authentication-workflows).
 
 ### GitHub CLI
 
