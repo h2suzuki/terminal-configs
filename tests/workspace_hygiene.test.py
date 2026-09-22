@@ -255,12 +255,16 @@ class HygieneTest(unittest.TestCase):
         installer = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(installer)
         home = Path(self.temp.name) / "user"
+        old = home / ".claude/skills/workspace-hygiene"
+        old.parent.mkdir(parents=True)
+        old.symlink_to("/etc/claude-code/skills/workspace-hygiene")
         with patch.object(Path, "is_file", return_value=True):
             installer.link_user_skill(home)
             installer.link_user_skill(home)
-        target = home / ".claude/skills/workspace-hygiene"
+        self.assertFalse(old.is_symlink())
+        target = home / ".claude/skills/scratch-file-management"
         self.assertEqual(
-            str(target.readlink()), "/etc/claude-code/skills/workspace-hygiene"
+            str(target.readlink()), "/etc/claude-code/skills/scratch-file-management"
         )
         target.unlink()
         target.mkdir()
@@ -354,6 +358,19 @@ class HygieneTest(unittest.TestCase):
         peer = stage / "etc/codex/skills/peer/SKILL.md"
         peer.parent.mkdir(parents=True)
         peer.write_text("peer")
+        retired = []
+        for client, name in (
+            ("codex", "workspace-hygiene"),
+            ("claude-code", "workspace-hygiene"),
+            ("claude-code", "browser-verification"),
+        ):
+            old = stage / f"etc/{client}/skills/{name}/SKILL.md"
+            old.parent.mkdir(parents=True, exist_ok=True)
+            old.write_text("old managed skill")
+            retired.append(old)
+        browser = stage / "etc/claude-code/skills/browser-testing-guide/SKILL.md"
+        browser.parent.mkdir(parents=True)
+        browser.write_text("new browser guide")
         claude = stage / "etc/claude-code/managed-settings.d/extensions.json"
         claude.parent.mkdir(parents=True)
         claude.write_text(
@@ -404,12 +421,14 @@ class HygieneTest(unittest.TestCase):
         )
         self.assertEqual(settings["permissions"], {"allow": ["existing"]})
         self.assertEqual(peer.read_text(), "peer")
+        self.assertTrue(all(not old.exists() for old in retired))
+        self.assertEqual(browser.read_text(), "new browser guide")
         for client in ("codex", "claude-code"):
             self.assertEqual(
                 (
-                    stage / f"etc/{client}/skills/workspace-hygiene/SKILL.md"
+                    stage / f"etc/{client}/skills/scratch-file-management/SKILL.md"
                 ).read_bytes(),
-                (FILES / "shared_skills/workspace-hygiene/SKILL.md").read_bytes(),
+                (FILES / "shared_skills/scratch-file-management/SKILL.md").read_bytes(),
             )
         deployed = stage / "usr/local/lib/workspace_hygiene/workspace_hygiene.py"
         result = subprocess.run(

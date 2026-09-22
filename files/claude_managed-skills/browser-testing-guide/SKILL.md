@@ -1,9 +1,9 @@
 ---
-name: browser-verification
+name: browser-testing-guide
 description: Choose browser verification tools for frontend work in Claude Code and Codex. Use for checking page appearance and interactions, reproducing browser bugs, planning browser tests, or investigating frontend performance and memory. Excludes unit tests and tasks without browser verification.
 ---
 
-# Browser Verification
+# Browser Testing Guide
 
 画面の観察、繰り返す検証、テスト作成の調査、性能の原因調査を分け、目的に必要な道具だけを使う。Svelte / React などのフレームワークによらず適用する。ユーザーが指定した道具と既存のテスト環境を優先する。
 

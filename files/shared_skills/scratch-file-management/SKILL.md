@@ -1,9 +1,9 @@
 ---
-name: workspace-hygiene
+name: scratch-file-management
 description: Choose locations for agent research notes, intermediate outputs, command temporary files, and Git worktrees; check scratch before staging or publishing. Use when creating these files or introducing a repository root directory.
 ---
 
-# Workspace hygiene
+# Scratch File Management
 
 - Put agent-created research notes, intermediate artifacts and temporary reports in
   the repository's ignored `drafts/`, even if short-lived. Verify `git check-ignore`

@@ -16,16 +16,22 @@ MATCHER = (
 
 
 def link_user_skill(home):
-    target = home / ".claude/skills/workspace-hygiene"
-    expected = Path("/etc/claude-code/skills/workspace-hygiene")
-    if target.is_symlink() and target.readlink() == expected:
-        return
-    if target.exists() or target.is_symlink():
-        raise ValueError(f"Preserving conflicting user skill: {target}")
+    target = home / ".claude/skills/scratch-file-management"
+    expected = Path("/etc/claude-code/skills/scratch-file-management")
     if not (expected / "SKILL.md").is_file():
-        raise ValueError("Install the machine-wide workspace-hygiene skill first.")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.symlink_to(expected, target_is_directory=True)
+        raise ValueError(
+            "Install the machine-wide scratch-file-management skill first."
+        )
+    if not (target.is_symlink() and target.readlink() == expected):
+        if target.exists() or target.is_symlink():
+            raise ValueError(f"Preserving conflicting user skill: {target}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.symlink_to(expected, target_is_directory=True)
+    old = home / ".claude/skills/workspace-hygiene"
+    if old.is_symlink() and old.readlink() == Path(
+        "/etc/claude-code/skills/workspace-hygiene"
+    ):
+        old.unlink()
 
 
 def install(source, root):
@@ -58,9 +64,16 @@ def install(source, root):
     wrapper.chmod(0o755)
     for client in ("claude-code", "codex"):
         copy(
-            "shared_skills/workspace-hygiene/SKILL.md",
-            f"/etc/{client}/skills/workspace-hygiene/SKILL.md",
+            "shared_skills/scratch-file-management/SKILL.md",
+            f"/etc/{client}/skills/scratch-file-management/SKILL.md",
         )
+        old = destination(f"/etc/{client}/skills/workspace-hygiene/SKILL.md")
+        old.unlink(missing_ok=True)
+    # Base installers merge the renamed browser skill before running this installer.
+    browser = root / "etc/claude-code/skills/browser-testing-guide/SKILL.md"
+    if browser.is_file():
+        old = destination("/etc/claude-code/skills/browser-verification/SKILL.md")
+        old.unlink(missing_ok=True)
     copy(
         "claude_managed-skills/temp-file-discipline/SKILL.md",
         "/etc/claude-code/skills/temp-file-discipline/SKILL.md",
@@ -128,7 +141,7 @@ def main():
         else:
             install(Path(__file__).resolve().parent, args.root.resolve())
     except (OSError, ValueError) as exc:
-        print(f"workspace-hygiene install failed: {exc}", file=sys.stderr)
+        print(f"scratch-file-management install failed: {exc}", file=sys.stderr)
         return 1
     return 0
 

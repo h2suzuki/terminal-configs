@@ -85,11 +85,18 @@ popd >/dev/null
 
 
 # Symlink the managed skills
+for old_skill in browser-verification workspace-hygiene; do
+    target="$HOME/.claude/skills/$old_skill"
+    if [ -L "$target" ] && [ "$(readlink "$target")" = "/etc/claude-code/skills/$old_skill" ]; then
+        run rm "$target"
+    fi
+done
 pushd /etc/claude-code/skills/ >/dev/null
 
 for skill_dir in *; do
     [ -n "$skill_dir" ] || continue
     [ -d "$skill_dir" ] || continue
+    [ -f "$skill_dir/SKILL.md" ] || continue
     target="$HOME/.claude/skills/$skill_dir"
     expected="/etc/claude-code/skills/$skill_dir"
     if [ -e "$target" ] || [ -L "$target" ]; then
@@ -107,7 +114,10 @@ popd >/dev/null
 
 # Share browser verification guidance with Codex
 run install --directory ~/.agents/skills/
-run ln -sfn /etc/claude-code/skills/browser-verification ~/.agents/skills/
+if [ -L ~/.agents/skills/browser-verification ] && [ "$(readlink ~/.agents/skills/browser-verification)" = /etc/claude-code/skills/browser-verification ]; then
+    run rm ~/.agents/skills/browser-verification
+fi
+run ln -sfn /etc/claude-code/skills/browser-testing-guide ~/.agents/skills/
 
 
 # Initialize the RAG memory for this user

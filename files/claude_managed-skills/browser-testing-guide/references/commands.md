@@ -1,4 +1,4 @@
-# Browser Verification Commands
+# Browser Testing Guide Commands
 
 選択した道具の節だけ読む。Google の例は導入・実行経路の smoke test であり、自作アプリの検証の代わりにはならない。通常は依頼された URL・locator・期待結果へ置き換える。Google に同意画面や CAPTCHA が出た場合は観測結果として扱い、回避せず確認できなかった範囲を報告する。
 
@@ -13,7 +13,7 @@
 
 ```bash
 browser_scope="${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:?session ID is required}}"
-browser_work_dir="$(git rev-parse --show-toplevel)/drafts/$browser_scope/browser-verification"
+browser_work_dir="$(git rev-parse --show-toplevel)/drafts/$browser_scope/browser-testing-guide"
 export TMPDIR="/tmp/claude-scratch-$browser_scope"
 mkdir -p "$browser_work_dir" "$TMPDIR"
 ```

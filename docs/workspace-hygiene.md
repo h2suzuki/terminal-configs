@@ -3,7 +3,7 @@
 <!-- dangling-ref-check: allow (documents intentional scratch paths) -->
 
 Claude Code and Codex use the same `files/workspace_hygiene.py` hook and
-`files/shared_skills/workspace-hygiene/SKILL.md`. Agent research notes, temporary
+`files/shared_skills/scratch-file-management/SKILL.md`. Agent research notes, temporary
 reports and intermediate artifacts belong in ignored `drafts/`; they must not be
 staged, committed or published. Manual worktrees use `~/worktrees/<repo>/<name>`.
 
@@ -28,8 +28,8 @@ User skill link conflicts fail with the existing object intact.
 |---|---|
 | Command | `/usr/local/bin/workspace_hygiene` |
 | Shared code and drafts dependencies | `/usr/local/lib/workspace_hygiene/` |
-| Codex skill | `/etc/codex/skills/workspace-hygiene/SKILL.md` |
-| Claude skill | `/etc/claude-code/skills/workspace-hygiene/SKILL.md`, linked from `~/.claude/skills/` |
+| Codex skill | `/etc/codex/skills/scratch-file-management/SKILL.md` |
+| Claude skill | `/etc/claude-code/skills/scratch-file-management/SKILL.md`, linked from `~/.claude/skills/` |
 | Codex registration | `[[hooks.PreToolUse]]` in `/etc/codex/config.toml` |
 | Claude registration | `/etc/claude-code/managed-settings.d/extensions.json` |
 
@@ -37,7 +37,7 @@ Record these states separately when deploying:
 
 1. **Not placed:** installed files or registration are absent/different.
 2. **Placed, reload pending:** files match, but running clients have not reloaded.
-3. **Active:** after restarting, both clients discover `workspace-hygiene` and their
+3. **Active:** after restarting, both clients discover `scratch-file-management` and their
    `/hooks` views show the shared PreToolUse command. Verify an isolated denied
    tool call and an ordinary allowed source edit in each client.
 
