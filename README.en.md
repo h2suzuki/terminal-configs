@@ -8,14 +8,17 @@ Configuration files and setup scripts for terminal and AI coding environments on
 
 | Area | Main components |
 |---|---|
-| Terminal | Bash, Git, Neovim, GitHub CLI, ripgrep, delta, libsixel-bin, uv, ruff, ty, Node.js LTS through nvm, Chrome, Google Cloud CLI, Vercel CLI |
-| AI tools | Claude Code, Codex CLI, Antigravity CLI, Typesafe.ai Jev (including a custom wrapper CLI and MCP server) |
-| LSP | clangd (C/C++), TypeScript Language Server, Pyright (Python) |
-| MCP | Chrome DevTools, CodeGraph, Cloud Run, BigQuery (Toolbox), mytask (custom), Jev |
-| Skill | Skills for agent-browser and Playwright CLI, browser verification, workspace file management, and more |
-| Plugin | Official Jev plugin, Codex plugin for Claude Code, agent-coord for session coordination |
+| Terminal | Bash, Git, Neovim, GitHub CLI, ripgrep, delta, libsixel-bin, uv, ruff, ty, Node.js LTS through nvm, Chrome, Google Cloud CLI |
+| AI tools | Claude Code, Codex CLI, Antigravity CLI, Typesafe.ai Jev\* |
+| <div align="right">LSP</div> | clangd (C/C++), TypeScript Language Server, Pyright (Python) |
+| <div align="right">MCP</div> | Chrome DevTools, CodeGraph, Cloud Run, BigQuery (Toolbox), mytask\*, Jev\* |
+| <div align="right">Skill</div> | agent-browser, playwright-cli, browser-verification\*, workspace-hygiene\*, and more |
+| <div align="right">Plugin</div> | Official Jev plugin, Codex plugin for Claude Code, agent-coord\* for session coordination |
+| <div align="right">CLI</div> | agent-browser, playwright-cli, Vercel CLI, agent_coord\*, workspace_hygiene\*, claude_memory_sync\*, jev\* |
 | Display and audio forwarding | X11 display and PulseAudio audio forwarding to the SSH client, shared by the login user and root |
 | OS integration | SSH keepalive, Windows Terminal detection; systemd, mDNS, hostname configuration and PulseAudio audio forwarding to WSLg on WSL2 |
+
+\* … Custom scripts maintained in this repository
 
 Voice notifications and SigNoz telemetry are available through [optional setup](#optional-setup).
 
