@@ -2304,6 +2304,162 @@ class HookTest(Fixture):
         )
 
 
+class AntigravityBindingTest(Fixture):
+    def setUp(self):
+        super().setUp()
+        self.daemon = Daemon(self.home)
+        self.addCleanup(self.daemon.stop)
+        self.client = self.daemon.client()
+        self.addCleanup(self.client.close)
+        self.adapter = coord.McpAdapter(
+            self.client, coord.Identity("antigravity", None, "/plugin")
+        )
+
+    def payload(self, native):
+        return {
+            "conversationId": native,
+            "workspacePaths": [str(self.wt)],
+        }
+
+    def call(self, native, name="whoami", arguments=None):
+        output = io.StringIO()
+        coord.hook_main(
+            "antigravity",
+            "PreInvocation",
+            io.StringIO(json.dumps(self.payload(native))),
+            output,
+        )
+        hook = json.loads(output.getvalue())
+        self.assertNotIn("decision", hook)
+        self.assertNotIn("permissionOverrides", hook)
+        result = self.adapter.dispatch(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": name,
+                    "arguments": arguments or {},
+                    "_meta": {"antigravity.google/conversation_id": native},
+                },
+            }
+        )["result"]
+        self.assertFalse(result["isError"], result)
+        return result["content"][0]["text"]
+
+    def test_hook_and_mcp_share_native_session_and_project(self):
+        out = io.StringIO()
+        coord.hook_main(
+            "antigravity",
+            "PreInvocation",
+            io.StringIO(json.dumps(self.payload("agy-a"))),
+            out,
+        )
+        self.assertIn("agy-agy-a", out.getvalue())
+        who = self.call("agy-a")
+        self.assertIn("agy-agy-a", who)
+        self.assertIn(str(self.wt), who)
+        sessions = self.client.call("status")["sessions"]
+        self.assertEqual([s["sid"] for s in sessions], ["agy-agy-a"])
+
+    def test_one_mcp_process_routes_multiple_conversations_and_replies(self):
+        self.call("a")
+        self.call("b")
+        self.call("a", "send", {"to": "agy-b", "text": "PING-B"})
+        self.assertNotIn("PING-B", self.call("a", "catchup"))
+        self.assertIn("PING-B", self.call("b", "catchup"))
+        last = self.client.call("peek", sid="agy-b")["last_seq"]
+        self.call("b", "ack", {"through": last})
+        self.assertEqual(self.client.call("peek", sid="agy-b")["unread"], 0)
+        self.call("b", "send", {"to": "agy-a", "text": "PONG-A"})
+        self.assertIn("PONG-A", self.call("a", "catchup"))
+        self.assertEqual(
+            {s["sid"] for s in self.client.call("status")["sessions"]},
+            {"agy-a", "agy-b"},
+        )
+
+    def test_missing_or_invalid_metadata_never_uses_previous_identity(self):
+        self.call("a")
+        for raw in (
+            None,
+            {},
+            [],
+            {"antigravity.google/conversation_id": ""},
+            {"antigravity.google/conversation_id": 42},
+            {"antigravity.google/conversation_id": "unregistered"},
+        ):
+            result = self.adapter.dispatch(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "send",
+                        "arguments": {
+                            "to": "self",
+                            "text": "MUST-NOT-SEND",
+                        },
+                        "_meta": raw,
+                    },
+                }
+            )["result"]
+            self.assertTrue(result["isError"], result)
+        self.assertNotIn("MUST-NOT-SEND", self.call("a", "catchup"))
+        self.assertEqual(len(self.client.call("status")["sessions"]), 1)
+
+    def test_native_metadata_routes_without_model_arguments_or_permission_hook(self):
+        self.call("a")
+        message = {
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "_meta": {
+                    "antigravity.google/artifacts_dir": "/fixture/brain/a",
+                    "antigravity.google/conversation_id": "a",
+                    "progressToken": "fixture:3",
+                },
+                "name": "whoami",
+                "arguments": {},
+            },
+        }
+        result = self.adapter.dispatch(message)["result"]
+        self.assertFalse(result["isError"], result)
+        self.assertIn("agy-a", result["content"][0]["text"])
+        self.assertEqual(self.adapter.identity.cwd, str(self.wt))
+        self.assertEqual(message["params"]["arguments"], {})
+        hooks = json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "files/shared_plugins/agent-coord-antigravity/hooks.json"
+            ).read_text()
+        )
+        self.assertNotIn("PreToolUse", hooks["agent-coord"])
+
+    def test_left_conversation_requires_hook_rejoin_and_never_revives_on_mcp_alone(
+        self,
+    ):
+        self.call("a", "leave")
+        result = self.adapter.dispatch(
+            {
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {
+                    "name": "whoami",
+                    "arguments": {},
+                    "_meta": {"antigravity.google/conversation_id": "a"},
+                },
+            }
+        )["result"]
+        self.assertTrue(result["isError"], result)
+        self.assertIn("agy-a", self.call("a"))
+
+    def test_tool_schema_does_not_ask_model_for_session_identity(self):
+        result = self.adapter.dispatch({"id": 1, "method": "tools/list"})
+        self.assertEqual(result["result"]["tools"], coord.MCP_TOOLS)
+
+
 class McpTest(Fixture):
     def setUp(self) -> None:
         super().setUp()

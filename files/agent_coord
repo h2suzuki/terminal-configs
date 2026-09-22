@@ -2477,6 +2477,7 @@ MCP_TOOLS: list[Json] = [
     tool("leave", "Leave the ledger; held grants become unconfirmed, not free.", {}),
 ]
 RESERVED_ARGS = frozenset({"sid", "native_id", "token", "user_action"})
+AGY_CONVERSATION_META = "antigravity.google/conversation_id"
 JSON_TYPES = {"string": str, "integer": int, "boolean": bool}
 
 
@@ -2524,6 +2525,8 @@ class McpAdapter:
             self.sid = None
 
     def call_tool(self, name: str, arguments: Json) -> Json:
+        if self.identity.client == "antigravity" and self.sid is None:
+            raise CoordError("Antigravity call has no bound conversation", -32602)
         spec = next((t for t in MCP_TOOLS if t["name"] == name), None)
         if spec is None:
             raise CoordError(f"unknown tool {name}", -32601)
@@ -2534,6 +2537,20 @@ class McpAdapter:
         if name == "leave":
             self.sid = None
         return result
+
+    def bind_antigravity(self, meta: Json) -> None:
+        # CLI 1.2.8 sends the native conversation ID in each tools/call's _meta.
+        self.sid = None
+        native = meta.get(AGY_CONVERSATION_META) if isinstance(meta, dict) else None
+        if not isinstance(native, str) or not native.strip():
+            raise CoordError(
+                "Antigravity MCP conversation metadata missing; cannot select an inbox",
+                -32602,
+            )
+        sid = session_id_for("antigravity", native)
+        attached = self.client.call("attach", sid=sid, native_id=native)
+        self.identity = Identity("antigravity", native, attached["session"]["cwd"])
+        self.sid = sid
 
     def dispatch(self, message: Json) -> Json | None:
         if "id" not in message:
@@ -2566,6 +2583,8 @@ class McpAdapter:
                     ),
                 )
             try:
+                if self.identity.client == "antigravity":
+                    self.bind_antigravity(params.get("_meta") or {})
                 result = self.call_tool(name, dict(arguments))
             except CoordError as error:
                 return rpc_result(
