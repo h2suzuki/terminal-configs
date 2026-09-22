@@ -81,6 +81,8 @@ To use Codex from Claude Code, complete the Codex login below, then run `/codex:
 codex login
 ```
 
+For device-code authentication, run `codex login --device-auth` instead.
+
 Setup enables remote connections for each user. To connect remotely, run the following after logging in:
 
 ```bash
@@ -133,10 +135,6 @@ For the BigQuery MCP connection, also select the project:
 ```bash
 gcloud config set project <PROJECT_ID>
 ```
-
-### Figma
-
-Complete Figma OAuth authentication through `/mcp` inside Claude Code.
 
 ## Optional setup
 

@@ -18,11 +18,8 @@ writable_roots = ["~/worktrees"]
 [plugins."agent-coord@terminal-configs".mcp_servers.agent_coord]
 default_tools_approval_mode = "approve"
 
-# Disable design app tools and their skill descriptions in Codex.
+# Disable Canva tools and their skill descriptions in Codex.
 # Remote plugin enablement is account-managed, so disable skills by stable name.
-[apps.connector_68df038e0ba48191908c8434991bbac2] # Figma
-enabled = false
-
 [apps.connector_68df33b1a2d081918778431a9cfca8ba] # Canva
 enabled = false
 
@@ -36,20 +33,6 @@ config = [
     { name = "canva:canva-implement-feedback", enabled = false },
     { name = "canva:canva-resize-for-social-media", enabled = false },
     { name = "canva:canva-translate-design", enabled = false },
-    { name = "figma:figma-code-connect", enabled = false },
-    { name = "figma:figma-create-new-file", enabled = false },
-    { name = "figma:figma-design-to-code", enabled = false },
-    { name = "figma:figma-generate-design", enabled = false },
-    { name = "figma:figma-generate-diagram", enabled = false },
-    { name = "figma:figma-generate-library", enabled = false },
-    { name = "figma:figma-generative-plugins", enabled = false },
-    { name = "figma:figma-implement-motion", enabled = false },
-    { name = "figma:figma-shaders", enabled = false },
-    { name = "figma:figma-swiftui", enabled = false },
-    { name = "figma:figma-use", enabled = false },
-    { name = "figma:figma-use-figjam", enabled = false },
-    { name = "figma:figma-use-motion", enabled = false },
-    { name = "figma:figma-use-slides", enabled = false },
 ]
 
 [tui]

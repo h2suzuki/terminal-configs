@@ -199,10 +199,6 @@ run claude plugin install pyright-lsp@claude-plugins-official
 run claude plugin install security-guidance@claude-plugins-official
 run claude plugin disable security-guidance@claude-plugins-official
 
-# Figma plugin
-run claude plugin install figma@claude-plugins-official
-run claude plugin update figma@claude-plugins-official
-
 # Agent-browser
 run CI=1 npm install -g agent-browser
 run agent-browser install --with-deps

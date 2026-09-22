@@ -81,6 +81,8 @@ Claude Code から Codex を使う場合は、下記の Codex の認証後に Cl
 codex login
 ```
 
+デバイスコードで認証する場合は、代わりに `codex login --device-auth` を実行します。
+
 リモート接続の機能はセットアップ時にユーザーごとに有効化されます。リモートから利用する場合は、認証後に次を実行します。
 
 ```bash
@@ -133,10 +135,6 @@ BigQuery の MCP 接続には、使用するプロジェクトも指定します
 ```bash
 gcloud config set project <プロジェクトID>
 ```
-
-### Figma
-
-Claude Code 内の `/mcp` から Figma の OAuth 認証を行います。
 
 ## 追加セットアップ
 
