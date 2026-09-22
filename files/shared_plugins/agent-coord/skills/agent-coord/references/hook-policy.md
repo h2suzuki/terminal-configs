@@ -85,6 +85,16 @@ wake channel, and Channels support in Claude Code does not imply support in agy.
 `agy inject --help` shows only the top-level help; it does not establish an
 `inject` command. No such command was found in the checked public CLI interface.
 
+There is a **different entry point**: the installed `agy agentapi --help` lists
+`send-message <recipient_id> <content>` and `get-conversation-metadata <conversation_id>`.
+The generated `bin/agentapi` is a wrapper for `agy agentapi`. Google's Sidecars
+documentation describes `agentapi send-message` for Antigravity 2.0; the CLI entry
+point above is locally verified on 1.2.8.[8] A CLI probe with only
+`ANTIGRAVITY_LS_ADDRESS` failed with `Unauthenticated: missing CSRF token`.
+This is a concrete candidate, not yet a verified CLI idle-wake route. Bind the
+endpoint and its authentication to the exact live target; never select the
+newest unrelated session or treat command success alone as a successful wake.
+
 Hook `injectSteps` runs at a model invocation boundary, so it can add context
 once execution reaches that boundary; it does not itself start an idle turn.[3]
 `agy --conversation <id> -p ...` starts another CLI process to resume a conversation;
@@ -100,10 +110,13 @@ Do not call ledger delivery, hook injection, or an unverified RPC a successful w
 
 ### Execution environment and deployment
 
-At the check date, `agy` is absent from both the source and installed Claude
-`sandbox.excludedCommands` and Codex sandbox-exclusion rules. A nested agy test
-failed to create its `bin/agentapi` under the read-only home. That is a test
-environment failure, not evidence that agy cannot wake or execute tools.
+The source policies now include `agy` alongside `codex` in Claude
+`sandbox.excludedCommands` and Codex sandbox-exclusion rules. Confirm deployment
+and invocation matching before assuming they apply; Python/shell wrappers are
+not the bare `agy` command. The child's own terminal sandbox stays enabled.
+A nested test before this change failed to create `bin/agentapi` under the
+read-only home. That is a test environment failure, not evidence that agy
+cannot wake or execute tools.
 
 An MCP call runs under its server/daemon's permissions, not automatically outside
 all sandboxes. A new host-side adapter must be authorized, deployed, and loaded
@@ -240,3 +253,5 @@ blocking decision.
    Documents the opt-in MCP extension, not agent-coord's current transport.
 7. Google, *Headless mode*, <https://antigravity.google/docs/cli/headless/>.
    Documents conversation resumption and driver-owned stream-JSON input.
+8. Google, *Sidecars — agentapi*, <https://antigravity.google/docs/sidecars#agentapi>.
+   The page targets Antigravity 2.0; CLI applicability must be tested separately.
