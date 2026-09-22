@@ -78,7 +78,7 @@ def allowed_dirs(top):
 def check_path(cwd, name, *, directory=False):
     if "$TMPDIR" in name or "${TMPDIR}" in name:
         raise Violation(
-            "Unresolved TMPDIR write: set and validate it in this same command, or use workspace_hygiene run."
+            "Unresolved TMPDIR write: set and validate it in this same command, or use scratch_file_management run."
         )
     if not name or any(char in name for char in "$`*"):
         return  # Dynamic shell paths are outside this check's bounded grammar.
@@ -94,7 +94,7 @@ def check_path(cwd, name, *, directory=False):
     if not parts:
         return
     if "drafts" in parts:
-        probe = path / ".workspace-hygiene-probe" if directory else path
+        probe = path / ".scratch-file-management-probe" if directory else path
         result = subprocess.run(
             ["git", "-C", str(top), "check-ignore", "-q", "--", str(probe)], check=False
         )
@@ -162,7 +162,7 @@ def check_temp(words, variables, cwd):
     dest = expand(dest, variables)
     if not dest or "$" in dest or "`" in dest:
         raise Violation(
-            "mktemp needs an explicit, nonempty scratch directory. Use workspace_hygiene run -- COMMAND."
+            "mktemp needs an explicit, nonempty scratch directory. Use scratch_file_management run -- COMMAND."
         )
     path = Path(cwd, dest).resolve()
     if path in {Path("/"), Path("/tmp")} or Path("/tmp") in path.parents:
@@ -220,7 +220,7 @@ def check_git(cwd, args):
                 after_dash = True
             elif not after_dash and arg.startswith("--pathspec-from-file"):
                 raise Violation(
-                    "Use explicit git add paths so workspace hygiene can check the selected files."
+                    "Use explicit git add paths so scratch file management can check the selected files."
                 )
             elif not after_dash and arg.startswith("-"):
                 force |= arg == "--force" or (not arg.startswith("--") and "f" in arg)
@@ -272,7 +272,7 @@ def check_shell(command, cwd):
                     not variables[name] or variables[name] in {"/", "/tmp"}
                 ):
                     raise Violation(
-                        "TMPDIR must be nonempty and scoped to owned scratch; use workspace_hygiene run -- COMMAND."
+                        "TMPDIR must be nonempty and scoped to owned scratch; use scratch_file_management run -- COMMAND."
                     )
         if not words:
             continue
@@ -294,7 +294,7 @@ def check_shell(command, cwd):
             if word in {">", ">>", "&>"}:
                 if "$TMPDIR" in words[index + 1]:
                     raise Violation(
-                        "Unresolved TMPDIR write: set and validate it in this same command, or use workspace_hygiene run."
+                        "Unresolved TMPDIR write: set and validate it in this same command, or use scratch_file_management run."
                     )
                 check_path(cwd, words[index + 1])
         if program in {"mkdir", "touch", "tee"}:
@@ -370,11 +370,11 @@ def main():
             return run_temp(command)
         check(json.load(sys.stdin))
     except Violation as exc:
-        print(f"workspace-hygiene: {exc}", file=sys.stderr)
+        print(f"scratch-file-management: {exc}", file=sys.stderr)
         return 2
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         # Unsupported shell syntax and Git failures are visible, never advertised as checked.
-        print(f"workspace-hygiene: unable to check: {exc}", file=sys.stderr)
+        print(f"scratch-file-management: unable to check: {exc}", file=sys.stderr)
         return 1
     return 0
 

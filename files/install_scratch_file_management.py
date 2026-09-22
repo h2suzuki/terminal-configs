@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install just shared workspace hygiene; --root stages a reproducible fixture."""
+"""Install just shared scratch file management; --root stages a reproducible fixture."""
 
 import argparse
 import json
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import tomllib
 
-COMMAND = "/usr/local/bin/workspace_hygiene hook"
+COMMAND = "/usr/local/bin/scratch_file_management hook"
 MATCHER = (
     "^(Bash|exec_command|shell_command|apply_patch|Write|Edit|MultiEdit|NotebookEdit)$"
 )
@@ -27,11 +27,6 @@ def link_user_skill(home):
             raise ValueError(f"Preserving conflicting user skill: {target}")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.symlink_to(expected, target_is_directory=True)
-    old = home / ".claude/skills/workspace-hygiene"
-    if old.is_symlink() and old.readlink() == Path(
-        "/etc/claude-code/skills/workspace-hygiene"
-    ):
-        old.unlink()
 
 
 def install(source, root):
@@ -51,15 +46,15 @@ def install(source, root):
         path.chmod(mode)
 
     copy(
-        "workspace_hygiene.py",
-        "/usr/local/lib/workspace_hygiene/workspace_hygiene.py",
+        "scratch_file_management.py",
+        "/usr/local/lib/scratch_file_management/scratch_file_management.py",
         0o755,
     )
     for name in ("deny_drafts_commit.py", "check_dangling_refs.py"):
-        copy("claude_managed-hooks/" + name, "/usr/local/lib/workspace_hygiene/" + name)
-    wrapper = destination("/usr/local/bin/workspace_hygiene")
+        copy("claude_managed-hooks/" + name, "/usr/local/lib/scratch_file_management/" + name)
+    wrapper = destination("/usr/local/bin/scratch_file_management")
     wrapper.write_text(
-        '#!/bin/sh\nexec python3 /usr/local/lib/workspace_hygiene/workspace_hygiene.py "$@"\n'
+        '#!/bin/sh\nexec python3 /usr/local/lib/scratch_file_management/scratch_file_management.py "$@"\n'
     )
     wrapper.chmod(0o755)
     for client in ("claude-code", "codex"):
@@ -67,8 +62,6 @@ def install(source, root):
             "shared_skills/scratch-file-management/SKILL.md",
             f"/etc/{client}/skills/scratch-file-management/SKILL.md",
         )
-        old = destination(f"/etc/{client}/skills/workspace-hygiene/SKILL.md")
-        old.unlink(missing_ok=True)
     # Base installers merge the renamed browser skill before running this installer.
     browser = root / "etc/claude-code/skills/browser-testing-guide/SKILL.md"
     if browser.is_file():
@@ -122,7 +115,7 @@ def install(source, root):
         tomllib.loads(text)
         path.write_text(text)
     print(
-        f"Placed workspace hygiene under {root}; restart clients and inspect /hooks and skill discovery."
+        f"Placed scratch file management under {root}; restart clients and inspect /hooks and skill discovery."
     )
 
 

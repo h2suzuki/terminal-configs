@@ -85,7 +85,7 @@ popd >/dev/null
 
 
 # Symlink the managed skills
-for old_skill in browser-verification workspace-hygiene; do
+for old_skill in browser-verification; do
     target="$HOME/.claude/skills/$old_skill"
     if [ -L "$target" ] && [ "$(readlink "$target")" = "/etc/claude-code/skills/$old_skill" ]; then
         run rm "$target"

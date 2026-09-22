@@ -15,7 +15,7 @@ from unittest.mock import patch
 import tomllib
 
 FILES = Path(__file__).resolve().parents[1] / "files"
-HOOK = FILES / "workspace_hygiene.py"
+HOOK = FILES / "scratch_file_management.py"
 ENV = {
     **os.environ,
     "GIT_CONFIG_NOSYSTEM": "1",
@@ -250,18 +250,14 @@ class HygieneTest(unittest.TestCase):
 
     def test_user_skill_link_preserves_conflicts(self):
         spec = importlib.util.spec_from_file_location(
-            "installer", FILES / "install_workspace_hygiene.py"
+            "installer", FILES / "install_scratch_file_management.py"
         )
         installer = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(installer)
         home = Path(self.temp.name) / "user"
-        old = home / ".claude/skills/workspace-hygiene"
-        old.parent.mkdir(parents=True)
-        old.symlink_to("/etc/claude-code/skills/workspace-hygiene")
         with patch.object(Path, "is_file", return_value=True):
             installer.link_user_skill(home)
             installer.link_user_skill(home)
-        self.assertFalse(old.is_symlink())
         target = home / ".claude/skills/scratch-file-management"
         self.assertEqual(
             str(target.readlink()), "/etc/claude-code/skills/scratch-file-management"
@@ -360,8 +356,6 @@ class HygieneTest(unittest.TestCase):
         peer.write_text("peer")
         retired = []
         for client, name in (
-            ("codex", "workspace-hygiene"),
-            ("claude-code", "workspace-hygiene"),
             ("claude-code", "browser-verification"),
         ):
             old = stage / f"etc/{client}/skills/{name}/SKILL.md"
@@ -398,7 +392,7 @@ class HygieneTest(unittest.TestCase):
             subprocess.run(
                 [
                     sys.executable,
-                    str(FILES / "install_workspace_hygiene.py"),
+                    str(FILES / "install_scratch_file_management.py"),
                     "--root",
                     str(stage),
                 ],
@@ -417,7 +411,7 @@ class HygieneTest(unittest.TestCase):
             h["command"] for g in settings["hooks"]["PreToolUse"] for h in g["hooks"]
         ]
         self.assertEqual(
-            commands, ["peer-command", "/usr/local/bin/workspace_hygiene hook"]
+            commands, ["peer-command", "/usr/local/bin/scratch_file_management hook"]
         )
         self.assertEqual(settings["permissions"], {"allow": ["existing"]})
         self.assertEqual(peer.read_text(), "peer")
@@ -430,7 +424,7 @@ class HygieneTest(unittest.TestCase):
                 ).read_bytes(),
                 (FILES / "shared_skills/scratch-file-management/SKILL.md").read_bytes(),
             )
-        deployed = stage / "usr/local/lib/workspace_hygiene/workspace_hygiene.py"
+        deployed = stage / "usr/local/lib/scratch_file_management/scratch_file_management.py"
         result = subprocess.run(
             [sys.executable, str(deployed)],
             input=json.dumps(
@@ -453,7 +447,7 @@ class HygieneTest(unittest.TestCase):
             subprocess.run(["bash", "-n", str(path)], check=True)
             source = path.read_text()
             self.assertIn(
-                'run python3 "$TOP_DIR/files/install_workspace_hygiene.py"', source
+                'run python3 "$TOP_DIR/files/install_scratch_file_management.py"', source
             )
             self.assertNotIn("find /etc/codex -depth", source)
             self.assertNotIn("find /etc/claude-code -depth", source)
@@ -465,7 +459,7 @@ class HygieneTest(unittest.TestCase):
         config = tomllib.loads((FILES / "codex_config.toml").read_text())
         self.assertEqual(
             config["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-            "/usr/local/bin/workspace_hygiene hook",
+            "/usr/local/bin/scratch_file_management hook",
         )
         self.assertEqual(
             config["hooks"]["SessionStart"][0]["hooks"][0]["command"],

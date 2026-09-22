@@ -2,7 +2,7 @@
 
 <!-- dangling-ref-check: allow (documents intentional scratch paths) -->
 
-Claude Code and Codex use the same `files/workspace_hygiene.py` hook and
+Claude Code and Codex use the same `files/scratch_file_management.py` hook and
 `files/shared_skills/scratch-file-management/SKILL.md`. Agent research notes, temporary
 reports and intermediate artifacts belong in ignored `drafts/`; they must not be
 staged, committed or published. Manual worktrees use `~/worktrees/<repo>/<name>`.
@@ -13,8 +13,8 @@ Both `debian12.sh` and `ubuntu2404-wsl.sh` call the shared installer. For a targ
 update from the repository, outside the agent sandbox:
 
 ```sh
-sudo python3 files/install_workspace_hygiene.py
-python3 files/install_workspace_hygiene.py --user
+sudo python3 files/install_scratch_file_management.py
+python3 files/install_scratch_file_management.py --user
 ```
 
 The targeted installer preserves unrelated settings, hook handlers and files.
@@ -26,8 +26,8 @@ User skill link conflicts fail with the existing object intact.
 
 | Component | Installed path |
 |---|---|
-| Command | `/usr/local/bin/workspace_hygiene` |
-| Shared code and drafts dependencies | `/usr/local/lib/workspace_hygiene/` |
+| Command | `/usr/local/bin/scratch_file_management` |
+| Shared code and drafts dependencies | `/usr/local/lib/scratch_file_management/` |
 | Codex skill | `/etc/codex/skills/scratch-file-management/SKILL.md` |
 | Claude skill | `/etc/claude-code/skills/scratch-file-management/SKILL.md`, linked from `~/.claude/skills/` |
 | Codex registration | `[[hooks.PreToolUse]]` in `/etc/codex/config.toml` |
@@ -66,7 +66,7 @@ The hook normalizes Claude `Bash.command`, `Write/Edit.file_path`, Codex canonic
   `.workspace-layout.json`: `{"directories":{"tests":"User requested permanent tests"}}`.
   Reuse existing user authorization; no additional confirmation is required. The
   declaration is not proof of authorization and must not be used for scratch.
-- Command temp: `workspace_hygiene run -- COMMAND ARGS...` creates a unique directory
+- Command temp: `scratch_file_management run -- COMMAND ARGS...` creates a unique directory
   under ignored drafts, sets `TMPDIR` for that child and removes only that directory.
   It propagates the command's status. It does not support background children that
   outlive the command, automatic cleanup after crashes, or broad garbage collection.
@@ -105,7 +105,7 @@ fixtures from discovering the enclosing checkout when temp lives under drafts.
 mkdir -p drafts/hygiene-checks
 export TMPDIR="$PWD/drafts/hygiene-checks"
 export GIT_CEILING_DIRECTORIES="$TMPDIR"
-python3 tests/workspace_hygiene.test.py
+python3 tests/scratch_file_management.test.py
 python3 tests/claude_managed-hooks/deny_drafts_commit.test.py
 python3 tests/claude_managed-hooks/check_dangling_refs.test.py
 bash -n debian12.sh

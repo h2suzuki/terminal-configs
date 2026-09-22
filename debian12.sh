@@ -328,7 +328,7 @@ copy shared_skills/memory-routing/SKILL.md      /etc/codex/skills/memory-routing
 copy shared_skills/mytask/SKILL.md             /etc/codex/skills/mytask/SKILL.md
 copy shared_skills/sandbox-host-recovery/SKILL.md /etc/codex/skills/sandbox-host-recovery/SKILL.md
 copy codex_sandbox_exclusions.rules             /etc/codex/rules/terminal-configs-sandbox-exclusions.rules
-run python3 "$TOP_DIR/files/install_workspace_hygiene.py"
+run python3 "$TOP_DIR/files/install_scratch_file_management.py"
 
 
 # Antigravity CLI

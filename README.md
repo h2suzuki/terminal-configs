@@ -17,7 +17,7 @@ Debian 12 と Ubuntu 24.04 on WSL2 向けに、ターミナルと AI コーデ�
 | <div align="right">MCP</div> | Chrome DevTools、CodeGraph、Cloud Run、BigQuery（Toolbox）、mytask\*、Jev\* |
 | <div align="right">Skill</div> | agent-browser、playwright-cli、mytask\*、memory-routing\*、browser-testing-guide\*、scratch-file-management\* など |
 | <div align="right">Plugin</div> | Jev、Codex（Claude Code 用）、security-guidance、agent-coord（AIエージェント間通信）\* |
-| <div align="right">CLI</div> | agent-browser、playwright-cli、GitHub CLI、uv・ruff・ty、Google Cloud CLI、Vercel CLI、agent_coord\*、workspace_hygiene\*、claude_memory_sync\*、jev\* |
+| <div align="right">CLI</div> | agent-browser、playwright-cli、GitHub CLI、uv・ruff・ty、Google Cloud CLI、Vercel CLI、agent_coord\*、scratch_file_management\*、claude_memory_sync\*、jev\* |
 
 \* … 本レポジトリ独自のスクリプト
 

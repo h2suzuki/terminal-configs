@@ -17,7 +17,7 @@ Configuration files and setup scripts for terminal and AI coding environments on
 | <div align="right">MCP</div> | Chrome DevTools, CodeGraph, Cloud Run, BigQuery (Toolbox), mytask\*, Jev\* |
 | <div align="right">Skill</div> | agent-browser, playwright-cli, mytask\*, memory-routing\*, browser-testing-guide\*, scratch-file-management\*, and more |
 | <div align="right">Plugin</div> | Jev, Codex (for Claude Code), security-guidance, agent-coord (communication between AI agents)\* |
-| <div align="right">CLI</div> | agent-browser, playwright-cli, GitHub CLI, uv, ruff, ty, Google Cloud CLI, Vercel CLI, agent_coord\*, workspace_hygiene\*, claude_memory_sync\*, jev\* |
+| <div align="right">CLI</div> | agent-browser, playwright-cli, GitHub CLI, uv, ruff, ty, Google Cloud CLI, Vercel CLI, agent_coord\*, scratch_file_management\*, claude_memory_sync\*, jev\* |
 
 \* … Custom scripts maintained in this repository
 

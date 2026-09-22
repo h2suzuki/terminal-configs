@@ -20,7 +20,7 @@ description: Choose locations for agent research notes, intermediate outputs, co
   the worktree for a continuing task; preserve peers' worktrees and files. This
   location convention does not grant extra sandbox permissions.
 - Distinguish command-internal temp from research artifacts. From the worktree,
-  run `workspace_hygiene run -- COMMAND ARGS...` to give a command a unique ignored
+  run `scratch_file_management run -- COMMAND ARGS...` to give a command a unique ignored
   scratch directory through `TMPDIR`; the helper removes only its own directory
   when the command exits. Do not use it for a background process that outlives the
   command, or for reports that you need to keep.
