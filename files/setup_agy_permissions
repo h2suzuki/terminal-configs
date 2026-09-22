@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""Merge the agent-coord permission into Antigravity CLI's user settings."""
+
+import argparse
+import json
+import os
+import stat
+import sys
+import tempfile
+from pathlib import Path
+
+GRANT = "mcp(agent-coord_agent_coord/*)"
+
+
+def configure(path):
+    if path.is_symlink():
+        raise ValueError(f"Refusing symlink settings file: {path}")
+    original = path.read_text() if path.exists() else None
+    data = json.loads(original) if original is not None else {}
+    if not isinstance(data, dict):
+        raise TypeError("settings must be a JSON object")
+    permissions = data.setdefault("permissions", {})
+    if not isinstance(permissions, dict):
+        raise TypeError("permissions must be a JSON object")
+    for key in ("allow", "deny", "ask"):
+        rules = permissions.get(key, [])
+        if not isinstance(rules, list) or not all(isinstance(r, str) for r in rules):
+            raise ValueError(f"permissions.{key} must be a list of strings")
+    for key in ("deny", "ask"):
+        if any(
+            r == "mcp(*)" or r.startswith("mcp(agent-coord_agent_coord/")
+            for r in permissions.get(key, [])
+        ):
+            print(
+                f"Warning: existing {key} rules take precedence; preserved.",
+                file=sys.stderr,
+            )
+    allowed = permissions.setdefault("allow", [])
+    if GRANT in allowed:
+        return False
+    allowed.append(GRANT)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    mode = stat.S_IMODE(path.stat().st_mode) if original is not None else 0o600
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=".settings-",
+            delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            os.fchmod(stream.fileno(), mode)
+            json.dump(data, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        if (path.read_text() if path.exists() else None) != original:
+            raise ValueError(
+                "settings changed during setup; retry after agy stops writing"
+            )
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    return True
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--settings",
+        type=Path,
+        default=Path.home() / ".gemini/antigravity-cli/settings.json",
+    )
+    args = parser.parse_args()
+    try:
+        changed = configure(args.settings)
+    except (OSError, ValueError, TypeError) as error:
+        print(f"setup_agy_permissions: {error}", file=sys.stderr)
+        return 1
+    print(
+        f"agent-coord permission {'added' if changed else 'already present'}: {args.settings}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

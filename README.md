@@ -118,6 +118,8 @@ codex remote-control pair
 
 ### Antigravity
 
+`setup_user_environment` は `setup_agy_permissions` を通して、`~/.gemini/antigravity-cli/settings.json` に `mcp(agent-coord_agent_coord/*)` の許可を追加します。既存設定と `deny` / `ask` は保持し、再実行でも重複させません。`deny` / `ask` が競合するときはそちらが優先されるため警告します。これは agent-coord のツール許可だけで、セッション識別や待機中の起床を保証する設定ではありません。[公式の権限仕様](https://www.antigravity.google/docs/permissions?tab=cli)
+
 ```bash
 agy
 ```

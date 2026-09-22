@@ -332,6 +332,8 @@ run python3 "$TOP_DIR/files/install_scratch_file_management.py"
 
 
 # Antigravity CLI
+copy setup_agy_permissions /usr/local/bin/setup_agy_permissions -m 0755
+
 [ -s /tmp/antigravity_cli_install.sh ] ||
 run curl -o /tmp/antigravity_cli_install.sh \
   -fsSL https://antigravity.google/cli/install.sh

@@ -136,6 +136,9 @@ run install --mode 0644 /etc/claude-code/skel/settings.json     ~/.claude/settin
 
 run uv tool install --force claude-monitor
 
+# Antigravity: preserve user settings and explicit deny/ask rules.
+run setup_agy_permissions
+
 run install_claude_extensions
 
 

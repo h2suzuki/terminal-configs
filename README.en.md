@@ -107,6 +107,8 @@ Use the code displayed by `pair` to pair your client. See [Remote connections](h
 
 ### Antigravity
 
+`setup_user_environment` runs `setup_agy_permissions` to add `mcp(agent-coord_agent_coord/*)` to `~/.gemini/antigravity-cli/settings.json`. Existing settings and `deny` / `ask` rules are preserved, and repeated runs do not duplicate the grant. Conflicting `deny` / `ask` rules still take precedence and produce a warning. This grants agent-coord tool access only; it does not ensure session identity or idle-session wake-up. See the [official permission reference](https://www.antigravity.google/docs/permissions?tab=cli).
+
 ```bash
 agy
 ```
