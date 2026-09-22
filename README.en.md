@@ -126,7 +126,7 @@ gh auth login
 
 ### Jev
 
-Register your API key, then send a test query to check authentication and connectivity:
+Enter your API key to verify it with a test query before saving. You can also check connectivity with `jev hello`:
 
 ```bash
 jev api-key set

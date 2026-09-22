@@ -17,7 +17,7 @@ import time
 import unittest
 import warnings
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx2
 from mcp import Client
@@ -60,6 +60,7 @@ class JevTests(unittest.TestCase):
 
     def save_key(self):
         with (
+            patch.object(jev, "test_api", new_callable=AsyncMock),
             patch.object(jev.sys.stdin, "isatty", return_value=True),
             patch.object(jev.getpass, "getpass", return_value=KEY),
             contextlib.redirect_stdout(io.StringIO()) as output,
@@ -113,6 +114,74 @@ class JevTests(unittest.TestCase):
         ):
             jev.api_key()
         self.assertFalse(self.directory.exists())
+
+    def test_set_verifies_candidate_before_writing(self):
+        from typesafe_sdk import AsyncTypeSafeClient, RetryPolicy
+
+        candidate = "new-test-key"
+        for saved in (False, True):
+            for outcome in (401, 403, 429, 503, "network", "bad-answer", 200):
+                with self.subTest(saved=saved, outcome=outcome):
+                    path = self.directory / "credentials.json"
+                    if path.exists():
+                        path.unlink()
+                    if saved:
+                        self.save_key()
+                    original = path.read_bytes() if saved else None
+
+                    def respond(request, path=path, original=original, outcome=outcome):
+                        self.assertEqual(
+                            request.headers["Authorization"], "Bearer " + candidate
+                        )
+                        self.assertEqual(
+                            path.read_bytes() if path.exists() else None, original
+                        )
+                        if outcome == "network":
+                            raise httpx2.ConnectError(candidate)
+                        body = response_body()
+                        if outcome == "bad-answer":
+                            body["answers"] = {}
+                        return httpx2.Response(
+                            outcome if isinstance(outcome, int) else 200, json=body
+                        )
+
+                    def make_client(key, respond=respond):
+                        self.assertEqual(key, candidate)
+                        client = AsyncTypeSafeClient(
+                            api_key=key,
+                            transport=httpx2.MockTransport(respond),
+                            retry=RetryPolicy(max_retries=0),
+                        )
+                        return client
+
+                    with (
+                        patch.object(sys, "argv", ["jev", "api-key", "set"]),
+                        patch.object(jev.sys.stdin, "isatty", return_value=True),
+                        patch.object(jev.getpass, "getpass", return_value=candidate),
+                        patch.object(
+                            jev, "create_client", side_effect=make_client
+                        ) as factory,
+                        patch.object(
+                            jev,
+                            "load_key",
+                            side_effect=AssertionError("must test candidate"),
+                        ),
+                        contextlib.redirect_stdout(io.StringIO()) as output,
+                        contextlib.redirect_stderr(io.StringIO()) as error,
+                    ):
+                        self.assertEqual(jev.main(), 0 if outcome == 200 else 1)
+                    factory.assert_called_once()
+                    self.assertNotIn(candidate, output.getvalue() + error.getvalue())
+                    if outcome == 200:
+                        self.assertEqual(jev.load_key(), candidate)
+                        self.assertEqual(output.getvalue(), "API is set\n")
+                        self.assertEqual(error.getvalue(), "")
+                    else:
+                        self.assertEqual(
+                            path.read_bytes() if path.exists() else None, original
+                        )
+                        self.assertEqual(output.getvalue(), "")
+                        self.assertTrue(error.getvalue())
 
     def test_rejected_input_explains_reason_and_preserves_saved_key(self):
         self.save_key()
@@ -480,7 +549,10 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["--serve-fixture"]:
         serve_fixture()
     elif len(sys.argv) == 3 and sys.argv[1] == "--key-fixture":
-        with patch.object(jev, "credential_dir", return_value=Path(sys.argv[2])):
+        with (
+            patch.object(jev, "credential_dir", return_value=Path(sys.argv[2])),
+            patch.object(jev, "test_api", new_callable=AsyncMock),
+        ):
             jev.api_key()
     else:
         unittest.main()

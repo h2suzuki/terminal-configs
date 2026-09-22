@@ -9,7 +9,7 @@ Jev MCP サーバーを導入します。Antigravity には公式 `typesafe-ai` 
 セットアップ後、利用するユーザーの通常のターミナルで実行します。
 
 ```bash
-jev api-key set   # キーを非表示入力で保存・更新
+jev api-key set   # キーを非表示入力し、API で確認してから保存・更新
 jev hello         # テストクエリーを 1 回送り、認証・通信・応答を診断
 jev api-key status # 保存状態を確認し、登録済みならテストクエリーで利用可否を診断
 jev api-key clear # 保存済みキーを削除するとき
@@ -21,7 +21,7 @@ jev api-key clear # 保存済みキーを削除するとき
 この保存先は本リポジトリの規約で、TypeSafe 公式 CLI の保存先ではありません。
 
 `.env`、`.bashrc`、MCP 設定へのキーの記載や `TYPESAFE_API_KEY` の export は不要です。
-`set` はローカル保存のみで、OAuth 認証や有効性確認は行いません。
+`set` は入力したキーでテストクエリーを 1 回送り、正常な応答を確認してから保存します（API 利用が発生します）。認証・通信・応答の診断に失敗した場合は保存せず、既存のキーも変更しません。OAuth 認証は行いません。
 TypeSafe の公開 API は API キーによる Bearer 認証です。
 
 `jev hello` と登録済みキーに対する `jev api-key status` は公式 Python SDK で小さな Jev クエリーを送信するため、API 利用が発生します。

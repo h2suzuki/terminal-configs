@@ -71,6 +71,7 @@ def api_key():
         raise JevError(
             "Hidden input is unavailable. Use your own interactive terminal."
         ) from None
+    asyncio.run(test_api(success_message=None, key=key))
     directory = credential_dir()
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     check_private(directory, directory=True)
@@ -170,9 +171,9 @@ def api_error_message(status_code):
 class JevSession:
     """One SDK client and connection pool per MCP connection."""
 
-    def __init__(self):
+    def __init__(self, key=None):
         self.client = None
-        self.key = None
+        self.key = key
 
     async def close(self):
         if self.client is not None:
@@ -212,7 +213,7 @@ class JevSession:
             if self.client is None:
                 # No await between loading and assigning: concurrent calls share
                 # one client. Missing credentials do not prevent MCP startup.
-                key = load_key()
+                key = self.key if self.key is not None else load_key()
                 self.client = create_client(key)
                 self.key = key
             result = await self.client.system_one(
@@ -245,8 +246,8 @@ class JevSession:
             ) from None
 
 
-async def test_api(success_message="Hello! Jev is ready."):
-    session = JevSession()
+async def test_api(success_message="Hello! Jev is ready.", *, key=None):
+    session = JevSession(key=key)
     try:
         result = await session.evaluate(
             state="This is a connectivity test.",
@@ -259,7 +260,8 @@ async def test_api(success_message="Hello! Jev is ready."):
             answer.get("noul"), (int, float)
         ):
             raise JevError("API responded, but the test answer was missing or invalid.")
-        print(success_message)
+        if success_message is not None:
+            print(success_message)
     finally:
         await session.close()
 

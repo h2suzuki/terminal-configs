@@ -126,7 +126,7 @@ gh auth login
 
 ### Jev
 
-API キーを登録し、テストクエリーで認証と通信を確認します。
+API キーを入力すると、テストクエリーで有効性を確認してから保存します。`jev hello` でも接続を確認できます。
 
 ```bash
 jev api-key set
