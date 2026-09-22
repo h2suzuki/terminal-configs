@@ -42,13 +42,18 @@ def check_private(path, directory=False):
 
 
 def validate_key(key):
-    if (
-        not isinstance(key, str)
-        or not key
-        or len(key) > 4096
-        or any(ord(c) < 33 or ord(c) > 126 for c in key)
-    ):
-        raise JevError("Invalid API key format.")
+    if not isinstance(key, str):
+        raise JevError("API key must be text. Run jev api-key set again.")
+    if not key:
+        raise JevError("No API key entered. Paste your key; input is hidden.")
+    if len(key) > 4096:
+        raise JevError("API key is too long. Paste only the key value.")
+    if any(c.isspace() for c in key):
+        raise JevError("API key contains whitespace. Paste only the key value.")
+    if any(ord(c) < 33 or ord(c) > 126 for c in key):
+        raise JevError(
+            "API key contains unsupported characters. Paste only the key value."
+        )
     return key
 
 
@@ -58,7 +63,10 @@ def api_key():
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", getpass.GetPassWarning)
-            key = validate_key(getpass.getpass("TypeSafe API key: ").strip())
+            key = getpass.getpass("TypeSafe API key: ").strip()
+            if not key:
+                return
+            key = validate_key(key)
     except getpass.GetPassWarning:
         raise JevError(
             "Hidden input is unavailable. Use your own interactive terminal."
@@ -81,8 +89,7 @@ def api_key():
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
-    print("API key saved to ~/.config/typesafe/credentials.json (0600).")
-    print("Stored locally; this command does not contact the API.")
+    print("API is set")
 
 
 def load_key():

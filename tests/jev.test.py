@@ -65,7 +65,7 @@ class JevTests(unittest.TestCase):
             contextlib.redirect_stdout(io.StringIO()) as output,
         ):
             jev.api_key()
-        self.assertNotIn(KEY, output.getvalue())
+        self.assertEqual(output.getvalue(), "API is set\n")
 
     def test_login_private_storage_and_replacement(self):
         self.save_key()
@@ -113,6 +113,45 @@ class JevTests(unittest.TestCase):
         ):
             jev.api_key()
         self.assertFalse(self.directory.exists())
+
+    def test_rejected_input_explains_reason_and_preserves_saved_key(self):
+        self.save_key()
+        for value, reason in (
+            (KEY + " extra", "contains whitespace"),
+            (KEY + "\x1b", "unsupported characters"),
+            (KEY + "あ", "unsupported characters"),
+            (KEY * 200, "too long"),
+        ):
+            with (
+                self.subTest(reason=reason),
+                patch.object(jev.sys.stdin, "isatty", return_value=True),
+                patch.object(jev.getpass, "getpass", return_value=value),
+                self.assertRaisesRegex(jev.JevError, reason) as error,
+            ):
+                jev.api_key()
+            self.assertNotIn(KEY, str(error.exception))
+            self.assertEqual(jev.load_key(), KEY)
+
+    def test_empty_key_input_cancels_silently(self):
+        for saved in (False, True):
+            if saved:
+                self.save_key()
+            for value in ("", "   "):
+                with (
+                    self.subTest(saved=saved, value=value),
+                    patch.object(sys, "argv", ["jev", "api-key", "set"]),
+                    patch.object(jev.sys.stdin, "isatty", return_value=True),
+                    patch.object(jev.getpass, "getpass", return_value=value),
+                    contextlib.redirect_stdout(io.StringIO()) as output,
+                    contextlib.redirect_stderr(io.StringIO()) as error,
+                ):
+                    self.assertEqual(jev.main(), 0)
+                self.assertEqual(output.getvalue(), "")
+                self.assertEqual(error.getvalue(), "")
+                if saved:
+                    self.assertEqual(jev.load_key(), KEY)
+                else:
+                    self.assertFalse(self.directory.exists())
 
     def test_hidden_input_failure_does_not_fall_back(self):
         def unavailable(prompt):
