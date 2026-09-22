@@ -54,10 +54,10 @@ mytask MCP の `TaskList`、`TaskCreate`、`TaskUpdate` を使う。Claude Code 
 
 ### mytask MCP
 
-- `TaskList()`：現在の項目を読む。
-- `TaskCreate(content, parent?, activeForm?)`：依頼や手順を登録する。子・孫など任意の深さで、直属の親の id を `parent` に渡す。
-- `TaskUpdate(id, status)`：状態を更新する。`in_progress` は一件で、新しく着手すると前の項目は `pending` に戻る。
+- `TaskList()`：未完了の項目を読む。完了履歴が必要なら `TaskList(completed_limit=5)` のように件数を指定する（最大100件）。未完了項目は省略されない。
+- `TaskCreate(content, parent?, activeForm?)`：依頼や手順を登録する。子・孫など任意の深さで、直属の親の id を `parent` に渡す。応答は作成した項目だけ。
+- `TaskUpdate(id, status)`：状態を更新する。`in_progress` は一件で、新しく着手すると前の項目は `pending` に戻る。応答は更新した項目と自動変更された ID だけ。
 - 現在の MCP は本文の編集・削除を提供しない。訂正や計画変更は元の id を参照する新しい項目に明記する。取り消した作業を実施済みとして報告しない。
-- 保存先はセッション／スレッドごとのローカル領域で、コミットしない。完了項目は12時間を過ぎると一覧から隠れる。
+- 保存先はセッション／スレッドごとのローカル領域で、コミットしない。完了項目は保存したまま既定の一覧から隠す。
 
 ツールを利用できない場合は、依頼と計画を本文または既存の作業メモで保持して作業を続ける。MCP に保存したとは主張しない。Claude 側で court 汚染の警告が出た場合は、警告を伝えてセッションのリセットを案内する。

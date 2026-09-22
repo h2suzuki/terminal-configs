@@ -14,14 +14,14 @@ import sys
 import tempfile
 import unittest
 from contextvars import ContextVar
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import TextIO, cast
 from unittest import mock
 
 Task = dict[str, object]
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 CLIENT = "claude"
 CODEX_THREAD: ContextVar[str | None] = ContextVar("codex_thread", default=None)
 DEFAULT_PROTOCOL_VERSION = "2025-11-25"
@@ -38,12 +38,12 @@ TASK_ID = re.compile(r"^[0-9]+(?:-[0-9]+)*$")
 TOOLS = [
     {
         "name": "TaskList",
-        "description": "List session work items (id order; pending/in_progress/blocked always shown, completed only if finished within 12h). Runs a court-bug contamination check and prepends a warning if the session transcript looks contaminated (#64108).",
-        "inputSchema": {"type": "object", "additionalProperties": False},
+        "description": "List unfinished session work items in ID order. completed_limit optionally adds the most recently completed items (default 0, maximum 100). Runs a court-bug contamination check and prepends a warning if the session transcript looks contaminated (#64108).",
+        "inputSchema": {"type": "object", "properties": {"completed_limit": {"type": "integer", "minimum": 0, "maximum": 100, "default": 0}}, "additionalProperties": False},
     },
     {
         "name": "TaskCreate",
-        "description": "Add a work item (status pending). Use `parent` (any existing task id) for hierarchical numbering: 4 -> 4-1 -> 4-1-2. IDs are assigned automatically and included in the returned list.",
+        "description": "Add a work item (status pending). Use `parent` (any existing task id) for hierarchical numbering: 4 -> 4-1 -> 4-1-2. Returns only the created item with its automatically assigned ID.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -57,7 +57,7 @@ TOOLS = [
     },
     {
         "name": "TaskUpdate",
-        "description": "Update a work item's status. Keep exactly one in_progress at a time (TodoWrite semantics): starting a new item auto-demotes the previous in_progress to pending.",
+        "description": "Update a work item's status and return only that item plus any auto-demoted IDs. Keep exactly one in_progress at a time (TodoWrite semantics): starting a new item auto-demotes the previous in_progress to pending.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -119,29 +119,16 @@ def _sort_key(task: Task) -> tuple[int, tuple[int, ...], str]:
     return (1, (), task_id)
 
 
-def _visible(task: Task, now: datetime) -> bool:
-    status = task.get("status")
-    if status in ("pending", "in_progress", "blocked"):
-        return True
-    if status != "completed":
-        return False
-    completed_at = task.get("completed_at")
-    if not isinstance(completed_at, str):
-        return False
-    try:
-        completed = datetime.strptime(completed_at, TIME_FORMAT)
-    except ValueError:
-        return False
-    return now - completed <= timedelta(hours=12)
-
-
-def render_tasks(tasks: list[Task], now: datetime | None = None) -> str:
-    """Render visible tasks in numeric parent and subtask order."""
-    current = _now() if now is None else now
+def render_tasks(tasks: list[Task], completed_limit: int = 0) -> str:
+    """Show unfinished work plus an optional recent completion window."""
+    active = [task for task in tasks if task.get("status") in STATUSES[:-1]]
+    completed = sorted(
+        (task for task in tasks if task.get("status") == "completed"),
+        key=lambda task: (str(task.get("completed_at", "")), _sort_key(task)),
+        reverse=True,
+    )[:completed_limit]
     lines: list[str] = []
-    for task in sorted(tasks, key=_sort_key):
-        if not _visible(task, current):
-            continue
+    for task in sorted(active + completed, key=_sort_key):
         task_id = str(task.get("id", ""))
         status = str(task.get("status", ""))
         content = str(task.get("content", ""))
@@ -164,11 +151,11 @@ def _load_session_tasks() -> tuple[Path | None, list[Task], str | None]:
     return path, read_tasks(path), None
 
 
-def task_list() -> tuple[str, bool]:
+def task_list(completed_limit: int = 0) -> tuple[str, bool]:
     _path, tasks, error = _load_session_tasks()
     if error:
         return error, True
-    return render_tasks(tasks), False
+    return render_tasks(tasks, completed_limit), False
 
 
 def _next_top_id(tasks: list[Task]) -> str:
@@ -218,7 +205,7 @@ def task_create(arguments: dict[str, object]) -> tuple[str, bool]:
     tasks.append(task)
     if save_error := write_tasks(path, tasks):
         return f"Error: {save_error}\n{render_tasks(tasks)}", True
-    return render_tasks(tasks), False
+    return render_tasks([task]), False
 
 
 def task_update(arguments: dict[str, object]) -> tuple[str, bool]:
@@ -243,7 +230,7 @@ def task_update(arguments: dict[str, object]) -> tuple[str, bool]:
         target.pop("completed_at", None)
     if save_error := write_tasks(path, tasks):
         return f"Error: {save_error}\n{render_tasks(tasks)}", True
-    rendered = render_tasks(tasks)
+    rendered = render_tasks([target], completed_limit=1)
     if demoted:
         ids = ", ".join(demoted)
         rendered = f"Auto-demoted in_progress task(s) {ids} to pending.\n{rendered}"
@@ -295,7 +282,12 @@ def _argument_error(name: str, arguments: object) -> str | None:
     typed_arguments = cast(dict[str, object], arguments)
     keys = set(typed_arguments)
     if name == "TaskList":
-        return "TaskList accepts no arguments." if keys else None
+        if unknown := keys - {"completed_limit"}:
+            return f"Unknown argument(s): {', '.join(sorted(unknown))}."
+        limit = arguments.get("completed_limit", 0)
+        if type(limit) is not int or not 0 <= limit <= 100:
+            return "completed_limit must be an integer between 0 and 100."
+        return None
     if name == "TaskCreate":
         allowed = {"content", "activeForm", "parent"}
         if unknown := keys - allowed:
@@ -347,7 +339,7 @@ def _call_session_tool(params: object) -> dict[str, object]:
         return _tool_result(error, True)
     typed_arguments = cast(dict[str, object], arguments)
     if name == "TaskList":
-        text, is_error = task_list()
+        text, is_error = task_list(cast(int, typed_arguments.get("completed_limit", 0)))
     elif name == "TaskCreate":
         text, is_error = task_create(typed_arguments)
     else:
@@ -500,7 +492,6 @@ class MyTasksTest(unittest.TestCase):
         self.assertIn("4-1-11 🔳 After hidden", text)
 
     def test_filter_order_rendering_and_legacy_fields(self):
-        now = datetime(2026, 7, 14, 12, 0)
         tasks: list[Task] = [
             {"id": "2", "content": "Second", "status": "blocked"},
             {"id": "1-2", "content": "Child two", "status": "pending"},
@@ -520,14 +511,41 @@ class MyTasksTest(unittest.TestCase):
             {"id": "4", "content": "Legacy", "status": "completed"},
         ]
         self.assertEqual(
-            render_tasks(tasks, now).splitlines(),
+            render_tasks(tasks).splitlines(),
             [
                 "1 ▶️ First",
-                "  1-1 ✅ Child one",
                 "  1-2 🔳 Child two",
                 "2 🚧 Second",
             ],
         )
+
+    def test_compact_responses_and_recent_completion_window(self):
+        tasks = [
+            {"id": str(i), "content": "Old completion", "status": "completed",
+             "completed_at": "2026-07-14 01:00"}
+            for i in range(1, 101)
+        ]
+        # Completion recency, not ID, decides which completed entries are shown.
+        tasks[0]["completed_at"] = "2026-07-15 01:00"
+        tasks.append({"id": "101", "content": "Still blocked", "status": "blocked"})
+        write_tasks(self.path, tasks)
+        self.assertEqual(task_list()[0], "101 🚧 Still blocked")
+        recent = task_list(5)[0].splitlines()
+        self.assertEqual([line.split()[0] for line in recent],
+                         ["1", "97", "98", "99", "100", "101"])
+        created, error = task_create({"content": "New request"})
+        self.assertFalse(error)
+        self.assertEqual(len(created.splitlines()), 1)
+        self.assertTrue(created.startswith("102 🔳 New request"))
+        updated, error = task_update({"id": "102", "status": "completed"})
+        self.assertFalse(error)
+        self.assertEqual(len(updated.splitlines()), 1)
+        self.assertTrue(updated.startswith("102 ✅ New request"))
+        self.assertEqual(task_list()[0], "101 🚧 Still blocked")
+        self.assertEqual(len(read_tasks(self.path)), 102)
+        for invalid in [-1, 101, True, "5", None]:
+            self.assertIsNotNone(_argument_error("TaskList", {"completed_limit": invalid}))
+        self.assertIsNone(_argument_error("TaskList", {"completed_limit": 5}))
 
     def test_protocol_sequence_unknown_method_and_notifications(self):
         with mock.patch(f"{__name__}.scan_court_guard", return_value=[]):
@@ -683,6 +701,7 @@ class MyTasksTest(unittest.TestCase):
                     "method": "tools/call",
                     "params": {
                         "name": "TaskList",
+                        "arguments": {"completed_limit": 5},
                         "_meta": {"threadId": "stdio-thread"},
                     },
                 }
