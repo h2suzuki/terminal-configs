@@ -1,4 +1,11 @@
 {
+  "permissions": {
+    "allow": [
+      "mcp__mytask__TaskCreate",
+      "mcp__mytask__TaskUpdate",
+      "mcp__mytask__TaskList"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
