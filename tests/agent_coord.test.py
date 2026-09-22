@@ -1229,6 +1229,44 @@ class NotificationTest(Direct):
             )
         )
 
+    def test_f3_nested_subagent_delivery_relays_through_the_root_inbox(self):
+        """F3: only the root session owns an inbox socket, so a delivery for a nested
+        subagent relays through it, naming the subagent the unread belongs to."""
+        inbox = self.register_claude_session("N-root")
+        self.join("a", self.repo)
+        self.call(
+            "root", "join", client="claude-code", native_id="N-root", cwd=str(self.wt)
+        )
+        self.call(
+            "spawn",
+            "join",
+            sid="cc-child",
+            client="claude-code",
+            native_id="agent-1",
+            cwd=str(self.wt),
+            parent_sid="cc-N-root",
+        )
+        self.call(
+            "nested",
+            "join",
+            sid="cc-grandchild",
+            client="claude-code",
+            native_id="agent-2",
+            cwd=str(self.wt),
+            parent_sid="cc-child",
+        )
+        self.call("a", "send", sid="a", to="cc-grandchild", text="for the grandchild")
+        self.assertTrue(wait_for(lambda: len(inbox.lines) >= 2))
+        message = inbox.lines[1]["message"]["content"]
+        self.assertIn("Delivery for your subagent cc-grandchild", message)
+        self.assertIn("catchup --as cc-grandchild", message)
+        self.assertIn("unread event(s) for subagent cc-grandchild", message)
+        self.assertNotIn("for this session", message)
+        self.assertEqual(
+            self.call("nested", "peek", sid="cc-grandchild")["deliveries"][0]["state"],
+            "pushed",
+        )
+
     def test_f3_6_codex_is_woken_with_codex_queue_and_antigravity_is_pull_only(self):
         self.join("a", self.repo)
         self.call("b", "join", client="codex", native_id="T-1", cwd=str(self.wt))
@@ -2431,6 +2469,51 @@ class HookTest(Fixture):
         self.assertIn("cc-root", sessions)
         self.assertEqual(sessions["cc-child-1"]["parent_sid"], "cc-root")
 
+    def transcript_path(self, root: str) -> str:
+        """Claude Code keeps <dir>/<session_id>.jsonl beside the directory <dir>/<session_id>/."""
+        directory = self.tmp / "projects"
+        directory.mkdir(parents=True, exist_ok=True)
+        return str(directory / f"{root}.jsonl")
+
+    def write_agent_meta(self, root: str, agent: str, parent: str | None) -> None:
+        directory = self.tmp / "projects" / root / "subagents"
+        directory.mkdir(parents=True, exist_ok=True)
+        record: dict[str, Any] = {
+            "agentType": "general-purpose",
+            "spawnDepth": 1 if parent is None else 2,
+        }
+        if parent:
+            record["parentAgentId"] = parent
+        (directory / f"agent-{agent}.meta.json").write_text(json.dumps(record))
+
+    def start_root_and_child(self) -> None:
+        self.hook(
+            "claude-code", "SessionStart", {"session_id": "root", "cwd": str(self.wt)}
+        )
+        self.write_agent_meta("root", "child-1", None)
+        self.hook(
+            "claude-code",
+            "SubagentStart",
+            {
+                "session_id": "root",
+                "agent_id": "child-1",
+                "cwd": str(self.wt),
+                "transcript_path": self.transcript_path("root"),
+            },
+        )
+
+    def start_grandchild(self) -> dict | None:
+        return self.hook(
+            "claude-code",
+            "SubagentStart",
+            {
+                "session_id": "root",
+                "agent_id": "grandchild-1",
+                "cwd": str(self.wt),
+                "transcript_path": self.transcript_path("root"),
+            },
+        )
+
     def test_f8_claude_phantom_subagent_stop_joins_nothing(self):
         """F8: Claude Code repeats SubagentStop with a fresh agent_id while a subagent is
         still running; a stop for a sid the ledger never saw must record nothing at all."""
@@ -2459,6 +2542,42 @@ class HookTest(Fixture):
             "cc-phantom-1", {s["sid"] for s in me.call("sessions")["sessions"]}
         )
 
+    def test_f8_claude_nested_subagent_parent_comes_from_the_meta_file(self):
+        """F8: a grandchild's SubagentStart still names the root in session_id; only the
+        meta file beside the agent transcript names the agent that spawned it."""
+        self.start_root_and_child()
+        self.write_agent_meta("root", "grandchild-1", "child-1")
+        context = self.start_grandchild()["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("joined as cc-grandchild-1", context)
+        self.assertIn("Parent: cc-child-1", context)
+        me = self.daemon.client()
+        self.addCleanup(me.close)
+        sessions = {s["sid"]: s for s in me.call("status")["sessions"]}
+        self.assertEqual(sessions["cc-grandchild-1"]["parent_sid"], "cc-child-1")
+        self.assertEqual(sessions["cc-child-1"]["parent_sid"], "cc-root")
+
+    def test_f8_claude_nested_subagent_waits_for_a_late_meta_file(self):
+        """F8: the meta file lands shortly after the hook starts, so the lookup polls."""
+        self.start_root_and_child()
+        timer = threading.Timer(
+            0.2, self.write_agent_meta, ("root", "grandchild-1", "child-1")
+        )
+        timer.start()
+        self.addCleanup(timer.cancel)
+        self.assertIn(
+            "Parent: cc-child-1",
+            self.start_grandchild()["hookSpecificOutput"]["additionalContext"],
+        )
+
+    def test_f8_claude_nested_subagent_falls_back_to_the_root_without_meta(self):
+        """F8: no meta file ever appears -- the wait is bounded and the root stays parent."""
+        self.start_root_and_child()
+        began = time.monotonic()
+        with patch.object(coord, "SUBAGENT_META_WAIT", 0.1):
+            context = self.start_grandchild()["hookSpecificOutput"]["additionalContext"]
+        self.assertLess(time.monotonic() - began, coord.SUBAGENT_META_WAIT)
+        self.assertIn("Parent: cc-root", context)
+
     def test_cli_as_flag_lets_the_parent_catchup_for_the_child(self):
         """CLI: `--as <child sid>`, proven by the parent's native id, can run
         `catchup` for the child -- what the relay note's `catchup --as <sid>` promises."""
@@ -2482,6 +2601,30 @@ class HookTest(Fixture):
         result = coord.run_command(client, args, identity)
         self.assertEqual(
             [e["body"]["text"] for e in result["events"]], ["for the child"]
+        )
+
+    def test_cli_as_flag_accepts_any_live_ancestor_native_id(self):
+        """F7/CLI: a nested subagent's own processes carry the root session id, so
+        `--as <grandchild sid>` must be provable by any live ancestor, not just the parent."""
+        self.start_root_and_child()
+        self.write_agent_meta("root", "grandchild-1", "child-1")
+        self.start_grandchild()
+        peer = self.daemon.client()
+        self.addCleanup(peer.close)
+        peer.call("join", sid="p", client="test", cwd=str(self.wt), native_id="p")
+        peer.call("send", sid="p", to="cc-grandchild-1", text="for the grandchild")
+
+        me = self.daemon.client()
+        self.addCleanup(me.close)
+        attached = me.call("attach", sid="cc-grandchild-1", native_id="root")
+        self.assertEqual(attached["session"]["sid"], "cc-grandchild-1")
+        args = coord.parse_cli(["--as", "cc-grandchild-1", "catchup"])
+        identity = coord.Identity("claude-code", "root", str(self.wt))
+        client = self.daemon.client()
+        self.addCleanup(client.close)
+        result = coord.run_command(client, args, identity)
+        self.assertEqual(
+            [e["body"]["text"] for e in result["events"]], ["for the grandchild"]
         )
 
     def test_f8_1_antigravity_hooks_speak_its_own_schema(self):

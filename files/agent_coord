@@ -44,6 +44,7 @@ EVENT_TTL = 24 * 3600  # undelivered talk outlives any real session by then
 JOIN_BACKFILL = 3600  # a newcomer sees the last hour on its scopes
 PRESENCE_TTL = 3600  # unconnected and silent this long: absent for names / broadcasts
 REPLAY_TTL = 3600  # how long a lost reply can still be retried by id
+SUBAGENT_META_WAIT = 1.0  # Claude Code writes the agent meta file just after the hook
 NOTIFY_KINDS = frozenset(
     {
         "message",
@@ -253,6 +254,10 @@ class ClientAdapter:
     def hook_parent_native(self, payload: Json) -> str | None:
         return None
 
+    def hook_spawn_parent(self, payload: Json) -> str | None:
+        """The agent that spawned this subagent, when the client records it separately."""
+        return None
+
     def hook_cwd(self, payload: Json) -> str | None:
         return payload.get("cwd")
 
@@ -300,6 +305,31 @@ class ClaudeCodeAdapter(ClientAdapter):
         child = self.hook_native(payload)
         parent = payload.get("session_id")
         return str(parent) if parent and str(parent) != str(child) else None
+
+    def hook_spawn_parent(self, payload: Json) -> str | None:
+        """The spawning agent, from Claude Code's undocumented meta file beside the agent
+        transcript (anthropics/claude-code#90256); without it the caller keeps the root."""
+        agent = payload.get("agent_id")
+        transcript = payload.get("transcript_path")
+        if not agent or not transcript:
+            return None
+        meta = (
+            Path(str(transcript)).with_suffix("")
+            / "subagents"
+            / f"agent-{agent}.meta.json"
+        )
+        deadline = time.monotonic() + SUBAGENT_META_WAIT
+        while True:
+            try:
+                record = json.loads(meta.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                record = None
+            if isinstance(record, dict):
+                parent = record.get("parentAgentId")
+                return str(parent) if parent else None
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.05)
 
     def hook_role(self, event: str) -> str:
         return {
@@ -1233,8 +1263,27 @@ class Ledger:
             **self.snapshot(session),
         }
 
+    def ancestors(self, session: Json) -> list[Json]:
+        """The live parent chain above a session, nearest first; a left link ends the walk."""
+        chain: list[Json] = []
+        seen = {session["sid"]}
+        current = self.sessions.get(session.get("parent_sid") or "")
+        while current is not None and not current["left_at"]:
+            if current["sid"] in seen:
+                break
+            seen.add(current["sid"])
+            chain.append(current)
+            current = self.sessions.get(current.get("parent_sid") or "")
+        return chain
+
+    def inbox_ancestor(self, session: Json) -> Json | None:
+        """The live root above a subagent: only a top-level session owns a wake channel."""
+        return next(
+            (a for a in self.ancestors(session) if not a.get("parent_sid")), None
+        )
+
     def attach(self, conn: str, p: Json) -> Json:
-        """Register this connection as an existing session, proven by native id, token, or its live parent's native id."""
+        """Register this connection as an existing session, proven by native id, token, or a live ancestor's native id."""
         sid = required(p, "sid", "sid")
         session = self.sessions.get(sid)
         if session is None:
@@ -1245,14 +1294,11 @@ class Ledger:
             )
         by_native = bool(p.get("native_id")) and session["native_id"] == p["native_id"]
         by_token = bool(p.get("token")) and session["token"] == p["token"]
-        parent = self.sessions.get(session.get("parent_sid") or "")
-        by_parent = (
-            bool(p.get("native_id"))
-            and parent is not None
-            and not parent["left_at"]
-            and parent["native_id"] == p["native_id"]
+        # A nested subagent's own processes carry the root session's native id.
+        by_ancestor = bool(p.get("native_id")) and any(
+            a["native_id"] == p["native_id"] for a in self.ancestors(session)
         )
-        if not (by_native or by_token or by_parent):
+        if not (by_native or by_token or by_ancestor):
             raise CoordError(
                 f"cannot attach as {sid}: native id or token does not match"
                 " (a subagent's parent native id is also accepted)",
@@ -2128,19 +2174,21 @@ class Coordinator:
             self.transact(lambda o=outcome: self.ledger.mark_deliveries("", o))
 
     def _wake_recipient(self, session: Json, text: str) -> tuple[Json | None, str]:
-        """A Claude Code subagent has no inbox socket of its own; relay through its
-        parent, still tracking the delivery on the child's sid."""
+        """A Claude Code subagent has no inbox socket of its own; relay through the root
+        session above it, still tracking the delivery on the child's sid."""
         if session["client"] != "claude-code" or not session.get("parent_sid"):
             return session, text
-        parent = self.transact(lambda: self.ledger.session(session["parent_sid"]))
-        if not parent or parent["left_at"] is not None:
+        root = self.transact(lambda: self.ledger.inbox_ancestor(session))
+        if root is None:
             return None, text
+        # The unread is the subagent's, and the root's own catchup will not show it.
+        relayed = text.replace("for this session", f"for subagent {session['sid']}")
         relay = (
             f"[agent-coord] Delivery for your subagent {session['sid']}"
             f" ({session['name']}): relay it with SendMessage if that agent is still"
-            f" running, or read it with catchup --as {session['sid']}.\n{text}"
+            f" running, or read it with catchup --as {session['sid']}.\n{relayed}"
         )
-        return parent, relay
+        return root, relay
 
 
 # ---------------------------------------------------------------- transport
@@ -2374,6 +2422,13 @@ class Client:
     def close(self) -> None:
         self.file.close()
         self.sock.close()
+
+
+def live_session(client: Client, sid: str) -> bool:
+    return any(
+        s["sid"] == sid and s["left_at"] is None
+        for s in client.call("sessions")["sessions"]
+    )
 
 
 def ensure_session(
@@ -2755,6 +2810,14 @@ def hook_dispatch(
             if error.code == -32001 and str(error).startswith("unknown session"):
                 return adapter.hook_silence(event)
     parent_native = adapter.hook_parent_native(payload)
+    if parent_native and event == "SubagentStart":
+        spawner = adapter.hook_spawn_parent(payload)
+        if (
+            spawner
+            and spawner != parent_native
+            and live_session(client, session_id_for(identity.client, spawner))
+        ):
+            parent_native = spawner
     parent_sid = None
     if parent_native:
         parent_identity = Identity(identity.client, parent_native, identity.cwd)
