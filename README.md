@@ -9,7 +9,7 @@ Debian 12 と Ubuntu 24.04 on WSL2 向けに、ターミナルと AI コーデ�
 | 分野 | 主な内容 |
 |---|---|
 | ターミナル | Bash、Git、Neovim、GitHub CLI、ripgrep、delta、libsixel-bin、uv・ruff・ty、Node.js LTS（nvm）、Chrome、Google Cloud CLI |
-| AI ツール | Claude Code、Codex CLI、Antigravity CLI、Typesafe.ai Jev\* |
+| AI ツール | Claude Code、Codex CLI、Antigravity CLI、Typesafe.ai Jev |
 | <div align="right">LSP</div> | clangd（C/C++）、TypeScript Language Server、Pyright（Python） |
 | <div align="right">MCP</div> | Chrome DevTools、CodeGraph、Cloud Run、BigQuery（Toolbox）、mytask\*、Jev\* |
 | <div align="right">Skill</div> | agent-browser、playwright-cli、browser-verification\*、workspace-hygiene\* など |

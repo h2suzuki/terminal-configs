@@ -9,7 +9,7 @@ Configuration files and setup scripts for terminal and AI coding environments on
 | Area | Main components |
 |---|---|
 | Terminal | Bash, Git, Neovim, GitHub CLI, ripgrep, delta, libsixel-bin, uv, ruff, ty, Node.js LTS through nvm, Chrome, Google Cloud CLI |
-| AI tools | Claude Code, Codex CLI, Antigravity CLI, Typesafe.ai Jev\* |
+| AI tools | Claude Code, Codex CLI, Antigravity CLI, Typesafe.ai Jev |
 | <div align="right">LSP</div> | clangd (C/C++), TypeScript Language Server, Pyright (Python) |
 | <div align="right">MCP</div> | Chrome DevTools, CodeGraph, Cloud Run, BigQuery (Toolbox), mytask\*, Jev\* |
 | <div align="right">Skill</div> | agent-browser, playwright-cli, browser-verification\*, workspace-hygiene\*, and more |
