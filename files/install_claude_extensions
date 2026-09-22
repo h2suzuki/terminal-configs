@@ -278,7 +278,6 @@ run codex plugin remove vercel-plugin@plugins-cli
 
 
 run claude mcp list
-run claude plugin list
 
 
 echo ''

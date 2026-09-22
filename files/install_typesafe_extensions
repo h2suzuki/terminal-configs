@@ -52,6 +52,7 @@ run claude plugin marketplace add typesafe-ai/skills
 run claude plugin marketplace update typesafe-ai
 run claude plugin install typesafe@typesafe-ai --scope user
 run claude plugin update typesafe@typesafe-ai --scope user
+run claude plugin enable typesafe@typesafe-ai --scope user
 
 
 # Codex supports the upstream .claude-plugin marketplace and manifest.
@@ -61,10 +62,10 @@ run codex plugin add typesafe@typesafe-ai
 
 
 # Register the persistent SDK-backed stdio server without credentials in config.
-claude mcp remove jev --scope user
+run "claude mcp remove jev --scope user || true"
 run claude mcp add jev --scope user -- /usr/local/bin/jev serve
 
-codex mcp remove jev
+run "codex mcp remove jev || true"
 run codex mcp add jev -- /usr/local/bin/jev serve
 
 
@@ -73,6 +74,4 @@ run codex mcp add jev -- /usr/local/bin/jev serve
 run npx -y skills add typesafe-ai/skills --skill typesafe-ai --agent antigravity --global --yes --copy
 
 
-echo 'TypeSafe / Jev installed. Run jev api-key set in your terminal to save the API key.'
-echo 'Run jev hello to check authentication and connectivity; agents use the jev MCP server.'
-echo 'Restart Codex / Antigravity; restart Claude Code or run /reload-plugins.'
+run claude plugin list
