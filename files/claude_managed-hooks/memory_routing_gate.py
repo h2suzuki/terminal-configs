@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 r"""
-Memory-entry write enforcement hook for Claude Code.
+Memory-entry direct-Write enforcement hook for Claude Code.
 
 Purpose
 =======
 memory entry (共有 clone /var/lib/claude-rag-memory/claude-lessons-learned 配下の
 org/*.md, user/<login>/*.md, project/<enc>/*.md) への書込を /memory-routing
-skill 経由に強制する決定論的 gate。retrieval 層 (memory_surface.py の
+skill 経由に強制する直接 Write 用の決定論的 gate。通常の保存は
+claude_memory_sync --write-from を使い、同じ _content_problem で検証する。
+retrieval 層 (memory_surface.py の
 reminder/keywords surface) の上に乗る hard 層で、skill 非発火でも format /
 keyword 品質 / DB 同期 / git commit+push を担保する。旧 location
 (~/.claude/memory, ~/.claude/projects/<enc>/memory) への書込は clone への
@@ -433,7 +435,7 @@ def cmd_guard(payload: dict) -> None:
             "ではなく "
             f"{MEMORY_REPO_DIR}/user/<login>/ (user scope) または "
             f"{MEMORY_REPO_DIR}/project/<encoded-cwd>/ (project scope) に "
-            "/memory-routing 経由で Write してください。"
+            "/memory-routing で保存先を選び、claude_memory_sync --write-from で保存してください。"
         )
         return
     if not os.path.isdir(os.path.join(MEMORY_REPO_DIR, ".git")):
@@ -448,8 +450,7 @@ def cmd_guard(payload: dict) -> None:
     if tool in ("Edit", "MultiEdit"):
         _emit_deny(
             "memory entry の差分編集 (Edit/MultiEdit) は不可です。 "
-            "/memory-routing を経由し、 full content で Write し直してください "
-            "(skill が書込前に grant を mint します)。"
+            "/memory-routing で全文を組み立て、claude_memory_sync --write-from で更新してください。"
         )
         return
 
@@ -458,8 +459,8 @@ def cmd_guard(payload: dict) -> None:
     if not _grant_valid(grant):
         _emit_deny(
             "この memory entry は /memory-routing skill を経由して書いてください。 "
-            "skill が書込直前に grant を mint し、 routing 判断・正書式・DB 同期を "
-            "一括で担保します (直接 Write は grant 不在で deny されます)。"
+            "通常の保存には claude_memory_sync --write-from <draft> <entry> を使います。 "
+            "この直接 Write 経路は grant 不在で deny されます。"
         )
         return
 

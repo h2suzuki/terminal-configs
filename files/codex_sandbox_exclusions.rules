@@ -35,7 +35,7 @@ prefix_rule(
     pattern = ["claude_memory_sync"],
     decision = "allow",
     justification = "Validate, write, and synchronize shared memory entries outside the workspace.",
-    match = ["claude_memory_sync --pull", "claude_memory_sync --status", "claude_memory_sync --write /var/lib/claude-rag-memory/claude-lessons-learned/org/feedback_example.md"],
+    match = ["claude_memory_sync --pull", "claude_memory_sync --status", "claude_memory_sync --write /var/lib/claude-rag-memory/claude-lessons-learned/org/feedback_example.md", "claude_memory_sync --write-from ENTRY_DRAFT /var/lib/claude-rag-memory/claude-lessons-learned/org/feedback_example.md"],
     not_match = ["claude_memory_sync_other --pull"],
 )
 

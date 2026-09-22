@@ -67,8 +67,9 @@ ls -d ~/.claude/memory ~/.claude/memory.pre-git \
    追記し、固有の事例・絶対日付を本文へ追記)。正す行動や状況が異なる → 新規。
    **迷ったら新規** (誤マージの分離は難しいが、重複は後から retire が容易)
 4. **保存先の判断**: 新規の scope は memory-routing skill で判定する (org = user 非依存 /
-   user = 個人情報を含む / project = project 固有)。反映はすべて memory-routing の
-   grant + Write 経由 (auto-sync が commit + push + index まで行う)
+   user = 個人情報・本人固有の事情 / project = project 固有)。反映はすべて共有
+   memory-routing の `claude_memory_sync --write-from <draft> <entry>` 経由で行う
+   (書式検証・index 更新・commit・push を 1 コマンドで行う)
 5. **project id は --project-id で導出する**: 旧 `~/.claude/projects/<enc>/memory/` の
    `<enc>` は旧方式 (cwd encode)。対応する project dir を引数に
    `~/.claude/hooks/memory_surface.py --project-id <project_dir>` を実行して得た id の

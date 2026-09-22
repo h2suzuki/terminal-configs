@@ -1,4 +1,4 @@
-# Project guidance for Codex
+# Project guidance for coding agents
 
 For `agent_coord` incidents reported from another environment that the user
 has said is inaccessible, finish the source fix and local verification here.

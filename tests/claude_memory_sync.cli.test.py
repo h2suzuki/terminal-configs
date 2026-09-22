@@ -5,7 +5,7 @@ Contract (each claim maps to one test):
   C1  `--help` and `-h` exit 0; the text names every command flag and the clone layout
   C2  no arguments is `--status`: identical output and exit status
   C3  an unknown flag exits 2 with a usage line on stderr
-  C4  `--commit` / `--retire` without PATH exit 2
+  C4  entry write / commit / retire commands without their paths exit 2
   C5  two commands at once exit 2 (mutually exclusive)
   C6  a relative PATH is resolved against the cwd before the command sees it
 """
@@ -24,6 +24,7 @@ COMMANDS = (
     "--pull",
     "--commit",
     "--write",
+    "--write-from",
     "--retire",
     "--full",
     "--status",
@@ -81,6 +82,10 @@ class CliTest(unittest.TestCase):
             out = self.run_cli(cmd)
             self.assertEqual(out.returncode, 2, cmd)
             self.assertIn("expected one argument", out.stderr)
+        for args in (("--write-from",), ("--write-from", "draft.md")):
+            out = self.run_cli(*args)
+            self.assertEqual(out.returncode, 2, args)
+            self.assertIn("expected 2 arguments", out.stderr)
 
     def test_c5_mutually_exclusive(self) -> None:
         out = self.run_cli("--pull", "--status")
