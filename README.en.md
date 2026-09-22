@@ -12,7 +12,7 @@ Configuration files and setup scripts for terminal and AI coding environments on
 | Development tools | Neovim, ripgrep, delta, libsixel-bin, Node.js LTS through nvm, Chrome |
 | AI tools | Claude Code CLI, Codex CLI, Antigravity CLI, Typesafe.ai Jev |
 | <div align="right">Tool settings</div> | `/etc/claude-code`, `/etc/codex`, Sandbox settings, and more |
-| <div align="right">Hooks</div> | mytask reminders\*, file-read checks before editing\*, commit message format checks\*, unfinished task detection before ending a response (Stop)\*, and more |
+| <div align="right">Hooks</div> | mytask reminders\*, file-read checks before editing\*, commit message format checks\*, checks against unsupported completion claims and unnecessary permission questions (Stop)\*, and more |
 | <div align="right">LSP</div> | clangd (C/C++), TypeScript Language Server, Pyright |
 | <div align="right">MCP</div> | Chrome DevTools, CodeGraph, Cloud Run, BigQuery (Toolbox), mytask\*, Jev\* |
 | <div align="right">Skill</div> | agent-browser, playwright-cli, memory-routing\*, browser-verification\*, workspace-hygiene\*, and more |
