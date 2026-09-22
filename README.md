@@ -94,6 +94,13 @@ Claude Code から Codex を使う場合は、下記の Codex の認証後に Cl
 `/etc/codex/skel/AGENTS.md`、`setup_user_environment` 実行時に各ユーザーの
 `~/.codex/AGENTS.md` へコピーします。既存の同名ファイルは更新されます。
 
+Claude Code の共通方針 (`files/claude_managed-CLAUDE.md`) も、この原本と本文・見出しを一致させます。差分は次の2点に限定します。
+
+- 個人の呼称: Codex は `~/.codex/AGENTS.md` に含め、Claude は `~/.claude/CLAUDE.md` (`files/claude_user-CLAUDE.md`) に分離します。Claude managed の配備先は `/etc/claude-code/CLAUDE.md` なので、個人の呼称は含めません。
+- Claude 固有の最終行書式: 既存の Stop hook `communication-lint` が検査するため、managed の独立した節に残します。Codex の共通方針には加えません。
+
+共通方針を変更するときは両方を更新し、`python3 tests/agent_guidance.test.py` で一致を確認します。
+
 ```bash
 codex login
 ```
