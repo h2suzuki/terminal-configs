@@ -1053,6 +1053,8 @@ class Ledger:
 
     def resolve_sid(self, ref: str) -> str:
         if ref in self.sessions:
+            if self.sessions[ref]["left_at"] is not None:
+                raise CoordError(f"no session named or identified by {ref!r}", -32602)
             return ref
         sids = [s["sid"] for s in self.present_sessions() if s["name"] == ref]
         if len(sids) == 1:
@@ -1219,6 +1221,10 @@ class Ledger:
         session = self.sessions.get(sid)
         if session is None:
             raise CoordError(f"unknown session {sid}: join first", -32001)
+        if session["left_at"]:
+            raise CoordError(
+                f"session {sid} has left; join again to participate", -32001
+            )
         by_native = bool(p.get("native_id")) and session["native_id"] == p["native_id"]
         by_token = bool(p.get("token")) and session["token"] == p["token"]
         if not (by_native or by_token):

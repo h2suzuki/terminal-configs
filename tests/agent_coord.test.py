@@ -655,6 +655,13 @@ class DeliveryTest(Direct):
         self.call("b", "attach", sid="b", native_id="b")
         self.assertEqual(self.texts("b"), ["sid still addresses it"])
 
+    def test_f2_7_direct_send_rejects_left_session_id(self):
+        self.join("sender", self.repo)
+        self.join("receiver", self.wt)
+        self.call("receiver", "leave", sid="receiver")
+        with self.assertRaisesRegex(coord.CoordError, "no session named"):
+            self.call("sender", "send", sid="sender", to="receiver", text="stale")
+
     def test_f2_8_broadcasts_and_peers_cover_present_sessions_only(self):
         """F2-8: `all` means connected (or recently seen) sessions, not everyone who ever joined."""
         self.join("a", self.repo)
@@ -1625,6 +1632,26 @@ class HookTest(Fixture):
         self.assertEqual(
             self.codex_hook_as("outer-thread", "Stop", stop), {"continue": True}
         )
+
+    def test_session_start_rejoins_after_resume_from_session_end(self):
+        payload = {"session_id": "resumed-thread", "cwd": str(self.repo)}
+        self.codex_hook_as("resumed-thread", "SessionStart", payload)
+        self.codex_hook_as("resumed-thread", "SessionEnd", payload)
+
+        context = self.codex_hook_as("resumed-thread", "SessionStart", payload)
+
+        self.assertIn(
+            "joined as codex-resumed-thread",
+            context["hookSpecificOutput"]["additionalContext"],
+        )
+        client = self.daemon.client()
+        self.addCleanup(client.close)
+        session = next(
+            row
+            for row in client.call("sessions")["sessions"]
+            if row["sid"] == "codex-resumed-thread"
+        )
+        self.assertIsNone(session["left_at"])
 
     def test_codex_hook_missing_payload_id_does_not_block_parent_unread(self):
         parent = self.daemon.client()
