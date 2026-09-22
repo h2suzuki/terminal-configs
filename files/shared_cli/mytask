@@ -671,7 +671,7 @@ def _main(argv: list[str] | None = None) -> int:
     if args == ["--client", "codex"]:
         CLIENT = "codex"
     elif args:
-        print("Usage: claude_mytask_mcp [--client codex | --selftest]", file=sys.stderr)
+        print("Usage: mytask [--client codex | --selftest]", file=sys.stderr)
         return 2
     serve(sys.stdin, sys.stdout)
     return 0

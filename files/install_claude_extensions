@@ -248,9 +248,9 @@ run claude mcp add toolbox --scope user -- toolbox_bigquery_mcp
 
 # mytask MCP (session-local work-item tracker)
 claude mcp remove mytask --scope user
-run claude mcp add mytask --scope user -- claude_mytask_mcp
+run claude mcp add mytask --scope user -- /usr/local/bin/mytask
 codex mcp remove mytask
-run codex mcp add mytask -- /usr/local/bin/claude_mytask_mcp --client codex
+run codex mcp add mytask -- /usr/local/bin/mytask --client codex
 
 # agent-coord plugin (host-wide session ledger; the CLI ships with the base setup)
 run claude plugin marketplace add /usr/local/share/agent_plugins

@@ -19,7 +19,7 @@ writable_roots = ["~/worktrees"]
 default_tools_approval_mode = "approve"
 
 [mcp_servers.mytask]
-command = "/usr/local/bin/claude_mytask_mcp"
+command = "/usr/local/bin/mytask"
 args = ["--client", "codex"]
 default_tools_approval_mode = "approve"
 
@@ -67,6 +67,14 @@ timeout = 35
 type = "command"
 command = "python3 /etc/claude-code/skel/hooks/memory_surface.py --codex"
 timeout = 10
+
+# Prompt-time reminder to track multi-step work through mytask.
+[[hooks.UserPromptSubmit]]
+
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "python3 /etc/codex/hooks/plan_first_nudge.py --codex"
+timeout = 5
 
 # A write-failure claim at Stop retrieves the relevant Stop-routed lesson.
 # It requests at most one continuation; unrelated or already-continued turns pass.
