@@ -153,8 +153,8 @@ flag するときは「verification 不能」だけでなく「**実際に動作
 スキャン対象:
 - System Prompt
 - /etc/claude-code/CLAUDE.md
-- /home/h2suzuki/.claude/CLAUDE.md
-- /home/h2suzuki/terminal-configs/.claude/CLAUDE.md
+- /home/<user>/.claude/CLAUDE.md
+- <cwd>/.claude/CLAUDE.md
 
 - [System Prompt 重複] /etc/claude-code/CLAUDE.md §7「`git push` は自動で行わず」: System Prompt「DO NOT push to the remote repository unless...」と重複（削除しても System Prompt 経由で同じ動作）
 - [input 内重複] ~/.claude/CLAUDE.md「コミットメッセージは英語で」 と /etc/claude-code/CLAUDE.md §7「コミットメッセージは英語で」 が重複
@@ -169,8 +169,8 @@ flag するときは「verification 不能」だけでなく「**実際に動作
 スキャン対象:
 - System Prompt
 - /etc/claude-code/CLAUDE.md
-- /home/h2suzuki/.claude/CLAUDE.md
-- /home/h2suzuki/terminal-configs/.claude/CLAUDE.md
+- /home/<user>/.claude/CLAUDE.md
+- <cwd>/.claude/CLAUDE.md
 
 なし
 ```
@@ -191,13 +191,13 @@ schema:
 clean な場合の例:
 
 ```
-{"scanned":["System Prompt","/etc/claude-code/CLAUDE.md","/home/h2suzuki/.claude/CLAUDE.md"],"findings":[]}
+{"scanned":["System Prompt","/etc/claude-code/CLAUDE.md","/home/<user>/.claude/CLAUDE.md"],"findings":[]}
 ```
 
 findings がある場合の例:
 
 ```
-{"scanned":["System Prompt","/etc/claude-code/CLAUDE.md","/home/h2suzuki/.claude/CLAUDE.md"],"findings":["- [System Prompt 重複] /etc/claude-code/CLAUDE.md §7「`git push` は自動で行わず」: System Prompt「DO NOT push to the remote repository unless...」と重複（削除しても System Prompt 経由で同じ動作）","- [stale] ~/.claude/CLAUDE.md: 参照している `/bootstrap` skill は他 input で `/wire` に rename 済み"]}
+{"scanned":["System Prompt","/etc/claude-code/CLAUDE.md","/home/<user>/.claude/CLAUDE.md"],"findings":["- [System Prompt 重複] /etc/claude-code/CLAUDE.md §7「`git push` は自動で行わず」: System Prompt「DO NOT push to the remote repository unless...」と重複（削除しても System Prompt 経由で同じ動作）","- [stale] ~/.claude/CLAUDE.md: 参照している `/bootstrap` skill は他 input で `/wire` に rename 済み"]}
 ```
 
 JSON mode では「なし」というリテラルは使わない（findings 空配列で表現）。 finding 文字列内に改行を含めない（テキスト mode と同じ）。

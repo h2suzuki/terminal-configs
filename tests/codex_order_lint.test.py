@@ -542,7 +542,7 @@ review-kind: none
 # from drafts/codex-delegation-integration-fixes.md @ 53a74d81 (trim 10/58 行)
 INTEGRATION = """\
 # fix round 発注書: codex-delegation SKILL.md 受け入れレビュー所見
-`/home/h2suzuki/terminal-configs/files/claude_managed-skills/codex-delegation/SKILL.md` 1 file のみ、commit はしない。
+`files/claude_managed-skills/codex-delegation/SKILL.md` 1 file のみ、commit はしない。
 ## 1. [blocker] 重複掲載の解消（これを最初にやる。以降の番号はこの整理後の姿に対して適用する）
 ## 2. [blocker] 3 分岐 rule が 2 条件 AND を迂回できる
 ## 3. [blocker] stall 判定に検証フェーズの carve-out が無い
