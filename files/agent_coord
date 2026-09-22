@@ -37,7 +37,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, TextIO, cast
 
-VERSION = "0.2.11"
+VERSION = "0.2.12"
 DB_SCHEMA_VERSION = 6
 MCP_PROTOCOL_VERSION = "2025-11-25"
 EVENT_TTL = 24 * 3600  # undelivered talk outlives any real session by then
