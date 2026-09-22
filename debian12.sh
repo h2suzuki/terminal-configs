@@ -314,6 +314,7 @@ copy claude_user-CLAUDE.md                      /etc/claude-code/skel/CLAUDE.md
 copy claude_user-settings.json                  /etc/claude-code/skel/settings.json
 
 merge_dir claude_user-skills                     /etc/claude-code/skel/skills/
+copy shared_skills/mytask/SKILL.md             /etc/claude-code/skel/skills/mytask/SKILL.md
 merge_dir claude_user-hooks                      /etc/claude-code/skel/hooks/
 copy claude_user-extensions.json                /etc/claude-code/skel/extensions.json   # To be installed by claude_user_hooks
 
@@ -323,6 +324,7 @@ copy claude_user-extensions.json                /etc/claude-code/skel/extensions
 copy codex_config.toml                          /etc/codex/config.toml
 merge_dir shared_hooks/                          /etc/codex/hooks/
 copy shared_skills/memory-routing/SKILL.md      /etc/codex/skills/memory-routing/SKILL.md
+copy shared_skills/mytask/SKILL.md             /etc/codex/skills/mytask/SKILL.md
 copy shared_skills/sandbox-host-recovery/SKILL.md /etc/codex/skills/sandbox-host-recovery/SKILL.md
 copy codex_sandbox_exclusions.rules             /etc/codex/rules/terminal-configs-sandbox-exclusions.rules
 run python3 "$TOP_DIR/files/install_workspace_hygiene.py"

@@ -390,11 +390,12 @@ def dispatch(message: object) -> dict[str, object] | None:
                     "capabilities": {"tools": {"listChanged": False}},
                     "serverInfo": {"name": "mytask", "version": VERSION},
                     "instructions": (
-                        "Use mytask to track multi-step work in this conversation. "
-                        "Read TaskList when starting or resuming work; create concrete "
-                        "steps with TaskCreate and keep TaskUpdate status current. "
-                        "Mark completed only after verifying the deliverable. "
-                        "For a single small edit, no task list is needed."
+                        "Read the mytask skill before planning work. Use this ledger to "
+                        "remember user requests, break large work into concrete steps, "
+                        "and review your own plan against the request as facts change. "
+                        "Keep requests, corrections, and deferred work recorded; verify "
+                        "completion before updating status. Self-review does not require "
+                        "asking the user to approve every plan."
                     ),
                 },
             )
@@ -635,7 +636,7 @@ class MyTasksTest(unittest.TestCase):
         )
         responses = [json.loads(line)["result"] for line in result.stdout.splitlines()]
         self.assertEqual(len(responses), 5)
-        self.assertIn("multi-step work", responses[0]["instructions"])
+        self.assertIn("review your own plan", responses[0]["instructions"])
         self.assertEqual(len(responses[1]["tools"]), 3)
         self.assertTrue(all(not response["isError"] for response in responses[2:]))
         resumed = subprocess.run(

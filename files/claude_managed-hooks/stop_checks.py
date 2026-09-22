@@ -173,6 +173,7 @@ def _empty_turn(path=""):
         "final_text": "",
         "turn_text": "",
         "tool_names": [],
+        "task_preparation_indices": [],
         "tool_paths": [],
         "edited_paths": [],
         "bash_commands": [],
@@ -242,6 +243,15 @@ def _turn_funnel(payload):
                 continue
             result["tool_names"].append(name)
             path_value = _tool_path(name, data)
+            if (
+                name == "Skill"
+                and isinstance(data, dict)
+                and data.get("skill") == "mytask"
+            ) or (
+                name == "Read"
+                and re.search(r"(?:^|/)skills/mytask/SKILL\.md$", path_value)
+            ):
+                result["task_preparation_indices"].append(len(result["tool_names"]) - 1)
             if name == "Skill" and isinstance(data, dict):
                 skill = data.get("skill")
                 if isinstance(skill, str):
@@ -511,7 +521,9 @@ def _task_plan(turn):
         (
             index
             for index, name in enumerate(names)
-            if not _task_tool(name) and name not in SCHEMA_TOOLS
+            if not _task_tool(name)
+            and name not in SCHEMA_TOOLS
+            and index not in turn.get("task_preparation_indices", [])
         ),
         None,
     )

@@ -1080,6 +1080,38 @@ class TaskPlanFirstTest(StopChecksTest):
         self.fx.write([prompt(), schema, *self.work()])
         self.assertBlocks(run_hook(self.fx, "編集しました。" + TAIL), "task-plan-first")
 
+    def test_mytask_skill_can_be_read_before_recording_request(self):
+        for preparation in (
+            call("Skill", skill="mytask"),
+            read("/home/test/.claude/skills/mytask/SKILL.md"),
+        ):
+            self.fx.write(
+                [
+                    prompt(),
+                    preparation,
+                    call("TaskCreate", subject="依頼"),
+                    *self.work(),
+                ]
+            )
+            self.assertNotBlocked(
+                run_hook(self.fx, "編集しました。" + TAIL), "task-plan-first"
+            )
+
+    def test_reading_mytask_skill_does_not_replace_recording_request(self):
+        self.fx.write([prompt(), call("Skill", skill="mytask"), *self.work()])
+        self.assertBlocks(run_hook(self.fx, "編集しました。" + TAIL), "task-plan-first")
+
+    def test_reading_source_before_recording_request_still_blocks(self):
+        self.fx.write(
+            [
+                prompt(),
+                read(self.fx.repo_file("x.py")),
+                call("TaskCreate", subject="依頼"),
+                *self.work(),
+            ]
+        )
+        self.assertBlocks(run_hook(self.fx, "編集しました。" + TAIL), "task-plan-first")
+
     def test_c6_turn_without_tool_calls_passes(self):
         self.fx.write([prompt(), say("説明しました")])
         self.assertClean(run_hook(self.fx, "仕様を説明しました。" + TAIL))
