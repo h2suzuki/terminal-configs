@@ -9,7 +9,7 @@ Debian 12 と Ubuntu 24.04 on WSL2 向けに、ターミナルと AI コーデ�
 | 分野 | 主な内容 |
 |---|---|
 | OS設定 | Bash、Git、SSH keepalive、Windows Terminal の色・画像表示対応（SSH・sudo 先）、SSH 接続元への画面・音声転送（X11・PulseAudio、sudo -i にも対応）<br>WSL2：systemd 有効化、.local 名の解決、WSLg への音声転送 |
-| 開発ツール | Neovim、ripgrep、delta、libsixel-bin、Node.js LTS（nvm）、Chrome |
+| 開発ツール | Neovim、ripgrep、delta、libsixel-bin、Node.js（nvm）、Chrome |
 | AI ツール | Claude Code CLI、Codex CLI、Antigravity CLI、Typesafe.ai Jev |
 | <div align="right">ツール設定</div> | `/etc/claude-code`、`/etc/codex`、Sandbox 設定など |
 | <div align="right">Hooks</div> | mytask の利用促進\*、編集前のファイル確認\*、コミットメッセージの書式確認\*、根拠のない完了報告・不要な確認質問の抑止（Stop）\* など |
@@ -57,7 +57,7 @@ debian12.sh または ubuntu2404-wsl.sh（sudo で実行）
 └── root とログインユーザー（検出できた場合）それぞれで実行
     └── setup_user_environment
         ├── Bash・Git のユーザー設定
-        ├── nodejs_clean_installer             Node.js LTS
+        ├── nodejs_clean_installer             Node.js
         ├── Codex CLI の導入・リモート接続の有効化
         ├── Claude Code のユーザー設定
         ├── install_claude_extensions          プラグイン・MCP・hooks・skills

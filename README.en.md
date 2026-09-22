@@ -9,7 +9,7 @@ Configuration files and setup scripts for terminal and AI coding environments on
 | Area | Main components |
 |---|---|
 | OS settings | Bash, Git, SSH keepalive, Windows Terminal color and image support over SSH and sudo, display and audio forwarding to the SSH client (X11 and PulseAudio, also supported with sudo -i)<br>WSL2: enable systemd, resolve .local names, forward audio to WSLg |
-| Development tools | Neovim, ripgrep, delta, libsixel-bin, Node.js LTS through nvm, Chrome |
+| Development tools | Neovim, ripgrep, delta, libsixel-bin, Node.js through nvm, Chrome |
 | AI tools | Claude Code CLI, Codex CLI, Antigravity CLI, Typesafe.ai Jev |
 | <div align="right">Tool settings</div> | `/etc/claude-code`, `/etc/codex`, Sandbox settings, and more |
 | <div align="right">Hooks</div> | mytask reminders\*, file-read checks before editing\*, commit message format checks\*, checks against unsupported completion claims and unnecessary permission questions (Stop)\*, and more |
@@ -57,7 +57,7 @@ debian12.sh or ubuntu2404-wsl.sh (run with sudo)
 └── Run for root and the login user (if detected)
     └── setup_user_environment
         ├── Configure the user's Bash and Git
-        ├── nodejs_clean_installer             Node.js LTS
+        ├── nodejs_clean_installer             Node.js
         ├── Install Codex CLI and enable remote connections
         ├── Configure the user's Claude Code
         ├── install_claude_extensions          Plugins, MCP, hooks and skills
