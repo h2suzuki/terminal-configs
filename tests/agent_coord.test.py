@@ -1490,7 +1490,7 @@ class HookTest(Fixture):
         self.addCleanup(os.environ.pop, "AGENT_COORD_NO_AUTOSTART", None)
 
     def test_codex_and_claude_hook_manifests_match_the_registered_roles(self):
-        hooks_dir = REPO_ROOT / "files/agent_plugins/agent-coord/hooks"
+        hooks_dir = REPO_ROOT / "files/shared_plugins/agent-coord/hooks"
         codex = json.loads((hooks_dir / "codex.json").read_text())["hooks"]
         claude = json.loads((hooks_dir / "claude-code.json").read_text())["hooks"]
         self.assertEqual(
@@ -1549,7 +1549,7 @@ class HookTest(Fixture):
         peer.call("send", sid="p", to="repo", text=text)
 
     def test_codex_plugin_keeps_the_explicit_trusted_hook_path(self):
-        plugin = REPO_ROOT / "files" / "agent_plugins" / "agent-coord"
+        plugin = REPO_ROOT / "files" / "shared_plugins" / "agent-coord"
         manifest = json.loads((plugin / ".codex-plugin" / "plugin.json").read_text())
         self.assertEqual(manifest["hooks"], "./hooks/codex.json")
         self.assertEqual(manifest["mcpServers"], "./mcp/codex.json")
@@ -1558,6 +1558,34 @@ class HookTest(Fixture):
         self.assertIn("Stop", hooks)
         self.assertIn("Interrupt", hooks)
         self.assertFalse((plugin / "hooks" / "hooks.json").exists())
+
+    def test_plugin_marketplaces_and_antigravity_skill_resolve(self):
+        source_root = REPO_ROOT / "files" / "shared_plugins"
+        plugin = source_root / "agent-coord"
+        repo_marketplace = json.loads(
+            (REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text()
+        )
+        self.assertEqual(
+            (REPO_ROOT / repo_marketplace["plugins"][0]["source"]).resolve(),
+            plugin,
+        )
+        local_claude = json.loads(
+            (source_root / ".claude-plugin" / "marketplace.json").read_text()
+        )
+        self.assertEqual(
+            (source_root / local_claude["plugins"][0]["source"]).resolve(),
+            plugin,
+        )
+        local_codex = json.loads(
+            (source_root / ".agents" / "plugins" / "marketplace.json").read_text()
+        )
+        self.assertEqual(
+            (source_root / local_codex["plugins"][0]["source"]["path"]).resolve(),
+            plugin,
+        )
+        shared_skill = source_root / "agent-coord-antigravity" / "skills" / "agent-coord"
+        self.assertTrue(shared_skill.is_symlink())
+        self.assertEqual(shared_skill.resolve(strict=True), plugin / "skills" / "agent-coord")
 
     def test_nested_codex_hook_uses_payload_thread_over_inherited_parent_env(self):
         payload = {"session_id": "nested-thread", "cwd": str(self.wt)}
@@ -2199,7 +2227,7 @@ class HookTest(Fixture):
     def test_f8_1_antigravity_hooks_speak_its_own_schema(self):
         manifest = json.loads(
             (
-                REPO_ROOT / "files/agent_plugins/agent-coord-antigravity/hooks.json"
+                REPO_ROOT / "files/shared_plugins/agent-coord-antigravity/hooks.json"
             ).read_text()
         )["agent-coord"]
         self.assertEqual(set(manifest), {"PreInvocation", "Stop"})

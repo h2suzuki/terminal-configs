@@ -164,7 +164,7 @@ Claude Code に「信頼を高めるための仕組み」と外部ツール連�
 - **プラグイン**: security-guidance（既定で無効）, figma, codex（OpenAI Codex への委譲・コードレビュー）
 - **CLI**: agent-browser（日常の画面確認）, Playwright CLI（テスト作成・再現調査）, Vercel CLI。ブラウザ操作の公式 Skill は Claude Code と Codex に配置し、旧 Playwright MCP 登録は削除します。
 
-共有 memory clone と `files/shared-skills/memory-routing/SKILL.md` は Claude Code と Codex の両方で使います。
+共有 memory clone と `files/shared_skills/memory-routing/SKILL.md` は Claude Code と Codex の両方で使います。
 同じスキルを `/etc/claude-code/skills/memory-routing/` と `/etc/codex/skills/memory-routing/` に配置します。
 `SessionStart` hook が共有 clone を更新し、`UserPromptSubmit` hook が
 Claude Code と同じ index を検索して、実行中の Codex モデルに合う教訓だけを文脈として渡します。
@@ -286,6 +286,10 @@ Claude の drop-in は共通 Codex ルールへ自動変換しません。
 session の旧 worktree 列を削除しますが、未読メッセージ・session・配送記録は同じ DB に残り、
 新着メッセージも同じ DB に書き込みます。未読がゼロになるのを待って DB ファイルを切り替える処理はありません。
 
+plugin の正本は `files/shared_plugins/` にあります。`agent-coord/` は Claude Code・Codex 用、
+`agent-coord-antigravity/` は Antigravity 用の形式で、後者の skill は前者を参照します。
+配置先の `/usr/local/share/agent_plugins/` は既存の marketplace 登録を維持するため変えません。
+
 | 構成要素 | 配置 |
 |---|---|
 | CLI / daemon / MCP アダプタ / hooks 本体 | `/usr/local/bin/agent_coord` |
@@ -322,7 +326,7 @@ daemon が再起動した場合は再試行します。登録済みの通知が�
 ありますが、hook が block を繰り返すことはありません。
 
 hook ごとの公式仕様、agent-coord の方針、block の条件と出典は
-[agent-coord hook policy](files/agent_plugins/agent-coord/skills/agent-coord/references/hook-policy.md)
+[agent-coord hook policy](files/shared_plugins/agent-coord/skills/agent-coord/references/hook-policy.md)
 にまとめています。
 repo の配送範囲の判定には Git の common-dir を使います。agent-coord は worktree の担当や編集権限を扱いません。
 daemon は通常の hooks / MCP アダプタから自動起動します。終了・中断時の後片付け hook は起動しません。

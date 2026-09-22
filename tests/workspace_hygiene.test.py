@@ -409,7 +409,7 @@ class HygieneTest(unittest.TestCase):
                 (
                     stage / f"etc/{client}/skills/workspace-hygiene/SKILL.md"
                 ).read_bytes(),
-                (FILES / "shared-skills/workspace-hygiene/SKILL.md").read_bytes(),
+                (FILES / "shared_skills/workspace-hygiene/SKILL.md").read_bytes(),
             )
         deployed = stage / "usr/local/lib/workspace_hygiene/workspace_hygiene.py"
         result = subprocess.run(
@@ -440,7 +440,7 @@ class HygieneTest(unittest.TestCase):
             self.assertNotIn("find /etc/claude-code -depth", source)
             for client in ("codex", "claude-code"):
                 self.assertIn(
-                    f"copy shared-skills/sandbox-host-recovery/SKILL.md /etc/{client}/skills/sandbox-host-recovery/SKILL.md",
+                    f"copy shared_skills/sandbox-host-recovery/SKILL.md /etc/{client}/skills/sandbox-host-recovery/SKILL.md",
                     source,
                 )
         config = tomllib.loads((FILES / "codex_config.toml").read_text())

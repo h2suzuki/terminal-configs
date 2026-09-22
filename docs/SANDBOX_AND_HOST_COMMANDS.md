@@ -36,7 +36,7 @@ errors did not establish that the sandbox barred memory synchronization.
 ## Stop-time memory reminder
 
 The `sandbox-host-recovery` skill is installed from one source file under
-`files/shared-skills/` for both clients. The canonical memory entry
+`files/shared_skills/` for both clients. The canonical memory entry
 `org/feedback_try_host_ops_before_delegating.md` has `when: prompt stop` and
 comma-separated keywords for write-failure claims.
 
