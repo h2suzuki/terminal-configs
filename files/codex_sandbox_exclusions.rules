@@ -32,6 +32,14 @@ prefix_rule(
 )
 
 prefix_rule(
+    pattern = ["jev"],
+    decision = "allow",
+    justification = "Use host TypeSafe credentials for Jev CLI commands, matching the Claude Code exclusion.",
+    match = ["jev hello", "jev api-key status", "jev serve"],
+    not_match = ["jev-other hello", "python3 script.py"],
+)
+
+prefix_rule(
     pattern = ["claude_memory_sync"],
     decision = "allow",
     justification = "Validate, write, and synchronize shared memory entries outside the workspace.",

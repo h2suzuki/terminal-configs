@@ -77,7 +77,11 @@ systemd などによる独立した daemon の管理は不要です。`jev hello
   除去します。この設定には資格情報ディレクトリの読み取り拒否は含まれません。
 - Antigravity：公式スキルのみで、MCP 登録や同等の credential deny は設定していません。
 
-MCP プロセスがホスト側で資格情報を読みます。`jev` の sandbox 除外コマンド設定は不要です。
+MCP プロセスがホスト側で資格情報を読みます。CLI でも同じように資格情報を使えるよう、
+Claude Code は `sandbox.excludedCommands` に `jev *`、Codex は sandbox 除外ルールに
+`["jev"]` の allow prefix を登録しています。`jev hello` や `jev api-key status` は
+ホスト側で実行されます。除外ルールに一致するよう、`jev` はパスや `sudo` を付けず、
+単独のコマンドとして実行してください。
 送信先は `https://api.typesafe.ai/v1/systemone` 固定です。リダイレクトと環境変数による
 プロキシ・CA・送信先の変更を使わず、OS の CA 証明書で HTTPS を検証します。
 

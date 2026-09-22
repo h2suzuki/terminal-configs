@@ -36,6 +36,7 @@
     "excludedCommands": [
       "git *",
       "gh *",
+      "jev *",
       "claude_memory_sync *",
       "docker *",
       "codex *",
