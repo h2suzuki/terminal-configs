@@ -132,6 +132,10 @@ run uv tool install --force claude-monitor
 run install_claude_extensions
 
 
+# TypeSafe / Jev: install after the coding agents and their extensions.
+run install_typesafe_extensions
+
+
 # Stop terminal bell
 run install --mode 0644 /etc/skel/.inputrc  ~/.inputrc
 

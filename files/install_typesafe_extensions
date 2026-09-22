@@ -1,0 +1,78 @@
+#!/bin/bash
+
+# Installs TypeSafe / Jev extensions for the login user via setup_user_environment.
+# https://docs.typesafe.ai/agent-skill
+
+
+command -v tty      >/dev/null || { echo "Cannot find tty";         exit 1; }
+command -v claude   >/dev/null || { echo "Cannot find claude";      exit 1; }
+command -v codex    >/dev/null || { echo "Cannot find codex";       exit 1; }
+command -v jev      >/dev/null || { echo "Cannot find jev";         exit 1; }
+command -v npx      >/dev/null || { echo "Cannot find npx";         exit 1; }
+
+
+if tty -s >/dev/null; then
+    COLOR_CLEAR="\033[0m"
+    COLOR_RED="\033[31m"
+    COLOR_GREEN="\033[32m"
+    COLOR_YELLOW="\033[33m"
+else
+    COLOR_CLEAR=
+    COLOR_RED=
+    COLOR_GREEN=
+    COLOR_YELLOW=
+fi
+
+
+
+MY_NAME="$(id -un)"
+
+run()
+{
+    local RETVAL
+
+    echo -e "($MY_NAME) => ${COLOR_YELLOW}${@}${COLOR_CLEAR}"
+    eval "${@}"
+    RETVAL=$?
+
+    if [ $RETVAL -eq 0 ]; then
+        echo -e "[ ${COLOR_GREEN}OK${COLOR_CLEAR} ]\n"
+    else
+        echo -e "[ ${COLOR_RED}ERROR($RETVAL)${COLOR_CLEAR} ]\n"
+        exit $RETVAL
+    fi
+}
+
+
+
+# Avoid interpreting a project's Claude configuration during user setup.
+cd "$HOME" || exit 1
+
+run claude plugin marketplace add typesafe-ai/skills
+run claude plugin marketplace update typesafe-ai
+run claude plugin install typesafe@typesafe-ai --scope user
+run claude plugin update typesafe@typesafe-ai --scope user
+
+
+# Codex supports the upstream .claude-plugin marketplace and manifest.
+run codex plugin marketplace add typesafe-ai/skills
+run codex plugin marketplace upgrade typesafe-ai
+run codex plugin add typesafe@typesafe-ai
+
+
+# Register the persistent SDK-backed stdio server without credentials in config.
+claude mcp remove jev --scope user
+run claude mcp add jev --scope user -- /usr/local/bin/jev serve
+
+codex mcp remove jev
+run codex mcp add jev -- /usr/local/bin/jev serve
+
+
+# Copy directly into Antigravity's directory: the default shared symlink target
+# (~/.agents/skills) would also expose a duplicate skill to Codex.
+run npx -y skills add typesafe-ai/skills --skill typesafe-ai --agent antigravity --global --yes --copy
+
+
+echo 'TypeSafe / Jev installed. Run jev api-key set in your terminal to save the API key.'
+echo 'Run jev hello to check authentication and connectivity; agents use the jev MCP server.'
+echo 'Restart Codex / Antigravity; restart Claude Code or run /reload-plugins.'

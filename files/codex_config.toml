@@ -16,11 +16,18 @@ writable_roots = ["~/worktrees"]
 TYPESAFE_API_KEY = "exclude"
 
 # Explicit command exceptions are installed separately in
-# rules/terminal-configs-sandbox-exclusions.rules (see README for the mapping).
+# rules/terminal-configs-sandbox-exclusions.rules; see that file for command entries.
 
 # approval_policy = "never" rejects MCP tools left on the default approval mode.
 [plugins."agent-coord@terminal-configs".mcp_servers.agent_coord]
 default_tools_approval_mode = "approve"
+
+# The Jev MCP process reads credentials outside tool-shell sandboxes.
+[mcp_servers.jev]
+command = "/usr/local/bin/jev"
+args = ["serve"]
+default_tools_approval_mode = "approve"
+tool_timeout_sec = 60
 
 [mcp_servers.mytask]
 command = "/usr/local/bin/mytask"
