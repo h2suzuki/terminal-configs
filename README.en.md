@@ -11,10 +11,11 @@ Configuration files and setup scripts for terminal and AI coding environments on
 | OS settings | Bash, Git, SSH keepalive, Windows Terminal color and image support over SSH and sudo, display and audio forwarding to the SSH client (X11 and PulseAudio, also supported with sudo -i)<br>WSL2: enable systemd, resolve .local names, forward audio to WSLg |
 | Development tools | Neovim, ripgrep, delta, libsixel-bin, Node.js LTS through nvm, Chrome |
 | AI tools | Claude Code CLI, Codex CLI, Antigravity CLI, Typesafe.ai Jev |
+| <div align="right">Tool settings</div> | `/etc/claude-code`, `/etc/codex`, Sandbox settings, and more |
 | <div align="right">Hooks</div> | mytask reminders\*, file-read checks before editing\*, commit message format checks\*, unfinished task detection before ending a response (Stop)\*, and more |
 | <div align="right">LSP</div> | clangd (C/C++), TypeScript Language Server, Pyright |
 | <div align="right">MCP</div> | Chrome DevTools, CodeGraph, Cloud Run, BigQuery (Toolbox), mytask\*, Jev\* |
-| <div align="right">Skill</div> | agent-browser, playwright-cli, browser-verification\*, workspace-hygiene\*, and more |
+| <div align="right">Skill</div> | agent-browser, playwright-cli, memory-routing\*, browser-verification\*, workspace-hygiene\*, and more |
 | <div align="right">Plugin</div> | Jev, Codex (for Claude Code), security-guidance, agent-coord\* |
 | <div align="right">CLI</div> | agent-browser, playwright-cli, GitHub CLI, uv, ruff, ty, Google Cloud CLI, Vercel CLI, agent_coord\*, workspace_hygiene\*, claude_memory_sync\*, jev\* |
 

@@ -11,10 +11,11 @@ Debian 12 と Ubuntu 24.04 on WSL2 向けに、ターミナルと AI コーデ�
 | OS設定 | Bash、Git、SSH keepalive、Windows Terminal の色・画像表示対応（SSH・sudo 先）、SSH 接続元への画面・音声転送（X11・PulseAudio、sudo -i にも対応）<br>WSL2：systemd 有効化、.local 名の解決、WSLg への音声転送 |
 | 開発ツール | Neovim、ripgrep、delta、libsixel-bin、Node.js LTS（nvm）、Chrome |
 | AI ツール | Claude Code CLI、Codex CLI、Antigravity CLI、Typesafe.ai Jev |
+| <div align="right">ツール設定</div> | `/etc/claude-code`、`/etc/codex`、Sandbox 設定など |
 | <div align="right">Hooks</div> | mytask の利用促進\*、編集前のファイル確認\*、コミットメッセージの書式確認\*、応答終了時の未完了タスク検出（Stop）\* など |
 | <div align="right">LSP</div> | clangd（C/C++）、TypeScript Language Server、Pyright |
 | <div align="right">MCP</div> | Chrome DevTools、CodeGraph、Cloud Run、BigQuery（Toolbox）、mytask\*、Jev\* |
-| <div align="right">Skill</div> | agent-browser、playwright-cli、browser-verification\*、workspace-hygiene\* など |
+| <div align="right">Skill</div> | agent-browser、playwright-cli、memory-routing\*、browser-verification\*、workspace-hygiene\* など |
 | <div align="right">Plugin</div> | Jev、Codex（Claude Code 用）、security-guidance、agent-coord\* |
 | <div align="right">CLI</div> | agent-browser、playwright-cli、GitHub CLI、uv・ruff・ty、Google Cloud CLI、Vercel CLI、agent_coord\*、workspace_hygiene\*、claude_memory_sync\*、jev\* |
 
