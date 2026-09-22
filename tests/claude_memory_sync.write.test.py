@@ -77,6 +77,16 @@ class WriteTest(unittest.TestCase):
         ):
             return self.sync.main_write(str(path))
 
+    def write_from(self, path, content):
+        draft = Path(self.tmp.name) / "entry-draft.md"
+        draft.write_text(content, encoding="utf-8")
+        with (
+            mock.patch.dict(os.environ, {"INDEX_LOG": str(self.log)}),
+            mock.patch.object(self.sync, "spawn_push"),
+            mock.patch.object(sys, "argv", ["claude_memory_sync", "--write-from", str(draft), str(path)]),
+        ):
+            return self.sync.main()
+
     def test_valid_entry_is_indexed_and_committed(self):
         self.assertEqual(self.write(self.target, CONTENT), 0)
         self.assertEqual(self.target.read_text(encoding="utf-8"), CONTENT)
@@ -101,6 +111,21 @@ class WriteTest(unittest.TestCase):
         outside = Path(self.tmp.name) / "feedback_outside.md"
         self.assertEqual(self.write(outside, CONTENT), 1)
         self.assertFalse(outside.exists())
+
+    def test_draft_creates_and_updates_one_entry(self):
+        self.assertEqual(self.write_from(self.target, CONTENT), 0)
+        updated = CONTENT.replace("利益の説明が無い", "具体的な利益の説明が無い")
+        self.assertEqual(self.write_from(self.target, updated), 0)
+        self.assertEqual(self.target.read_text(encoding="utf-8"), updated)
+        self.assertEqual(
+            subprocess.run(
+                ["git", "-C", str(self.clone), "show", "HEAD:org/feedback_test_feature_value.md"],
+                check=True, capture_output=True, text=True,
+            ).stdout,
+            updated,
+        )
+        self.assertEqual(self.write_from(self.target, "bad entry"), 1)
+        self.assertEqual(self.target.read_text(encoding="utf-8"), updated)
 
 
 if __name__ == "__main__":

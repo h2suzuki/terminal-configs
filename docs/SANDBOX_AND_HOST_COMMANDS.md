@@ -21,7 +21,7 @@ preceding inspection justifies it, then verify the target state.
 
 | Runtime | Check before concluding that the operation is blocked |
 | --- | --- |
-| Codex | Compare the complete tool call with the active sandbox and rules. This repository's source rule is [`files/codex_sandbox_exclusions.rules`](../files/codex_sandbox_exclusions.rules), installed as `/etc/codex/rules/terminal-configs-sandbox-exclusions.rules`. Its `claude_memory_sync --pull` exception matches the bare command; a combined shell command or direct `git pull` is a different invocation. Pass the checkout through the tool's `workdir` argument. |
+| Codex | Compare the complete tool call with the active sandbox and rules. This repository's source rule is [`files/codex_sandbox_exclusions.rules`](../files/codex_sandbox_exclusions.rules), installed as `/etc/codex/rules/terminal-configs-sandbox-exclusions.rules`. Its `claude_memory_sync` prefix applies to the bare executable, including `--pull` and `--write-from`; a shell redirection, combined command, or direct `git pull` is a different invocation. Pass the checkout through the tool's `workdir` argument. |
 | Claude Code | Distinguish a Bash filesystem error from an auto-mode classifier denial and inspect the active managed policy and hook decision. The existing `auto-mode-denial-recovery` skill covers explicit classifier denial. Do not treat a generic denial message as permission to alter settings or retry around the classifier. |
 | Antigravity or another harness | Inspect that harness's current command policy and documented invocation shape. Do not assume Codex prefix rules or Claude auto-mode behavior apply to it. |
 
