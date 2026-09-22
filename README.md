@@ -8,10 +8,10 @@ Debian 12 と Ubuntu 24.04 on WSL2 向けに、ターミナルと AI コーデ�
 
 | 分野 | 主な内容 |
 |---|---|
-| ターミナル | Bash、Git、Neovim、GitHub CLI、ripgrep、delta、SIXEL 画像表示、Python ツール（uv・ruff・ty）、Node.js LTS（nvm）、Chrome、Google Cloud CLI、Vercel CLI |
+| ターミナル | Bash、Git、Neovim、GitHub CLI、ripgrep、delta、libsixel-bin、uv・ruff・ty、Node.js LTS（nvm）、Chrome、Google Cloud CLI、Vercel CLI |
 | AI ツール | Claude Code、Codex CLI、Antigravity CLI、Typesafe.ai Jev （独自のラッパー CLI・MCP 含む） |
 | LSP | clangd（C/C++）、TypeScript Language Server、Pyright（Python） |
-| MCP | Chrome DevTools、CodeGraph、Cloud Run、BigQuery（Toolbox）、my-task、Jev |
+| MCP | Chrome DevTools、CodeGraph、Cloud Run、BigQuery（Toolbox）、mytask（独自）、Jev |
 | Skill | agent-browser・Playwright CLI の操作スキル、ブラウザー検証、作業ファイル管理など |
 | Plugin | Jev の公式プラグイン、Claude Code 用 Codex プラグイン、agent-coord（セッション間連携） |
 | 画面・音声転送 | SSH クライアントへの X11 画面転送・PulseAudio 音声転送を、ログインユーザーと root で共用 |
@@ -45,7 +45,7 @@ cd terminal-configs
 debian12.sh または ubuntu2404-wsl.sh（sudo で実行）
 ├── システム全体のツール・設定を導入
 │   ├── OS パッケージの更新、Neovim・GitHub CLI・Google Cloud CLI の導入
-│   ├── Python ツール（uv・ruff・ty）、Chrome・日本語フォントの導入
+│   ├── uv・ruff・ty、Chrome・日本語フォントの導入
 │   ├── Claude Code・Antigravity CLI の導入
 │   ├── Claude Code・Codex の共通設定・sandbox 設定の配備
 │   ├── Jev のラッパー CLI・SDK 実行環境の導入

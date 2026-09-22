@@ -18,6 +18,11 @@ writable_roots = ["~/worktrees"]
 [plugins."agent-coord@terminal-configs".mcp_servers.agent_coord]
 default_tools_approval_mode = "approve"
 
+[mcp_servers.mytask]
+command = "/usr/local/bin/claude_mytask_mcp"
+args = ["--client", "codex"]
+default_tools_approval_mode = "approve"
+
 # Disable Canva tools and their skill descriptions in Codex.
 # Remote plugin enablement is account-managed, so disable skills by stable name.
 [apps.connector_68df33b1a2d081918778431a9cfca8ba] # Canva

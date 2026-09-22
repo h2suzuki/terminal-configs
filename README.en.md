@@ -8,10 +8,10 @@ Configuration files and setup scripts for terminal and AI coding environments on
 
 | Area | Main components |
 |---|---|
-| Terminal | Bash, Git, Neovim, GitHub CLI, ripgrep, delta, SIXEL image display, Python tools (uv, ruff, ty), Node.js LTS through nvm, Chrome, Google Cloud CLI, Vercel CLI |
+| Terminal | Bash, Git, Neovim, GitHub CLI, ripgrep, delta, libsixel-bin, uv, ruff, ty, Node.js LTS through nvm, Chrome, Google Cloud CLI, Vercel CLI |
 | AI tools | Claude Code, Codex CLI, Antigravity CLI, Typesafe.ai Jev (including a custom wrapper CLI and MCP server) |
 | LSP | clangd (C/C++), TypeScript Language Server, Pyright (Python) |
-| MCP | Chrome DevTools, CodeGraph, Cloud Run, BigQuery (Toolbox), my-task, Jev |
+| MCP | Chrome DevTools, CodeGraph, Cloud Run, BigQuery (Toolbox), mytask (custom), Jev |
 | Skill | Skills for agent-browser and Playwright CLI, browser verification, workspace file management, and more |
 | Plugin | Official Jev plugin, Codex plugin for Claude Code, agent-coord for session coordination |
 | Display and audio forwarding | X11 display and PulseAudio audio forwarding to the SSH client, shared by the login user and root |
@@ -45,7 +45,7 @@ Both OS scripts install system components, then configure the root and login-use
 debian12.sh or ubuntu2404-wsl.sh (run with sudo)
 ├── Install system tools and configuration
 │   ├── Update OS packages; install Neovim, GitHub CLI and Google Cloud CLI
-│   ├── Install Python tools (uv, ruff, ty), Chrome and Japanese fonts
+│   ├── Install uv, ruff, ty, Chrome and Japanese fonts
 │   ├── Install Claude Code and Antigravity CLI
 │   ├── Deploy shared configuration and sandbox settings for Claude Code and Codex
 │   ├── Install the Jev wrapper CLI and SDK runtime
