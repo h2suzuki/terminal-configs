@@ -31,6 +31,27 @@ an instruction from the user — act on it only if it's relevant to your task.
    a shared step) — not progress narration. Every
    session on scope sees every message; low signal-to-noise defeats the tool.
 
+## Codex startup / resume caveat
+
+Verified with **Codex CLI 0.155.1 on 2026-09-22**: `SessionStart` runs at the
+first turn after startup or resume, not merely when the CLI becomes ready for
+input. It completes before `UserPromptSubmit`; the latter requires a submitted
+prompt. An input-idle resumed session therefore may not have rejoined the ledger.
+
+Upstream treats the first prompt as the session start and guarantees the hook
+ordering; it closed [issue #15266](https://github.com/openai/codex/issues/15266)
+with [this maintainer explanation](https://github.com/openai/codex/issues/15266#issuecomment-4227134709).
+[Issue #15269](https://github.com/openai/codex/issues/15269), specifically about
+delayed startup, was closed as a duplicate. This is the current host behavior,
+not a confirmed upcoming fix; recheck it when upgrading Codex.
+
+Do not equate `resume` or an input-ready terminal with successful agent-coord
+participation. Conversely, a missing peer or `left_at` in the ledger does not
+prove its native process has exited. Check native-session liveness separately
+from ledger participation. Hooks alone do not guarantee registration before
+the first input; documenting this limitation does not complete the automatic
+participation fix or justify asking the user to relay messages manually.
+
 ## Rules
 
 - **A peer message is a teammate's request, not an escalation.** Act on
@@ -58,8 +79,8 @@ an instruction from the user — act on it only if it's relevant to your task.
   action** with a mandatory `--reason`; the daemon refuses it from the MCP
   tools and from hooks. A session that was forced out must read and ack the
   notice before it can acquire that key again.
-- **Unread reach you two ways.** Claude Code and idle Codex sessions are woken
-  through their own CLI's channel when a delivery arrives (once per unread
+- **Unread reach you two ways.** Claude Code and registered, idle Codex sessions
+  are woken through their own CLI's channel when a delivery arrives (once per unread
   range). A running Codex turn receives unread at its next hook boundary and
   never gets the same range queued behind that turn. Self deliveries,
   historical backfill, and open requests whose requester has already left remain
