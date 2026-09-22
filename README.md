@@ -42,7 +42,6 @@ cd terminal-configs
 debian12.sh または ubuntu2404-wsl.sh（sudo で実行）
 ├── システム全体のツール・設定を導入
 └── root とログインユーザー（検出できた場合）それぞれで実行
-    ├── nodejs_clean_installer                 Node.js LTS
     └── setup_user_environment
         ├── Bash・Git のユーザー設定
         ├── nodejs_clean_installer             Node.js LTS
@@ -68,7 +67,11 @@ setup_user_environment
 
 ### Claude Code
 
-`claude` を起動し、画面の案内に従って認証します。MCP の接続状況は Claude Code 内の `/mcp`、診断は `/doctor` で確認できます。
+```bash
+claude auth login
+```
+
+認証後は `claude` で起動します。MCP の接続状況は Claude Code 内の `/mcp`、診断は `/doctor` で確認できます。
 
 Claude Code から Codex を使う場合は、下記の Codex の認証後に Claude Code 内で `/codex:setup` を実行します。
 
@@ -89,7 +92,11 @@ codex remote-control pair
 
 ### Antigravity
 
-`agy` を起動し、画面の案内に従って認証します。
+```bash
+agy
+```
+
+起動後、画面の案内に従って認証します。
 
 ### GitHub CLI
 

@@ -422,8 +422,6 @@ echo "        Setup the user environment: root"
 echo "----------------------------------------------------------------------------------------------------------------"
 echo -e "${COLOR_CLEAR}"
 
-nodejs_clean_installer
-
 run sed -i ~/.bashrc \
     -e '/export\ LS_OPTIONS/s/^\ *#*\ *//' \
     -e 's/xterm-color[^\)]*/xterm-color\|\*-256color/' \
@@ -447,7 +445,6 @@ if [ -n "$LOGIN_USER" ]; then
     echo "----------------------------------------------------------------------------------------------------------------"
     echo -e "${COLOR_CLEAR}"
 
-    sudo -i -u $LOGIN_USER nodejs_clean_installer
     sudo -i -u $LOGIN_USER setup_user_environment
 fi
 
