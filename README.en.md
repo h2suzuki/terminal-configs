@@ -13,7 +13,7 @@ Configuration files and setup scripts for terminal and AI coding environments on
 | <div align="right">LSP</div> | clangd (C/C++), TypeScript Language Server, Pyright |
 | <div align="right">MCP</div> | Chrome DevTools, CodeGraph, Cloud Run, BigQuery (Toolbox), mytask\*, Jev\* |
 | <div align="right">Skill</div> | agent-browser, playwright-cli, browser-verification\*, workspace-hygiene\*, and more |
-| <div align="right">Plugin</div> | Jev, Codex (for Claude Code), agent-coord\*, clangd-lsp, typescript-lsp, pyright-lsp, security-guidance (disabled by default) |
+| <div align="right">Plugin</div> | Jev, Codex (for Claude Code), clangd-lsp, typescript-lsp, pyright-lsp, security-guidance (disabled by default), agent-coord\* |
 | <div align="right">CLI</div> | agent-browser, playwright-cli, Vercel CLI, agent_coord\*, workspace_hygiene\*, claude_memory_sync\*, jev\* |
 | Display and audio forwarding | X11 display and PulseAudio audio forwarding to the SSH client, shared by the login user and root |
 | OS integration | SSH keepalive, Windows Terminal detection; systemd, mDNS, hostname configuration and PulseAudio audio forwarding to WSLg on WSL2 |
