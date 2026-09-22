@@ -2431,6 +2431,34 @@ class HookTest(Fixture):
         self.assertIn("cc-root", sessions)
         self.assertEqual(sessions["cc-child-1"]["parent_sid"], "cc-root")
 
+    def test_f8_claude_phantom_subagent_stop_joins_nothing(self):
+        """F8: Claude Code repeats SubagentStop with a fresh agent_id while a subagent is
+        still running; a stop for a sid the ledger never saw must record nothing at all."""
+        self.hook(
+            "claude-code", "SessionStart", {"session_id": "root", "cwd": str(self.wt)}
+        )
+        me = self.daemon.client()
+        self.addCleanup(me.close)
+        before = me.call("status")["service"]["events"]
+        stopped = self.hook(
+            "claude-code",
+            "SubagentStop",
+            {
+                "session_id": "root",
+                "agent_id": "phantom-1",
+                "agent_type": "",
+                "cwd": str(self.wt),
+                "last_assistant_message": "Sleeping 5 seconds (3/8)",
+            },
+        )
+        self.assertIsNone(stopped)
+        status = me.call("status")
+        self.assertEqual(status["service"]["events"], before)
+        self.assertNotIn("cc-phantom-1", {s["sid"] for s in status["sessions"]})
+        self.assertNotIn(
+            "cc-phantom-1", {s["sid"] for s in me.call("sessions")["sessions"]}
+        )
+
     def test_cli_as_flag_lets_the_parent_catchup_for_the_child(self):
         """CLI: `--as <child sid>`, proven by the parent's native id, can run
         `catchup` for the child -- what the relay note's `catchup --as <sid>` promises."""

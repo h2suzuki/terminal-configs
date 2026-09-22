@@ -2746,6 +2746,14 @@ def hook_dispatch(
     sid = session_id_for(identity.client, str(identity.native_id))
     turn_id = payload.get("turn_id")
     turn_id = str(turn_id) if turn_id else None
+    if role == "end":
+        try:
+            client.call("attach", sid=sid, native_id=identity.native_id)
+        except CoordError as error:
+            # Claude Code repeats SubagentStop with a fresh agent_id while a subagent is
+            # still running; a stop for a session nobody joined must record nothing.
+            if error.code == -32001 and str(error).startswith("unknown session"):
+                return adapter.hook_silence(event)
     parent_native = adapter.hook_parent_native(payload)
     parent_sid = None
     if parent_native:
