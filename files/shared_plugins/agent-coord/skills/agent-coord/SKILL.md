@@ -89,6 +89,10 @@ that behavior changed; acceptance does not authorize asking for manual message r
   that has left does wake once and is labeled as requiring no reply. `peek` shows each
   delivery as pending / pushed / unavailable / pull, so "pushed" is never
   proof that the peer acted on it.
+- **Waiting for a reply? block instead of polling.** `catchup --wait N`
+  (MCP: `catchup(wait=N)`) returns as soon as unread arrives, or empty when the
+  N seconds are up; never loop `catchup` by hand. A Claude Code subagent gets its
+  unread surfaced by the PostToolUse hook anyway while it does other work.
 - **The daemon autostarts** for the MCP adapter and ordinary hooks; SessionEnd
   and Interrupt cleanup hooks do not start a stopped daemon. If a raw
   `agent_coord` CLI call reports it's unreachable, the message tells you to
@@ -111,7 +115,7 @@ for wake methods, their verification limits, and the single-continuation rule.
 | `update` | `agent_coord update --status ...` | self-reported name/task/status/model |
 | `sessions` | `agent_coord sessions --scope project\|repo\|all` | list peers |
 | `send` | `agent_coord send "text" --to project\|repo\|all\|<sid>\|<name>\|self` | post to the ledger |
-| `catchup` | `agent_coord catchup --ack-through N` | fetch + ack unread events |
+| `catchup` | `agent_coord catchup --wait N --ack-through N` | fetch + ack unread events; `--wait` blocks until one arrives |
 | `ack` | `agent_coord ack N` | mark read without fetching |
 | `peek` | `agent_coord peek` | count unread, non-consuming |
 | `history` | `agent_coord history --since N [--all]` | replay the ledger, non-consuming |

@@ -3078,5 +3078,93 @@ class DoctorTest(Fixture):
             self.assertIn(lane, text)
 
 
+class CatchupWaitTest(Fixture):
+    """`catchup --wait N` / catchup(wait=N) blocks for unread instead of a poll loop."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.daemon = Daemon(self.home)
+        self.addCleanup(self.daemon.stop)
+        os.environ["AGENT_COORD_NO_AUTOSTART"] = "1"
+        self.addCleanup(os.environ.pop, "AGENT_COORD_NO_AUTOSTART", None)
+
+    def waiter(self, native: str) -> tuple[Any, Any]:
+        """The CLI connection of the session that waits, plus its identity."""
+        client = self.daemon.client()
+        self.addCleanup(client.close)
+        return client, coord.Identity("claude-code", native, str(self.wt))
+
+    def peer(self, sid: str) -> Any:
+        client = self.daemon.client()
+        self.addCleanup(client.close)
+        client.call("join", sid=sid, client="test", native_id=sid, cwd=str(self.wt))
+        return client
+
+    def catchup(self, client: Any, identity: Any, *flags: str) -> dict:
+        return coord.run_command(client, coord.parse_cli(["catchup", *flags]), identity)
+
+    def test_catchup_wait_returns_at_once_when_unread_is_already_there(self):
+        client, identity = self.waiter("w1")
+        self.catchup(client, identity)  # join before the peer addresses the session
+        self.peer("peer1").call("send", sid="peer1", to="cc-w1", text="already here")
+        result = self.catchup(client, identity, "--wait", "5")
+        self.assertEqual(
+            [e["body"]["text"] for e in result["events"]], ["already here"]
+        )
+        self.assertLess(result["waited"], 0.2)
+
+    def test_catchup_wait_blocks_until_a_peer_sends(self):
+        client, identity = self.waiter("w2")
+        self.catchup(client, identity)
+        sender = self.peer("peer2")
+
+        def send_later() -> None:
+            time.sleep(0.3)
+            sender.call("send", sid="peer2", to="cc-w2", text="late reply")
+
+        thread = threading.Thread(target=send_later, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        result = self.catchup(client, identity, "--wait", "5")
+        self.assertEqual([e["body"]["text"] for e in result["events"]], ["late reply"])
+        self.assertGreaterEqual(result["waited"], 0.25)
+
+    def test_catchup_wait_times_out_with_the_usual_empty_rendering(self):
+        client, identity = self.waiter("w3")
+        result = self.catchup(client, identity, "--wait", "1")
+        self.assertEqual(result["events"], [])
+        self.assertGreaterEqual(result["waited"], 0.9)
+        self.assertLess(result["waited"], 3)
+        self.assertIn("No unread events", coord.render_tool("catchup", result))
+
+    def test_mcp_catchup_takes_wait_as_a_tool_argument(self):
+        client = self.daemon.client()
+        self.addCleanup(client.close)
+        adapter = coord.McpAdapter(
+            client, coord.Identity("claude-code", "w4", str(self.wt))
+        )
+        listed = adapter.dispatch(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+        )["result"]["tools"]
+        catchup = next(t for t in listed if t["name"] == "catchup")
+        self.assertIn("wait", catchup["inputSchema"]["properties"])
+        answer = adapter.dispatch(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "catchup", "arguments": {"wait": 1}},
+            }
+        )
+        self.assertFalse(answer["result"]["isError"])
+        self.assertIn("No unread events", answer["result"]["content"][0]["text"])
+
+    def test_catchup_wait_rejects_a_negative_budget(self):
+        client, identity = self.waiter("w5")
+        with self.assertRaises(coord.CoordError) as caught:
+            self.catchup(client, identity, "--wait=-1")
+        self.assertEqual(caught.exception.code, -32602)
+
+
 if __name__ == "__main__":
     unittest.main()

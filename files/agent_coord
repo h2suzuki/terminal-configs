@@ -2468,6 +2468,25 @@ def ensure_session(
     )
 
 
+CATCHUP_WAIT_MAX = 600.0
+CATCHUP_POLL = 0.25
+
+
+def catchup_waiting(client: Client, wait: float, params: Json) -> Json:
+    """catchup that blocks on non-consuming peek until unread lands or the budget runs out."""
+    if wait < 0:
+        raise CoordError("wait must not be negative", -32602)
+    budget = min(float(wait), CATCHUP_WAIT_MAX)
+    started = time.monotonic()
+    result = client.call("catchup", **params)
+    params = {k: v for k, v in params.items() if k != "ack_through"}
+    while not result["events"] and (left := budget - (time.monotonic() - started)) > 0:
+        time.sleep(min(CATCHUP_POLL, left))
+        if client.call("peek", sid=params.get("sid"))["unread"]:
+            result = client.call("catchup", **params)
+    return {**result, "waited": round(time.monotonic() - started, 3)}
+
+
 # ---------------------------------------------------------------- MCP adapter
 
 
@@ -2525,8 +2544,9 @@ MCP_TOOLS: list[Json] = [
     ),
     tool(
         "catchup",
-        "Fetch unread events (non-consuming); ack_through moves the cursor first.",
-        {"limit": N, "ack_through": N},
+        "Fetch unread events (non-consuming); ack_through moves the cursor first;"
+        " wait=N blocks up to N seconds for unread instead of polling in a loop.",
+        {"limit": N, "ack_through": N, "wait": N},
     ),
     tool("ack", "Mark events up to a seq as read.", {"through": N}, ["through"]),
     tool("peek", "Count unread and their delivery states without consuming.", {}),
@@ -2649,6 +2669,10 @@ class McpAdapter:
         if target != self.acting_as:
             self.client.call("attach", sid=target, native_id=self.identity.native_id)
             self.acting_as = target
+        if name == "catchup" and "wait" in arguments:
+            return catchup_waiting(
+                self.client, arguments.pop("wait"), {"sid": target, **arguments}
+            )
         result = self.client.call(name, sid=target, **arguments)
         if name == "leave":
             if target == sid:
@@ -3191,6 +3215,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub("catchup")
     p.add_argument("--limit", type=int, default=20)
     p.add_argument("--ack-through", type=int)
+    p.add_argument("--wait", type=float, metavar="SECONDS")
     p = sub("ack")
     p.add_argument("through", type=int)
     sub("peek")
@@ -3387,6 +3412,8 @@ def run_command(client: Client, args: argparse.Namespace, identity: Identity) ->
     method = {"transfer": "resource_transfer", "accept": "resource_accept"}.get(
         command, command.replace("-", "_")
     )
+    if command == "catchup" and "wait" in params:
+        return catchup_waiting(client, params.pop("wait"), {"sid": sid, **params})
     return client.call(method, sid=sid, **params)
 
 
