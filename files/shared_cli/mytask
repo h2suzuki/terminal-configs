@@ -21,7 +21,7 @@ from unittest import mock
 
 Task = dict[str, object]
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 CLIENT = "claude"
 CODEX_THREAD: ContextVar[str | None] = ContextVar("codex_thread", default=None)
 DEFAULT_PROTOCOL_VERSION = "2025-11-25"
@@ -33,7 +33,7 @@ EMOJI = {
     "blocked": "🚧",
     "completed": "✅",
 }
-SUBTASK_ID = re.compile(r"^(\d+)-(\d+)$")
+TASK_ID = re.compile(r"^[0-9]+(?:-[0-9]+)*$")
 
 TOOLS = [
     {
@@ -43,7 +43,7 @@ TOOLS = [
     },
     {
         "name": "TaskCreate",
-        "description": "Add a work item (status pending). Use `parent` (a top-level id) to add a subtask.",
+        "description": "Add a work item (status pending). Use `parent` (any existing task id) for hierarchical numbering: 4 -> 4-1 -> 4-1-2. IDs are assigned automatically and included in the returned list.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -112,14 +112,11 @@ def write_tasks(path: Path, tasks: list[Task]) -> str | None:
     return None
 
 
-def _sort_key(task: Task) -> tuple[int, int, int, str]:
+def _sort_key(task: Task) -> tuple[int, tuple[int, ...], str]:
     task_id = str(task.get("id", ""))
-    if task_id.isdigit():
-        return (int(task_id), 0, 0, "")
-    match = SUBTASK_ID.fullmatch(task_id)
-    if match:
-        return (int(match.group(1)), 1, int(match.group(2)), "")
-    return (sys.maxsize, 2, 0, task_id)
+    if TASK_ID.fullmatch(task_id):
+        return (0, tuple(int(part) for part in task_id.split("-")), "")
+    return (1, (), task_id)
 
 
 def _visible(task: Task, now: datetime) -> bool:
@@ -150,7 +147,7 @@ def render_tasks(tasks: list[Task], now: datetime | None = None) -> str:
         content = str(task.get("content", ""))
         created = task.get("created")
         suffix = f" ({created})" if isinstance(created, str) and created else ""
-        indent = "  " if SUBTASK_ID.fullmatch(task_id) else ""
+        indent = "  " * task_id.count("-") if TASK_ID.fullmatch(task_id) else ""
         lines.append(f"{indent}{task_id} {EMOJI[status]} {content}{suffix}")
     return "\n".join(lines) if lines else "(no active tasks)"
 
@@ -184,9 +181,10 @@ def _next_top_id(tasks: list[Task]) -> str:
 def _next_subtask_id(tasks: list[Task], parent: str) -> str:
     numbers: list[int] = []
     for task in tasks:
-        match = SUBTASK_ID.fullmatch(str(task.get("id", "")))
-        if match and match.group(1) == parent:
-            numbers.append(int(match.group(2)))
+        task_id = str(task.get("id", ""))
+        prefix, separator, number = task_id.rpartition("-")
+        if separator and prefix == parent and TASK_ID.fullmatch(task_id):
+            numbers.append(int(number))
     return f"{parent}-{max(numbers, default=0) + 1}"
 
 
@@ -198,11 +196,12 @@ def task_create(arguments: dict[str, object]) -> tuple[str, bool]:
     parent = cast(str | None, arguments.get("parent"))
     if parent is not None:
         exists = any(
-            str(task.get("id", "")) == parent and parent.isdigit() for task in tasks
+            str(task.get("id", "")) == parent and TASK_ID.fullmatch(parent)
+            for task in tasks
         )
         if not exists:
             return (
-                f"Error: top-level parent task {parent!r} was not found.\n{render_tasks(tasks)}",
+                f"Error: parent task {parent!r} was not found.\n{render_tasks(tasks)}",
                 True,
             )
         task_id = _next_subtask_id(tasks, parent)
@@ -463,6 +462,42 @@ class MyTasksTest(unittest.TestCase):
         self.assertEqual(read_tasks(self.path)[1]["completed_at"], "2026-07-14 10:00")
         task_update({"id": "2", "status": "pending"})
         self.assertNotIn("completed_at", read_tasks(self.path)[1])
+
+    def test_nested_numbering_rendering_and_update(self):
+        task_create({"content": "Parent"})
+        task_create({"content": "Child", "parent": "1"})
+        task_create({"content": "Grandchild", "parent": "1-1"})
+        task_update({"id": "1-1-1", "status": "completed"})
+        text, error = task_create({"content": "Grandchild two", "parent": "1-1"})
+        self.assertFalse(error)
+        self.assertIn("    1-1-2 🔳 Grandchild two", text)
+        task_create({"content": "Great grandchild", "parent": "1-1-2"})
+        task_create({"content": "Sibling", "parent": "1"})
+        task_create({"content": "Next parent"})
+        self.assertEqual(
+            [task["id"] for task in read_tasks(self.path)],
+            ["1", "1-1", "1-1-1", "1-1-2", "1-1-2-1", "1-2", "2"],
+        )
+        text, error = task_update({"id": "1-1-2-1", "status": "in_progress"})
+        self.assertFalse(error)
+        self.assertIn("      1-1-2-1 ▶️ Great grandchild", text)
+        before = self.path.read_text()
+        self.assertTrue(task_create({"content": "Missing", "parent": "1-9"})[1])
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_nested_numeric_order_and_hidden_ids_are_not_reused(self):
+        ids = ["4-10", "4-1-10", "5", "4-1-2", "4-1", "4", "4-2"]
+        tasks = [{"id": value, "content": "Item", "status": "pending"} for value in ids]
+        self.assertEqual(
+            [line.split()[0] for line in render_tasks(tasks).splitlines()],
+            ["4", "4-1", "4-1-2", "4-1-10", "4-2", "4-10", "5"],
+        )
+        tasks[1].update(status="completed", completed_at="2000-01-01 00:00")
+        write_tasks(self.path, tasks)
+        self.assertNotIn("4-1-10", task_list()[0])
+        text, error = task_create({"content": "After hidden", "parent": "4-1"})
+        self.assertFalse(error)
+        self.assertIn("4-1-11 🔳 After hidden", text)
 
     def test_filter_order_rendering_and_legacy_fields(self):
         now = datetime(2026, 7, 14, 12, 0)
