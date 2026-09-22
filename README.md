@@ -11,8 +11,12 @@ Debian 12 と Ubuntu 24.04 on WSL2 向けに、ターミナルと AI コーデ�
 | ターミナル | Bash・Git の設定、Neovim、GitHub CLI、ripgrep、delta、SIXEL 画像表示 |
 | 開発環境 | Python ツール（uv・ruff・ty）、Node.js LTS（nvm）、Chrome、日本語フォント、Google Cloud CLI、Vercel CLI |
 | AI エージェント | Claude Code、Codex CLI、Antigravity CLI、Typesafe.ai Jev （独自のラッパー CLI・MCP 含む） |
-| エージェントの拡張 | LSP、Chrome DevTools MCP、agent-browser、Playwright CLI、共通 hooks・skills、`agent_coord` によるセッション間連携 |
-| OS 連携 | SSH keepalive、Windows Terminal の認識、root との X 接続共有、音声転送。WSL2 では systemd・mDNS・ホスト名も設定 |
+| LSP | clangd（C/C++）、TypeScript Language Server、Pyright（Python） |
+| MCP | Chrome DevTools、CodeGraph、Cloud Run、BigQuery（Toolbox）、タスク管理、Jev |
+| Skill | agent-browser・Playwright CLI の操作スキル、ブラウザー検証、作業ファイル管理など |
+| Plugin | Jev の公式プラグイン、Claude Code 用 Codex プラグイン、agent-coord（セッション間連携） |
+| 画面・音声転送 | SSH クライアントへの X11 画面転送・PulseAudio 音声転送を、ログインユーザーと root で共用 |
+| OS 連携 | SSH keepalive、Windows Terminal の認識。WSL2 では systemd・mDNS・ホスト名、WSLg への PulseAudio 音声転送も設定 |
 
 音声通知と SigNoz テレメトリは[追加セットアップ](#追加セットアップ)で導入できます。
 

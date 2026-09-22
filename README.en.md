@@ -11,8 +11,12 @@ Configuration files and setup scripts for terminal and AI coding environments on
 | Terminal | Bash and Git settings, Neovim, GitHub CLI, ripgrep, delta, SIXEL image display |
 | Development | Python tools (uv, ruff, ty), Node.js LTS through nvm, Chrome, Japanese fonts, Google Cloud CLI, Vercel CLI |
 | AI agents | Claude Code, Codex CLI, Antigravity CLI, Typesafe.ai Jev (including a custom wrapper CLI and MCP server) |
-| Agent extensions | LSP, Chrome DevTools MCP, agent-browser, Playwright CLI, shared hooks and skills, session coordination through `agent_coord` |
-| OS integration | SSH keepalive, Windows Terminal detection, X display sharing with root, audio forwarding; systemd, mDNS and hostname configuration on WSL2 |
+| LSP | clangd (C/C++), TypeScript Language Server, Pyright (Python) |
+| MCP | Chrome DevTools, CodeGraph, Cloud Run, BigQuery (Toolbox), task management, Jev |
+| Skill | Skills for agent-browser and Playwright CLI, browser verification, workspace file management, and more |
+| Plugin | Official Jev plugin, Codex plugin for Claude Code, agent-coord for session coordination |
+| Display and audio forwarding | X11 display and PulseAudio audio forwarding to the SSH client, shared by the login user and root |
+| OS integration | SSH keepalive, Windows Terminal detection; systemd, mDNS, hostname configuration and PulseAudio audio forwarding to WSLg on WSL2 |
 
 Voice notifications and SigNoz telemetry are available through [optional setup](#optional-setup).
 
