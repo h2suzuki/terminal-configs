@@ -14,7 +14,7 @@ Configuration files and setup scripts for terminal and AI coding environments on
 | <div align="right">LSP</div> | clangd (C/C++), TypeScript Language Server, Pyright |
 | <div align="right">MCP</div> | Chrome DevTools, CodeGraph, Cloud Run, BigQuery (Toolbox), mytask\*, Jev\* |
 | <div align="right">Skill</div> | agent-browser, playwright-cli, browser-verification\*, workspace-hygiene\*, and more |
-| <div align="right">Plugin</div> | Jev, Codex (for Claude Code), clangd-lsp, typescript-lsp, pyright-lsp, security-guidance, agent-coord\* |
+| <div align="right">Plugin</div> | Jev, Codex (for Claude Code), security-guidance, agent-coord\* |
 | <div align="right">CLI</div> | agent-browser, playwright-cli, Google Cloud CLI, Vercel CLI, agent_coord\*, workspace_hygiene\*, claude_memory_sync\*, jev\* |
 
 \* … Custom scripts maintained in this repository

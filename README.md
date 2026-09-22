@@ -14,7 +14,7 @@ Debian 12 と Ubuntu 24.04 on WSL2 向けに、ターミナルと AI コーデ�
 | <div align="right">LSP</div> | clangd（C/C++）、TypeScript Language Server、Pyright |
 | <div align="right">MCP</div> | Chrome DevTools、CodeGraph、Cloud Run、BigQuery（Toolbox）、mytask\*、Jev\* |
 | <div align="right">Skill</div> | agent-browser、playwright-cli、browser-verification\*、workspace-hygiene\* など |
-| <div align="right">Plugin</div> | Jev、Codex（Claude Code 用）、clangd-lsp、typescript-lsp、pyright-lsp、security-guidance、agent-coord\* |
+| <div align="right">Plugin</div> | Jev、Codex（Claude Code 用）、security-guidance、agent-coord\* |
 | <div align="right">CLI</div> | agent-browser、playwright-cli、Google Cloud CLI、Vercel CLI、agent_coord\*、workspace_hygiene\*、claude_memory_sync\*、jev\* |
 
 \* … 本レポジトリ独自のスクリプト
