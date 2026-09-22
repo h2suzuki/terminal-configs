@@ -19,6 +19,7 @@ class AgentGuidanceTest(unittest.TestCase):
         self.assertEqual(codex_shared, claude_shared)
         self.assertEqual(personal_heading + codex_personal, personal)
         self.assertIn("commit の実行・保留・タイミング・粒度", claude_shared)
+        self.assertIn("ホームディレクトリの絶対パスをハードコードしない", codex_shared)
         self.assertNotIn("commit", personal)
         self.assertNotIn(personal_heading, managed)
         self.assertIn("Stop hook", claude_only)
