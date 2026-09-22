@@ -16,6 +16,7 @@
       "Read(~/.pypirc)",
       "Read(~/.claude/.credentials.json)",
       "Read(~/.codex/auth.json)",
+      "Read(~/.config/typesafe/credentials.json)",
       "Read(~/.agent-browser/**)",
       "Read(~/.local/share/com.vercel.cli/**)",
       "Read(~/.config/vercel-plugin/**)",
@@ -64,6 +65,7 @@
         { "path": "~/.config/pip", "mode": "deny" },
         { "path": "~/.claude/.credentials.json", "mode": "deny" },
         { "path": "~/.codex/auth.json", "mode": "deny" },
+        { "path": "~/.config/typesafe/credentials.json", "mode": "deny" },
         { "path": "~/.agent-browser", "mode": "deny" },
         { "path": "~/.local/share/com.vercel.cli", "mode": "deny" },
         { "path": "~/.config/vercel-plugin", "mode": "deny" },
@@ -86,6 +88,7 @@
         { "name": "CLAUDE_CODE_OAUTH_TOKEN", "mode": "deny" },
         { "name": "OPENAI_API_KEY", "mode": "deny" },
         { "name": "CODEX_API_KEY", "mode": "deny" },
+        { "name": "TYPESAFE_API_KEY", "mode": "deny" },
         { "name": "TWINE_PASSWORD", "mode": "deny" },
         { "name": "PYPI_TOKEN", "mode": "deny" }
       ]

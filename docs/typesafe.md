@@ -71,20 +71,19 @@ systemd などによる独立した daemon の管理は不要です。`jev hello
 
 ## Sandbox と資格情報
 
-- Claude Code：資格情報ディレクトリの Read と sandbox 内からの読み取りを拒否し、
+- Claude Code：`~/.config/typesafe/credentials.json` の Read と sandbox 内からの読み取りを拒否し、
   `TYPESAFE_API_KEY` も sandbox 環境から除去します。
-- Codex：`terminal-configs` permission profile が資格情報ディレクトリを deny し、
-  `TYPESAFE_API_KEY` をシェル環境から除去します。
+- Codex：従来の `workspace-write` 設定を使用し、`TYPESAFE_API_KEY` をシェル環境から
+  除去します。この設定には資格情報ディレクトリの読み取り拒否は含まれません。
 - Antigravity：公式スキルのみで、MCP 登録や同等の credential deny は設定していません。
 
 MCP プロセスがホスト側で資格情報を読みます。`jev` の sandbox 除外コマンド設定は不要です。
 送信先は `https://api.typesafe.ai/v1/systemone` 固定です。リダイレクトと環境変数による
 プロキシ・CA・送信先の変更を使わず、OS の CA 証明書で HTTPS を検証します。
 
-Codex の permission profile は旧 `sandbox_mode` / `sandbox_workspace_write` と併用できません。
-ユーザー設定やプロジェクト設定に旧形式が残っていたり、`--sandbox` で起動したりすると、
-この profile の deny は適用されません。該当設定を取り除き、再起動後に `/permissions` で
-`terminal-configs` が選ばれていることを確認してください。
+Codex のパス単位の読み取り拒否は permission profile の filesystem `deny` で設定できますが、
+従来の `sandbox_mode` / `sandbox_workspace_write` とは併用できません。
+このリポジトリでは従来方式を維持します。
 
 ここでの deny は通常の sandbox 実行に対する制限です。ホスト実行を許可した他のコマンドや
 同じ OS ユーザーのプロセス全体を隔離するものではありません。

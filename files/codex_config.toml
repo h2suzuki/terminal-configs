@@ -11,6 +11,10 @@ network_access = true
 # Allow worktree creation and editing from a session started in the main repository.
 # Codex expands ~ to the home directory of the user running it.
 writable_roots = ["~/worktrees"]
+
+[shell_environment_policy.filters]
+TYPESAFE_API_KEY = "exclude"
+
 # Explicit command exceptions are installed separately in
 # rules/terminal-configs-sandbox-exclusions.rules (see README for the mapping).
 
