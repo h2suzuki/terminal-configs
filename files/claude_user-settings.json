@@ -1,6 +1,11 @@
 {
   "permissions": {
-    "defaultMode": "auto"
+    "defaultMode": "auto",
+    "allow": [
+      "mcp__mytask__TaskCreate",
+      "mcp__mytask__TaskUpdate",
+      "mcp__mytask__TaskList"
+    ]
   },
   "env": { "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1" },
   "statusLine": {
