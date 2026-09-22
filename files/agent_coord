@@ -2499,23 +2499,48 @@ def ensure_session(
     )
 
 
-CATCHUP_WAIT_MAX = 600.0
-CATCHUP_POLL = 0.25
+WAIT_DEFAULT = 60.0
+WAIT_MAX = 600.0
+WAIT_POLL = 0.25
 
 
-def catchup_waiting(client: Client, wait: float, params: Json) -> Json:
-    """catchup that blocks on non-consuming peek until unread lands or the budget runs out."""
-    if wait < 0:
-        raise CoordError("wait must not be negative", -32602)
-    budget = min(float(wait), CATCHUP_WAIT_MAX)
+def wait_for_events(
+    client: Client, sid: str | None, timeout: float, after: int | None = None
+) -> Json:
+    """Block on non-consuming peek until a delivery past the baseline lands.
+
+    The baseline is what the session has already seen, so an unread backlog it
+    never acked does not count as the arrival the caller is waiting for.
+    """
+    if timeout < 0:
+        raise CoordError("timeout must not be negative", -32602)
+    budget = min(float(timeout), WAIT_MAX)
     started = time.monotonic()
-    result = client.call("catchup", **params)
-    params = {k: v for k, v in params.items() if k != "ack_through"}
-    while not result["events"] and (left := budget - (time.monotonic() - started)) > 0:
-        time.sleep(min(CATCHUP_POLL, left))
-        if client.call("peek", sid=params.get("sid"))["unread"]:
-            result = client.call("catchup", **params)
-    return {**result, "waited": round(time.monotonic() - started, 3)}
+    seen = client.call("peek", sid=sid)
+    baseline = (
+        after if after is not None else max(seen["cursor"], seen["last_seq"] or 0)
+    )
+
+    def arrived(peeked: Json) -> set[int]:
+        return {r["seq"] for r in peeked["deliveries"] if r["seq"] > baseline}
+
+    fresh = arrived(seen)
+    while not fresh and (left := budget - (time.monotonic() - started)) > 0:
+        time.sleep(min(WAIT_POLL, left))
+        fresh = arrived(client.call("peek", sid=sid))
+    waited = round(time.monotonic() - started, 3)
+    events: list[Json] = []
+    if fresh:
+        replay = client.call("history", sid=sid, since=baseline, limit=500)
+        events = [e for e in replay["events"] if e["seq"] in fresh]
+    return {
+        "events": events,
+        "baseline": baseline,
+        "timeout": budget,
+        "waited": waited,
+        "timed_out": not events,
+        "last_seq": events[-1]["seq"] if events else baseline,
+    }
 
 
 # ---------------------------------------------------------------- MCP adapter
@@ -2575,12 +2600,19 @@ MCP_TOOLS: list[Json] = [
     ),
     tool(
         "catchup",
-        "Fetch unread events (non-consuming); ack_through moves the cursor first;"
-        " wait=N blocks up to N seconds for unread instead of polling in a loop.",
-        {"limit": N, "ack_through": N, "wait": N},
+        "Fetch unread events (non-consuming); ack_through moves the cursor first.",
+        {"limit": N, "ack_through": N},
     ),
     tool("ack", "Mark events up to a seq as read.", {"through": N}, ["through"]),
     tool("peek", "Count unread and their delivery states without consuming.", {}),
+    tool(
+        "wait",
+        "Block up to timeout seconds (default 60) for an event newer than the"
+        " ones this session has already seen, instead of polling catchup in a"
+        " loop; returns only the new events (non-consuming)."
+        " after=SEQ sets the baseline by hand.",
+        {"timeout": N, "after": N},
+    ),
     tool(
         "history",
         "Replay retained events (non-consuming).",
@@ -2700,9 +2732,12 @@ class McpAdapter:
         if target != self.acting_as:
             self.client.call("attach", sid=target, native_id=self.identity.native_id)
             self.acting_as = target
-        if name == "catchup" and "wait" in arguments:
-            return catchup_waiting(
-                self.client, arguments.pop("wait"), {"sid": target, **arguments}
+        if name == "wait":
+            return wait_for_events(
+                self.client,
+                target,
+                arguments.get("timeout", WAIT_DEFAULT),
+                arguments.get("after"),
             )
         result = self.client.call(name, sid=target, **arguments)
         if name == "leave":
@@ -3061,6 +3096,19 @@ def render_catchup(result: Json) -> str:
     return "\n".join(lines)
 
 
+def render_wait(result: Json) -> str:
+    events = result["events"]
+    if not events:
+        return (
+            f"No new events within {result['timeout']:g}s"
+            f" (after seq {result['baseline']})."
+        )
+    trailer = (
+        f"-- {len(events)} new event(s). Ack with ack(through={result['last_seq']})."
+    )
+    return "\n".join([render_event(e) for e in events] + [trailer])
+
+
 def render_identity(result: Json) -> str:
     s = result["session"]
     held = [f"{r['key']}@{r['owner']}" for r in result["resources_held"]]
@@ -3189,6 +3237,7 @@ def render_status(status: Json) -> str:
 def render_tool(name: str, result: Json) -> str:
     renderers: dict[str, Callable[[Json], str]] = {
         "catchup": render_catchup,
+        "wait": render_wait,
         "history": lambda r: (
             "\n".join(render_event(e) for e in r["events"]) or "No events."
         ),
@@ -3265,10 +3314,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub("catchup")
     p.add_argument("--limit", type=int, default=20)
     p.add_argument("--ack-through", type=int)
-    p.add_argument("--wait", type=float, metavar="SECONDS")
     p = sub("ack")
     p.add_argument("through", type=int)
     sub("peek")
+    p = sub("wait", help="block until an event newer than the ones already seen")
+    p.add_argument("--timeout", type=float, default=WAIT_DEFAULT, metavar="SECONDS")
+    p.add_argument("--after", type=int, metavar="SEQ")
     sub("nudge")
     p = sub("history")
     p.add_argument("--since", type=int, default=0)
@@ -3462,8 +3513,8 @@ def run_command(client: Client, args: argparse.Namespace, identity: Identity) ->
     method = {"transfer": "resource_transfer", "accept": "resource_accept"}.get(
         command, command.replace("-", "_")
     )
-    if command == "catchup" and "wait" in params:
-        return catchup_waiting(client, params.pop("wait"), {"sid": sid, **params})
+    if command == "wait":
+        return wait_for_events(client, sid, params["timeout"], params.get("after"))
     return client.call(method, sid=sid, **params)
 
 

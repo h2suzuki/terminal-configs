@@ -3241,8 +3241,8 @@ class DoctorTest(Fixture):
             self.assertIn(lane, text)
 
 
-class CatchupWaitTest(Fixture):
-    """`catchup --wait N` / catchup(wait=N) blocks for unread instead of a poll loop."""
+class WaitTest(Fixture):
+    """`wait --timeout N` / wait(timeout=N) blocks for the NEXT arrival, not the backlog."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -3263,44 +3263,57 @@ class CatchupWaitTest(Fixture):
         client.call("join", sid=sid, client="test", native_id=sid, cwd=str(self.wt))
         return client
 
-    def catchup(self, client: Any, identity: Any, *flags: str) -> dict:
-        return coord.run_command(client, coord.parse_cli(["catchup", *flags]), identity)
+    def cli(self, client: Any, identity: Any, *argv: str) -> dict:
+        return coord.run_command(client, coord.parse_cli(list(argv)), identity)
 
-    def test_catchup_wait_returns_at_once_when_unread_is_already_there(self):
+    def test_wait_returns_at_once_when_a_newer_event_is_already_there(self):
         client, identity = self.waiter("w1")
-        self.catchup(client, identity)  # join before the peer addresses the session
-        self.peer("peer1").call("send", sid="peer1", to="cc-w1", text="already here")
-        result = self.catchup(client, identity, "--wait", "5")
-        self.assertEqual(
-            [e["body"]["text"] for e in result["events"]], ["already here"]
+        self.cli(client, identity, "catchup")  # join before the peer addresses it
+        peer = self.peer("peer1")
+        peer.call("send", sid="peer1", to="cc-w1", text="old one")
+        seen = self.cli(client, identity, "catchup")["last_seq"]
+        peer.call("send", sid="peer1", to="cc-w1", text="new one")
+        result = self.cli(
+            client, identity, "wait", "--timeout", "5", "--after", str(seen)
         )
-        self.assertLess(result["waited"], 0.2)
+        self.assertEqual([e["body"]["text"] for e in result["events"]], ["new one"])
+        self.assertFalse(result["timed_out"])
+        self.assertLess(result["waited"], 0.5)
 
-    def test_catchup_wait_blocks_until_a_peer_sends(self):
+    def test_wait_ignores_the_unread_backlog_it_has_already_been_shown(self):
         client, identity = self.waiter("w2")
-        self.catchup(client, identity)
-        sender = self.peer("peer2")
+        self.cli(client, identity, "catchup")
+        self.peer("peer2").call("send", sid="peer2", to="cc-w2", text="old unread")
+        self.assertGreater(client.call("peek")["unread"], 0)  # still unacked
+        result = self.cli(client, identity, "wait", "--timeout", "1")
+        self.assertEqual(result["events"], [])
+        self.assertTrue(result["timed_out"])
+        self.assertGreaterEqual(result["waited"], 0.9)
+        self.assertLess(result["waited"], 3)
+        self.assertIn("No new events within 1s", coord.render_tool("wait", result))
+
+    def test_wait_blocks_until_a_peer_sends(self):
+        client, identity = self.waiter("w3")
+        self.cli(client, identity, "catchup")
+        sender = self.peer("peer3")
 
         def send_later() -> None:
             time.sleep(0.3)
-            sender.call("send", sid="peer2", to="cc-w2", text="late reply")
+            sender.call("send", sid="peer3", to="cc-w3", text="late reply")
 
         thread = threading.Thread(target=send_later, daemon=True)
         thread.start()
         self.addCleanup(thread.join, 5)
-        result = self.catchup(client, identity, "--wait", "5")
+        result = self.cli(client, identity, "wait", "--timeout", "5")
         self.assertEqual([e["body"]["text"] for e in result["events"]], ["late reply"])
         self.assertGreaterEqual(result["waited"], 0.25)
+        rendered = coord.render_tool("wait", result)
+        self.assertIn("late reply", rendered)
+        self.assertIn(
+            f"-- 1 new event(s). Ack with ack(through={result['last_seq']}).", rendered
+        )
 
-    def test_catchup_wait_times_out_with_the_usual_empty_rendering(self):
-        client, identity = self.waiter("w3")
-        result = self.catchup(client, identity, "--wait", "1")
-        self.assertEqual(result["events"], [])
-        self.assertGreaterEqual(result["waited"], 0.9)
-        self.assertLess(result["waited"], 3)
-        self.assertIn("No unread events", coord.render_tool("catchup", result))
-
-    def test_mcp_catchup_takes_wait_as_a_tool_argument(self):
+    def test_mcp_lists_and_runs_the_wait_tool(self):
         client = self.daemon.client()
         self.addCleanup(client.close)
         adapter = coord.McpAdapter(
@@ -3309,24 +3322,33 @@ class CatchupWaitTest(Fixture):
         listed = adapter.dispatch(
             {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
         )["result"]["tools"]
-        catchup = next(t for t in listed if t["name"] == "catchup")
-        self.assertIn("wait", catchup["inputSchema"]["properties"])
+        spec = next(t for t in listed if t["name"] == "wait")
+        self.assertEqual(
+            set(spec["inputSchema"]["properties"]) - {"as"}, {"timeout", "after"}
+        )
         answer = adapter.dispatch(
             {
                 "jsonrpc": "2.0",
                 "id": 2,
                 "method": "tools/call",
-                "params": {"name": "catchup", "arguments": {"wait": 1}},
+                "params": {"name": "wait", "arguments": {"timeout": 1}},
             }
         )
         self.assertFalse(answer["result"]["isError"])
-        self.assertIn("No unread events", answer["result"]["content"][0]["text"])
+        self.assertIn("No new events", answer["result"]["content"][0]["text"])
 
-    def test_catchup_wait_rejects_a_negative_budget(self):
+    def test_wait_rejects_a_negative_timeout(self):
         client, identity = self.waiter("w5")
         with self.assertRaises(coord.CoordError) as caught:
-            self.catchup(client, identity, "--wait=-1")
+            self.cli(client, identity, "wait", "--timeout=-1")
         self.assertEqual(caught.exception.code, -32602)
+        self.assertIn("timeout must not be negative", str(caught.exception))
+
+    def test_catchup_no_longer_takes_a_wait_of_its_own(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            coord.parse_cli(["catchup", "--wait", "5"])
+        catchup = next(t for t in coord.MCP_TOOLS if t["name"] == "catchup")
+        self.assertNotIn("wait", catchup["inputSchema"]["properties"])
 
 
 if __name__ == "__main__":
