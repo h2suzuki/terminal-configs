@@ -1,6 +1,6 @@
 {
   "name": "agent-coord",
-  "version": "0.2.13+codex.20260923001200",
+  "version": "0.2.14+codex.20260923013000",
   "description": "Session ledger for agents on this host: scoped messaging and resource grants.",
   "author": {
     "name": "terminal-configs"
