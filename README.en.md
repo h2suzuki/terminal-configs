@@ -10,7 +10,7 @@ Configuration files and setup scripts for terminal and AI coding environments on
 |---|---|
 | Terminal | Bash and Git settings, Neovim, GitHub CLI, ripgrep, delta, SIXEL image display |
 | Development | Python tools (uv, ruff, ty), Node.js LTS through nvm, Chrome, Japanese fonts, Google Cloud CLI, Vercel CLI |
-| AI agents | Claude Code, Codex CLI, Antigravity CLI (`agy`), Jev |
+| AI agents | Claude Code, Codex CLI, Antigravity CLI (`agy`), Typesafe.ai Jev (including a custom wrapper CLI and MCP server) |
 | Agent extensions | LSP, MCP integrations, agent-browser, Playwright CLI, shared hooks and skills, session coordination through `agent_coord` |
 | OS integration | SSH keepalive, Windows Terminal detection, X display sharing with root, audio forwarding; systemd, mDNS and hostname configuration on WSL2 |
 

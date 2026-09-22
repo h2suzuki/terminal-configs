@@ -10,7 +10,7 @@ Debian 12 と Ubuntu 24.04 on WSL2 向けに、ターミナルと AI コーデ�
 |---|---|
 | ターミナル | Bash・Git の設定、Neovim、GitHub CLI、ripgrep、delta、SIXEL 画像表示 |
 | 開発環境 | Python ツール（uv・ruff・ty）、Node.js LTS（nvm）、Chrome、日本語フォント、Google Cloud CLI、Vercel CLI |
-| AI エージェント | Claude Code、Codex CLI、Antigravity CLI（`agy`）、Jev |
+| AI エージェント | Claude Code、Codex CLI、Antigravity CLI（`agy`）、Typesafe.ai Jev （独自のラッパー CLI・MCP 含む） |
 | エージェントの拡張 | LSP、MCP 連携、agent-browser、Playwright CLI、共通 hooks・skills、`agent_coord` によるセッション間連携 |
 | OS 連携 | SSH keepalive、Windows Terminal の認識、root との X 接続共有、音声転送。WSL2 では systemd・mDNS・ホスト名も設定 |
 
