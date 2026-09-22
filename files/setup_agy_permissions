@@ -12,7 +12,7 @@ from pathlib import Path
 GRANT = "mcp(agent-coord_agent_coord/*)"
 
 
-def configure(path):
+def configure(path, sandbox_auto=False, shared_policy=None):
     if path.is_symlink():
         raise ValueError(f"Refusing symlink settings file: {path}")
     original = path.read_text() if path.exists() else None
@@ -36,9 +36,40 @@ def configure(path):
                 file=sys.stderr,
             )
     allowed = permissions.setdefault("allow", [])
-    if GRANT in allowed:
+    additions = {"allow": [GRANT]}
+    if shared_policy is not None:
+        policy = json.loads(shared_policy.read_text())
+        if not isinstance(policy, dict) or set(policy) - {"allow", "deny", "ask"}:
+            raise ValueError("shared policy must contain only allow/deny/ask lists")
+        for key, rules in policy.items():
+            if not isinstance(rules, list) or not all(
+                isinstance(r, str) for r in rules
+            ):
+                raise ValueError(f"shared policy {key} must be a list of strings")
+            additions.setdefault(key, []).extend(rules)
+    changed = False
+    for key, rules in additions.items():
+        destination = allowed if key == "allow" else permissions.setdefault(key, [])
+        for rule in rules:
+            for action in ("read_file", "write_file"):
+                prefix = action + "(~/"
+                if rule.startswith(prefix) and rule.endswith(")"):
+                    rule = (
+                        action + "(" + str(Path.home() / rule[len(prefix) : -1]) + ")"
+                    )
+            if rule not in destination:
+                destination.append(rule)
+                changed = True
+    if sandbox_auto:
+        for key, value in {
+            "toolPermission": "proceed-in-sandbox",
+            "enableTerminalSandbox": True,
+        }.items():
+            if data.get(key) != value:
+                data[key] = value
+                changed = True
+    if not changed:
         return False
-    allowed.append(GRANT)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     mode = stat.S_IMODE(path.stat().st_mode) if original is not None else 0o600
     temporary = None
@@ -70,18 +101,28 @@ def configure(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--sandbox-auto",
+        action="store_true",
+        help="Auto-proceed inside the terminal sandbox; retain explicit deny/ask rules",
+    )
+    parser.add_argument(
+        "--shared-policy",
+        type=Path,
+        help="Merge the reviewed Codex/Claude-equivalent permissions JSON",
+    )
+    parser.add_argument(
         "--settings",
         type=Path,
         default=Path.home() / ".gemini/antigravity-cli/settings.json",
     )
     args = parser.parse_args()
     try:
-        changed = configure(args.settings)
+        changed = configure(args.settings, args.sandbox_auto, args.shared_policy)
     except (OSError, ValueError, TypeError) as error:
         print(f"setup_agy_permissions: {error}", file=sys.stderr)
         return 1
     print(
-        f"agent-coord permission {'added' if changed else 'already present'}: {args.settings}"
+        f"Antigravity settings {'updated' if changed else 'already configured'}: {args.settings}"
     )
     return 0
 

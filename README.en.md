@@ -107,7 +107,11 @@ Use the code displayed by `pair` to pair your client. See [Remote connections](h
 
 ### Antigravity
 
-`setup_user_environment` runs `setup_agy_permissions` to add `mcp(agent-coord_agent_coord/*)` to `~/.gemini/antigravity-cli/settings.json`. Existing settings and `deny` / `ask` rules are preserved, and repeated runs do not duplicate the grant. Conflicting `deny` / `ask` rules still take precedence and produce a warning. This grants agent-coord tool access only; it does not ensure session identity or idle-session wake-up. See the [official permission reference](https://www.antigravity.google/docs/permissions?tab=cli).
+`setup_user_environment` runs `setup_agy_permissions --sandbox-auto --shared-policy /etc/antigravity-cli/skel/permissions.json` to update `~/.gemini/antigravity-cli/settings.json`: auto-execute inside the sandbox (`toolPermission: proceed-in-sandbox`, `enableTerminalSandbox: true`) and allow the agent-coord server (`mcp(agent-coord_agent_coord/*)`). See the [official sandbox settings](https://www.antigravity.google/docs/sandbox?tab=cli).
+
+`files/antigravity_user-permissions.json` maps the 11 reviewed Codex command exceptions and network access, plus Claude's extra writable paths and credential/socket read denials. `tests/setup_agy_permissions.test.py` detects drift. Matching and deny precedence follow agy's rules; Claude's dynamic auto decisions and environment filtering are not equivalent. No blanket `command(*)`, `mcp(*)`, or unrestricted `node` grant is added.
+
+Existing settings and explicit `deny` / `ask` rules are preserved without duplicating rules on repeated runs. Explicit denials and prompts take precedence over added grants. Permissions do not fix session identity or idle-session wake-up. See the [official permission reference](https://www.antigravity.google/docs/permissions?tab=cli).
 
 ```bash
 agy

@@ -356,6 +356,7 @@ run python3 "$TOP_DIR/files/install_scratch_file_management.py"
 
 # Antigravity CLI
 copy setup_agy_permissions /usr/local/bin/setup_agy_permissions -m 0755
+copy antigravity_user-permissions.json /etc/antigravity-cli/skel/permissions.json -m 0644
 
 [ -s /tmp/antigravity_cli_install.sh ] ||
 run curl -o /tmp/antigravity_cli_install.sh \

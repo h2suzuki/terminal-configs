@@ -118,7 +118,11 @@ codex remote-control pair
 
 ### Antigravity
 
-`setup_user_environment` は `setup_agy_permissions` を通して、`~/.gemini/antigravity-cli/settings.json` に `mcp(agent-coord_agent_coord/*)` の許可を追加します。既存設定と `deny` / `ask` は保持し、再実行でも重複させません。`deny` / `ask` が競合するときはそちらが優先されるため警告します。これは agent-coord のツール許可だけで、セッション識別や待機中の起床を保証する設定ではありません。[公式の権限仕様](https://www.antigravity.google/docs/permissions?tab=cli)
+`setup_user_environment` は `setup_agy_permissions --sandbox-auto --shared-policy /etc/antigravity-cli/skel/permissions.json` を通して、`~/.gemini/antigravity-cli/settings.json` を更新します。sandbox 内は自動実行 (`toolPermission: proceed-in-sandbox`, `enableTerminalSandbox: true`)、agent-coord のツールはサーバー単位 (`mcp(agent-coord_agent_coord/*)`) で許可します。[公式の sandbox 設定](https://www.antigravity.google/docs/sandbox?tab=cli)
+
+共通許可の原本は `files/antigravity_user-permissions.json` です。Codex のレビュー済みコマンド例外11件とネットワーク許可、Claude の追加書込先と資格情報・ソケットの読取禁止を対応付け、`tests/setup_agy_permissions.test.py` で差分を検出します。実行形式の評価や拒否の優先順位は agy 自身の仕様に従い、Claude の動的な auto 判定や環境変数フィルターまで同一とはみなしません。広すぎる `command(*)`・`mcp(*)` や、曖昧な `node` の許可は追加しません。
+
+既存設定・`deny`・`ask` は保持し、再実行でもルールを重複させません。明示的な `deny` / `ask` は追加した許可より優先されます。これらの許可設定は、セッション識別や待機中の起床の修正とは別です。[公式の権限仕様](https://www.antigravity.google/docs/permissions?tab=cli)
 
 ```bash
 agy

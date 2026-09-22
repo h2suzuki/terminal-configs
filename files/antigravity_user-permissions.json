@@ -1,0 +1,41 @@
+{
+  "allow": [
+    "command(git)",
+    "command(gh)",
+    "command(jev)",
+    "command(claude_memory_sync)",
+    "command(docker)",
+    "command(codex)",
+    "command(codex_broker_reap)",
+    "command(agent-browser)",
+    "command(claude --bg)",
+    "command(claude agents)",
+    "command(agent_coord)",
+    "write_file(~/.claude/plugins/data)",
+    "write_file(/var/lib/claude-rag-memory)",
+    "write_file(~/worktrees)",
+    "read_url(*)"
+  ],
+  "deny": [
+    "read_file(/run/docker.sock)",
+    "read_file(~/.aws)",
+    "read_file(~/.config/gcloud)",
+    "read_file(~/.ssh)",
+    "read_file(~/.config/gh/hosts.yml)",
+    "read_file(~/.git-credentials)",
+    "read_file(~/.netrc)",
+    "read_file(~/.pypirc)",
+    "read_file(~/.config/pip)",
+    "read_file(~/.claude/.credentials.json)",
+    "read_file(~/.codex/auth.json)",
+    "read_file(~/.config/typesafe/credentials.json)",
+    "read_file(~/.agent-browser)",
+    "read_file(~/.local/share/com.vercel.cli)",
+    "read_file(~/.config/vercel-plugin)",
+    "read_file(~/.claude/daemon/control.key)",
+    "read_file(~/.config/google-chrome)",
+    "read_file(~/.local/share/pki)",
+    "read_file(~/.bash_history)",
+    "read_file(/mnt/c/Users)"
+  ]
+}
