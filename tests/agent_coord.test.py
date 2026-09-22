@@ -1187,6 +1187,48 @@ class NotificationTest(Direct):
         self.call("a", "send", sid="a", to="repo", text="new range")
         self.assertTrue(wait_for(lambda: len(inbox.lines) >= 4, timeout=10))
 
+    def test_f3_subagent_delivery_wakes_the_parents_inbox_with_a_relay_note(self):
+        """F3: a Claude Code subagent has no inbox of its own; a message to it wakes
+        its parent's inbox instead, prefixed with a relay note, and stays keyed to the
+        child's sid. If the parent has left, the delivery is unavailable."""
+        inbox = self.register_claude_session("N-root")
+        self.join("a", self.repo)
+        self.call(
+            "root", "join", client="claude-code", native_id="N-root", cwd=str(self.wt)
+        )
+        self.call(
+            "spawn",
+            "join",
+            sid="cc-child",
+            client="claude-code",
+            native_id="agent-1",
+            cwd=str(self.wt),
+            parent_sid="cc-N-root",
+        )
+        self.call("a", "send", sid="a", to="cc-child", text="for the child")
+        self.assertTrue(wait_for(lambda: len(inbox.lines) >= 2))
+        message = inbox.lines[1]["message"]["content"]
+        self.assertIn("Delivery for your subagent cc-child", message)
+        self.assertIn("SendMessage", message)
+        self.assertIn("catchup --as cc-child", message)
+        self.assertIn("1 unread event", message)
+        peeked = self.call("spawn", "peek", sid="cc-child")
+        self.assertEqual(peeked["deliveries"][0]["state"], "pushed")
+        self.call("spawn", "ack", sid="cc-child", through=peeked["last_seq"])
+
+        self.call("root", "leave", sid="cc-N-root")
+        self.call("a", "send", sid="a", to="cc-child", text="after parent left")
+        self.assertTrue(
+            wait_for(
+                lambda: (
+                    self.call("spawn", "peek", sid="cc-child")["deliveries"][-1][
+                        "state"
+                    ]
+                    == "unavailable"
+                )
+            )
+        )
+
     def test_f3_6_codex_is_woken_with_codex_queue_and_antigravity_is_pull_only(self):
         self.join("a", self.repo)
         self.call("b", "join", client="codex", native_id="T-1", cwd=str(self.wt))
@@ -1345,6 +1387,48 @@ class StatusAndBoundaryTest(Direct):
         self.call("x", "release", sid="a", key="rig", generation=grant["generation"])
         with self.assertRaises(coord.CoordError):
             self.call("y", "attach", sid="a", native_id="wrong")
+
+    def test_f7_child_attaches_by_its_parents_native_id(self):
+        """F7: a Claude Code subagent proves itself with the parent's native id
+        (the process it inherited); an unrelated native id is rejected, token still works."""
+        self.join("root", self.repo, client="claude-code")
+        self.call(
+            "root",
+            "join",
+            sid="cc-child",
+            client="claude-code",
+            native_id="agent-1",
+            cwd=str(self.wt),
+            parent_sid="root",
+        )
+        self.call("x", "attach", sid="cc-child", native_id="root")
+        with self.assertRaises(coord.CoordError) as ctx:
+            self.call("y", "attach", sid="cc-child", native_id="someone-else")
+        self.assertEqual(ctx.exception.code, -32001)
+        self.assertNotIn("\n", str(ctx.exception))
+        token = self.call("x", "whoami", sid="cc-child")["session"]["token"]
+        self.call("z", "attach", sid="cc-child", token=token)
+
+    def test_f7_attach_by_parent_native_id_requires_a_present_parent(self):
+        """F7: once the parent has left, its native id no longer authorizes attaching
+        as the child; the child's own token still does."""
+        self.join("root", self.repo, client="claude-code")
+        self.call(
+            "root",
+            "join",
+            sid="cc-child",
+            client="claude-code",
+            native_id="agent-1",
+            cwd=str(self.wt),
+            parent_sid="root",
+        )
+        token = self.call("root", "whoami", sid="cc-child")["session"]["token"]
+        self.call("q", "attach", sid="root", native_id="root")
+        self.call("q", "leave", sid="root")
+        with self.assertRaises(coord.CoordError) as ctx:
+            self.call("x", "attach", sid="cc-child", native_id="root")
+        self.assertEqual(ctx.exception.code, -32001)
+        self.call("y", "attach", sid="cc-child", token=token)
 
     def test_f7_3_lost_singleton_race_fails_clearly(self):
         """4.2 / V2: the second daemon exits non-zero and never opens a second ledger."""
@@ -1518,6 +1602,8 @@ class HookTest(Fixture):
             {
                 "SessionStart",
                 "SessionEnd",
+                "SubagentStart",
+                "SubagentStop",
                 "Stop",
                 "UserPromptSubmit",
                 "PostToolUse",
@@ -2251,6 +2337,125 @@ class HookTest(Fixture):
         gone = [s for s in me.call("status")["sessions"] if s["sid"] == "cc-s1"][0]
         self.assertEqual((gone["status"], gone["left_at"] is not None), ("done", True))
 
+    def test_f8_claude_subagent_start_uses_agent_id_and_never_consumes_parent_inbox(
+        self,
+    ):
+        """F8: SubagentStart joins cc-<agent_id> with parent cc-<session_id>; context
+        names the parent and the --as / SendMessage guidance; the parent's unread stays."""
+        self.hook(
+            "claude-code", "SessionStart", {"session_id": "root", "cwd": str(self.wt)}
+        )
+        me = self.daemon.client()
+        self.addCleanup(me.close)
+        peer = self.daemon.client()
+        self.addCleanup(peer.close)
+        peer.call("join", sid="p", client="test", cwd=str(self.wt), native_id="p")
+        seq = peer.call("send", sid="p", to="cc-root", text="for root")["seq"]
+
+        started = self.hook(
+            "claude-code",
+            "SubagentStart",
+            {"session_id": "root", "agent_id": "child-1", "cwd": str(self.wt)},
+        )
+        context = started["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("joined as cc-child-1", context)
+        self.assertIn("Parent: cc-root", context)
+        self.assertIn("--as cc-child-1", context)
+        self.assertIn('as="cc-child-1"', context)
+        self.assertIn("SendMessage", context)
+        me.call("attach", sid="cc-child-1", native_id="child-1")
+        self.assertEqual(me.call("peek", sid="cc-child-1")["unread"], 0)
+        me.call("attach", sid="cc-root", native_id="root")
+        self.assertEqual(me.call("peek", sid="cc-root")["last_seq"], seq)
+
+    def test_f8_claude_post_tool_use_routes_by_agent_id(self):
+        """F8: PostToolUse carrying agent_id surfaces the child's unread, not the
+        parent's; the same hook without agent_id surfaces the parent's."""
+        self.hook(
+            "claude-code", "SessionStart", {"session_id": "root", "cwd": str(self.wt)}
+        )
+        self.hook(
+            "claude-code",
+            "SubagentStart",
+            {"session_id": "root", "agent_id": "child-1", "cwd": str(self.wt)},
+        )
+        peer = self.daemon.client()
+        self.addCleanup(peer.close)
+        peer.call("join", sid="p", client="test", cwd=str(self.wt), native_id="p")
+        peer.call("send", sid="p", to="cc-child-1", text="for the child")
+        for_parent = self.hook(
+            "claude-code", "PostToolUse", {"session_id": "root", "cwd": str(self.wt)}
+        )
+        self.assertIsNone(for_parent)
+        for_child = self.hook(
+            "claude-code",
+            "PostToolUse",
+            {"session_id": "root", "agent_id": "child-1", "cwd": str(self.wt)},
+        )
+        self.assertIn("1 unread", for_child["hookSpecificOutput"]["additionalContext"])
+
+    def test_f8_claude_subagent_stop_leaves_exactly_the_child(self):
+        """F8: SubagentStop leaves the child session; the parent stays present."""
+        self.hook(
+            "claude-code", "SessionStart", {"session_id": "root", "cwd": str(self.wt)}
+        )
+        self.hook(
+            "claude-code",
+            "SubagentStart",
+            {"session_id": "root", "agent_id": "child-1", "cwd": str(self.wt)},
+        )
+        stopped = self.hook(
+            "claude-code",
+            "SubagentStop",
+            {"session_id": "root", "agent_id": "child-1", "cwd": str(self.wt)},
+        )
+        self.assertIsNone(stopped)
+        me = self.daemon.client()
+        self.addCleanup(me.close)
+        sessions = {s["sid"]: s for s in me.call("status")["sessions"]}
+        self.assertIsNotNone(sessions["cc-child-1"]["left_at"])
+        self.assertIsNone(sessions["cc-root"]["left_at"])
+
+    def test_f8_claude_post_tool_use_first_joins_both_parent_and_child(self):
+        """F8: a PostToolUse carrying agent_id as the very first hook of a session
+        still joins the parent and the child, with the right parent_sid."""
+        surfaced = self.hook(
+            "claude-code",
+            "PostToolUse",
+            {"session_id": "root", "agent_id": "child-1", "cwd": str(self.wt)},
+        )
+        self.assertIsNone(surfaced)
+        me = self.daemon.client()
+        self.addCleanup(me.close)
+        sessions = {s["sid"]: s for s in me.call("status")["sessions"]}
+        self.assertIn("cc-root", sessions)
+        self.assertEqual(sessions["cc-child-1"]["parent_sid"], "cc-root")
+
+    def test_cli_as_flag_lets_the_parent_catchup_for_the_child(self):
+        """CLI: `--as <child sid>`, proven by the parent's native id, can run
+        `catchup` for the child -- what the relay note's `catchup --as <sid>` promises."""
+        self.hook(
+            "claude-code", "SessionStart", {"session_id": "root", "cwd": str(self.wt)}
+        )
+        self.hook(
+            "claude-code",
+            "SubagentStart",
+            {"session_id": "root", "agent_id": "child-1", "cwd": str(self.wt)},
+        )
+        peer = self.daemon.client()
+        self.addCleanup(peer.close)
+        peer.call("join", sid="p", client="test", cwd=str(self.wt), native_id="p")
+        peer.call("send", sid="p", to="cc-child-1", text="for the child")
+
+        args = coord.parse_cli(["--as", "cc-child-1", "catchup"])
+        identity = coord.Identity("claude-code", "root", str(self.wt))
+        client = self.daemon.client()
+        self.addCleanup(client.close)
+        result = coord.run_command(client, args, identity)
+        self.assertEqual(
+            [e["body"]["text"] for e in result["events"]], ["for the child"]
+        )
+
     def test_f8_1_antigravity_hooks_speak_its_own_schema(self):
         manifest = json.loads(
             (
@@ -2507,6 +2712,124 @@ class McpTest(Fixture):
         )
         self.assertTrue(odd["result"]["isError"])
         self.assertEqual(self.rpc(adapter, 7, "ping")["result"], {})
+
+    def test_mcp_as_argument_acts_as_the_child_for_one_call_only(self):
+        """MCP: `as` acts as the named child for that call; the next call without
+        `as` reverts to the server's own session."""
+        client = self.daemon.client()
+        self.addCleanup(client.close)
+        adapter = coord.McpAdapter(
+            client, coord.Identity("claude-code", "m1", str(self.wt))
+        )
+        self.rpc(adapter, 1, "tools/call", {"name": "whoami", "arguments": {}})
+        other = self.daemon.client()
+        self.addCleanup(other.close)
+        other.call(
+            "join",
+            sid="cc-child",
+            client="claude-code",
+            native_id="agent-x",
+            cwd=str(self.wt),
+            parent_sid="cc-m1",
+        )
+        as_child = self.rpc(
+            adapter,
+            2,
+            "tools/call",
+            {"name": "update", "arguments": {"as": "cc-child", "status": "working"}},
+        )
+        self.assertFalse(as_child["result"]["isError"])
+        self.assertEqual(
+            other.call("whoami", sid="cc-child")["session"]["status"], "working"
+        )
+        checker = self.daemon.client()
+        self.addCleanup(checker.close)
+        checker.call("attach", sid="cc-m1", native_id="m1")
+        self.assertEqual(
+            checker.call("whoami", sid="cc-m1")["session"]["status"], "unset"
+        )
+        back = self.rpc(
+            adapter,
+            3,
+            "tools/call",
+            {"name": "update", "arguments": {"status": "done"}},
+        )
+        self.assertFalse(back["result"]["isError"])
+        self.assertEqual(
+            checker.call("whoami", sid="cc-m1")["session"]["status"], "done"
+        )
+        self.assertEqual(
+            other.call("whoami", sid="cc-child")["session"]["status"], "working"
+        )
+
+    def test_mcp_as_is_rejected_for_a_sid_whose_parent_is_not_this_native_id(self):
+        """F7: `as` cannot reach a child whose parent is a different native session."""
+        client = self.daemon.client()
+        self.addCleanup(client.close)
+        adapter = coord.McpAdapter(
+            client, coord.Identity("claude-code", "m1", str(self.wt))
+        )
+        self.rpc(adapter, 1, "tools/call", {"name": "whoami", "arguments": {}})
+        other = self.daemon.client()
+        self.addCleanup(other.close)
+        other.call(
+            "join",
+            sid="cc-stranger",
+            client="claude-code",
+            native_id="stranger-native",
+            cwd=str(self.wt),
+        )
+        other.call(
+            "join",
+            sid="cc-stranger-child",
+            client="claude-code",
+            native_id="agent-y",
+            cwd=str(self.wt),
+            parent_sid="cc-stranger",
+        )
+        rejected = self.rpc(
+            adapter,
+            2,
+            "tools/call",
+            {"name": "whoami", "arguments": {"as": "cc-stranger-child"}},
+        )
+        self.assertTrue(rejected["result"]["isError"])
+        self.assertIn("cannot attach", rejected["result"]["content"][0]["text"])
+
+    def test_mcp_leave_as_child_does_not_rejoin_the_servers_own_session(self):
+        """MCP: `leave` with `as=<child>` leaves only the child; the server's next
+        call without `as` still acts as its own sid, without rejoining it."""
+        client = self.daemon.client()
+        self.addCleanup(client.close)
+        adapter = coord.McpAdapter(
+            client, coord.Identity("claude-code", "m1", str(self.wt))
+        )
+        self.rpc(adapter, 1, "tools/call", {"name": "whoami", "arguments": {}})
+        other = self.daemon.client()
+        self.addCleanup(other.close)
+        other.call(
+            "join",
+            sid="cc-child",
+            client="claude-code",
+            native_id="agent-x",
+            cwd=str(self.wt),
+            parent_sid="cc-m1",
+        )
+        left = self.rpc(
+            adapter, 2, "tools/call", {"name": "leave", "arguments": {"as": "cc-child"}}
+        )
+        self.assertFalse(left["result"]["isError"])
+        sessions = {s["sid"]: s for s in other.call("sessions")["sessions"]}
+        self.assertIsNotNone(sessions["cc-child"]["left_at"])
+        self.assertIsNone(sessions["cc-m1"]["left_at"])
+        with patch.object(
+            coord, "ensure_session", side_effect=AssertionError("must not rejoin")
+        ):
+            back = self.rpc(
+                adapter, 3, "tools/call", {"name": "whoami", "arguments": {}}
+            )
+        self.assertFalse(back["result"]["isError"])
+        self.assertIn("cc-m1", back["result"]["content"][0]["text"])
 
     def test_mcp_2_codex_tool_call_binds_to_the_hook_thread(self):
         """MCP-2 / openai/codex#19937 + #18093: the Codex MCP subprocess has no thread id in

@@ -291,6 +291,24 @@ class ClaudeCodeAdapter(ClientAdapter):
             or os.path.expanduser("~/.claude/sessions")
         )
 
+    def hook_native(self, payload: Json) -> str | None:
+        # Subagent hooks carry the child in agent_id and the parent in session_id;
+        # ordinary hooks carry only session_id, naming the current session.
+        return payload.get("agent_id") or super().hook_native(payload)
+
+    def hook_parent_native(self, payload: Json) -> str | None:
+        child = self.hook_native(payload)
+        parent = payload.get("session_id")
+        return str(parent) if parent and str(parent) != str(child) else None
+
+    def hook_role(self, event: str) -> str:
+        return {
+            "SessionStart": "start",
+            "SubagentStart": "start",
+            "SessionEnd": "end",
+            "SubagentStop": "end",
+        }.get(event, "nudge")
+
     def inbox(self, native_id: str) -> tuple[str, str | None] | None:
         """The session's inbox socket and auth key from the registry Claude Code publishes."""
         directory = self.registry_dir()
@@ -1216,7 +1234,7 @@ class Ledger:
         }
 
     def attach(self, conn: str, p: Json) -> Json:
-        """Register this connection as an existing session, proven by its native id or token."""
+        """Register this connection as an existing session, proven by native id, token, or its live parent's native id."""
         sid = required(p, "sid", "sid")
         session = self.sessions.get(sid)
         if session is None:
@@ -1227,9 +1245,18 @@ class Ledger:
             )
         by_native = bool(p.get("native_id")) and session["native_id"] == p["native_id"]
         by_token = bool(p.get("token")) and session["token"] == p["token"]
-        if not (by_native or by_token):
+        parent = self.sessions.get(session.get("parent_sid") or "")
+        by_parent = (
+            bool(p.get("native_id"))
+            and parent is not None
+            and not parent["left_at"]
+            and parent["native_id"] == p["native_id"]
+        )
+        if not (by_native or by_token or by_parent):
             raise CoordError(
-                f"cannot attach as {sid}: native id or token does not match", -32001
+                f"cannot attach as {sid}: native id or token does not match"
+                " (a subagent's parent native id is also accepted)",
+                -32001,
             )
         session["last_seen"] = self.now()
         self.touch("sessions", session)
@@ -2088,7 +2115,10 @@ class Coordinator:
             if not plan:
                 continue
             session = plan["session"]
-            ok = adapter_for(session["client"]).wake(session, plan["text"])
+            recipient, text = self._wake_recipient(session, plan["text"])
+            ok = recipient is not None and adapter_for(recipient["client"]).wake(
+                recipient, text
+            )
             outcome = {
                 "sid": session["sid"],
                 "seqs": plan["seqs"],
@@ -2096,6 +2126,21 @@ class Coordinator:
                 "state": "pushed" if ok else "unavailable",
             }
             self.transact(lambda o=outcome: self.ledger.mark_deliveries("", o))
+
+    def _wake_recipient(self, session: Json, text: str) -> tuple[Json | None, str]:
+        """A Claude Code subagent has no inbox socket of its own; relay through its
+        parent, still tracking the delivery on the child's sid."""
+        if session["client"] != "claude-code" or not session.get("parent_sid"):
+            return session, text
+        parent = self.transact(lambda: self.ledger.session(session["parent_sid"]))
+        if not parent or parent["left_at"] is not None:
+            return None, text
+        relay = (
+            f"[agent-coord] Delivery for your subagent {session['sid']}"
+            f" ({session['name']}): relay it with SendMessage if that agent is still"
+            f" running, or read it with catchup --as {session['sid']}.\n{text}"
+        )
+        return parent, relay
 
 
 # ---------------------------------------------------------------- transport
@@ -2379,7 +2424,14 @@ def tool(
 ) -> Json:
     schema: Json = {
         "type": "object",
-        "properties": properties,
+        "properties": {
+            **properties,
+            "as": {
+                "type": "string",
+                "description": "act as this child session id for this call only"
+                " (needs its parent's native id, which this server has).",
+            },
+        },
         "additionalProperties": False,
     }
     if required_keys:
@@ -2507,6 +2559,7 @@ class McpAdapter:
         self.client = client
         self.identity = identity
         self.sid: str | None = None
+        self.acting_as: str | None = None
 
     def ensure_joined(self) -> str:
         if self.sid is None:
@@ -2514,6 +2567,7 @@ class McpAdapter:
                 self.client, self.identity, model=os.environ.get("CLAUDE_MODEL")
             )
             self.sid = joined["session"]["sid"]
+            self.acting_as = self.sid
         return self.sid
 
     def bind_thread(self, meta: Json) -> None:
@@ -2531,11 +2585,20 @@ class McpAdapter:
         if spec is None:
             raise CoordError(f"unknown tool {name}", -32601)
         arguments = {k: v for k, v in arguments.items() if k not in RESERVED_ARGS}
+        as_sid = arguments.pop("as", None)
         check_arguments(spec["inputSchema"], arguments)
         sid = self.ensure_joined()
-        result = self.client.call(name, sid=sid, **arguments)
+        # Shared by the parent and its children: re-attach whenever the target
+        # differs from what a prior call (its own or another's) left this bound as.
+        target = str(as_sid) if as_sid else sid
+        if target != self.acting_as:
+            self.client.call("attach", sid=target, native_id=self.identity.native_id)
+            self.acting_as = target
+        result = self.client.call(name, sid=target, **arguments)
         if name == "leave":
-            self.sid = None
+            if target == sid:
+                self.sid = None
+            self.acting_as = None
         return result
 
     def bind_antigravity(self, meta: Json) -> None:
@@ -2551,6 +2614,7 @@ class McpAdapter:
         attached = self.client.call("attach", sid=sid, native_id=native)
         self.identity = Identity("antigravity", native, attached["session"]["cwd"])
         self.sid = sid
+        self.acting_as = sid
 
     def dispatch(self, message: Json) -> Json | None:
         if "id" not in message:
@@ -2687,8 +2751,7 @@ def hook_dispatch(
     if parent_native:
         parent_identity = Identity(identity.client, parent_native, identity.cwd)
         parent_sid = session_id_for(identity.client, parent_native)
-        if event == "SubagentStart":
-            ensure_session(client, parent_identity)
+        ensure_session(client, parent_identity)
     if role == "start":
         joined = ensure_session(client, identity, parent_sid=parent_sid)
         if adapter.name == "codex":
@@ -2785,10 +2848,18 @@ def joined_text(joined: Json, sid: str) -> str:
     session = joined["session"]
     peers = ", ".join(p["name"] for p in joined.get("peers_same_project", [])) or "none"
     parent = f" Parent: {session['parent_sid']}." if session.get("parent_sid") else ""
+    child_note = (
+        f" Your agent_coord calls act as parent {session['parent_sid']} unless you pass"
+        f' --as {sid} (CLI) or as="{sid}" (MCP); message your parent or sibling'
+        " subagents with SendMessage, not agent_coord."
+        if session.get("parent_sid") and session["client"] == "claude-code"
+        else ""
+    )
     return (
         f"[agent-coord] joined as {sid} ({session['name']}). Same-project peers: {peers}."
         f"{parent} Unread: {joined.get('unread', 0)}."
         " Tools: mcp agent_coord (send/catchup/acquire) or `agent_coord` CLI."
+        f"{child_note}"
     )
 
 

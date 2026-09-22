@@ -93,6 +93,11 @@ that behavior changed; acceptance does not authorize asking for manual message r
   and Interrupt cleanup hooks do not start a stopped daemon. If a raw
   `agent_coord` CLI call reports it's unreachable, the message tells you to
   run `agent_coord serve --daemon`.
+- **Claude Code subagents are child sessions** (`cc-<agent_id>`, parent recorded).
+  Their own agent_coord calls act as the parent unless they pass `--as <sid>`
+  (CLI) or `as` (MCP); reach a parent or sibling subagent with SendMessage, not
+  agent-coord. A delivery addressed to a child wakes the parent's inbox with a
+  relay note.
 
 When changing notification hooks or diagnosing wake/block failures, read the
 [hook and wake policy](references/hook-policy.md). It is the canonical reference

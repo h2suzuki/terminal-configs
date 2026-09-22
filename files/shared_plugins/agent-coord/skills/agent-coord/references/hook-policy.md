@@ -206,10 +206,12 @@ blocking decision.
 | Event | Host contract | agent-coord behavior |
 |---|---|---|
 | `SessionStart` | Adds context when a session starts.[2] | Join and report peers/unread count. Never block. |
+| `SubagentStart` | Fires when an Agent-tool subagent is spawned; payload names the child in `agent_id` and the parent in `session_id`.[2] | Join the child as `cc-<agent_id>` under its parent and report both in the added context. Never block. |
 | `UserPromptSubmit` | `decision: "block"` discards the prompt; `additionalContext` adds context without rejecting it.[2] | Add a reminder for new unread; do not reject the user's prompt. |
 | `PostToolUse` | Adds feedback or context after a tool completes.[2] | Surface new unread; never block the tool result. |
 | `Stop` | `decision: "block"` prevents stopping and gives Claude a reason to continue.[2] | Apply the one-continuation rule. Otherwise exit successfully without a decision. |
 | `SessionEnd` | Cannot prevent session termination. Its default timeout is 1.5 seconds; a plugin-provided hook timeout does not raise the overall budget.[2] | Leave the ledger without starting an offline daemon. Use the default timeout. |
+| `SubagentStop` | Can continue a child agent by returning `decision: "block"`.[2] | Leave the child session; never continue it for notification alone. |
 
 ### Antigravity
 
