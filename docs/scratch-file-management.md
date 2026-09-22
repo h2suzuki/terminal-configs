@@ -1,4 +1,4 @@
-# Shared workspace hygiene
+# Shared scratch file management
 
 <!-- dangling-ref-check: allow (documents intentional scratch paths) -->
 
