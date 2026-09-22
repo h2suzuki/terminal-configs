@@ -181,10 +181,18 @@ Installs Docker and SigNoz to visualize Claude Code OpenTelemetry data. The dash
 
 ## Updating and changing configuration
 
-Update the repository, then run the same command used for initial setup: `sudo ./debian12.sh` or `sudo ./ubuntu2404-wsl.sh`. As shown in the [call tree](#how-the-scripts-call-each-other), this updates the system and the root and login-user environments.
+Make configuration and script changes in the repository's `files/` directory. You may deploy just the changed files with individual `cp` commands; a single-file change does not require rerunning the entire setup. Follow the target OS installer for destinations, ownership, and permissions, and update every destination when a file is deployed to multiple locations.
+
+For example, after changing only `mytask`, run this from the repository root:
+
+```bash
+sudo cp files/shared_cli/mytask /usr/local/bin/mytask
+```
+
+If a change also adds dependencies or requires configuration generation or registration, run the corresponding installation steps too. Changes made only to deployed files under `/etc/claude-code/`, `/etc/codex/`, or `/usr/local/bin/` will be overwritten by the next deployment.
+
+To update the entire environment, update the repository and run `sudo ./debian12.sh` or `sudo ./ubuntu2404-wsl.sh`. As shown in the [call tree](#how-the-scripts-call-each-other), this updates the system and the root and login-user environments.
 
 To update an additional user's environment, run `setup_user_environment` as that user. To update an existing voice notification or SigNoz installation, rerun its optional installer.
 
-To change configuration, edit the source files under `files/`, then rerun setup. Direct edits to deployed files under `/etc/claude-code/`, `/etc/codex/`, or `/usr/local/bin/` will be overwritten by the next deployment.
-
-Open a new shell and restart the affected agents after updating.
+After updating, restart any shells or affected agents that need to reload the changed files.
