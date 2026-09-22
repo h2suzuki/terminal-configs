@@ -41,6 +41,12 @@ cd terminal-configs
 ```text
 debian12.sh または ubuntu2404-wsl.sh（sudo で実行）
 ├── システム全体のツール・設定を導入
+│   ├── OS パッケージの更新、Neovim・GitHub CLI・Google Cloud CLI の導入
+│   ├── Python ツール（uv・ruff・ty）、Chrome・日本語フォントの導入
+│   ├── Claude Code・Antigravity CLI の導入
+│   ├── Claude Code・Codex の共通設定・sandbox 設定の配備
+│   ├── Jev のラッパー CLI・SDK 実行環境の導入
+│   └── ユーザー用セットアップスクリプトを /usr/local/bin に配置
 └── root とログインユーザー（検出できた場合）それぞれで実行
     └── setup_user_environment
         ├── Bash・Git のユーザー設定

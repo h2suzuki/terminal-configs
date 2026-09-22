@@ -41,6 +41,12 @@ Both OS scripts install system components, then configure the root and login-use
 ```text
 debian12.sh or ubuntu2404-wsl.sh (run with sudo)
 ├── Install system tools and configuration
+│   ├── Update OS packages; install Neovim, GitHub CLI and Google Cloud CLI
+│   ├── Install Python tools (uv, ruff, ty), Chrome and Japanese fonts
+│   ├── Install Claude Code and Antigravity CLI
+│   ├── Deploy shared configuration and sandbox settings for Claude Code and Codex
+│   ├── Install the Jev wrapper CLI and SDK runtime
+│   └── Place user setup scripts in /usr/local/bin
 └── Run for root and the login user (if detected)
     └── setup_user_environment
         ├── Configure the user's Bash and Git
