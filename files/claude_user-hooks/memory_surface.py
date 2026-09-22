@@ -334,6 +334,11 @@ def _normalize_model(model_id: str) -> str:
     return re.sub(r"-(\d+)-(\d+)$", r"-\1.\2", m)
 
 
+def _model_major(model: str) -> str:
+    """opus-4.8 -> opus-4: the tag and the running model compare on the major only."""
+    return model.split(".", 1)[0]
+
+
 def _statusline_model(session_id) -> str | None:
     """Model id from the statusline stdin dump cache (absent in headless runs)."""
     if not isinstance(session_id, str) or not session_id:
@@ -399,8 +404,11 @@ def _model_pred(con: sqlite3.Connection, project_id: str, model: str):
     # entry を書き直すまで DB に残るため、query 時に揃えないと mute が続く。
     tags = {fp: {_normalize_model(t) for t in m.split()} for fp, m in rows if m}
 
+    major = _model_major(model)
+
     def ok(file_path: str) -> bool:
-        return model in tags.get(file_path, {MODELS_DEFAULT})
+        # Minor versions do not change model behavior, so fable-5 covers fable-5.x.
+        return major in {_model_major(t) for t in tags.get(file_path, {MODELS_DEFAULT})}
 
     return ok
 

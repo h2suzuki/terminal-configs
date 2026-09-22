@@ -299,5 +299,68 @@ class CodexHookTest(unittest.TestCase):
         surface.assert_not_called()
 
 
+class ModelTagTest(unittest.TestCase):
+    """models: tags and the running model compare on the major version only."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.patch = mock.patch.object(
+            ms, "DB_PATH", os.path.join(self.tmp.name, "idx.sqlite3")
+        )
+        self.patch.start()
+        con = ms._connect()
+        assert con is not None
+        self.con: sqlite3.Connection = con
+        rows = [
+            ("/m/major.md", "fable-5"),
+            ("/m/minor.md", "fable-5.1"),
+            ("/m/raw.md", "claude-fable-5-1 gpt-6-astra"),
+            ("/m/other.md", "opus-4.8"),
+        ]
+        self.con.executemany(
+            "INSERT INTO entry_models(file_path, project_id, models, last_modified)"
+            " VALUES (?, ?, ?, 0)",
+            [(fp, PROJECT, m) for fp, m in rows],
+        )
+
+    def tearDown(self) -> None:
+        self.con.close()
+        self.patch.stop()
+        self.tmp.cleanup()
+
+    def ok(self, model: str):
+        return ms._model_pred(self.con, PROJECT, ms._normalize_model(model))
+
+    def test_major_only_tag_matches_any_minor_of_that_major(self):
+        ok = self.ok("claude-fable-5-1")
+        self.assertTrue(ok("/m/major.md"))
+        self.assertTrue(ok("/m/minor.md"))
+        self.assertTrue(ok("/m/raw.md"))
+        self.assertFalse(ok("/m/other.md"))
+
+    def test_major_only_tag_matches_the_bare_major_model(self):
+        ok = self.ok("claude-fable-5")
+        self.assertTrue(ok("/m/major.md"))
+        self.assertTrue(ok("/m/minor.md"))
+
+    def test_tag_with_a_minor_version_also_covers_sibling_minors(self):
+        ok = self.ok("claude-fable-5-2")
+        self.assertTrue(ok("/m/major.md"))
+        self.assertTrue(ok("/m/minor.md"))
+        self.assertTrue(ok("/m/raw.md"))
+        self.assertTrue(self.ok("claude-opus-4-9")("/m/other.md"))
+
+    def test_different_major_never_matches(self):
+        ok = self.ok("claude-fable-6")
+        self.assertFalse(ok("/m/major.md"))
+        ok = self.ok("claude-opus-4-8")
+        self.assertTrue(ok("/m/other.md"))
+        self.assertFalse(ok("/m/major.md"))
+
+    def test_untagged_entry_keeps_the_default_tag(self):
+        self.assertTrue(self.ok(ms.MODELS_DEFAULT)("/m/untagged.md"))
+        self.assertFalse(self.ok("claude-fable-5-1")("/m/untagged.md"))
+
+
 if __name__ == "__main__":
     unittest.main()
