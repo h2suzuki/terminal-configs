@@ -106,11 +106,11 @@ Use the code displayed by `pair` to pair your client. See [Remote connections](h
 
 ### Antigravity
 
-A login prompt appears on first launch:
-
 ```bash
 agy
 ```
+
+A login prompt appears on first launch.
 
 - Local terminal: sign in to your Google account in the browser that opens automatically.
 - Over SSH: open the authorization URL printed in the terminal in your local browser, sign in, then paste the resulting authorization code into the SSH terminal.
