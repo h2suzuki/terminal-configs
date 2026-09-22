@@ -46,6 +46,7 @@ Claim map (ID -> requirement):
 
 from __future__ import annotations
 
+import contextlib
 import importlib.machinery
 import importlib.util
 import io
@@ -373,6 +374,41 @@ class LedgerTest(Direct):
                 cwd=str(self.repo),
                 parent_sid="self-child",
             )
+
+    def test_reparent_moves_a_subagent_down_the_chain_it_joined_under(self):
+        """A client can name the spawning agent only after the subagent has joined, so
+        the session may move from the root to a live descendant of it, idempotently."""
+        self.join("root", self.repo, client="codex")
+        self.join("child", self.repo, client="codex", parent_sid="root")
+        self.join("grand", self.repo, client="codex", parent_sid="root")
+        moved = self.call("grand", "reparent", sid="grand", parent_sid="child")
+        self.assertEqual(moved["session"]["parent_sid"], "child")
+        again = self.call("grand", "reparent", sid="grand", parent_sid="child")
+        self.assertEqual(again["session"]["parent_sid"], "child")
+
+    def test_reparent_refuses_anything_but_a_live_descendant_asked_by_the_session(self):
+        """Re-parenting corrects a chain; it must not let a stranger, a cycle, a departed
+        agent or another connection take a session over."""
+        self.join("root", self.repo, client="codex")
+        self.join("child", self.repo, client="codex", parent_sid="root")
+        self.join("grand", self.repo, client="codex", parent_sid="root")
+        self.join("outsider", self.repo, client="codex")
+        for parent, message in (
+            ("outsider", "not a live descendant"),
+            ("grand", "not a live descendant"),
+            ("nobody", "no live session"),
+        ):
+            with self.assertRaises(coord.CoordError) as caught:
+                self.call("grand", "reparent", sid="grand", parent_sid=parent)
+            self.assertEqual(caught.exception.code, -32001)
+            self.assertIn(message, str(caught.exception))
+        with self.assertRaisesRegex(coord.CoordError, "not a live descendant"):
+            self.call("root", "reparent", sid="root", parent_sid="child")
+        self.call("child", "leave", sid="child")
+        with self.assertRaisesRegex(coord.CoordError, "no live session child"):
+            self.call("grand", "reparent", sid="grand", parent_sid="child")
+        with self.assertRaisesRegex(coord.CoordError, "not registered as grand"):
+            self.call("outsider", "reparent", sid="grand", parent_sid="child")
 
     def test_expiry_bounds_abandoned_rows_but_preserves_live_state(self):
         self.assertEqual(
@@ -1267,6 +1303,39 @@ class NotificationTest(Direct):
             "pushed",
         )
 
+    def test_f3_a_reparented_subagent_still_relays_through_the_root_inbox(self):
+        """F3: a nested subagent joins under the root and only later moves under the agent
+        that spawned it; the relay follows the chain as it stands, not as it was joined."""
+        inbox = self.register_claude_session("N-root")
+        self.join("a", self.repo)
+        self.call(
+            "root", "join", client="claude-code", native_id="N-root", cwd=str(self.wt)
+        )
+        self.call(
+            "spawn",
+            "join",
+            sid="cc-child",
+            client="claude-code",
+            native_id="agent-1",
+            cwd=str(self.wt),
+            parent_sid="cc-N-root",
+        )
+        self.call(
+            "nested",
+            "join",
+            sid="cc-grandchild",
+            client="claude-code",
+            native_id="agent-2",
+            cwd=str(self.wt),
+            parent_sid="cc-N-root",
+        )
+        self.call("nested", "reparent", sid="cc-grandchild", parent_sid="cc-child")
+        self.call("a", "send", sid="a", to="cc-grandchild", text="for the grandchild")
+        self.assertTrue(wait_for(lambda: len(inbox.lines) >= 2))
+        message = inbox.lines[1]["message"]["content"]
+        self.assertIn("Delivery for your subagent cc-grandchild", message)
+        self.assertIn("catchup --as cc-grandchild", message)
+
     def test_f3_6_codex_is_woken_with_codex_queue_and_antigravity_is_pull_only(self):
         self.join("a", self.repo)
         self.call("b", "join", client="codex", native_id="T-1", cwd=str(self.wt))
@@ -1663,6 +1732,14 @@ class HookTest(Fixture):
             rc = coord.hook_main(client, event, io.StringIO(json.dumps(payload)), out)
         self.assertEqual(rc, 0)
         return json.loads(out.getvalue()) if out.getvalue().strip() else None
+
+    def hook_without_error(self, client: str, event: str, payload: dict) -> dict | None:
+        """The hook, plus the proof it did not fall back to silence: a failed call prints."""
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            output = self.hook(client, event, payload)
+        self.assertEqual(errors.getvalue(), "")
+        return output
 
     def codex_hook_as(
         self, actual_thread: str, event: str, payload: dict
@@ -2502,17 +2579,35 @@ class HookTest(Fixture):
             },
         )
 
-    def start_grandchild(self) -> dict | None:
+    def start_grandchild(self, agent: str = "grandchild-1") -> dict | None:
         return self.hook(
             "claude-code",
             "SubagentStart",
             {
                 "session_id": "root",
-                "agent_id": "grandchild-1",
+                "agent_id": agent,
                 "cwd": str(self.wt),
                 "transcript_path": self.transcript_path("root"),
             },
         )
+
+    def subagent_hook(self, event: str, agent: str = "grandchild-1") -> dict | None:
+        """A later hook for a subagent: session_id still names the root, never the spawner."""
+        return self.hook_without_error(
+            "claude-code",
+            event,
+            {
+                "session_id": "root",
+                "agent_id": agent,
+                "cwd": str(self.wt),
+                "transcript_path": self.transcript_path("root"),
+            },
+        )
+
+    def parents(self) -> dict:
+        me = self.daemon.client()
+        self.addCleanup(me.close)
+        return {s["sid"]: s.get("parent_sid") for s in me.call("status")["sessions"]}
 
     def test_f8_claude_phantom_subagent_stop_joins_nothing(self):
         """F8: Claude Code repeats SubagentStop with a fresh agent_id while a subagent is
@@ -2542,41 +2637,108 @@ class HookTest(Fixture):
             "cc-phantom-1", {s["sid"] for s in me.call("sessions")["sessions"]}
         )
 
-    def test_f8_claude_nested_subagent_parent_comes_from_the_meta_file(self):
-        """F8: a grandchild's SubagentStart still names the root in session_id; only the
-        meta file beside the agent transcript names the agent that spawned it."""
+    def test_f8_claude_subagent_start_never_waits_for_the_meta_file(self):
+        """F8: Claude Code writes the agent meta file only after SubagentStart has
+        returned, so the hook joins under the root at once instead of waiting for it."""
         self.start_root_and_child()
-        self.write_agent_meta("root", "grandchild-1", "child-1")
+        began = time.monotonic()
         context = self.start_grandchild()["hookSpecificOutput"]["additionalContext"]
+        self.assertLess(time.monotonic() - began, 0.3)
         self.assertIn("joined as cc-grandchild-1", context)
-        self.assertIn("Parent: cc-child-1", context)
+        self.assertIn("Parent: cc-root", context)
+        subagents = self.tmp / "projects" / "root" / "subagents"
+        self.assertFalse((subagents / "agent-grandchild-1.meta.json").exists())
+
+    def test_f8_claude_nested_subagent_is_reparented_by_a_later_hook(self):
+        """F8: once the meta file names the spawner, the next hook for the grandchild
+        moves it under that agent, surfaces its unread, and repeats neither."""
+        self.start_root_and_child()
+        self.start_grandchild()
+        peer = self.daemon.client()
+        self.addCleanup(peer.close)
+        peer.call("join", sid="p", client="test", cwd=str(self.wt), native_id="p")
+        peer.call("send", sid="p", to="cc-grandchild-1", text="for the grandchild")
+
+        self.write_agent_meta("root", "grandchild-1", "child-1")
+        surfaced = self.subagent_hook("PostToolUse")
+        self.assertIn(
+            "1 unread event(s)", surfaced["hookSpecificOutput"]["additionalContext"]
+        )
+        parents = self.parents()
+        self.assertEqual(parents["cc-grandchild-1"], "cc-child-1")
+        self.assertEqual(parents["cc-child-1"], "cc-root")
+        self.assertIsNone(self.subagent_hook("PostToolUse"))
+        self.assertEqual(self.parents()["cc-grandchild-1"], "cc-child-1")
+
+    def test_f8_claude_reparented_subagent_still_nudges_and_leaves(self):
+        """F8: every later hook still carries the root in session_id; a re-parented
+        grandchild must not be refused by it -- it keeps its unread and its stop."""
+        self.start_root_and_child()
+        self.start_grandchild()
+        self.write_agent_meta("root", "grandchild-1", "child-1")
+        self.subagent_hook("PostToolUse")
+        peer = self.daemon.client()
+        self.addCleanup(peer.close)
+        peer.call("join", sid="p", client="test", cwd=str(self.wt), native_id="p")
+        peer.call("send", sid="p", to="cc-grandchild-1", text="second delivery")
+
+        surfaced = self.subagent_hook("PostToolUse")
+        self.assertIn(
+            "1 unread event(s)", surfaced["hookSpecificOutput"]["additionalContext"]
+        )
+        self.assertIsNone(self.subagent_hook("SubagentStop"))
         me = self.daemon.client()
         self.addCleanup(me.close)
         sessions = {s["sid"]: s for s in me.call("status")["sessions"]}
+        self.assertIsNotNone(sessions["cc-grandchild-1"]["left_at"])
         self.assertEqual(sessions["cc-grandchild-1"]["parent_sid"], "cc-child-1")
-        self.assertEqual(sessions["cc-child-1"]["parent_sid"], "cc-root")
+        self.assertIsNone(sessions["cc-child-1"]["left_at"])
 
-    def test_f8_claude_nested_subagent_waits_for_a_late_meta_file(self):
-        """F8: the meta file lands shortly after the hook starts, so the lookup polls."""
+    def test_f8_claude_spawner_lookup_follows_the_agent_transcript_path(self):
+        """F8: SubagentStop names the agent transcript, which Claude Code may keep in a
+        subdirectory; the meta file is that path with .jsonl swapped for .meta.json."""
         self.start_root_and_child()
-        timer = threading.Timer(
-            0.2, self.write_agent_meta, ("root", "grandchild-1", "child-1")
+        self.start_grandchild()
+        nested = self.tmp / "projects" / "root" / "subagents" / "w1"
+        nested.mkdir(parents=True)
+        (nested / "agent-grandchild-1.meta.json").write_text(
+            json.dumps({"parentAgentId": "child-1", "spawnDepth": 2})
         )
-        timer.start()
-        self.addCleanup(timer.cancel)
-        self.assertIn(
-            "Parent: cc-child-1",
-            self.start_grandchild()["hookSpecificOutput"]["additionalContext"],
+        stopped = self.hook_without_error(
+            "claude-code",
+            "SubagentStop",
+            {
+                "session_id": "root",
+                "agent_id": "grandchild-1",
+                "cwd": str(self.wt),
+                "transcript_path": self.transcript_path("root"),
+                "agent_transcript_path": str(nested / "agent-grandchild-1.jsonl"),
+            },
+        )
+        self.assertIsNone(stopped)
+        self.assertEqual(self.parents()["cc-grandchild-1"], "cc-child-1")
+
+    def test_f8_claude_nested_subagent_keeps_the_root_when_the_spawner_cannot_own_it(
+        self,
+    ):
+        """F8: a meta file naming an agent the ledger never saw, or one that has already
+        left, leaves the grandchild under the root instead of failing the hook."""
+        self.start_root_and_child()
+        self.start_grandchild("grandchild-1")
+        self.start_grandchild("grandchild-2")
+        self.write_agent_meta("root", "grandchild-1", "ghost-9")
+        self.write_agent_meta("root", "grandchild-2", "child-1")
+        self.hook(
+            "claude-code",
+            "SubagentStop",
+            {"session_id": "root", "agent_id": "child-1", "cwd": str(self.wt)},
         )
 
-    def test_f8_claude_nested_subagent_falls_back_to_the_root_without_meta(self):
-        """F8: no meta file ever appears -- the wait is bounded and the root stays parent."""
-        self.start_root_and_child()
-        began = time.monotonic()
-        with patch.object(coord, "SUBAGENT_META_WAIT", 0.1):
-            context = self.start_grandchild()["hookSpecificOutput"]["additionalContext"]
-        self.assertLess(time.monotonic() - began, coord.SUBAGENT_META_WAIT)
-        self.assertIn("Parent: cc-root", context)
+        self.assertIsNone(self.subagent_hook("PostToolUse", "grandchild-1"))
+        self.assertIsNone(self.subagent_hook("PostToolUse", "grandchild-2"))
+        parents = self.parents()
+        self.assertEqual(parents["cc-grandchild-1"], "cc-root")
+        self.assertEqual(parents["cc-grandchild-2"], "cc-root")
 
     def test_cli_as_flag_lets_the_parent_catchup_for_the_child(self):
         """CLI: `--as <child sid>`, proven by the parent's native id, can run
@@ -2607,8 +2769,9 @@ class HookTest(Fixture):
         """F7/CLI: a nested subagent's own processes carry the root session id, so
         `--as <grandchild sid>` must be provable by any live ancestor, not just the parent."""
         self.start_root_and_child()
-        self.write_agent_meta("root", "grandchild-1", "child-1")
         self.start_grandchild()
+        self.write_agent_meta("root", "grandchild-1", "child-1")
+        self.subagent_hook("PostToolUse")
         peer = self.daemon.client()
         self.addCleanup(peer.close)
         peer.call("join", sid="p", client="test", cwd=str(self.wt), native_id="p")

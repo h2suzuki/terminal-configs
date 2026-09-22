@@ -44,7 +44,6 @@ EVENT_TTL = 24 * 3600  # undelivered talk outlives any real session by then
 JOIN_BACKFILL = 3600  # a newcomer sees the last hour on its scopes
 PRESENCE_TTL = 3600  # unconnected and silent this long: absent for names / broadcasts
 REPLAY_TTL = 3600  # how long a lost reply can still be retried by id
-SUBAGENT_META_WAIT = 1.0  # Claude Code writes the agent meta file just after the hook
 NOTIFY_KINDS = frozenset(
     {
         "message",
@@ -236,6 +235,16 @@ def session_id_for(client: str, native_id: str) -> str:
     return f"{CLIENT_PREFIX.get(client, client)}-{native_id}"
 
 
+def meta_spawn_parent(meta: Path) -> str | None:
+    """The spawning agent id from a Claude Code agent meta file, if it is there yet."""
+    try:
+        record = json.loads(meta.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    parent = record.get("parentAgentId") if isinstance(record, dict) else None
+    return str(parent) if parent else None
+
+
 class ClientAdapter:
     """What differs per agent CLI; everything else is shared. Base = plain CLI / unknown."""
 
@@ -308,28 +317,22 @@ class ClaudeCodeAdapter(ClientAdapter):
 
     def hook_spawn_parent(self, payload: Json) -> str | None:
         """The spawning agent, from Claude Code's undocumented meta file beside the agent
-        transcript (anthropics/claude-code#90256); without it the caller keeps the root."""
+        transcript (anthropics/claude-code#90256); written after SubagentStart returns."""
         agent = payload.get("agent_id")
+        agent_transcript = payload.get("agent_transcript_path")
         transcript = payload.get("transcript_path")
-        if not agent or not transcript:
+        if agent_transcript:
+            # Exactly where the file is written, per-agent subdirectory included.
+            meta = Path(str(agent_transcript)).with_suffix(".meta.json")
+        elif agent and transcript:
+            meta = (
+                Path(str(transcript)).with_suffix("")
+                / "subagents"
+                / f"agent-{agent}.meta.json"
+            )
+        else:
             return None
-        meta = (
-            Path(str(transcript)).with_suffix("")
-            / "subagents"
-            / f"agent-{agent}.meta.json"
-        )
-        deadline = time.monotonic() + SUBAGENT_META_WAIT
-        while True:
-            try:
-                record = json.loads(meta.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                record = None
-            if isinstance(record, dict):
-                parent = record.get("parentAgentId")
-                return str(parent) if parent else None
-            if time.monotonic() >= deadline:
-                return None
-            time.sleep(0.05)
+        return meta_spawn_parent(meta)
 
     def hook_role(self, event: str) -> str:
         return {
@@ -1309,6 +1312,34 @@ class Ledger:
         self.bind(conn, sid)
         return {"session": self.public(session)}
 
+    def reparent(self, conn: str, p: Json) -> Json:
+        """Move a subagent under the spawner its client only names after the join.
+
+        The new parent must be a live descendant of the recorded one, so this corrects
+        a chain nobody could know at join time without letting anything else re-own it.
+        """
+        session = self.actor(conn, p)
+        parent_sid = required(p, "parent_sid", "parent_sid")
+        if parent_sid == session["parent_sid"]:
+            return {"session": self.public(session)}
+        parent = self.sessions.get(parent_sid)
+        if parent is None or parent["left_at"] is not None:
+            raise CoordError(f"no live session {parent_sid} to re-parent under", -32001)
+        if parent["client"] != session["client"]:
+            raise CoordError(
+                f"subagent {session['sid']} and parent {parent_sid} use different clients",
+                -32001,
+            )
+        line = {parent_sid, *(a["sid"] for a in self.ancestors(parent))}
+        if session["parent_sid"] not in line or session["sid"] in line:
+            raise CoordError(
+                f"{parent_sid} is not a live descendant of {session['parent_sid']}",
+                -32001,
+            )
+        session.update(parent_sid=parent_sid, updated_at=self.now())
+        self.touch("sessions", session)
+        return {"session": self.public(session)}
+
     def snapshot(self, session: Json) -> Json:
         """Current state a joiner needs regardless of age: peers, held grants, open requests, unread."""
         peers = [
@@ -2026,7 +2057,7 @@ class Ledger:
 
 METHODS = frozenset(
     (
-        "join attach update activity leave whoami sessions send catchup ack peek nudge stop_nudge history request"
+        "join attach reparent update activity leave whoami sessions send catchup ack peek nudge stop_nudge history request"
         " resolve cancel requests acquire release force_release resource_transfer resource_accept"
         " declare resources status"
     ).split()
@@ -2424,21 +2455,19 @@ class Client:
         self.sock.close()
 
 
-def live_session(client: Client, sid: str) -> bool:
-    return any(
-        s["sid"] == sid and s["left_at"] is None
-        for s in client.call("sessions")["sessions"]
-    )
-
-
 def ensure_session(
     client: Client,
     identity: Identity,
     name: str | None = None,
     model: str | None = None,
     parent_sid: str | None = None,
+    claim_parent: bool = True,
 ) -> Json:
-    """Attach to the session this process belongs to, joining if the ledger does not know it yet."""
+    """Attach to the session this process belongs to, joining if the ledger does not know it yet.
+
+    claim_parent=False offers parent_sid for a first join only: a hook that finds the
+    session already there must not re-assert a parent it cannot know.
+    """
     if not identity.native_id:
         return client.call(
             "join", client=identity.client, cwd=identity.cwd, name=name, model=model
@@ -2449,9 +2478,11 @@ def ensure_session(
     except CoordError as error:
         if error.code != -32001:
             raise
+        if not claim_parent and not str(error).startswith("unknown session"):
+            parent_sid = None  # a session that only left keeps the parent it has
     else:
         recorded_parent = attached["session"].get("parent_sid")
-        if parent_sid is None or recorded_parent == parent_sid:
+        if not claim_parent or parent_sid is None or recorded_parent == parent_sid:
             return attached
         if recorded_parent is not None:
             raise CoordError(
@@ -2814,6 +2845,30 @@ def hook_main(client_name: str, event: str, stdin: TextIO, stdout: TextIO) -> in
     return 0
 
 
+def adopt_spawner(
+    client: Client,
+    adapter: ClientAdapter,
+    identity: Identity,
+    session: Json,
+    root_sid: str | None,
+    payload: Json,
+) -> None:
+    """Move a subagent under the agent that spawned it: its client records that only
+    after SubagentStart returns, so the session first joins under the root."""
+    if not root_sid or session.get("parent_sid") != root_sid:
+        return
+    spawner = adapter.hook_spawn_parent(payload)
+    if not spawner:
+        return
+    parent_sid = session_id_for(identity.client, spawner)
+    if parent_sid == root_sid:
+        return
+    try:
+        client.call("reparent", sid=session["sid"], parent_sid=parent_sid)
+    except CoordError:
+        pass  # an unknown or departed spawner leaves the root in place
+
+
 def hook_dispatch(
     client: Client,
     adapter: ClientAdapter,
@@ -2834,14 +2889,6 @@ def hook_dispatch(
             if error.code == -32001 and str(error).startswith("unknown session"):
                 return adapter.hook_silence(event)
     parent_native = adapter.hook_parent_native(payload)
-    if parent_native and event == "SubagentStart":
-        spawner = adapter.hook_spawn_parent(payload)
-        if (
-            spawner
-            and spawner != parent_native
-            and live_session(client, session_id_for(identity.client, spawner))
-        ):
-            parent_native = spawner
     parent_sid = None
     if parent_native:
         parent_identity = Identity(identity.client, parent_native, identity.cwd)
@@ -2886,7 +2933,10 @@ def hook_dispatch(
             if nudge.get("text")
             else adapter.hook_silence(event)
         )
-    ensure_session(client, identity, parent_sid=parent_sid)
+    current = ensure_session(
+        client, identity, parent_sid=parent_sid, claim_parent=False
+    )
+    adopt_spawner(client, adapter, identity, current["session"], parent_sid, payload)
     if event == "Stop":
         stopped = client.call(
             "stop_nudge",
