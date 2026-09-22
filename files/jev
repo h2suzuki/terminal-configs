@@ -259,11 +259,7 @@ async def test_api(success_message="Hello! Jev is ready."):
 
 async def api_key_status():
     load_key()
-    print(
-        "API key is saved. Checking usability with one small, billed test query...",
-        flush=True,
-    )
-    await test_api("API key: valid. Jev is ready.")
+    await test_api("API key is valid.")
 
 
 def create_server():

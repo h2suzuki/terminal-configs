@@ -349,18 +349,17 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                 with contextlib.redirect_stdout(io.StringIO()) as output:
                     if status == 200:
                         await jev.api_key_status()
-                        self.assertIn("API key: valid.", output.getvalue())
+                        self.assertEqual(output.getvalue(), "API key is valid.\n")
                     else:
                         with self.assertRaisesRegex(
                             jev.JevError, f"HTTP {status}"
                         ) as error:
                             await jev.api_key_status()
                         self.assertNotIn(KEY, str(error.exception))
-                        self.assertNotIn("API key: valid.", output.getvalue())
+                        self.assertEqual(output.getvalue(), "")
                         if status == 401:
                             self.assertIn("invalid", str(error.exception))
                             self.assertNotIn("expired", str(error.exception))
-                self.assertIn("API key is saved", output.getvalue())
                 self.assertNotIn(KEY, output.getvalue())
                 self.assertTrue(self.clients[-1].is_closed)
         self.assertEqual(len(self.requests), 5)
@@ -376,7 +375,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             self.assertRaisesRegex(jev.JevError, "connectivity") as error,
         ):
             await jev.api_key_status()
-        self.assertIn("API key is saved", output.getvalue())
+        self.assertEqual(output.getvalue(), "")
         self.assertNotIn(KEY, str(error.exception))
         self.assertNotIn("invalid", str(error.exception).lower())
         self.assertTrue(self.clients[-1].is_closed)
