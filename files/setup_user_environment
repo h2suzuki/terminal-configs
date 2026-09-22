@@ -118,6 +118,10 @@ run nodejs_clean_installer
 # Codex CLI (https://github.com/openai/codex, needs Node.js 18+)
 run npm install -g @openai/codex
 
+# Persist remote control per user (including root's separate setup).
+# A stopped daemon stays stopped; start it after login with codex remote-control start.
+run codex app-server daemon enable-remote-control
+
 
 # Claude Code
 npm uninstall -g @anthropic-ai/claude-code || true  # Old one
