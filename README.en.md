@@ -100,7 +100,7 @@ Use the code displayed by `pair` to pair your client. See [Remote connections](h
 
 ### Antigravity
 
-Antigravity signs you in at startup:
+A login prompt appears on first launch:
 
 ```bash
 agy

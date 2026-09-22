@@ -100,7 +100,7 @@ codex remote-control pair
 
 ### Antigravity
 
-Antigravity は起動時にログインを行います。
+初回起動時にログインプロンプトが表示されます。
 
 ```bash
 agy
