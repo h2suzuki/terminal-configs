@@ -87,7 +87,12 @@ Claude Code は `sandbox.excludedCommands` に `jev *`、Codex は sandbox 除�
 
 Codex のパス単位の読み取り拒否は permission profile の filesystem `deny` で設定できますが、
 従来の `sandbox_mode` / `sandbox_workspace_write` とは併用できません。
-このリポジトリでは従来方式を維持します。
+Codex 0.155.1 では deny-read があると、`allow` ルールに一致しても sandbox の解除を
+禁止します（[該当版の実装](https://github.com/openai/codex/blob/rust-v0.155.1/codex-rs/core/src/tools/sandboxing.rs#L243-L278)、
+[対応テスト](https://github.com/openai/codex/blob/rust-v0.155.1/codex-rs/core/src/tools/sandboxing_tests.rs) の
+`deny_read_blocks_explicit_escalation_and_policy_bypass`）。したがって、この版の設定だけでは
+credential の読み書き拒否と Jev / Git の sandbox 除外を同時に満たせません。
+このリポジトリでは従来方式を維持しており、Codex の credential ファイル保護は未達です。
 
 ここでの deny は通常の sandbox 実行に対する制限です。ホスト実行を許可した他のコマンドや
 同じ OS ユーザーのプロセス全体を隔離するものではありません。
