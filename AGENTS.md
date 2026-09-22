@@ -1,7 +1,6 @@
 # Project guidance for coding agents
 
-For `agent_coord` incidents reported from another environment that the user
-has said is inaccessible, finish the source fix and local verification here.
-Do not make access to that environment, testing there, or deployment there a
-completion condition. The user deploys; give commands from the repository's
-canonical redeployment instructions.
+Each commit must contain one logical change. Split unrelated changes into
+separate commits, including separate hunks within the same file when needed.
+Review the staged diff before committing to confirm that it contains only the
+intended logical change.
