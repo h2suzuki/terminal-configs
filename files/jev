@@ -246,21 +246,33 @@ class JevSession:
             ) from None
 
 
-async def test_api(success_message="Hello! Jev is ready.", *, key=None):
+async def test_api(
+    success_message="Hello! Jev is ready.", *, key=None, show_exchange=False
+):
+    request = {
+        "model": "jev-latest",
+        "state": "This is a connectivity test.",
+        "questions": {
+            "test": {"type": "noul", "instructions": "Is this a connectivity test?"}
+        },
+    }
     session = JevSession(key=key)
     try:
-        result = await session.evaluate(
-            state="This is a connectivity test.",
-            questions={
-                "test": {"type": "noul", "instructions": "Is this a connectivity test?"}
-            },
-        )
+        if show_exchange:
+            print("Query:")
+            print(json.dumps(request, indent=2, ensure_ascii=False), flush=True)
+        result = await session.evaluate(**request)
+        if show_exchange:
+            print("\nResponse:")
+            print(json.dumps(result, indent=2, ensure_ascii=False))
         answer = result.get("answers", {}).get("test", {})
         if answer.get("type") != "noul" or not isinstance(
             answer.get("noul"), (int, float)
         ):
             raise JevError("API responded, but the test answer was missing or invalid.")
         if success_message is not None:
+            if show_exchange:
+                print()
             print(success_message)
     finally:
         await session.close()
@@ -343,7 +355,7 @@ def main():
         if args.command == "serve":
             create_server().run()
         elif args.command == "hello":
-            asyncio.run(test_api())
+            asyncio.run(test_api(show_exchange=True))
         elif args.key_command == "status":
             asyncio.run(api_key_status())
         else:

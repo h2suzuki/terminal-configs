@@ -441,8 +441,18 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cli_test_checks_answer_and_closes_client(self):
         with contextlib.redirect_stdout(io.StringIO()) as output:
-            await jev.test_api()
-        self.assertEqual(output.getvalue(), "Hello! Jev is ready.\n")
+            await jev.test_api(show_exchange=True)
+        query, response = output.getvalue().split("\nResponse:\n")
+        self.assertTrue(query.startswith("Query:\n"))
+        self.assertEqual(
+            json.loads(query.removeprefix("Query:\n")),
+            json.loads(self.requests[0].content),
+        )
+        self.assertTrue(response.endswith("\n\nHello! Jev is ready.\n"))
+        self.assertEqual(
+            json.loads(response.removesuffix("\n\nHello! Jev is ready.\n"))["answers"],
+            self.body["answers"],
+        )
         self.assertNotIn(KEY, output.getvalue())
         self.assertTrue(self.clients[0].is_closed)
         self.body = response_body() | {"answers": {}}

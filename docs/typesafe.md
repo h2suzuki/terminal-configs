@@ -25,7 +25,7 @@ jev api-key clear # 保存済みキーを削除するとき
 TypeSafe の公開 API は API キーによる Bearer 認証です。
 
 `jev hello` と登録済みキーに対する `jev api-key status` は公式 Python SDK で小さな Jev クエリーを送信するため、API 利用が発生します。
-成功時は確認メッセージを表示し、失敗時は診断メッセージと終了コード `1` を返します。
+`jev hello` は送信クエリーとレスポンスを JSON で表示し、成功時は最後に `Hello! Jev is ready.` と表示します。失敗時は診断メッセージと終了コード `1` を返します。
 
 | 診断 | 対処 |
 | --- | --- |
