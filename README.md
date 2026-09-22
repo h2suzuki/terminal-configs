@@ -11,7 +11,7 @@ Debian 12 と Ubuntu 24.04 on WSL2 向けに、ターミナルと AI コーデ�
 | ターミナル | Bash、Git、Neovim、GitHub CLI、ripgrep、delta、SIXEL 画像表示、Python ツール（uv・ruff・ty）、Node.js LTS（nvm）、Chrome、Google Cloud CLI、Vercel CLI |
 | AI ツール | Claude Code、Codex CLI、Antigravity CLI、Typesafe.ai Jev （独自のラッパー CLI・MCP 含む） |
 | LSP | clangd（C/C++）、TypeScript Language Server、Pyright（Python） |
-| MCP | Chrome DevTools、CodeGraph、Cloud Run、BigQuery（Toolbox）、タスク管理、Jev |
+| MCP | Chrome DevTools、CodeGraph、Cloud Run、BigQuery（Toolbox）、my-task、Jev |
 | Skill | agent-browser・Playwright CLI の操作スキル、ブラウザー検証、作業ファイル管理など |
 | Plugin | Jev の公式プラグイン、Claude Code 用 Codex プラグイン、agent-coord（セッション間連携） |
 | 画面・音声転送 | SSH クライアントへの X11 画面転送・PulseAudio 音声転送を、ログインユーザーと root で共用 |
