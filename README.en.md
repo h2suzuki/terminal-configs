@@ -9,11 +9,11 @@ Configuration files and setup scripts for terminal and AI coding environments on
 | Area | Main components |
 |---|---|
 | Terminal | Bash, Git, Neovim, GitHub CLI, ripgrep, delta, libsixel-bin, uv, ruff, ty, Node.js LTS through nvm, Chrome, Google Cloud CLI |
-| AI tools | Claude Code, Codex CLI, Antigravity CLI, Typesafe.ai Jev |
+| AI tools | Claude Code CLI, Codex CLI, Antigravity CLI, Typesafe.ai Jev |
 | <div align="right">LSP</div> | clangd (C/C++), TypeScript Language Server, Pyright (Python) |
 | <div align="right">MCP</div> | Chrome DevTools, CodeGraph, Cloud Run, BigQuery (Toolbox), mytask\*, Jev\* |
 | <div align="right">Skill</div> | agent-browser, playwright-cli, browser-verification\*, workspace-hygiene\*, and more |
-| <div align="right">Plugin</div> | Official Jev plugin, Codex plugin for Claude Code, agent-coord\* for session coordination |
+| <div align="right">Plugin</div> | Jev, Codex (for Claude Code), agent-coord\*, clangd-lsp, typescript-lsp, pyright-lsp, security-guidance (disabled by default) |
 | <div align="right">CLI</div> | agent-browser, playwright-cli, Vercel CLI, agent_coord\*, workspace_hygiene\*, claude_memory_sync\*, jev\* |
 | Display and audio forwarding | X11 display and PulseAudio audio forwarding to the SSH client, shared by the login user and root |
 | OS integration | SSH keepalive, Windows Terminal detection; systemd, mDNS, hostname configuration and PulseAudio audio forwarding to WSLg on WSL2 |
