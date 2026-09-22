@@ -1,0 +1,346 @@
+#!/usr/local/lib/jev/bin/python -I
+"""Manage Jev credentials, test the API, or serve Jev over stdio MCP."""
+
+import argparse
+import asyncio
+import getpass
+import json
+import logging
+import os
+import pwd
+import ssl
+import stat
+import sys
+import tempfile
+import warnings
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
+
+ENDPOINT = "https://api.typesafe.ai/v1/systemone"
+MAX_BYTES = 8 * 1024 * 1024
+
+
+class JevError(Exception):
+    pass
+
+
+def credential_dir():
+    # Resolve the OS user, not caller-controlled HOME / XDG_CONFIG_HOME.
+    return Path(pwd.getpwuid(os.getuid()).pw_dir) / ".config/typesafe"
+
+
+def check_private(path, directory=False):
+    info = path.lstat()
+    correct_type = (
+        stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
+    )
+    if not correct_type or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise JevError(
+            "Credential storage must be owned by this user, private, and not a symlink."
+        )
+
+
+def validate_key(key):
+    if (
+        not isinstance(key, str)
+        or not key
+        or len(key) > 4096
+        or any(ord(c) < 33 or ord(c) > 126 for c in key)
+    ):
+        raise JevError("Invalid API key format.")
+    return key
+
+
+def api_key():
+    if not sys.stdin.isatty():
+        raise JevError("Run jev api-key set in your own interactive terminal.")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", getpass.GetPassWarning)
+            key = validate_key(getpass.getpass("TypeSafe API key: ").strip())
+    except getpass.GetPassWarning:
+        raise JevError(
+            "Hidden input is unavailable. Use your own interactive terminal."
+        ) from None
+    directory = credential_dir()
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    check_private(directory, directory=True)
+    target = directory / "credentials.json"
+    if target.exists() or target.is_symlink():
+        check_private(target)
+    # Atomic replacement keeps an existing key intact if writing fails.
+    fd, temporary = tempfile.mkstemp(prefix=".credentials-", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump({"api_key": key}, handle)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    print("API key saved to ~/.config/typesafe/credentials.json (0600).")
+    print("Stored locally; this command does not contact the API.")
+
+
+def load_key():
+    directory = credential_dir()
+    try:
+        check_private(directory, directory=True)
+        path = directory / "credentials.json"
+        check_private(path)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            info = os.fstat(handle.fileno())
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_mode & 0o077
+            ):
+                raise JevError(
+                    "Credential file must be private and owned by this user."
+                )
+            data = json.loads(handle.read(8192))
+        if not isinstance(data, dict):
+            raise JevError("Invalid credential file. Run jev api-key set again.")
+        return validate_key(data.get("api_key"))
+    except FileNotFoundError:
+        raise JevError(
+            "No API key saved. Run jev api-key set in your terminal."
+        ) from None
+    except (ValueError, UnicodeError):
+        raise JevError("Invalid credential file. Run jev api-key set again.") from None
+
+
+def remove_key():
+    directory = credential_dir()
+    if directory.exists():
+        check_private(directory, directory=True)
+        path = directory / "credentials.json"
+        if path.exists() or path.is_symlink():
+            check_private(path)
+            path.unlink()
+    print("Saved key removed. Restart connected agents to discard cached keys.")
+
+
+def create_client(key):
+    import httpx2
+    from typesafe_sdk import AsyncTypeSafeClient, RetryPolicy
+
+    # Neither environment variables nor MCP arguments can redirect the key.
+    context = ssl.create_default_context(cafile="/etc/ssl/certs/ca-certificates.crt")
+    http = httpx2.AsyncClient(
+        trust_env=False,
+        follow_redirects=False,
+        verify=context,
+        timeout=30,
+    )
+    return AsyncTypeSafeClient(
+        api_key=key,
+        base_url="https://api.typesafe.ai",
+        model="jev-latest",
+        http_client=http,
+        retry=RetryPolicy(max_retries=0),
+    )
+
+
+def api_error_message(status_code):
+    if status_code == 401:
+        return "HTTP 401: API key rejected (invalid, revoked, or expired). Run jev api-key set with a current key."
+    if status_code == 403:
+        return "HTTP 403: Access denied. Check the key's permissions and account access; update it with jev api-key set if needed."
+    if status_code == 429:
+        return "HTTP 429: Rate limit or quota reached. Check account usage and retry later."
+    if 300 <= status_code < 400:
+        return f"HTTP {status_code}: API redirect refused."
+    if status_code >= 500:
+        return f"HTTP {status_code}: TypeSafe service error. Retry later."
+    return f"HTTP {status_code}: TypeSafe rejected the request. Check the request and account settings."
+
+
+class JevSession:
+    """One SDK client and connection pool per MCP connection."""
+
+    def __init__(self):
+        self.client = None
+        self.key = None
+
+    async def close(self):
+        if self.client is not None:
+            await self.client.aclose()
+        self.client = None
+        self.key = None
+
+    async def evaluate(self, state, questions, model="jev-latest"):
+        # SDK diagnostics can contain response bodies. Only our safe messages
+        # cross the MCP boundary, including when TYPESAFE_LOG_LEVEL=debug.
+        logging.getLogger("typesafe_sdk").disabled = True
+        from typesafe_sdk import (
+            TypeSafeAPIConnectionError,
+            TypeSafeAPIError,
+            TypeSafeAPIResponseValidationError,
+            TypeSafeError,
+        )
+
+        if (
+            not isinstance(state, (str, dict, list))
+            or not isinstance(questions, dict)
+            or not questions
+        ):
+            raise JevError("Supply state and a non-empty questions object.")
+        if not isinstance(model, str) or not model:
+            raise JevError("model must be a non-empty string.")
+        try:
+            request = json.dumps(
+                {"state": state, "questions": questions, "model": model},
+                allow_nan=False,
+            )
+        except (TypeError, ValueError):
+            raise JevError("Request must contain valid JSON values.") from None
+        if len(request.encode()) > MAX_BYTES:
+            raise JevError("Request exceeds 8 MiB.")
+        try:
+            if self.client is None:
+                # No await between loading and assigning: concurrent calls share
+                # one client. Missing credentials do not prevent MCP startup.
+                key = load_key()
+                self.client = create_client(key)
+                self.key = key
+            result = await self.client.system_one(
+                state=state, questions=questions, model=model
+            )
+            output = result.model_dump_json()
+            if len(output.encode()) > MAX_BYTES:
+                raise JevError("API response exceeds 8 MiB.")
+            return json.loads(output.replace(json.dumps(self.key)[1:-1], "[REDACTED]"))
+        except TypeSafeAPIConnectionError:
+            raise JevError(
+                "Unable to reach TypeSafe (network, TLS, or timeout). Check connectivity and retry."
+            ) from None
+        except TypeSafeAPIResponseValidationError:
+            raise JevError(
+                "TypeSafe returned an unexpected response. Check for a Jev integration update."
+            ) from None
+        except TypeSafeAPIError as error:
+            raise JevError(api_error_message(error.status)) from None
+        except TypeSafeError:
+            raise JevError(
+                "Invalid TypeSafe request. Check the question definitions."
+            ) from None
+        except JevError:
+            raise
+        except Exception:  # noqa: BLE001 - credential boundary; never expose raw exceptions
+            # Never expose SDK exceptions, response bodies, or credential values.
+            raise JevError(
+                "Jev operation failed. Check local credentials, installation, and connectivity."
+            ) from None
+
+
+async def test_api():
+    session = JevSession()
+    try:
+        result = await session.evaluate(
+            state="This is a connectivity test.",
+            questions={
+                "test": {"type": "noul", "instructions": "Is this a connectivity test?"}
+            },
+        )
+        answer = result.get("answers", {}).get("test", {})
+        if answer.get("type") != "noul" or not isinstance(
+            answer.get("noul"), (int, float)
+        ):
+            raise JevError("API responded, but the test answer was missing or invalid.")
+        print("OK: API key accepted; Jev returned a valid answer.")
+    finally:
+        await session.close()
+
+
+def create_server():
+    from mcp.server import MCPServer
+    from mcp.server.mcpserver.exceptions import ToolError
+    from mcp.types import ToolAnnotations
+
+    session = JevSession()
+
+    @asynccontextmanager
+    async def lifespan(server):
+        try:
+            yield
+        finally:
+            await session.close()
+
+    server = MCPServer(
+        "jev",
+        lifespan=lifespan,
+        instructions="Use the TypeSafe skill for question design and the evaluate tool for Jev API calls. Credentials are managed by this server; never read credential files or pass API keys in tool arguments.",
+    )
+
+    @server.tool(
+        structured_output=True,
+        annotations=ToolAnnotations(
+            readOnlyHint=True, destructiveHint=False, openWorldHint=True
+        ),
+    )
+    async def evaluate(
+        state: str | dict | list, questions: dict, model: str = "jev-latest"
+    ) -> dict[str, Any]:
+        """Ask Jev typed questions via the official Python SDK (a billed API call).
+
+        state is text, a JSON object, or an array. questions maps names to
+        TypeSafe question objects. Example: {"urgent": {"type": "noul",
+        "instructions": "Is this urgent?"}}. Choice and score questions are
+        also supported; consult the TypeSafe skill. Batch independent questions
+        in one call. Returns typed answers, model, and usage. No key is needed
+        in arguments; run `jev api-key set` and `jev hello` in your terminal to set up.
+        """
+        try:
+            return await session.evaluate(state, questions, model)
+        except JevError as error:
+            raise ToolError(str(error)) from None
+
+    return server
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    key_parser = commands.add_parser("api-key", help="Manage the locally saved API key")
+    key_commands = key_parser.add_subparsers(dest="key_command")
+    key_commands.add_parser(
+        "set", help="Save or replace a key from a hidden terminal prompt"
+    )
+    key_commands.add_parser("clear", help="Delete the saved API key")
+    commands.add_parser(
+        "hello",
+        help="Send one small, billed test query and diagnose authentication/connectivity",
+    )
+    commands.add_parser("serve", help="Run the persistent stdio MCP server")
+    args = parser.parse_args()
+    if args.command == "api-key" and args.key_command is None:
+        key_parser.print_help()
+        return 0
+    try:
+        if args.command == "serve":
+            create_server().run()
+        elif args.command == "hello":
+            asyncio.run(test_api())
+        else:
+            remove_key() if args.key_command == "clear" else api_key()
+    except (JevError, OSError, ValueError) as error:
+        print(
+            str(error)
+            if isinstance(error, JevError)
+            else "Local credential or request operation failed.",
+            file=sys.stderr,
+        )
+        return 1
+    except (KeyboardInterrupt, EOFError):
+        print("Cancelled.", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

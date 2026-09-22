@@ -1,0 +1,3 @@
+# Official TypeSafe and MCP Python SDKs; runtime shared under /usr/local/lib/jev.
+typesafe-sdk==0.7.1
+mcp==2.2.0
