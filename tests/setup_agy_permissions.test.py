@@ -213,6 +213,33 @@ class AgyPermissionsTest(unittest.TestCase):
         self.assertNotIn("command(*)", policy["allow"])
         self.assertNotIn("mcp(*)", policy["allow"])
 
+    def test_agy_cli_has_same_host_execution_scope_as_codex(self):
+        claude = json.loads((ROOT / "files/claude_managed-settings.json").read_text())
+        sandbox = claude["sandbox"]
+        self.assertIn("agy *", sandbox["excludedCommands"])
+        self.assertTrue(sandbox["enabled"])
+        self.assertFalse(sandbox["allowUnsandboxedCommands"])
+        self.assertNotIn("*", sandbox["excludedCommands"])
+        tree = ast.parse((ROOT / "files/codex_sandbox_exclusions.rules").read_text())
+        rules = [
+            {key.arg: ast.literal_eval(key.value) for key in node.value.keywords}
+            for node in tree.body
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+        ]
+        selected = [rule for rule in rules if rule["pattern"] == ["agy"]]
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0]["decision"], "allow")
+        self.run_helper(
+            0,
+            "--sandbox-auto",
+            "--shared-policy",
+            str(ROOT / "files/antigravity_user-permissions.json"),
+        )
+        settings = json.loads(self.path.read_text())
+        self.assertIn("command(agy)", settings["permissions"]["allow"])
+        self.assertTrue(settings["enableTerminalSandbox"])
+        self.assertEqual(settings["toolPermission"], "proceed-in-sandbox")
+
     def test_shared_policy_expands_home_preserves_overrides_and_is_idempotent(self):
         policy = ROOT / "files/antigravity_user-permissions.json"
         self.write(

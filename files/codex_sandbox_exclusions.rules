@@ -64,6 +64,14 @@ prefix_rule(
 )
 
 prefix_rule(
+    pattern = ["agy"],
+    decision = "allow",
+    justification = "Let the child Antigravity CLI manage its own sandbox and user state, matching Codex.",
+    match = ["agy --help", "agy agentapi --help", "agy -p example"],
+    not_match = ["agy-other -p example", "python3 script.py"],
+)
+
+prefix_rule(
     pattern = ["codex_broker_reap"],
     decision = "allow",
     justification = "Inspect host broker processes accurately and clean up their state.",

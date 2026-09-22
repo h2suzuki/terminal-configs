@@ -6,6 +6,7 @@
     "command(claude_memory_sync)",
     "command(docker)",
     "command(codex)",
+    "command(agy)",
     "command(codex_broker_reap)",
     "command(agent-browser)",
     "command(claude --bg)",
