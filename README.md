@@ -8,7 +8,8 @@ Debian 12 と Ubuntu 24.04 on WSL2 向けに、ターミナルと AI コーデ�
 
 | 分野 | 主な内容 |
 |---|---|
-| ターミナル | Bash、Git、Neovim、GitHub CLI、ripgrep、delta、libsixel-bin、uv・ruff・ty、Node.js LTS（nvm）、Chrome |
+| OS設定 | Bash、Git、Neovim、SSH keepalive、Windows Terminal の認識、WSL2 の systemd・mDNS・ホスト名・WSLg 向け PulseAudio 音声転送 |
+| ターミナル | GitHub CLI、ripgrep、delta、libsixel-bin、uv・ruff・ty、Node.js LTS（nvm）、Chrome |
 | AI ツール | Claude Code CLI、Codex CLI、Antigravity CLI、Typesafe.ai Jev |
 | <div align="right">LSP</div> | clangd（C/C++）、TypeScript Language Server、Pyright |
 | <div align="right">MCP</div> | Chrome DevTools、CodeGraph、Cloud Run、BigQuery（Toolbox）、mytask\*、Jev\* |
@@ -16,7 +17,6 @@ Debian 12 と Ubuntu 24.04 on WSL2 向けに、ターミナルと AI コーデ�
 | <div align="right">Plugin</div> | Jev、Codex（Claude Code 用）、clangd-lsp、typescript-lsp、pyright-lsp、security-guidance、agent-coord\* |
 | <div align="right">CLI</div> | agent-browser、playwright-cli、Google Cloud CLI、Vercel CLI、agent_coord\*、workspace_hygiene\*、claude_memory_sync\*、jev\* |
 | 画面・音声転送 | SSH クライアントへの X11 画面転送・PulseAudio 音声転送を、ログインユーザーと root で共用 |
-| OS 連携 | SSH keepalive、Windows Terminal の認識。WSL2 では systemd・mDNS・ホスト名、WSLg への PulseAudio 音声転送も設定 |
 
 \* … 本レポジトリ独自のスクリプト
 
