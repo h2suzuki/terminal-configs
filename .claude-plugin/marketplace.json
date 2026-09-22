@@ -6,7 +6,7 @@
     {
       "name": "agent-coord",
       "description": "Session ledger for agents on this host: scoped messaging and resource grants.",
-      "version": "0.2.11",
+      "version": "0.2.13",
       "source": "./files/shared_plugins/agent-coord"
     }
   ]
