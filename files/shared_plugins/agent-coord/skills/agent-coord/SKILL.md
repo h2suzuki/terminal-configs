@@ -48,9 +48,10 @@ not a confirmed upcoming fix; recheck it when upgrading Codex.
 Do not equate `resume` or an input-ready terminal with successful agent-coord
 participation. Conversely, a missing peer or `left_at` in the ledger does not
 prove its native process has exited. Check native-session liveness separately
-from ledger participation. Hooks alone do not guarantee registration before
-the first input; documenting this limitation does not complete the automatic
-participation fix or justify asking the user to relay messages manually.
+from ledger participation. Registration before the first input is not guaranteed.
+This startup/resume timing is an accepted, documented caveat, not an outstanding
+automatic-registration fix. Do not reopen it without a new request or evidence
+that behavior changed; acceptance does not authorize asking for manual message relay.
 
 ## Rules
 
@@ -93,9 +94,9 @@ participation fix or justify asking the user to relay messages manually.
   `agent_coord` CLI call reports it's unreachable, the message tells you to
   run `agent_coord serve --daemon`.
 
-When changing agent-coord notification hooks or diagnosing a wake/block
-failure, read the [hook policy](references/hook-policy.md). It records the
-registered events, host contracts, and the single-continuation rule.
+When changing notification hooks or diagnosing wake/block failures, read the
+[hook and wake policy](references/hook-policy.md). It is the canonical reference
+for wake methods, their verification limits, and the single-continuation rule.
 
 ## Tools ↔ CLI
 

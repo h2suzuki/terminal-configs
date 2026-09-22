@@ -1,20 +1,23 @@
-# agent-coord hook policy
+# agent-coord hook and wake policy
 
 Agent-coord uses hooks to surface unread messages while a session is active
 and to give a session one chance to handle unread messages before it stops.
 The inbox remains the source of truth when a reminder is missed or ignored.
+This is the canonical reference for wake methods; distinguish the deployed
+adapter from a client's other available features and from unverified candidates.
 
 ## Contents
 
 1. [Scope and invariants](#scope-and-invariants)
-2. [Notification lifecycle](#notification-lifecycle)
-3. [Stop continuation rule](#stop-continuation-rule)
-4. [Hook contracts](#hook-contracts)
+2. [Wake methods](#wake-methods)
+3. [Notification lifecycle](#notification-lifecycle)
+4. [Stop continuation rule](#stop-continuation-rule)
+5. [Hook contracts](#hook-contracts)
    - [Codex](#codex)
    - [Claude Code](#claude-code)
    - [Antigravity](#antigravity)
-5. [No-op and failure outcomes](#no-op-and-failure-outcomes)
-6. [Official sources](#official-sources)
+6. [No-op and failure outcomes](#no-op-and-failure-outcomes)
+7. [Sources](#sources)
 
 ## Scope and invariants
 
@@ -30,6 +33,83 @@ The inbox remains the source of truth when a reminder is missed or ignored.
 - A `Stop` continuation asks the agent to `catchup`, handle relevant events,
   and `ack`. It is never a substitute for an inbox delivery and never grants
   authority beyond the user's instructions.
+
+## Wake methods
+
+Checked **2026-09-22** against the adapter code, installed CLI help, and the
+sources below: Codex **0.155.1**, Claude Code **2.1.278**, Antigravity **1.2.8**.
+This inspection is not proof of a successful wake in every target session.
+
+| Recipient | Current agent-coord route | Status / boundary |
+|---|---|---|
+| Codex | `codex queue --thread <native-id> --message <reminder>` | External CLI queue; the daemon reserves one slot per unread range. An active turn uses hooks instead. |
+| Claude Code | Session inbox socket, with an auth line when a key is available | Not MCP Channels. The recipient's inbound controls still apply.[5] |
+| Antigravity | `PreInvocation` injects unread context; `Stop` can continue once | Pull only: no working external idle-wake route has been established here. |
+
+The route depends on the **recipient**, not the sender. A Codex MCP `send`
+addressed to Claude Code reaches the agent-coord daemon, which uses Claude's
+inbox socket. MCP tool success records a ledger event; it does not prove that
+the recipient accepted input, started a turn, or replied. Verify these separately.
+
+### Codex queue
+
+`codex queue --help` describes queuing a message for an existing session. The
+adapter calls it with the native thread ID and a signed unread reminder, not
+the full event body. The recipient retrieves the event with `catchup`.
+
+The [accepted startup/resume caveat](../SKILL.md#codex-startup--resume-caveat)
+already records first-prompt hook timing, the tested version, and upstream
+issue URLs. It is not an open automatic-registration fix.
+
+### Claude Code inbox versus Channels
+
+`ClaudeCodeAdapter.inbox()` resolves `messagingSocketPath` from the local session
+registry and reads the matching key when available. `wake()` sends newline-delimited
+JSON over a Unix socket: an optional `type: auth` line, then a `type: user` message.
+
+The official inbox documentation publishes the socket environment variable
+`CLAUDE_CODE_MESSAGING_SOCKET`, token variable `CLAUDE_CODE_MESSAGING_TOKEN`, and
+auth-line format. Auth is optional on Linux/WSL and macOS, required on native
+Windows.[5] This adapter uses Unix sockets; Windows named-pipe support is not
+implemented. Do not infer a stable public contract for every registry field or
+wire-message field from documentation of the socket and auth line alone.
+
+Channels is a separate, documented MCP extension using `claude/channel` and
+`notifications/claude/channel`, enabled explicitly in Claude Code.[6] Agent-coord
+does **not** use Channels. A connected MCP server alone does not establish a
+wake channel, and Channels support in Claude Code does not imply support in agy.
+
+### Antigravity: injection is not idle wake
+
+`agy help inject` on 1.2.8 returns `Error: unknown subcommand: inject`.
+`agy inject --help` shows only the top-level help; it does not establish an
+`inject` command. No such command was found in the checked public CLI interface.
+
+Hook `injectSteps` runs at a model invocation boundary, so it can add context
+once execution reaches that boundary; it does not itself start an idle turn.[3]
+`agy --conversation <id> -p ...` starts another CLI process to resume a conversation;
+stream-JSON stdin controls the process launched by its driver. Neither is evidence
+of delivery into an independently waiting terminal.[7]
+
+Upstream [issue #1022](https://github.com/google-antigravity/antigravity-cli/issues/1022)
+is open as of the check date: it reports that native `send_message` on 1.2.2
+does not wake an idle interactive session. It is relevant evidence, not proof
+that every wake route on 1.2.8 is impossible. Local language-server RPC attempts
+have not established a usable route (the unauthenticated probe returned HTTP 401).
+Do not call ledger delivery, hook injection, or an unverified RPC a successful wake.
+
+### Execution environment and deployment
+
+At the check date, `agy` is absent from both the source and installed Claude
+`sandbox.excludedCommands` and Codex sandbox-exclusion rules. A nested agy test
+failed to create its `bin/agentapi` under the read-only home. That is a test
+environment failure, not evidence that agy cannot wake or execute tools.
+
+An MCP call runs under its server/daemon's permissions, not automatically outside
+all sandboxes. A new host-side adapter must be authorized, deployed, and loaded
+by the running process before testing it. Do not use an existing allowed command
+or a generic MCP launcher to bypass a denied operation. Launching a new agy
+process still does not establish wake of the existing target session.
 
 ## Notification lifecycle
 
@@ -137,7 +217,7 @@ blocking decision.
 | A push wake channel is unavailable | Leave unread deliveries intact for the next hook boundary or `catchup`; a failed push must not create a blocking hook response. |
 | `SessionEnd` or `Interrupt` finds no daemon | Do not start one solely for cleanup. Do not block the host lifecycle event. |
 
-## Official sources
+## Sources
 
 1. OpenAI, *Codex Hooks*, <https://learn.chatgpt.com/docs/hooks>.
    UserPromptSubmit: “To block the prompt, return”; Stop: “automatically
@@ -152,3 +232,11 @@ blocking decision.
    the execution loop”.
 4. Google, *Antigravity Changelog*, <https://antigravity.google/changelog>.
    Stop-hook fix: “after a configurable number of consecutive continuations”.
+5. Anthropic, *The session's inbox socket*,
+   <https://code.claude.com/docs/en/cross-session-messaging#the-sessions-inbox-socket>.
+   Includes platform-specific authentication and inbound-control requirements.
+6. Anthropic, *Channels reference*,
+   <https://code.claude.com/docs/en/channels-reference>.
+   Documents the opt-in MCP extension, not agent-coord's current transport.
+7. Google, *Headless mode*, <https://antigravity.google/docs/cli/headless/>.
+   Documents conversation resumption and driver-owned stream-JSON input.
