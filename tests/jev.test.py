@@ -79,6 +79,33 @@ class JevTests(unittest.TestCase):
             list(self.directory.iterdir()), [self.directory / "credentials.json"]
         )
 
+    def test_status_unset_cleared_or_corrupt_never_calls_api(self):
+        for state in ("unset", "cleared", "corrupt"):
+            with self.subTest(state=state):
+                if state != "unset":
+                    self.save_key()
+                    if state == "cleared":
+                        with contextlib.redirect_stdout(io.StringIO()):
+                            jev.remove_key()
+                    else:
+                        (self.directory / "credentials.json").write_text("{broken")
+                with (
+                    patch.object(sys, "argv", ["jev", "api-key", "status"]),
+                    patch.object(jev, "create_client") as factory,
+                    contextlib.redirect_stdout(io.StringIO()) as output,
+                    contextlib.redirect_stderr(io.StringIO()) as error,
+                ):
+                    self.assertEqual(jev.main(), 1)
+                factory.assert_not_called()
+                self.assertEqual(output.getvalue(), "")
+                expected = (
+                    "Invalid credential file"
+                    if state == "corrupt"
+                    else "No API key saved"
+                )
+                self.assertIn(expected, error.getvalue())
+                self.assertNotIn(KEY, error.getvalue())
+
     def test_login_requires_terminal(self):
         with (
             patch.object(jev.sys.stdin, "isatty", return_value=False),
@@ -307,13 +334,52 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_cli_test_checks_answer_and_closes_client(self):
         with contextlib.redirect_stdout(io.StringIO()) as output:
             await jev.test_api()
-        self.assertIn("OK:", output.getvalue())
+        self.assertEqual(output.getvalue(), "Hello! Jev is ready.\n")
         self.assertNotIn(KEY, output.getvalue())
         self.assertTrue(self.clients[0].is_closed)
         self.body = response_body() | {"answers": {}}
         with self.assertRaisesRegex(jev.JevError, "missing or invalid"):
             await jev.test_api()
         self.assertTrue(self.clients[1].is_closed)
+
+    async def test_status_valid_and_rejected_keys(self):
+        for status in (200, 401, 403, 429, 503):
+            with self.subTest(status=status):
+                self.code = status
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    if status == 200:
+                        await jev.api_key_status()
+                        self.assertIn("API key: valid.", output.getvalue())
+                    else:
+                        with self.assertRaisesRegex(
+                            jev.JevError, f"HTTP {status}"
+                        ) as error:
+                            await jev.api_key_status()
+                        self.assertNotIn(KEY, str(error.exception))
+                        self.assertNotIn("API key: valid.", output.getvalue())
+                        if status == 401:
+                            self.assertIn("invalid", str(error.exception))
+                            self.assertNotIn("expired", str(error.exception))
+                self.assertIn("API key is saved", output.getvalue())
+                self.assertNotIn(KEY, output.getvalue())
+                self.assertTrue(self.clients[-1].is_closed)
+        self.assertEqual(len(self.requests), 5)
+
+    async def test_status_network_error_does_not_label_key_invalid(self):
+        with (
+            patch.object(
+                self.transport,
+                "handle_async_request",
+                side_effect=httpx2.ConnectError(KEY),
+            ),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+            self.assertRaisesRegex(jev.JevError, "connectivity") as error,
+        ):
+            await jev.api_key_status()
+        self.assertIn("API key is saved", output.getvalue())
+        self.assertNotIn(KEY, str(error.exception))
+        self.assertNotIn("invalid", str(error.exception).lower())
+        self.assertTrue(self.clients[-1].is_closed)
 
     async def test_mcp_schema_and_safe_error(self):
         self.key_loader.side_effect = jev.JevError(

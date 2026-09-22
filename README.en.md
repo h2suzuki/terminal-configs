@@ -133,7 +133,7 @@ jev api-key set
 jev hello
 ```
 
-Use `jev api-key set` to update the key and `jev api-key clear` to remove it. See the [Jev usage guide](docs/typesafe.md) (Japanese) for agent usage and help interpreting diagnostics.
+Use `jev api-key status` to check whether a key is saved and usable (sends one test query if saved). Use `jev api-key set` to update the key and `jev api-key clear` to remove it. See the [Jev usage guide](docs/typesafe.md) (Japanese) for agent usage and help interpreting diagnostics.
 
 ### CodeGraph
 

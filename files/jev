@@ -148,7 +148,7 @@ def create_client(key):
 
 def api_error_message(status_code):
     if status_code == 401:
-        return "HTTP 401: API key rejected (invalid, revoked, or expired). Run jev api-key set with a current key."
+        return "HTTP 401: API key invalid. Run jev api-key set with a current key."
     if status_code == 403:
         return "HTTP 403: Access denied. Check the key's permissions and account access; update it with jev api-key set if needed."
     if status_code == 429:
@@ -238,7 +238,7 @@ class JevSession:
             ) from None
 
 
-async def test_api():
+async def test_api(success_message="Hello! Jev is ready."):
     session = JevSession()
     try:
         result = await session.evaluate(
@@ -252,9 +252,18 @@ async def test_api():
             answer.get("noul"), (int, float)
         ):
             raise JevError("API responded, but the test answer was missing or invalid.")
-        print("OK: API key accepted; Jev returned a valid answer.")
+        print(success_message)
     finally:
         await session.close()
+
+
+async def api_key_status():
+    load_key()
+    print(
+        "API key is saved. Checking usability with one small, billed test query...",
+        flush=True,
+    )
+    await test_api("API key: valid. Jev is ready.")
 
 
 def create_server():
@@ -312,6 +321,10 @@ def main():
         "set", help="Save or replace a key from a hidden terminal prompt"
     )
     key_commands.add_parser("clear", help="Delete the saved API key")
+    key_commands.add_parser(
+        "status",
+        help="Check saved key status and usability with one small, billed test query",
+    )
     commands.add_parser(
         "hello",
         help="Send one small, billed test query and diagnose authentication/connectivity",
@@ -326,6 +339,8 @@ def main():
             create_server().run()
         elif args.command == "hello":
             asyncio.run(test_api())
+        elif args.key_command == "status":
+            asyncio.run(api_key_status())
         else:
             remove_key() if args.key_command == "clear" else api_key()
     except (JevError, OSError, ValueError) as error:

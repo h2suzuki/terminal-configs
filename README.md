@@ -133,7 +133,7 @@ jev api-key set
 jev hello
 ```
 
-キーの更新も `jev api-key set`、削除は `jev api-key clear` で行います。エージェントからの利用方法や診断結果の見方は [Jev の利用手順](docs/typesafe.md) を参照してください。
+`jev api-key status` で保存状態と利用可否を確認できます（登録済みならテストクエリーを 1 回送信）。キーの更新も `jev api-key set`、削除は `jev api-key clear` で行います。エージェントからの利用方法や診断結果の見方は [Jev の利用手順](docs/typesafe.md) を参照してください。
 
 ### CodeGraph
 
