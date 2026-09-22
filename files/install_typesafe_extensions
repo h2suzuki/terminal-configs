@@ -9,6 +9,7 @@ command -v claude   >/dev/null || { echo "Cannot find claude";      exit 1; }
 command -v codex    >/dev/null || { echo "Cannot find codex";       exit 1; }
 command -v jev      >/dev/null || { echo "Cannot find jev";         exit 1; }
 command -v npx      >/dev/null || { echo "Cannot find npx";         exit 1; }
+command -v jq       >/dev/null || { echo "Cannot find jq";          exit 1; }
 
 
 if tty -s >/dev/null; then
@@ -52,7 +53,9 @@ run claude plugin marketplace add typesafe-ai/skills
 run claude plugin marketplace update typesafe-ai
 run claude plugin install typesafe@typesafe-ai --scope user
 run claude plugin update typesafe@typesafe-ai --scope user
-run claude plugin enable typesafe@typesafe-ai --scope user
+claude plugin list --json |
+    jq -e '.[] | select(.id == "typesafe@typesafe-ai" and .scope == "user") | .enabled' >/dev/null ||
+    run claude plugin enable typesafe@typesafe-ai --scope user
 
 
 # Codex supports the upstream .claude-plugin marketplace and manifest.
@@ -62,10 +65,10 @@ run codex plugin add typesafe@typesafe-ai
 
 
 # Register the persistent SDK-backed stdio server without credentials in config.
-run "claude mcp remove jev --scope user || true"
+claude mcp remove jev --scope user
 run claude mcp add jev --scope user -- /usr/local/bin/jev serve
 
-run "codex mcp remove jev || true"
+codex mcp remove jev
 run codex mcp add jev -- /usr/local/bin/jev serve
 
 
