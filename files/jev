@@ -6,6 +6,7 @@ import asyncio
 import functools
 import importlib.util
 import getpass
+import hashlib
 import json
 import logging
 import os
@@ -25,6 +26,7 @@ ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 MAX_BYTES = 8 * 1024 * 1024
 BACKOFF_S = 30
 BACKOFF_MAX_S = 1800
+EVALUATE_FILE_DIR = "jev-evaluate-files"
 ERROR_LOG_KEEP = 20
 ERROR_LOG_PART_BYTES = 256 * 1024
 ERROR_LOG_MIN_FREE = 512 * 1024 * 1024
@@ -365,6 +367,30 @@ class JevSession:
                 "Jev operation failed. Check local credentials, installation, and connectivity."
             ) from None
 
+    async def evaluate_file(self, path):
+        # A model copying long Japanese state changed glyphs; reading the file sends it unchanged.
+        real = Path(path).resolve()
+        if not real.is_file() or EVALUATE_FILE_DIR not in real.parent.parts[-2:]:
+            raise JevError(
+                f"Give a file inside a {EVALUATE_FILE_DIR} directory or one of its subdirectories."
+            )
+        if real.stat().st_size > MAX_BYTES:
+            raise JevError("Request exceeds 8 MiB.")
+        try:
+            data = json.loads(real.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raise JevError(f"{real} is not readable JSON.") from None
+        if not isinstance(data, dict) or "state" not in data or "questions" not in data:
+            raise JevError(f"{real} must be a JSON object with state and questions.")
+        result = await self.evaluate(
+            data["state"], data["questions"], data.get("model", "jev-latest")
+        )
+        sent = {"state": data["state"], "questions": data["questions"]}
+        digest = hashlib.sha256(
+            json.dumps(sent, sort_keys=True, ensure_ascii=False).encode()
+        ).hexdigest()
+        return {**result, "file": str(real), "sha256": digest}
+
     async def context_gate(self, tool_input, cwd, session_id=""):
         if isinstance(tool_input, str):
             try:
@@ -478,6 +504,24 @@ def create_server():
         """
         try:
             return await session.evaluate(state, questions, model)
+        except JevError as error:
+            raise ToolError(str(error)) from None
+
+    @server.tool(
+        structured_output=True,
+        annotations=ToolAnnotations(
+            readOnlyHint=True, destructiveHint=False, openWorldHint=True
+        ),
+    )
+    async def evaluate_file(path: str) -> dict[str, Any]:
+        """Send the state and questions of a JSON file to Jev unchanged (a billed API call).
+
+        For backtest harnesses: the file must sit in a jev-evaluate-files directory or one of its
+        subdirectories and hold {"state": ..., "questions": ..., "model"?: ...}. Returns the answers
+        plus the resolved file and the sha256 of the sent state and questions.
+        """
+        try:
+            return await session.evaluate_file(path)
         except JevError as error:
             raise ToolError(str(error)) from None
 

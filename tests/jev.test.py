@@ -3,6 +3,7 @@
 
 import asyncio
 import contextlib
+import hashlib
 import importlib.machinery
 import importlib.util
 import io
@@ -481,6 +482,61 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                 await session.evaluate(**REQUEST)
         self.assertFalse(folder.exists())
 
+    def request_file(self, content, run="fixed", name="case__0.json"):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "backtest" / jev.EVALUATE_FILE_DIR / run / name
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+        )
+        return path
+
+    async def test_evaluate_file_sends_the_file_exactly(self):
+        """Copied by a model, Japanese state text changed glyphs (方針→方针); the file must reach Jev unchanged."""
+        state = {"text": "方針・立脚・叩き台・残骸\t`x` end", "list": ["?", "\\u2028"]}
+        path = self.request_file(
+            {"case": "c", "request": 0, "state": state, "questions": REQUEST["questions"]}
+        )
+        result = await self.session.evaluate_file(str(path))
+        sent = json.loads(self.requests[0].content)
+        self.assertEqual((sent["state"], sent["questions"]), (state, REQUEST["questions"]))
+        self.assertEqual(result["file"], str(path.resolve()))
+        canonical = json.dumps(
+            {"state": state, "questions": REQUEST["questions"]},
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        self.assertEqual(result["sha256"], hashlib.sha256(canonical.encode()).hexdigest())
+        self.assertEqual(result["answers"], response_body()["answers"])
+
+    async def test_evaluate_file_refuses_paths_outside_the_request_directory(self):
+        inside = self.request_file({"state": "s", "questions": REQUEST["questions"]})
+        outside = inside.parents[2] / "secret.json"
+        outside.write_text(json.dumps({"state": "s", "questions": REQUEST["questions"]}))
+        link = inside.parent / "link.json"
+        link.symlink_to(outside)
+        deep = inside.parent / "a" / "b" / "deep.json"
+        deep.parent.mkdir(parents=True)
+        deep.write_text(inside.read_text())
+        for path in (outside, link, deep, inside.parent, inside.parent / "missing.json"):
+            with self.subTest(path=path), self.assertRaisesRegex(
+                jev.JevError, jev.EVALUATE_FILE_DIR
+            ):
+                await self.session.evaluate_file(str(path))
+        self.assertEqual(self.requests, [])
+
+    async def test_evaluate_file_refuses_invalid_or_oversized_content(self):
+        for content in ("not json", json.dumps(["state"]), json.dumps({"state": "s"})):
+            with self.subTest(content=content), self.assertRaises(jev.JevError):
+                await self.session.evaluate_file(str(self.request_file(content)))
+        big = self.request_file(
+            {"state": "x" * jev.MAX_BYTES, "questions": REQUEST["questions"]}
+        )
+        with self.assertRaisesRegex(jev.JevError, "8 MiB"):
+            await self.session.evaluate_file(str(big))
+        self.assertEqual(self.requests, [])
+
     async def test_reflected_key_is_redacted(self):
         self.body = response_body(model=KEY)
         result = await self.session.evaluate(**REQUEST)
@@ -585,10 +641,12 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         async with Client(jev.create_server()) as client:
             listed = await client.list_tools()
             self.assertEqual(
-                [tool.name for tool in listed.tools], ["evaluate", "context_gate"]
+                [tool.name for tool in listed.tools],
+                ["evaluate", "evaluate_file", "context_gate"],
             )
             properties = listed.tools[0].input_schema["properties"]
             self.assertEqual(set(properties), {"state", "questions", "model"})
+            self.assertEqual(set(listed.tools[1].input_schema["properties"]), {"path"})
             result = await client.call_tool("evaluate", REQUEST)
             self.assertTrue(result.is_error)
             self.assertIn("jev api-key set", str(result.content))

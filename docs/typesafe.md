@@ -46,7 +46,7 @@ API のエラー本文やキーは表示しません。[公式のエラー仕様
 
 ## エージェントからの利用
 
-Claude Code と Codex の MCP 登録名は `jev`、公開ツールは `evaluate` です。
+Claude Code と Codex の MCP 登録名は `jev`、主な公開ツールは `evaluate` です。
 「TypeSafe スキルで質問を設計し、Jev MCP の evaluate で呼び出す」と指示できます。
 ツールには次のような引数を渡します。
 
@@ -65,6 +65,8 @@ Claude Code と Codex の MCP 登録名は `jev`、公開ツールは `evaluate`
 `model` の省略時は `jev-latest` を使います。質問形式は公式スキル・ドキュメントを参照してください。
 MCP は `state`、`questions`、任意の `model` だけを受け取り、型付き回答と利用量を返します。
 キーや送信先を指定する引数、キーを読み出すツールはありません。
+
+`evaluate_file` は、`jev-evaluate-files` ディレクトリにある JSON ファイルの `state` と `questions` をそのまま送ります (検証ハーネス用の仮のツール)。
 
 エージェントが `jev serve` を stdio MCP として起動し、接続終了まで維持します。
 公式 Python SDK の `AsyncTypeSafeClient` と HTTP 接続プールを再利用するので、
