@@ -16,6 +16,8 @@ import tomllib
 
 FILES = Path(__file__).resolve().parents[1] / "files"
 HOOK = FILES / "scratch_file_management.py"
+# The hook rejects scratch under /tmp, so fixture repos must live outside it.
+SCRATCH = FILES.parent / "drafts"
 ENV = {
     **os.environ,
     "GIT_CONFIG_NOSYSTEM": "1",
@@ -29,7 +31,8 @@ ENV = {
 
 class HygieneTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+        SCRATCH.mkdir(exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory(dir=SCRATCH)
         self.addCleanup(self.temp.cleanup)
         self.top = Path(self.temp.name) / "repo"
         self.top.mkdir()
