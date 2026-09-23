@@ -474,6 +474,21 @@ class JevContextGateTest(unittest.TestCase):
             self.run_hook('git commit -m "x" -- README.md', mode="bad"), {}
         )
 
+    def test_top_level_code_is_asked_whether_it_belongs_at_the_top_level(self):
+        """Asked whether it did the job of the place "(top level of the file)", a needed import line scored 0.09."""
+        for name in ("loader.py", "loader_test.py"):
+            with self.subTest(name=name):
+                self.sent.clear()
+                (self.repo / name).write_text(CODE)
+                self.git("add", name)
+                self.git("commit", "-q", "-m", "code")
+                (self.repo / name).write_text(CODE.replace('"""\n\n\n', '"""\n\nimport os\n\n\n'))
+                self.run_hook(f'git commit -m "x" -- {name}')
+                call = self.calls()[0]
+                (hunk,) = call["state"]["hunks"]
+                self.assertEqual(hunk["place_and_its_purpose"], "(top level of the file)")
+                self.assertIn("top level of this file", call["questions"]["fits_0_0"]["instructions"])
+
     def test_code_piece_maps_scope_and_docstring_into_the_same_slots(self):
         (self.repo / "loader.py").write_text(CODE)
         self.git("add", "loader.py")

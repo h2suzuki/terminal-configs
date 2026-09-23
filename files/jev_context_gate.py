@@ -16,10 +16,11 @@ import time
 from pathlib import Path
 
 DENY_BELOW = 0.5  # real README commits: misplaced text ≤ 0.25, fitting ≥ 0.72
-QUESTION_VERSION = "fdet-3"
+QUESTION_VERSION = "fdet-4"
 STATE_LIMIT = 12000  # characters of JSON state per request; Jev caps state plus question at 32k tokens
 CHUNK_LIMIT = 1500  # characters of added text per judged piece
 AROUND = 6
+TOP_LEVEL = "(top level of the file)"
 OUTLINE_LIMIT = 40
 ROLE_LIMIT = 600
 BODY_LIMIT = 300
@@ -92,6 +93,17 @@ FIT = {
         "The added lines check or set up the behavior that the test's name and existing assertions are about.",
         "The added lines check something unrelated to the test's name, such as a different feature or a detail "
         "of the test file itself.",
+    ),
+    "module": (
+        "`form.background_of_change` says what the commit does and `form.file_kind_and_role` what kind of file "
+        "`document.file` is. `{p}.added_lines` was added at the top level of the file, outside any function or "
+        "test (between `{p}.lines_before` and `{p}.lines_after`); `{h}.style_of_this_place` lists the file's "
+        "definitions before this change; `{p}.what_the_edit_adds` describes the added lines. Do the added lines "
+        "belong at the top level of this file?",
+        "The added lines are top-level content this kind of file keeps: imports, constants, module setup, or new "
+        "functions, classes or tests that fit the file's role and the background of the change.",
+        "The added lines are statements that belong inside an existing function or test, content of another "
+        "language or file type, or code unrelated to the file's role.",
     ),
 }
 STYLE = (
@@ -365,7 +377,7 @@ def code_scope(lines: list[str], index: int) -> str:
         if line.strip() and depth < indent and SCOPE_RE.match(line):
             chain.insert(0, line.strip()[:80])
             indent = depth
-    return " > ".join(chain) or "(top level of the file)"
+    return " > ".join(chain) or TOP_LEVEL
 
 
 def paragraphs(
@@ -423,6 +435,8 @@ def places(hunks: list[dict]) -> list[dict]:
                 adds = (
                     f"{sum(1 for c in chunk if c.strip())} non-empty line(s) of {kind}."
                 )
+                # A scope question has no scope to ask about at the top level of the file.
+                kind = "module" if location == TOP_LEVEL else kind
             text = "\n".join(chunk)
             piece = {
                 "what_the_edit_adds": adds,
