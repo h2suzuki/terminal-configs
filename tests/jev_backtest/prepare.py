@@ -38,6 +38,21 @@ def git(cwd: Path | str, *args: str, stdin: str | None = None) -> str:
     ).stdout
 
 
+def lay_out_neighbors(source: Path, base: str, file: str, repo: Path) -> None:
+    """Empty stand-ins for what `base` keeps where `file` is added (or its nearest existing parent); the gate reads only names."""
+    folder, listing = os.path.dirname(file), ""
+    while True:
+        listing = git(source, "ls-tree", "--full-tree", base, *(["--", f"{folder}/"] if folder else []))  # fmt: skip
+        if listing or not folder:
+            break
+        folder = os.path.dirname(folder)
+    for row in listing.splitlines():
+        meta, _, path = row.partition("\t")
+        stub = repo / path / ".keep" if meta.split()[1] == "tree" else repo / path
+        stub.parent.mkdir(parents=True, exist_ok=True)
+        stub.write_text("")
+
+
 def main() -> int:
     out, ky = Path(sys.argv[1]), Path(sys.argv[2])
     data = json.loads((HERE / "cases.json").read_text())
@@ -50,10 +65,17 @@ def main() -> int:
         target = repo / case["file"]
         target.parent.mkdir(parents=True, exist_ok=True)
         git(repo, "init", "-q", "-b", "main")
-        target.write_text(git(source, "show", f"{base}:{case['file']}"))
-        git(repo, "add", case["file"])
+        if case.get("new_file"):
+            lay_out_neighbors(source, base, case["file"], repo)
+        else:
+            target.write_text(git(source, "show", f"{base}:{case['file']}"))
+        git(repo, "add", "-A")
         git(repo, "commit", "-q", "-m", "base")
-        if "patch" in case:
+        if case.get("new_file"):
+            text = case.get("content") or git(source, "show", case.get("from") or f"{case['sha']}:{case['file']}")  # fmt: skip
+            target.write_text(text)
+            git(repo, "add", case["file"])
+        elif "patch" in case:
             git(repo, "apply", "-", stdin=case["patch"])
         else:
             target.write_text(git(source, "show", f"{case['sha']}:{case['file']}"))

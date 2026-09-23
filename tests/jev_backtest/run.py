@@ -147,9 +147,11 @@ def _records(log_path, run_name):
 
 
 def _score(record):
-    values = [p.get("fit") for p in record.get("pieces", [])] + [
-        s.get("style") for s in record.get("new_sections", [])
-    ]
+    values = (
+        [p.get("fit") for p in record.get("pieces", [])]
+        + [s.get("style") for s in record.get("new_sections", [])]
+        + [f.get("placed") for f in record.get("new_files", [])]
+    )
     values = [v for v in values if isinstance(v, (int, float))]
     return min(values) if values else None
 
@@ -223,7 +225,9 @@ def score(cases_path, log_path, run_name):
         failing = [
             p
             for r in recs
-            for p in r.get("pieces", []) + r.get("new_sections", [])
+            for p in r.get("pieces", [])
+            + r.get("new_sections", [])
+            + r.get("new_files", [])
             if p.get("failed")
         ]
         for group in (by_kind[c["kind"]], by_origin[c.get("origin", "real")], overall):

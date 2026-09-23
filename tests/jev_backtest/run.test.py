@@ -151,6 +151,21 @@ class HarnessTest(unittest.TestCase):
         self.assertEqual([p["fit"] for p in fd["failing"]], [0.2])
         self.assertEqual(report["misses"][0]["id"], "b1")
 
+    def test_u15_new_file_judgments_score_like_pieces(self):
+        """A commit that only adds a file logs `new_files[].placed`; it scores and lists as a failing item."""
+        cases = self.write("cases.jsonl", [case("g1", "good"), case("b1", "bad")])
+        added = record("r", "b1", "deny", [])
+        added["new_files"] = [
+            {"file": "NOTES.md", "line": 1, "place": "(top level)", "placed": 0.1, "failed": True}
+        ]  # fmt: skip
+        log = self.write("log.jsonl", [record("r", "g1", "allow", [0.8]), added])
+        report = run.score(cases, log, "r")
+        self.assertAlmostEqual(report["kind"]["doc"]["max_bad"], 0.1)
+        self.assertEqual(report["misses"], [])
+        denied = self.write("log2.jsonl", [{**added, "session_id": "backtest:r:g1"}])
+        (fd,) = run.score(cases, denied, "r")["false_denials"]
+        self.assertEqual([p["placed"] for p in fd["failing"]], [0.1])
+
     def test_u12_diff_lists_cases_whose_decision_changed(self):
         cases = self.write("cases.jsonl", [case("g1", "good"), case("g2", "good")])
         log = self.write("log.jsonl", [
