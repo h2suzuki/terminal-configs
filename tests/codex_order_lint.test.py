@@ -166,9 +166,7 @@ KIND = "review-kind: adversarial|acceptance|none を行頭形式で 1 行指定�
 NO_INVENTORY = "## 既製手段の棚卸し に検討した既製 command/skill と不使用理由を列挙せよ"
 NO_SCOPE = "scope: diff|artifact を行頭形式で 1 行指定せよ"
 NO_REPORT = "報告書 path (*-report.md) が 1 度も書かれていない"
-MIXED_REPORT = (
-    "報告書 path が食い違う: drafts/example-report.md / drafts/other-report.md"
-)
+MIXED_REPORT = "報告書 path が食い違う: drafts/example-report.md / drafts/other-report.md"  # dangling-ref-check: allow
 NO_TOKEN = "報告書の最終行に置く終端 token が指定されていない"
 NO_BAND = "見積もりバンド (N〜M 分) が無い"
 NO_THRESHOLD = "調査発動しきい値 (K 分) が無い"
@@ -233,7 +231,7 @@ review-kind: none
 
 ## 成果物
 
-- 報告書 1 file のみ: `drafts/example-report.md`
+- 報告書 1 file のみ: `@DRAFTS@/example-report.md`
 - commit もしない
 
 ## 作業量上限 (worst-case bound)
@@ -243,7 +241,7 @@ review-kind: none
 ## 実行してよい command
 
 ```
-python3 files/x --metadata drafts/example.md
+python3 files/x --metadata @DRAFTS@/example.md
 ```
 
 - `fuser -k` / `pkill` 等の kill-by-port は禁止
@@ -268,7 +266,7 @@ python3 files/x --metadata drafts/example.md
 
 ## 出力言語規約
 
-- 報告書 (`drafts/example-report.md`) は **日本語**で書く
+- 報告書 (`@DRAFTS@/example-report.md`) は **日本語**で書く
 
 ## 報告書の書式
 
@@ -284,7 +282,7 @@ REPORT_COMPLETE
 
 - 見積もりバンド: **20〜30 分**
 - 調査発動しきい値: **60 分** (見積もりの 2 倍)
-"""
+""".replace("@DRAFTS@", "drafts")
 
 FIX_TAIL = """
 ## 前巡 verdict
@@ -316,7 +314,7 @@ def fix_order(number: int, treatment: str = TREATMENT_SECTION) -> str:
     return head + FIX_TAIL + treatment
 
 
-# from drafts/gates/send-gate-order.md @ e9f16141 (trim 31/129 行)
+# Real order, trimmed to 31 of 129 lines
 SEND_GATE = """\
 # 発注: SendMessage 発信文の承認語 gate の新設
 review-kind: none
@@ -330,7 +328,7 @@ review-kind: none
 - 触らない: 他の全 file (`stop_checks.py`・`codex_delegation_gate.py`・`codex_order_lint`・
 - commit しない (受け入れ後に発注側が行う)。kill-by-port (`fuser -k` / `pkill`) は禁止
 ## 成果物
-- 報告書 `drafts/send-gate-report.md` — 書式例:
+- 報告書 `@DRAFTS@/send-gate-report.md` — 書式例:
 ```
 # 承認語 gate 報告
 ## 実装概要
@@ -349,9 +347,9 @@ REPORT_COMPLETE
 ## 所要見積もり
 - 見積もりバンド: **20〜40 分** (sol high・warm)
 - 調査発動しきい値: **80 分** (見積もり上限の 2 倍) — 超過したら再アームをやめ調査に切り替える
-"""
+""".replace("@DRAFTS@", "drafts")
 
-# from drafts/ruling61/sentinel-r80-review-order.md @ a6949085 (trim 41/101 行)
+# Real order, trimmed to 41 of 101 lines
 R80_REVIEW = """\
 # r80: 分類後一意性の適用後の確認巡 (全体 round・認定)
 review-kind: adversarial
@@ -377,7 +375,7 @@ target: codex-task-sentinel
 ```
 ```
 ## 成果物
-- 報告書 `drafts/sentinel-r80-report.md` — verdict 6 節 + 指摘一覧 (U 分類・severity・
+- 報告書 `@DRAFTS@/sentinel-r80-report.md` — verdict 6 節 + 指摘一覧 (U 分類・severity・
 ```
 # r80 報告
 ## 指摘の振り分け
@@ -394,9 +392,9 @@ REPORT_COMPLETE
 ## 所要見積もり
 - 見積もりバンド: **25〜50 分** (sol xhigh)
 - 調査発動しきい値: **100 分** (見積もり上限の 2 倍) — 超過したら再アームをやめ調査に切り替える
-"""
+""".replace("@DRAFTS@", "drafts")
 
-# from drafts/gates/review-gates-fixes-12.md @ a5487e84 (trim 39/123 行)
+# Real order, trimmed to 39 of 123 lines
 FIXES_12 = """\
 # fix round 12: 回帰 filter round 3 の低位 2 指摘の是正
 review-kind: none
@@ -418,7 +416,7 @@ review-kind: none
 - 触らない: `files/claude_managed-hooks/codex_delegation_gate.py`・`files/codex_order_lint`・
 - commit しない (受け入れ後に発注側が行う)。kill-by-port (`fuser -k` / `pkill`) は禁止
 ## 成果物
-- 報告書 `drafts/review-gates-fixes-12-report.md` — 書式例:
+- 報告書 `@DRAFTS@/review-gates-fixes-12-report.md` — 書式例:
 ```
 # fix round 12 報告
 ## 実装概要
@@ -437,9 +435,9 @@ REPORT_COMPLETE
 ## 所要見積もり
 - 見積もりバンド: **15〜30 分** (sol・warm)
 - 調査発動しきい値: **60 分** (見積もり上限の 2 倍) — 超過したら再アームをやめ調査に切り替える
-"""
+""".replace("@DRAFTS@", "drafts")
 
-# from drafts/ruling61/sentinel-r81-fixes.md @ 0a4256d7 (trim 42/140 行)
+# Real order, trimmed to 42 of 140 lines
 R81_FIXES = """\
 # fix round 8: 縮小再入場 — r81 の 2 指摘の是正
 review-kind: none
@@ -464,7 +462,7 @@ review-kind: none
 - 触らない: `tests/codex_task_sentinel.test.py` (実行のみ可)・`docs/`・他の `files/`・
 - commit しない (受け入れ後に発注側が行う)。kill-by-port (`fuser -k` / `pkill`) は禁止
 ## 成果物
-- 報告書 `drafts/sentinel-r81-fixes-report.md` — 書式例:
+- 報告書 `@DRAFTS@/sentinel-r81-fixes-report.md` — 書式例:
 ```
 # fix round 8 報告
 ## 実装概要
@@ -483,9 +481,9 @@ REPORT_COMPLETE
 ## 所要見積もり
 - 見積もりバンド: **20〜40 分** (sol high・warm)
 - 調査発動しきい値: **80 分** (見積もり上限の 2 倍) — 超過したら再アームをやめ調査に切り替える
-"""
+""".replace("@DRAFTS@", "drafts")
 
-# from drafts/gates/review-gates-fixes-3.md @ d7ed5a44 (trim 34/109 行)
+# Real order, trimmed to 34 of 109 lines
 FIXES_3 = """\
 # fix round 3: 既製判定器の 6 指摘の class 是正
 review-kind: none
@@ -501,7 +499,7 @@ review-kind: none
 - 触らない: `files/codex_task_sentinel`・`files/claude_managed-hooks/stop_checks.py`・
 - commit しない (受け入れ後に発注側が行う)。kill-by-port (`fuser -k` / `pkill`) は禁止
 ## 成果物
-- 報告書 `drafts/review-gates-fixes-3-report.md` — 書式例:
+- 報告書 `@DRAFTS@/review-gates-fixes-3-report.md` — 書式例:
 ```
 # fix round 3 報告
 ## 実装概要
@@ -521,9 +519,9 @@ REPORT_COMPLETE
 ## 所要見積もり
 - 見積もりバンド: **20〜40 分** (sol high・warm)
 - 調査発動しきい値: **80 分** (見積もり上限の 2 倍) — 超過したら再アームをやめ調査に切り替える
-"""
+""".replace("@DRAFTS@", "drafts")
 
-# from drafts/gates/review-gates-fixes.md @ 0707d51c (trim 12/57 行)
+# Real order, trimmed to 12 of 57 lines
 FIXES_1 = """\
 # fix round 1: verdict 強制の組み込み (G4 再設計 + G5/G6 追加)
 review-kind: none
@@ -536,10 +534,10 @@ review-kind: none
 ### 2. G5: 発注書 lint に「verdict 要求」の必須化を追加する
 ### 3. G6: fix 発注書の「修正方式」宣言を lint 必須化する
 ## スコープ・完了条件 (初回発注書と同じ規約)
-- 報告書 = `drafts/review-gates-fixes-report.md`、最終行 `REPORT_COMPLETE`、報告後即終了
-"""
+- 報告書 = `@DRAFTS@/review-gates-fixes-report.md`、最終行 `REPORT_COMPLETE`、報告後即終了
+""".replace("@DRAFTS@", "drafts")
 
-# from drafts/codex-delegation-integration-fixes.md @ 53a74d81 (trim 10/58 行)
+# Real order, trimmed to 10 of 58 lines
 INTEGRATION = """\
 # fix round 発注書: codex-delegation SKILL.md 受け入れレビュー所見
 `files/claude_managed-skills/codex-delegation/SKILL.md` 1 file のみ、commit はしない。
@@ -549,9 +547,9 @@ INTEGRATION = """\
 ## 4. [blocker] 長寿命 listener rule の第 2 分岐が欠落（前回発注書の記載漏れ。codex の逸脱ではない）
 ## 5. [nit] 一次情報との不一致・記法
 ## 6. [nit] 自己申告レポートの訂正
-`drafts/codex-delegation-integration-report.md` の「Process 3 に教訓 3、4、6、7、8、9、10 を統合した」という記述のうち教訓 6 は Process 3 に存在しない（Rules にのみ存在）。今回の整理後の実態に合わせてレポートを更新すること。
+`@DRAFTS@/codex-delegation-integration-report.md` の「Process 3 に教訓 3、4、6、7、8、9、10 を統合した」という記述のうち教訓 6 は Process 3 に存在しない（Rules にのみ存在）。今回の整理後の実態に合わせてレポートを更新すること。
 ## 完了条件
-"""
+""".replace("@DRAFTS@", "drafts")
 
 CORPUS: tuple[tuple[str, str, list[str]], ...] = (
     ("send-gate-order.md", SEND_GATE, []),
@@ -725,8 +723,8 @@ class OrderLintTest(unittest.TestCase):
         self.check(
             swap(
                 CONFORMING,
-                "`drafts/example-report.md`) は",
-                "`drafts/other-report.md`) は",
+                "`drafts/example-report.md`) は",  # dangling-ref-check: allow
+                "`drafts/other-report.md`) は",  # dangling-ref-check: allow
             ),
             [MIXED_REPORT],
         )
@@ -769,8 +767,8 @@ class OrderLintTest(unittest.TestCase):
         self.check(
             swap(
                 CONFORMING,
-                "```\npython3 files/x --metadata drafts/example.md\n```\n",
-                "- 使う command: `python3 files/x --metadata drafts/example.md`\n",
+                "```\npython3 files/x --metadata drafts/example.md\n```\n",  # dangling-ref-check: allow
+                "- 使う command: `python3 files/x --metadata drafts/example.md`\n",  # dangling-ref-check: allow
             ),
             [NO_FENCE],
         )
@@ -851,7 +849,7 @@ class OrderLintTest(unittest.TestCase):
                 "scope": None,
                 "methods": [{"finding": 1, "methods": ["既存集約"]}],
                 "has_previous_verdict": True,
-                "report_path": "drafts/example-report.md",
+                "report_path": "drafts/example-report.md",  # dangling-ref-check: allow
                 "findings": [],
             },
         )
