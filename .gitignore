@@ -4,25 +4,3 @@ __pycache__/
 drafts/
 .codegraph/
 last-session-handoff.md
-# Mount points the Claude Code sandbox leaves for the dotfiles it guards
-/.bash_profile
-/.bashrc
-/.gitconfig
-/.gitmodules
-/.idea
-/.profile
-/.ripgreprc
-/.vscode
-/.zprofile
-/.zshrc
-/.claude/agents
-/.claude/commands
-/.claude/hooks
-/.claude/launch.json
-/.claude/loop.md
-/.claude/output-styles
-/.claude/routines
-/.claude/scheduled_tasks.json
-/.claude/settings.json
-/.claude/skills
-/.claude/workflows
