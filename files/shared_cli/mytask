@@ -200,7 +200,6 @@ def task_create(arguments: dict[str, object]) -> tuple[str, bool]:
         "content": content,
         "status": "pending",
         "created": stamp,
-        # 放置 Task を prompt 時に促す hook が最終 status 変更時刻として読む。
         "updated": stamp,
     }
     if "activeForm" in arguments:

@@ -5,20 +5,20 @@ Only model-facing UserPromptSubmit additionalContext is emitted. Empty prompts
 and synthetic task notifications stay silent. Claude's native-task feature gate
 does not disable the reminder: the skill also covers the mytask MCP fallback.
 
-A second line is appended when the session's ledger has gone stale: the create
-side is nudged every prompt, so without it memo-style Tasks pile up open until
-wind-down. Any failure while reading the ledger drops that line only.
+The reminder pushes work into the ledger every prompt but nothing pushed it
+back out, so finished items piled up open. When the session holds open Tasks
+the reminder also prints them as a parent/child tree and asks for the closable
+ones to be closed. Any failure while reading the ledger drops that part only.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import tempfile
-import time
 import unittest
-from datetime import datetime
 from unittest import mock
 
 PURPOSE = "依頼を記録し、大きな作業を分解し、自分の計画を依頼に照らして見直すため、"
@@ -36,16 +36,12 @@ CODEX_NUDGE = (
 )
 SYNTHETIC_PREFIX = "<task-notification>"
 
-TIME_FORMAT = "%Y-%m-%d %H:%M"  # mytask CLI の created / updated と同じ書式
-CLOSED_STATUSES = frozenset({"completed", "cancelled"})
-STALE_STATUSES = frozenset({"pending", "in_progress"})
-STALE_SECONDS = 30 * 60
-STALE_LABEL = "30 分以上更新なし"
-OPEN_TASK_CAP = 10  # 放置が無くてもこの件数を超えたら整理を促す
-STALE_ID_CAP = 5
-THROTTLE_SECONDS = 600
-STAMP_TTL_SECONDS = 7 * 24 * 3600
-CLOSE_ADVICE = "終わった項目は completed に、不要な項目は cancelled にする"
+CLOSE_NUDGE = "mytask: 終わった項目は completed に、不要な項目は cancelled にする"
+CLOSED_STATUSES = frozenset({"completed", "cancelled", "deleted"})
+STATUS_EMOJI = {"pending": "🔳", "in_progress": "▶️", "blocked": "🚧"}
+DEFAULT_EMOJI = "🔳"
+TASK_BODY_CHARS = 60
+NUMERIC_ID = re.compile(r"[0-9]+(?:-[0-9]+)*")
 
 
 def _emit_context(msg: str) -> None:
@@ -94,102 +90,69 @@ def _session_tasks(payload: dict) -> list[dict]:
     return records
 
 
-def _is_stale(task: dict, now: datetime) -> bool:
-    for key in ("updated", "created"):
-        value = task.get(key)
-        if isinstance(value, str) and value:
-            try:
-                touched = datetime.strptime(value, TIME_FORMAT)
-            except ValueError:
-                return False
-            return (now - touched).total_seconds() > STALE_SECONDS
-    return False
-
-
-def _close_message(payload: dict, now: datetime) -> str | None:
-    opened = [
+def _open_tasks(tasks: list[dict]) -> list[dict]:
+    return [
         task
-        for task in _session_tasks(payload)
+        for task in tasks
         if str(task.get("status", "")).lower() not in CLOSED_STATUSES
     ]
-    if not opened:
-        return None
-    stale = [
-        task
-        for task in opened
-        if str(task.get("status", "")).lower() in STALE_STATUSES
-        and _is_stale(task, now)
-    ]
-    if not stale and len(opened) <= OPEN_TASK_CAP:
-        return None
-    detail = ""
-    if stale:
-        ids = ", ".join(f"#{task.get('id', '?')}" for task in stale[:STALE_ID_CAP])
-        detail = f" (うち {STALE_LABEL} {len(stale)} 件: {ids})"
-    return f"mytask: open Task {len(opened)} 件{detail}。{CLOSE_ADVICE}"
 
 
-def _stamp_path(payload: dict) -> str | None:
-    session = payload.get("session_id")
-    home = os.environ.get("HOME")
-    if not home or not isinstance(session, str) or not session:
-        return None
-    if "/" in session or session in {".", ".."}:
-        return None
-    return os.path.join(
-        home, ".claude", "hooks", "state", "mytask_close_nudge", session
-    )
+def _ancestry(task: dict, by_id: dict[str, dict]) -> list[str]:
+    """root から自身までの id。 数字 id は `-` 区切り、他は台帳の parent 欄をたどる。"""
+    task_id = str(task.get("id", ""))
+    if NUMERIC_ID.fullmatch(task_id):
+        parts = task_id.split("-")
+        return ["-".join(parts[: depth + 1]) for depth in range(len(parts))]
+    chain = [task_id]
+    parent = task.get("parent")
+    while isinstance(parent, str) and parent in by_id and parent not in chain:
+        chain.append(parent)
+        parent = by_id[parent].get("parent")
+    chain.reverse()
+    return chain
 
 
-def _throttled(path: str, now_ts: float) -> bool:
+def _tree_key(chain: list[str]) -> tuple:
+    leaf = chain[-1] if chain else ""
+    if NUMERIC_ID.fullmatch(leaf):
+        return (0, tuple(int(part) for part in leaf.split("-")), ())
+    return (1, (), tuple(chain))
+
+
+def _task_body(task: dict) -> str:
+    for key in ("content", "subject", "activeForm", "name"):
+        value = task.get(key)
+        if isinstance(value, str) and value.strip():
+            text = " ".join(value.split())
+            return (
+                text if len(text) <= TASK_BODY_CHARS else text[:TASK_BODY_CHARS] + "…"
+            )
+    return "(本文なし)"
+
+
+def _task_tree(tasks: list[dict]) -> list[str]:
+    """mytask の TaskList と同じ id / 状態 / 本文を、子は 2 字下げで親の下に並べる。"""
+    by_id = {str(task.get("id", "")): task for task in tasks}
+    rows = []
+    for task in tasks:
+        chain = _ancestry(task, by_id)
+        rows.append((_tree_key(chain), len(chain) - 1, task))
+    rows.sort(key=lambda row: row[0])
+    lines = []
+    for _key, depth, task in rows:
+        emoji = STATUS_EMOJI.get(str(task.get("status", "")).lower(), DEFAULT_EMOJI)
+        lines.append(f"{'  ' * depth}{task.get('id', '?')} {emoji} {_task_body(task)}")
+    return lines
+
+
+def _close_block(payload: dict) -> str | None:
+    """open Task のツリーとクローズ依頼。 0 件 / 台帳が読めない場合は None。"""
     try:
-        with open(path, encoding="utf-8") as stream:
-            last = float(stream.read().strip())
-    except (OSError, ValueError):
-        return False
-    return now_ts - last < THROTTLE_SECONDS
-
-
-def _record_emit(path: str, now_ts: float) -> None:
-    directory = os.path.dirname(path)
-    try:
-        os.makedirs(directory, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as stream:
-            stream.write(str(now_ts))
-    except OSError:
-        return
-    _prune_stamps(directory, now_ts)
-
-
-def _prune_stamps(directory: str, now_ts: float) -> None:
-    """SessionEnd を経ずに終わった session の stamp を落とす (無ければ何もしない)。"""
-    try:
-        names = os.listdir(directory)
-    except OSError:
-        return
-    for name in names:
-        stale = os.path.join(directory, name)
-        try:
-            if now_ts - os.path.getmtime(stale) > STAMP_TTL_SECONDS:
-                os.remove(stale)
-        except OSError:
-            pass
-
-
-def _close_nudge(payload: dict) -> str | None:
-    """Stale な open Task を畳むよう促す 1 行。 読めない / 節目でなければ None。"""
-    try:
-        path = _stamp_path(payload)
-        if path is None:
+        opened = _open_tasks(_session_tasks(payload))
+        if not opened:
             return None
-        now_ts = time.time()
-        if _throttled(path, now_ts):
-            return None
-        message = _close_message(payload, datetime.now())
-        if message is None:
-            return None
-        _record_emit(path, now_ts)
-        return message
+        return "\n".join(_task_tree(opened) + [CLOSE_NUDGE])
     except Exception:
         return None
 
@@ -204,7 +167,7 @@ def _run(payload: object, *, codex: bool = False) -> int:
         and not prompt.lstrip().startswith(SYNTHETIC_PREFIX)
     ):
         message = CODEX_NUDGE if codex else NUDGE
-        close = _close_nudge(payload)
+        close = _close_block(payload)
         _emit_context(f"{message}\n{close}" if close else message)
     return 0
 
@@ -271,70 +234,76 @@ class CloseNudgeTest(unittest.TestCase):
         ) as stream:
             json.dump(tasks, stream, ensure_ascii=False)
 
-    def task(self, task_id: str, minutes_ago: int, status: str = "pending") -> dict:
-        touched = datetime.fromtimestamp(time.time() - minutes_ago * 60)
-        return {
-            "id": task_id,
-            "content": "覚え書きの Task",
-            "status": status,
-            "created": touched.strftime(TIME_FORMAT),
-            "updated": touched.strftime(TIME_FORMAT),
-        }
+    def task(self, task_id: str, status: str = "pending", **extra) -> dict:
+        return {"id": task_id, "content": "覚え書き", "status": status, **extra}
 
-    def test_stale_open_task_is_nudged_with_ids(self):
+    def test_open_tasks_add_the_tree_and_the_close_line(self):
+        self.ledger([self.task("1", "in_progress"), self.task("2", "completed")])
+        block = _close_block(self.payload)
+        self.assertEqual(block, f"1 ▶️ 覚え書き\n{CLOSE_NUDGE}")
+
+    def test_blocked_tasks_count_as_open(self):
+        self.ledger([self.task("1", "blocked"), self.task("2", "cancelled")])
+        block = _close_block(self.payload)
+        self.assertEqual(block, f"1 🚧 覚え書き\n{CLOSE_NUDGE}")
+
+    def test_children_are_indented_under_their_parent(self):
         self.ledger(
             [
-                self.task("1", 90, status="in_progress"),
-                self.task("2-3", 45),
-                self.task("3", 1),
+                self.task(task_id)
+                for task_id in ("4-10", "4-1-10", "5", "4-1-2", "4-1", "4", "4-2")
             ]
         )
-        message = _close_nudge(self.payload)
-        self.assertIsNotNone(message)
-        assert message is not None
-        self.assertIn("open Task 3 件", message)
-        self.assertIn(f"{STALE_LABEL} 2 件: #1, #2-3", message)
-        self.assertIn(CLOSE_ADVICE, message)
+        block = _close_block(self.payload)
+        assert block is not None
+        self.assertEqual(
+            block.splitlines()[:-1],
+            [
+                "4 🔳 覚え書き",
+                "  4-1 🔳 覚え書き",
+                "    4-1-2 🔳 覚え書き",
+                "    4-1-10 🔳 覚え書き",
+                "  4-2 🔳 覚え書き",
+                "  4-10 🔳 覚え書き",
+                "5 🔳 覚え書き",
+            ],
+        )
 
-    def test_fresh_and_few_open_tasks_stay_silent(self):
-        self.ledger([self.task(str(index), 1) for index in range(1, 11)])
-        self.assertIsNone(_close_nudge(self.payload))
+    def test_parent_field_builds_the_tree_for_non_numeric_ids(self):
+        self.ledger(
+            [
+                self.task("child", parent="root"),
+                self.task("root"),
+                self.task("grandchild", parent="child"),
+            ]
+        )
+        block = _close_block(self.payload)
+        assert block is not None
+        self.assertEqual(
+            block.splitlines()[:-1],
+            ["root 🔳 覚え書き", "  child 🔳 覚え書き", "    grandchild 🔳 覚え書き"],
+        )
 
-    def test_more_than_ten_open_tasks_are_nudged_without_stale_detail(self):
-        self.ledger([self.task(str(index), 1) for index in range(1, 12)])
-        message = _close_nudge(self.payload)
-        self.assertEqual(message, f"mytask: open Task 11 件。{CLOSE_ADVICE}")
+    def test_long_bodies_are_cut_to_one_line(self):
+        self.ledger([{"id": "1", "content": "詳細" * 80, "status": "pending"}])
+        block = _close_block(self.payload)
+        assert block is not None
+        line = block.splitlines()[0]
+        self.assertEqual(len(block.splitlines()), 2)
+        self.assertEqual(line, "1 🔳 " + "詳細" * (TASK_BODY_CHARS // 2) + "…")
 
-    def test_second_call_within_the_window_stays_silent(self):
-        self.ledger([self.task("1", 90)])
-        self.assertIsNotNone(_close_nudge(self.payload))
-        self.assertIsNone(_close_nudge(self.payload))
+    def test_closed_ledger_and_missing_session_add_nothing(self):
+        self.assertIsNone(_close_block(self.payload))
+        self.ledger([self.task("1", "completed"), self.task("2", "cancelled")])
+        self.assertIsNone(_close_block(self.payload))
+        self.assertIsNone(_close_block({"prompt": "session_id なし"}))
 
-    def test_stamps_older_than_the_ttl_are_pruned(self):
-        self.ledger([self.task("1", 90)])
-        self.assertIsNotNone(_close_nudge(self.payload))
-        stamp = _stamp_path(self.payload)
-        assert stamp is not None
-        orphan = os.path.join(os.path.dirname(stamp), "gone-session")
-        open(orphan, "w").close()
-        os.utime(orphan, (0, time.time() - STAMP_TTL_SECONDS - 60))
-        os.remove(stamp)
-        self.assertIsNotNone(_close_nudge(self.payload))
-        self.assertFalse(os.path.exists(orphan))
-
-    def test_missing_ledger_and_closed_tasks_stay_silent(self):
-        self.assertIsNone(_close_nudge(self.payload))
-        self.ledger([self.task("1", 90, status="completed")])
-        self.assertIsNone(_close_nudge(self.payload))
-        self.assertIsNone(_close_nudge({"prompt": "session_id なし"}))
-
-    def test_nudge_rides_the_skill_reminder_as_a_second_line(self):
-        self.ledger([self.task("1", 90)])
+    def test_tree_rides_the_skill_reminder(self):
+        self.ledger([self.task("1")])
         with mock.patch.object(sys.modules[__name__], "_emit_context") as emit:
             _run({**self.payload, "prompt": "続きをお願いします"})
         emitted = emit.call_args[0][0]
-        self.assertTrue(emitted.startswith(NUDGE + "\n"))
-        self.assertIn("open Task 1 件", emitted)
+        self.assertEqual(emitted.splitlines(), [NUDGE, "1 🔳 覚え書き", CLOSE_NUDGE])
 
 
 if __name__ == "__main__":
