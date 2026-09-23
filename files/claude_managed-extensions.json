@@ -142,6 +142,12 @@
     "SessionEnd": [
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/session_cleanup.py" } ] },
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/reap_orphan_helpers.py" } ] }
+    ],
+    "WorktreeCreate": [
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/worktree_home.py" } ] }
+    ],
+    "WorktreeRemove": [
+      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/worktree_home.py" } ] }
     ]
   }
 }

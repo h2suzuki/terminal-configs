@@ -18,7 +18,9 @@ description: Choose locations for agent research notes, intermediate outputs, co
   do not create one for temporary investigation output. It never exempts `drafts/`.
 - Put manual worktrees at `~/worktrees/<repo>/<name>` (branch or `issue-N`). Reuse
   the worktree for a continuing task; preserve peers' worktrees and files. This
-  location convention does not grant extra sandbox permissions.
+  location convention does not grant extra sandbox permissions. In Claude Code, use
+  `EnterWorktree` with `name`: a WorktreeCreate hook creates it there, while `path`
+  outside `.claude/worktrees/` always asks for approval.
 - Distinguish command-internal temp from research artifacts. From the worktree,
   run `scratch_file_management run -- COMMAND ARGS...` to give a command a unique ignored
   scratch directory through `TMPDIR`; the helper removes only its own directory
