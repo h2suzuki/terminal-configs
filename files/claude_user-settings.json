@@ -2,7 +2,10 @@
   "permissions": {
     "defaultMode": "auto"
   },
-  "env": { "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1" },
+  "env": {
+    "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1",
+    "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION": "false"
+  },
   "statusLine": {
     "type": "command",
     "command": "/etc/claude-code/statusline.sh",
