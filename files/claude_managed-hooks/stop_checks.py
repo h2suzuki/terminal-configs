@@ -17,6 +17,14 @@ LEDGER_MIN_EDITS = 3
 TASK_TOOLS = {"TaskCreate", "TaskUpdate", "TodoWrite"}
 OPEN_TASK_REF_CAP = 8
 OPEN_TASK_REF_CHARS = 24
+CLOSED_STATUSES = {"completed", "cancelled", "deleted"}
+TASK_BODY_CHARS = 60
+TASK_STATUS_EMOJI = {"pending": "🔳", "in_progress": "▶️", "blocked": "🚧"}
+DEFAULT_TASK_EMOJI = "🔳"
+NUMERIC_TASK_ID = re.compile(r"[0-9]+(?:-[0-9]+)*")
+TASK_CLOSE_WORDS = re.compile(
+    r"(?<![未不])完了|終了|終わりました|クローズ|\bcompleted\b|\bdone\b", re.IGNORECASE
+)
 SCHEMA_TOOLS = {"ToolSearch"}
 EVIDENCE_TOOLS = {"Read", "Grep", "Glob", "WebSearch", "WebFetch"}
 PERSISTENCE_WORDS = ("memory", "skills", "hooks", "CLAUDE.md", "SKILL.md")
@@ -360,7 +368,7 @@ def _open_tasks(tasks):
     return [
         task
         for task in tasks
-        if str(task.get("status", "")).lower() not in {"completed", "cancelled"}
+        if str(task.get("status", "")).lower() not in CLOSED_STATUSES
     ]
 
 
@@ -610,6 +618,64 @@ def _open_task_block(tasks):
             f"未完了 Task {len(refs)} 件: {shown}",
             "完了または取消にする",
         )
+    ]
+
+
+def _task_ancestry(task, by_id):
+    """root から自身までの id。 数字 id は `-` 区切り、他は台帳の parent 欄をたどる。"""
+    task_id = str(task.get("id", ""))
+    if NUMERIC_TASK_ID.fullmatch(task_id):
+        parts = task_id.split("-")
+        return ["-".join(parts[: depth + 1]) for depth in range(len(parts))]
+    chain = [task_id]
+    parent = task.get("parent")
+    while isinstance(parent, str) and parent in by_id and parent not in chain:
+        chain.append(parent)
+        parent = by_id[parent].get("parent")
+    chain.reverse()
+    return chain
+
+
+def _task_tree_key(chain):
+    leaf = chain[-1] if chain else ""
+    if NUMERIC_TASK_ID.fullmatch(leaf):
+        return (0, tuple(int(part) for part in leaf.split("-")), ())
+    return (1, (), tuple(chain))
+
+
+def _task_tree(tasks):
+    """mytask の TaskList と同じ id / 状態 / 本文を、子は 2 字下げで親の下に並べる。"""
+    by_id = {str(task.get("id", "")): task for task in tasks}
+    rows = sorted(
+        ((_task_ancestry(task, by_id), task) for task in tasks),
+        key=lambda row: _task_tree_key(row[0]),
+    )
+    lines = []
+    for chain, task in rows:
+        body = " ".join(_task_name(task).split())
+        if len(body) > TASK_BODY_CHARS:
+            body = body[:TASK_BODY_CHARS] + "…"
+        emoji = TASK_STATUS_EMOJI.get(
+            str(task.get("status", "")).lower(), DEFAULT_TASK_EMOJI
+        )
+        indent = "  " * (len(chain) - 1)
+        lines.append(f"{indent}{task.get('id', '?')} {emoji} {body}")
+    return lines
+
+
+def _task_close(payload, scan, tasks):
+    """完了を述べた turn に open Task が残っていれば、ツリーを添えて閉じるよう促す。"""
+    if _wind_down(payload):  # wind-down-open-tasks が block で同じことを言う
+        return []
+    if not TASK_CLOSE_WORDS.search(scan):
+        return []
+    opened = _open_tasks(tasks)
+    if not opened:
+        return []
+    return [
+        f"task-close-nudge: 完了を述べたが open Task が {len(opened)} 件ある:\n"
+        + "\n".join(_task_tree(opened))
+        + "\n終わった項目は completed に、不要な項目は cancelled にする"
     ]
 
 
@@ -1329,6 +1395,7 @@ def _evaluate(payload, turn):
         (_host_command, (normalized,)),
         (_claim_without_evidence, (turn, scan)),
         (_communication, (scan, turn["prompt_text"], tasks)),
+        (_task_close, (payload, scan, tasks)),
         (_memory, (payload, turn)),
     )
     for function, args in warn_calls:

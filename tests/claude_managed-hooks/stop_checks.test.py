@@ -308,6 +308,17 @@ Why: repo に該当コードがあるのに「要件全体が repo 外ゆえ実�
 宣言は走査範囲とセットでなければ、読み手が反証も追試もできない。
 test 方針: 裸の「実装不能」は block、path を挙げて Grep した turn は通す、code span 内の引用は発火
 しない、path はあるが根拠 tool 0 の turn は block。
+
+### C21 task-close-nudge (warn)
+
+入力: scan に完了語 (「完了」「終了」「終わりました」「クローズ」`completed` `done`。「未完了」「不完了」は数えない。
+英語は語境界で照合し `abandoned` に当てない) があり、Task store に open な task が 1 件以上ある turn。
+open = status が `completed` / `cancelled` / `deleted` 以外 (`blocked` も open)。
+出力: open 件数に続けて open Task を mytask の TaskList と同じ形 (id + 状態 emoji + 本文 1 行。本文は
+`TASK_BODY_CHARS` 文字で切る) で親子ツリーに並べ、最後にクローズを促す 1 行を出す warn。子の深さは数字 id の
+`-` 区切りから、数字でない id は台帳の `parent` 欄から決め、2 字ずつ下げる。件数が多くても全件出す。
+open 0 件、完了語なしの turn は no-op。wind-down 宣言中も no-op (C9 が同じことを block で出すため)。
+test 方針: 完了語 × open の 4 象限、`blocked` が open に数えられること、親子の並び順と字下げ、wind-down 中の no-op。
 """
 
 from __future__ import annotations
@@ -345,6 +356,7 @@ ALLOWED_FAMILIES = frozenset(
         "ruling-without-reading",
         "wind-down-open-tasks",
         "wind-down-background-unreaped",
+        "task-close-nudge",
         "handoff-doc-without-marker",
         "self-report-honesty",
         "offload-to-user",
@@ -1579,6 +1591,93 @@ class WindDownTest(StopChecksTest):
         self.window(3_000_000)
         proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
         self.assertNotBlocked(proc, "wind-down-background-unreaped")
+
+
+class TaskCloseNudgeTest(StopChecksTest):
+    """C21: a completion claim with open Tasks gets the ledger tree and a close nudge."""
+
+    FAMILY = "task-close-nudge"
+    DONE = "調査が完了しました。" + TAIL
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.fx.turn(say("片付けました"))
+
+    def ledger(self, *rows: tuple[str, str]) -> None:
+        self.fx.mytask_tasks(
+            [
+                {"id": task_id, "content": "覚え書き", "status": status}
+                for task_id, status in rows
+            ]
+        )
+
+    def nudge(self, proc: subprocess.CompletedProcess) -> str:
+        for part in warn_body(proc).split("\n\n"):
+            if family_of(part) == self.FAMILY:
+                return part
+        return ""
+
+    def test_c21_completion_with_an_open_task_warns(self):
+        self.ledger(("1", "in_progress"))
+        proc = run_hook(self.fx, self.DONE)
+        self.assertWarnsFamily(proc, self.FAMILY)
+        self.assertEqual(
+            self.nudge(proc).splitlines(),
+            [
+                "task-close-nudge: 完了を述べたが open Task が 1 件ある:",
+                "1 ▶️ 覚え書き",
+                "終わった項目は completed に、不要な項目は cancelled にする",
+            ],
+        )
+
+    def test_c21_blocked_counts_as_open_and_closed_states_do_not(self):
+        self.ledger(("1", "blocked"), ("2", "completed"), ("3", "cancelled"))
+        proc = run_hook(self.fx, self.DONE)
+        self.assertWarnsFamily(proc, self.FAMILY)
+        self.assertIn("open Task が 1 件ある", self.nudge(proc))
+        self.assertIn("1 🚧 覚え書き", self.nudge(proc))
+
+    def test_c21_no_open_task_is_silent(self):
+        self.ledger(("1", "completed"))
+        self.assertNotWarned(run_hook(self.fx, self.DONE), self.FAMILY)
+
+    def test_c21_without_a_completion_word_is_silent(self):
+        """「未完了」だけの本文は完了の主張ではない。"""
+        self.ledger(("1", "pending"))
+        for final in ("調査の結果を表にまとめました。", "未完了の項目が残っています。"):
+            with self.subTest(final=final):
+                self.assertNotWarned(run_hook(self.fx, final + TAIL), self.FAMILY)
+
+    def test_c21_children_are_indented_under_their_parent(self):
+        self.ledger(
+            ("4-10", "pending"),
+            ("4-1-10", "pending"),
+            ("5", "pending"),
+            ("4-1-2", "blocked"),
+            ("4-1", "pending"),
+            ("4", "in_progress"),
+        )
+        proc = run_hook(self.fx, self.DONE)
+        self.assertWarnsFamily(proc, self.FAMILY)
+        self.assertEqual(
+            self.nudge(proc).splitlines()[1:-1],
+            [
+                "4 ▶️ 覚え書き",
+                "  4-1 🔳 覚え書き",
+                "    4-1-2 🚧 覚え書き",
+                "    4-1-10 🔳 覚え書き",
+                "  4-10 🔳 覚え書き",
+                "5 🔳 覚え書き",
+            ],
+        )
+
+    def test_c21_wind_down_leaves_the_open_tasks_to_c9(self):
+        """Decree: the two families never report the same ledger twice."""
+        self.ledger(("1", "pending"))
+        self.fx.wind_down()
+        proc = run_hook(self.fx, self.DONE)
+        self.assertBlocks(proc, "wind-down-open-tasks")
+        self.assertNotIn(self.FAMILY, proc.stderr)
 
 
 class HandoffMarkerTest(StopChecksTest):
