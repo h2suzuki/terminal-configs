@@ -23,6 +23,13 @@ Contract (each claim maps to one test):
   R6  the pre-existing patterns keep their behavior: denied whatever the target path, skipped only by the
       marker anywhere in the new content (unlike R4, this opt-out is not line-scoped)
   R7  fail-open: unreadable payload or another tool → exit 0
+  R8  a `.refignore` file at the repo root exempts specific (repo-relative path, reference) pairs for
+      formats that cannot carry a line marker: each non-blank, non-`#` line is `<path> <reference>`
+      (whitespace-separated); a listed pair is allowed, an unlisted reference in the same file is still
+      denied, a pair listed for another file exempts nothing here, comment/blank/malformed (not exactly
+      two fields) lines are ignored, and a missing/unreadable `.refignore` behaves as before its existence
+  R9  in the root `.refignore` itself, a well-formed entry line is the exemption, not a reference: it
+      may be written; a drafts reference on any other line of it (e.g. a comment) is still denied
 """
 
 from __future__ import annotations
@@ -82,6 +89,10 @@ class GateTest(unittest.TestCase):
     def path(self, rel: str) -> str:
         return os.path.join(self.repo, rel)
 
+    def refignore(self, content: str) -> None:
+        with open(os.path.join(self.repo, ".refignore"), "w", encoding="utf-8") as fh:
+            fh.write(content)
+
     def deny(self, payload: dict, needle: str) -> str:
         out = run_hook(payload)
         self.assertEqual(out.returncode, 2, f"{payload}: {out.stderr}")
@@ -97,8 +108,9 @@ class GateTest(unittest.TestCase):
         """R1 / R2: every content slot of Write, Edit, and MultiEdit is scanned."""
         target = self.path("docs/a.md")
         self.deny(
-            write_payload(target, REF), "drafts/plan.md"
-        )  # dangling-ref-check: allow
+            write_payload(target, REF),
+            "drafts/plan.md",  # dangling-ref-check: allow
+        )
         self.deny(
             {
                 "tool_name": "Edit",
@@ -124,16 +136,17 @@ class GateTest(unittest.TestCase):
             "drafts/plan.md",  # dangling-ref-check: allow
         )
         self.deny(
-            write_payload(self.path("docs/new/deep/x.md"), REF), "drafts/plan.md"
-        )  # dangling-ref-check: allow
+            write_payload(self.path("docs/new/deep/x.md"), REF),
+            "drafts/plan.md",  # dangling-ref-check: allow
+        )
 
     def test_r2_concrete_reference_forms(self) -> None:
         """R2: any concrete file or dir name under a drafts component is a reference."""
         for text, needle in (
             (
-                "`drafts/corpus-tools/extract.py`",
-                "drafts/corpus-tools/extract.py",
-            ),  # dangling-ref-check: allow
+                "`drafts/corpus-tools/extract.py`",  # dangling-ref-check: allow
+                "drafts/corpus-tools/extract.py",  # dangling-ref-check: allow
+            ),
             ("(spec: drafts/plan.md)", "drafts/plan.md"),  # dangling-ref-check: allow
             ('"drafts/a"', "drafts/a"),  # dangling-ref-check: allow
             ("./drafts/a.md", "drafts/a.md"),  # dangling-ref-check: allow
@@ -167,8 +180,9 @@ class GateTest(unittest.TestCase):
         ):
             with self.subTest(target=target):
                 self.deny(
-                    write_payload(target, REF), "drafts/plan.md"
-                )  # dangling-ref-check: allow
+                    write_payload(target, REF),
+                    "drafts/plan.md",  # dangling-ref-check: allow
+                )
 
     def test_r4_same_line_marker_allows(self) -> None:
         """R4: a marker on the very line that holds the reference exempts it."""
@@ -185,8 +199,9 @@ class GateTest(unittest.TestCase):
             + "also see drafts/other.md\n"  # dangling-ref-check: allow
         )
         out = self.deny(
-            write_payload(target, content), "drafts/other.md"
-        )  # dangling-ref-check: allow
+            write_payload(target, content),
+            "drafts/other.md",  # dangling-ref-check: allow
+        )
         self.assertNotIn("drafts/plan.md", out)  # dangling-ref-check: allow
 
     def test_r4_marker_elsewhere_in_file_exempts_nothing(self) -> None:
@@ -246,6 +261,64 @@ class GateTest(unittest.TestCase):
         with open(outside, "w", encoding="utf-8") as fh:
             fh.write("dangling-ref-check: allow\n")
         self.deny(write_payload(outside, "see Plan B"), "Plan B")
+
+    def test_r8_refignore_pair_exempts_listed_reference(self) -> None:
+        """R8: a (file, reference) pair listed in .refignore is exempt."""
+        self.refignore("docs/a.md drafts/plan.md\n")  # dangling-ref-check: allow
+        self.allow(write_payload(self.path("docs/a.md"), REF))
+
+    def test_r8_unlisted_reference_in_same_file_still_denied(self) -> None:
+        """R8: listing one reference for a file does not exempt another reference in it."""
+        self.refignore("docs/a.md drafts/plan.md\n")  # dangling-ref-check: allow
+        self.deny(
+            write_payload(
+                self.path("docs/a.md"),
+                "see drafts/other.md",  # dangling-ref-check: allow
+            ),
+            "drafts/other.md",  # dangling-ref-check: allow
+        )
+
+    def test_r8_pair_listed_for_another_file_does_not_exempt(self) -> None:
+        """R8: the same reference listed for a different file does not exempt this file."""
+        self.refignore("docs/b.md drafts/plan.md\n")  # dangling-ref-check: allow
+        self.deny(
+            write_payload(self.path("docs/a.md"), REF),
+            "drafts/plan.md",  # dangling-ref-check: allow
+        )
+
+    def test_r8_comment_blank_and_malformed_lines_ignored(self) -> None:
+        """R8: comment, blank, and malformed (not exactly two fields) lines add no exemption."""
+        self.refignore(
+            "# header\n\ndocs/a.md\ndocs/a.md drafts/plan.md extra\n"  # dangling-ref-check: allow
+        )
+        self.deny(
+            write_payload(self.path("docs/a.md"), REF),
+            "drafts/plan.md",  # dangling-ref-check: allow
+        )
+
+    def test_r8_no_refignore_behaves_as_before(self) -> None:
+        """R8: a missing .refignore denies exactly as it did before the file existed."""
+        self.deny(
+            write_payload(self.path("docs/a.md"), REF),
+            "drafts/plan.md",  # dangling-ref-check: allow
+        )
+
+    def test_r9_refignore_entry_lines_are_not_references(self) -> None:
+        """R9: a well-formed .refignore entry may be written; a drafts reference in its comment may not."""
+        target = self.path(".refignore")
+        self.allow(
+            write_payload(
+                target,
+                "docs/a.md drafts/plan.md\n",  # dangling-ref-check: allow
+            )
+        )
+        self.deny(
+            write_payload(
+                target,
+                "# see drafts/plan.md\n",  # dangling-ref-check: allow
+            ),
+            "drafts/plan.md",  # dangling-ref-check: allow
+        )
 
     def test_r7_fail_open(self) -> None:
         """R7: broken input or an unrelated tool never blocks."""

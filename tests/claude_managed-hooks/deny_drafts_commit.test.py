@@ -24,6 +24,14 @@ Contract (each claim maps to one test):
   D7  commit message text (`-m` values, heredoc bodies) is never read as a path or a reference
   D8  fail-open and scope: non-Bash tool, unreadable payload, or a cwd outside any git repo → exit 0;
       other git subcommands and non-git commands are allowed
+  D9  a `.refignore` file at the repo's working-tree toplevel exempts specific (repo-relative path,
+      reference) pairs from D4, for formats that cannot carry a line marker: each non-blank, non-`#` line
+      is `<path> <reference>` (whitespace-separated); a listed pair is allowed, an unlisted reference in
+      the same file is still denied, a pair listed for another file exempts nothing here, comment/blank/
+      malformed (not exactly two fields) lines are ignored, and a missing/unreadable `.refignore` behaves
+      as before its existence
+  D10 in the root `.refignore` itself, a well-formed entry line is the exemption, not a reference: it
+      commits; a drafts reference on any other line of it (e.g. a comment) is still denied
 """
 
 from __future__ import annotations
@@ -104,6 +112,9 @@ class GateTest(unittest.TestCase):
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(text)
 
+    def refignore(self, content: str) -> None:
+        self.write(".refignore", content)
+
     def deny(self, command: str, *needles: str, cwd: str | None = None) -> None:
         out = run_hook(command, cwd or self.repo)
         self.assertEqual(out.returncode, 2, f"{command!r}: {out.stderr}")
@@ -118,8 +129,12 @@ class GateTest(unittest.TestCase):
     def test_d1_d8_contract_and_fail_open(self) -> None:
         """D1 / D8: only Bash payloads are gated; broken input and non-repo cwd never block."""
         self.assertEqual(
-            run_hook("git add drafts/x.md", self.repo, tool="Write").returncode,
-            0,  # dangling-ref-check: allow
+            run_hook(
+                "git add drafts/x.md",  # dangling-ref-check: allow
+                self.repo,
+                tool="Write",
+            ).returncode,
+            0,
         )
         self.assertEqual(run_hook("", self.repo, body="{not json").returncode, 0)
         self.allow("git add drafts/x.md", cwd=self.plain)  # dangling-ref-check: allow
@@ -139,17 +154,20 @@ class GateTest(unittest.TestCase):
         self.deny("git add drafts/x.md", "drafts/x.md")  # dangling-ref-check: allow
         self.deny("git add -f drafts/x.md", "drafts/x.md")  # dangling-ref-check: allow
         self.deny(
-            "git add --force -- sub/drafts/y.md", "sub/drafts/y.md"
-        )  # dangling-ref-check: allow
+            "git add --force -- sub/drafts/y.md",  # dangling-ref-check: allow
+            "sub/drafts/y.md",  # dangling-ref-check: allow
+        )
         self.deny('git add "drafts/x.md"', "drafts/x.md")  # dangling-ref-check: allow
         self.deny("git add ./drafts")
         self.deny("git add drafts")
         self.deny(
-            "git add docs/a.md drafts/x.md", "drafts/x.md"
-        )  # dangling-ref-check: allow
+            "git add docs/a.md drafts/x.md",  # dangling-ref-check: allow
+            "drafts/x.md",  # dangling-ref-check: allow
+        )
         self.deny(
-            f"git add {self.repo}/drafts/x.md", "drafts/x.md"
-        )  # dangling-ref-check: allow
+            f"git add {self.repo}/drafts/x.md",  # dangling-ref-check: allow
+            "drafts/x.md",  # dangling-ref-check: allow
+        )
         for command in (
             "git add docs/a.md",
             "git add docs/drafts-notes.md",
@@ -165,16 +183,18 @@ class GateTest(unittest.TestCase):
         git(self.repo, "add", "-f", "drafts/x.md")  # dangling-ref-check: allow
         self.deny(COMMIT_A, "drafts/x.md")  # dangling-ref-check: allow
         self.deny(
-            "git commit --amend --no-edit", "drafts/x.md"
-        )  # dangling-ref-check: allow
+            "git commit --amend --no-edit",
+            "drafts/x.md",  # dangling-ref-check: allow
+        )
 
     def test_d3_nested_drafts_component(self) -> None:
         """D3: the drafts component may sit below the repo root."""
         self.write("sub/drafts/y.md", "scratch\n")  # dangling-ref-check: allow
         git(self.repo, "add", "-f", "sub/drafts/y.md")  # dangling-ref-check: allow
         self.deny(
-            "git commit -m 'sub: Add' -- sub/drafts/y.md", "sub/drafts/y.md"
-        )  # dangling-ref-check: allow
+            "git commit -m 'sub: Add' -- sub/drafts/y.md",  # dangling-ref-check: allow
+            "sub/drafts/y.md",  # dangling-ref-check: allow
+        )
 
     def test_d3_untracking_a_leaked_file_is_allowed(self) -> None:
         """D3: removing a leaked file from the index is the fix and must stay committable."""
@@ -182,24 +202,30 @@ class GateTest(unittest.TestCase):
         git(self.repo, "add", "-f", "drafts/x.md")  # dangling-ref-check: allow
         git(self.repo, "commit", "-q", "-m", "leak")
         git(
-            self.repo, "rm", "-q", "--cached", "drafts/x.md"
-        )  # dangling-ref-check: allow
+            self.repo,
+            "rm",
+            "-q",
+            "--cached",
+            "drafts/x.md",  # dangling-ref-check: allow
+        )
         self.allow(
-            "git commit -m 'drafts: Untrack scratch' -- drafts/x.md"
-        )  # dangling-ref-check: allow
+            "git commit -m 'drafts: Untrack scratch' -- drafts/x.md"  # dangling-ref-check: allow
+        )
 
     def test_d4_reference_added_in_working_tree_of_pathspec(self) -> None:
         """D4: a `-- PATH` commit records working-tree content that was never staged."""
         self.write(
-            "docs/a.md", BASE_A + "details in `drafts/plan.md`\n"
-        )  # dangling-ref-check: allow
+            "docs/a.md",
+            BASE_A + "details in `drafts/plan.md`\n",  # dangling-ref-check: allow
+        )
         self.deny(COMMIT_A, "docs/a.md", "drafts/plan.md")  # dangling-ref-check: allow
 
     def test_d4_reference_added_in_staged_file(self) -> None:
         """D4: staged content is checked even when the pathspec names another file."""
         self.write(
-            "docs/b.md", "see /home/u/repo/drafts/notes/n.md\n"
-        )  # dangling-ref-check: allow
+            "docs/b.md",
+            "see /home/u/repo/drafts/notes/n.md\n",  # dangling-ref-check: allow
+        )
         git(self.repo, "add", "docs/b.md")
         self.deny(
             "git commit -m 'docs: Add b' -- docs/b.md",
@@ -241,8 +267,9 @@ class GateTest(unittest.TestCase):
     def test_d4_only_added_lines_count(self) -> None:
         """D4: an untouched old reference or a deleted one does not block an unrelated edit."""
         self.write(
-            "docs/a.md", "intro changed\nsee `drafts/old.md`\n"
-        )  # dangling-ref-check: allow
+            "docs/a.md",
+            "intro changed\nsee `drafts/old.md`\n",  # dangling-ref-check: allow
+        )
         self.allow(COMMIT_A)
         self.write("docs/a.md", "intro\n")
         self.allow(COMMIT_A)
@@ -261,8 +288,9 @@ class GateTest(unittest.TestCase):
                 self.write(rel, "see drafts/plan.md\n")  # dangling-ref-check: allow
                 git(self.repo, "add", rel)
                 self.deny(
-                    f"git commit -m 'x: Update' -- {rel}", "drafts/plan.md"
-                )  # dangling-ref-check: allow
+                    f"git commit -m 'x: Update' -- {rel}",
+                    "drafts/plan.md",  # dangling-ref-check: allow
+                )
 
     def test_d5_preceding_line_marker_allows(self) -> None:
         """D5: a marker alone on the line immediately before an added reference exempts it."""
@@ -287,8 +315,9 @@ class GateTest(unittest.TestCase):
             "docs/c.md", "# dangling-ref-check: allow\nintro\nsee drafts/plan.md\n"
         )
         self.deny(
-            "git commit -m 'c: Update' -- docs/c.md", "drafts/plan.md"
-        )  # dangling-ref-check: allow
+            "git commit -m 'c: Update' -- docs/c.md",
+            "drafts/plan.md",  # dangling-ref-check: allow
+        )
 
     def test_d5_preceding_unchanged_context_line_marker_allows(self) -> None:
         """D5: the preceding line may be pre-existing, unchanged context from the same diff."""
@@ -304,23 +333,87 @@ class GateTest(unittest.TestCase):
     def test_d6_git_dash_c_selects_the_repo(self) -> None:
         """D6: `git -C` overrides a cwd that is not the repo."""
         self.write(
-            "docs/a.md", BASE_A + "see drafts/plan.md\n"
-        )  # dangling-ref-check: allow
+            "docs/a.md",
+            BASE_A + "see drafts/plan.md\n",  # dangling-ref-check: allow
+        )
         self.deny(
             f"git -C {self.repo} commit -m 'docs: Update' -- docs/a.md",
             "drafts/plan.md",  # dangling-ref-check: allow
             cwd=self.plain,
         )
         self.deny(
-            f"git -C {self.repo} add drafts/x.md", "drafts/x.md", cwd=self.plain
-        )  # dangling-ref-check: allow
+            f"git -C {self.repo} add drafts/x.md",  # dangling-ref-check: allow
+            "drafts/x.md",  # dangling-ref-check: allow
+            cwd=self.plain,
+        )
+
+    def test_d9_refignore_pair_exempts_listed_reference(self) -> None:
+        """D9: a (file, reference) pair listed in .refignore is exempt from D4."""
+        self.refignore("docs/a.md drafts/plan.md\n")  # dangling-ref-check: allow
+        self.write(
+            "docs/a.md",
+            BASE_A + "see drafts/plan.md\n",  # dangling-ref-check: allow
+        )
+        self.allow(COMMIT_A)
+
+    def test_d9_unlisted_reference_in_same_file_still_denied(self) -> None:
+        """D9: listing one reference for a file does not exempt another reference in it."""
+        self.refignore("docs/a.md drafts/plan.md\n")  # dangling-ref-check: allow
+        self.write(
+            "docs/a.md",
+            BASE_A + "see drafts/other.md\n",  # dangling-ref-check: allow
+        )
+        self.deny(COMMIT_A, "drafts/other.md")  # dangling-ref-check: allow
+
+    def test_d9_pair_listed_for_another_file_does_not_exempt(self) -> None:
+        """D9: the same reference listed for a different file does not exempt this file."""
+        self.refignore("docs/b.md drafts/plan.md\n")  # dangling-ref-check: allow
+        self.write(
+            "docs/a.md",
+            BASE_A + "see drafts/plan.md\n",  # dangling-ref-check: allow
+        )
+        self.deny(COMMIT_A, "drafts/plan.md")  # dangling-ref-check: allow
+
+    def test_d9_comment_blank_and_malformed_lines_ignored(self) -> None:
+        """D9: comment, blank, and malformed (not exactly two fields) lines add no exemption."""
+        self.refignore(
+            "# header\n\ndocs/a.md\ndocs/a.md drafts/plan.md extra\n"  # dangling-ref-check: allow
+        )
+        self.write(
+            "docs/a.md",
+            BASE_A + "see drafts/plan.md\n",  # dangling-ref-check: allow
+        )
+        self.deny(COMMIT_A, "drafts/plan.md")  # dangling-ref-check: allow
+
+    def test_d9_no_refignore_behaves_as_before(self) -> None:
+        """D9: a missing .refignore denies exactly as it did before the file existed."""
+        self.write(
+            "docs/a.md",
+            BASE_A + "see drafts/plan.md\n",  # dangling-ref-check: allow
+        )
+        self.deny(COMMIT_A, "drafts/plan.md")  # dangling-ref-check: allow
+
+    def test_d10_refignore_entry_lines_are_not_references(self) -> None:
+        """D10: a well-formed .refignore entry commits; a drafts reference in its comment does not."""
+        self.write(
+            ".refignore",
+            "docs/a.md drafts/plan.md\n",  # dangling-ref-check: allow
+        )
+        git(self.repo, "add", ".refignore")
+        self.allow("git commit -m 'x: Add refignore' -- .refignore")
+        self.write(".refignore", "# see drafts/plan.md\n")  # dangling-ref-check: allow
+        git(self.repo, "add", ".refignore")
+        self.deny(
+            "git commit -m 'x: Update' -- .refignore",
+            "drafts/plan.md",  # dangling-ref-check: allow
+        )
 
     def test_d7_commit_message_is_not_a_path(self) -> None:
         """D7: messages may mention drafts paths; only recorded content matters."""
         self.write("docs/a.md", BASE_A + "plain line\n")
         self.allow(
-            "git commit -m 'docs: Mention drafts/x.md' -- docs/a.md"
-        )  # dangling-ref-check: allow
+            "git commit -m 'docs: Mention drafts/x.md' -- docs/a.md"  # dangling-ref-check: allow
+        )
         self.allow(
             "git commit -m \"$(cat <<'EOF'\ndocs: Update\n\nsee drafts/x.md\nEOF\n)\" -- docs/a.md"  # dangling-ref-check: allow
         )

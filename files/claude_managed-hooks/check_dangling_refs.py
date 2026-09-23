@@ -9,6 +9,9 @@ when the pattern is intentional (rule file itself, hook source listing the patte
 Opt-out for a drafts/ reference is line-scoped, like shellcheck: the marker must appear on the
 same line as the reference, or alone (as a comment) on the line immediately before it in the
 resulting text. A marker elsewhere in the file exempts nothing else.
+
+For formats that cannot carry a line marker (e.g. JSON), a `.refignore` file at the repo root
+exempts specific (repo-relative path, reference) pairs; see `refignore_exempt`.
 """
 
 import json
@@ -75,22 +78,57 @@ def run_git(cwd, *args):
         return None
 
 
-def drafts_rule_applies(file_path):
-    """True when file_path is a non-ignored file, outside drafts/ itself, in a git work tree."""
+def drafts_rule_location(file_path):
+    """(git toplevel, repo-relative rel path) when the drafts/ rule applies to file_path: inside a
+    git work tree (nearest existing ancestor decides), non-ignored, and outside drafts/ itself.
+    None otherwise."""
     if not isinstance(file_path, str) or not file_path:
-        return False
+        return None
     path = os.path.realpath(file_path)
     parent = os.path.dirname(path)
     while not os.path.isdir(parent):
         parent = os.path.dirname(parent)
     top = run_git(parent, "rev-parse", "--show-toplevel")
     if top is None or top.returncode != 0:
-        return False
-    rel = os.path.relpath(path, os.path.realpath(top.stdout.strip()))
+        return None
+    top = os.path.realpath(top.stdout.strip())
+    rel = os.path.relpath(path, top)
     if rel.startswith(".." + os.sep) or in_drafts(rel):
-        return False
+        return None
     ignored = run_git(parent, "check-ignore", "-q", "--", path)
-    return ignored is not None and ignored.returncode == 1
+    if ignored is None or ignored.returncode != 1:
+        return None
+    return top, rel
+
+
+def refignore_exempt(top):
+    """{(repo-relative path, exact DRAFTS_REF match)} pairs exempted by `.refignore` at `top`.
+    Missing/unreadable file → empty set; a line needs exactly two whitespace-separated fields."""
+    try:
+        with open(os.path.join(top, ".refignore"), encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except OSError:
+        return set()
+    pairs = set()
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        fields = stripped.split()
+        if len(fields) == 2:
+            pairs.add((fields[0], fields[1]))
+    return pairs
+
+
+def refignore_entry(rel, line, ref):
+    """True when `line` is the root `.refignore` entry listing `ref`: the exemption, not a citation."""
+    fields = line.split()
+    return (
+        rel == ".refignore"
+        and len(fields) == 2
+        and not fields[0].startswith("#")
+        and fields[1] == ref
+    )
 
 
 def read_text(path):
@@ -133,9 +171,10 @@ def edit_spans(payload, disk_text):
             current = resulting
 
 
-def drafts_hits_in(label, resulting, start, end):
+def drafts_hits_in(label, resulting, start, end, rel, exempt):
     """Findings for drafts/ references whose start offset falls in [start, end), line-scoped
-    against `dangling-ref-check: allow` on the same line or alone on the line before it."""
+    against `dangling-ref-check: allow` on the same line or alone on the line before it, and
+    against `.refignore` pairs for `rel`."""
     lines = resulting.split("\n")
     hits = []
     pos = 0
@@ -149,6 +188,8 @@ def drafts_hits_in(label, resulting, start, end):
                 continue
             if i > 0 and marker_only_line(lines[i - 1]):
                 continue
+            if (rel, m.group(0)) in exempt or refignore_entry(rel, line, m.group(0)):
+                continue
             hits.append(f"  - {label}: drafts/ 配下 file への参照 — '{m.group(0)}'")
     return hits
 
@@ -156,12 +197,15 @@ def drafts_hits_in(label, resulting, start, end):
 def drafts_findings(payload):
     tool_input = payload.get("tool_input") or {}
     file_path = tool_input.get("file_path")
-    if not drafts_rule_applies(file_path):
+    located = drafts_rule_location(file_path)
+    if located is None:
         return []
+    top, rel = located
+    exempt = refignore_exempt(top)
     disk_text = read_text(file_path)
     hits = []
     for label, resulting, start, end in edit_spans(payload, disk_text):
-        hits += drafts_hits_in(label, resulting, start, end)
+        hits += drafts_hits_in(label, resulting, start, end, rel, exempt)
     return hits
 
 

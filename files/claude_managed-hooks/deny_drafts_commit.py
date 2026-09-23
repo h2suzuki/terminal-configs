@@ -5,7 +5,9 @@ dangling-ref-check: allow (this hook quotes the drafts/ rule it enforces)
 
 A reference is exempt from the commit-time check only when `dangling-ref-check: allow` is on
 the same added line, or alone (as a comment) on the line immediately before it — line-scoped,
-like shellcheck; a marker elsewhere in the file exempts nothing else.
+like shellcheck; a marker elsewhere in the file exempts nothing else. A `.refignore` file also
+exempts specific (path, reference) pairs; it is read from the working tree at the repo toplevel,
+not from what is actually being committed.
 
 Exit:
   0: not `git add` / `git commit`, nothing drafts-related would be recorded, or any parse / git error
@@ -25,6 +27,8 @@ from check_dangling_refs import (
     OPT_OUT_RE,
     in_drafts,
     marker_only_line,
+    refignore_entry,
+    refignore_exempt,
     run_git,
 )
 
@@ -190,6 +194,7 @@ def commit_findings(
     top = toplevel(repo)
     if top is None:
         return set(), set()
+    exempt = refignore_exempt(top)
     paths, all_flag = commit_pathspecs(args)
     sources: list[tuple[str, ...]] = [("--cached",)]
     if all_flag:
@@ -212,7 +217,12 @@ def commit_findings(
                     continue
                 if prev_line is not None and marker_only_line(prev_line):
                     continue
-                refs |= {(rel, m.group(0)) for m in DRAFTS_REF.finditer(text)}
+                refs |= {
+                    (rel, m.group(0))
+                    for m in DRAFTS_REF.finditer(text)
+                    if (rel, m.group(0)) not in exempt
+                    and not refignore_entry(rel, text, m.group(0))
+                }
     return files, refs
 
 
