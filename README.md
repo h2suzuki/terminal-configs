@@ -60,7 +60,6 @@ debian12.sh または ubuntu2404-wsl.sh（sudo で実行）
         ├── nodejs_clean_installer             Node.js
         ├── Codex CLI の導入・リモート接続の有効化
         ├── Claude Code のユーザー設定
-        ├── Antigravity の権限設定・リモート操作の登録（サインイン済みの場合）
         ├── install_claude_extensions          プラグイン・MCP・hooks・skills
         └── install_typesafe_extensions        Jev のプラグイン・スキル・MCP
 ```
@@ -89,6 +88,8 @@ claude auth login
 
 Claude Code から Codex を使う場合は、下記の Codex の認証後に Claude Code 内で `/codex:setup` を実行します。
 
+起動した `claude` は、スマートフォンの Claude アプリの **Code** から操作できます。Windows のデスクトップアプリでは **Settings > Claude Code > Enable remote control by default** を有効にします。
+
 ### Codex
 
 ```bash
@@ -96,6 +97,15 @@ codex login
 ```
 
 デバイスコードで認証する場合は、代わりに `codex login --device-auth` を実行します。
+
+リモート接続の機能はセットアップ時にユーザーごとに有効化されます。リモートから利用する場合は、認証後に次を実行します。
+
+```bash
+codex remote-control start
+codex remote-control pair
+```
+
+ChatGPT アプリの **Remote** で **Pair manually instead** を選び、`pair` が表示するコードを入力します。
 
 ### Antigravity
 
@@ -109,6 +119,12 @@ agy
 - SSH 接続先：端末に表示された認証 URL を手元のブラウザーで開いてログインし、発行された認証コードを SSH 端末に貼り付けます。
 
 保存済みの有効な認証情報がある場合は自動ログインします。[公式の認証手順](https://antigravity.google/docs/cli/install#authentication-workflows)も参照してください。
+
+リモートから利用する場合は、ログイン後に次を実行し、スマートフォンのブラウザーで [antigravity.google.com](https://antigravity.google.com) を開いてこのマシンを選びます。
+
+```bash
+agy remote-control start
+```
 
 ### GitHub CLI
 
@@ -149,31 +165,6 @@ BigQuery の MCP 接続には、使用するプロジェクトも指定します
 ```bash
 gcloud config set project <プロジェクトID>
 ```
-
-## スマートフォンからの操作
-
-上の認証を済ませたあと、スマートフォンから各 CLI を操作できるようにします。
-
-### Claude Code
-
-設定済みなので、`claude` を起動すると自動で接続します。スマートフォンの Claude アプリで **Code** を開き、セッションを選びます。Windows のデスクトップアプリでは **Settings > Claude Code > Enable remote control by default** を有効にします。
-
-### Codex
-
-```bash
-codex remote-control start
-codex remote-control pair
-```
-
-ChatGPT アプリの **Remote** で **Pair manually instead** を選び、`pair` が表示したコードを入力します。
-
-### Antigravity
-
-```bash
-agy remote-control start
-```
-
-スマートフォンのブラウザーで [antigravity.google.com](https://antigravity.google.com) を開き、このマシンを選びます。
 
 ## 追加セットアップ
 

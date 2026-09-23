@@ -60,7 +60,6 @@ debian12.sh or ubuntu2404-wsl.sh (run with sudo)
         ├── nodejs_clean_installer             Node.js
         ├── Install Codex CLI and enable remote connections
         ├── Configure the user's Claude Code
-        ├── Configure Antigravity permissions and register remote control (if already signed in)
         ├── install_claude_extensions          Plugins, MCP, hooks and skills
         └── install_typesafe_extensions        Jev plugins, skills and MCP
 ```
@@ -89,6 +88,8 @@ After authentication, start `claude`. Inside Claude Code, use `/mcp` to check MC
 
 To use Codex from Claude Code, complete the Codex login below, then run `/codex:setup` inside Claude Code.
 
+You can control a running `claude` from **Code** in the Claude phone app. In the Windows desktop app, turn on **Settings > Claude Code > Enable remote control by default**.
+
 ### Codex
 
 ```bash
@@ -96,6 +97,15 @@ codex login
 ```
 
 For device-code authentication, run `codex login --device-auth` instead.
+
+Setup enables remote connections for each user. To connect remotely, run the following after logging in:
+
+```bash
+codex remote-control start
+codex remote-control pair
+```
+
+In the ChatGPT app, open **Remote**, choose **Pair manually instead**, and enter the code displayed by `pair`.
 
 ### Antigravity
 
@@ -109,6 +119,12 @@ A login prompt appears on first launch.
 - Over SSH: open the authorization URL printed in the terminal in your local browser, sign in, then paste the resulting authorization code into the SSH terminal.
 
 A valid saved session signs you in automatically. See the [official authentication instructions](https://antigravity.google/docs/cli/install#authentication-workflows).
+
+To connect remotely, run the following after logging in, then open [antigravity.google.com](https://antigravity.google.com) in your phone's browser and choose this machine.
+
+```bash
+agy remote-control start
+```
 
 ### GitHub CLI
 
@@ -149,31 +165,6 @@ For the BigQuery MCP connection, also select the project:
 ```bash
 gcloud config set project <PROJECT_ID>
 ```
-
-## Control from your phone
-
-After signing in above, set up each CLI so you can operate it from your phone.
-
-### Claude Code
-
-It is already configured: `claude` connects automatically when it starts. On your phone, open **Code** in the Claude app and choose the session. In the Windows desktop app, turn on **Settings > Claude Code > Enable remote control by default**.
-
-### Codex
-
-```bash
-codex remote-control start
-codex remote-control pair
-```
-
-In the ChatGPT app, open **Remote**, choose **Pair manually instead**, and enter the code that `pair` printed.
-
-### Antigravity
-
-```bash
-agy remote-control start
-```
-
-Open [antigravity.google.com](https://antigravity.google.com) in your phone's browser and choose this machine.
 
 ## Optional setup
 
