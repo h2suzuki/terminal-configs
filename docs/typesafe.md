@@ -97,32 +97,6 @@ credential の読み書き拒否と Jev / Git の sandbox 除外を同時に満�
 ここでの deny は通常の sandbox 実行に対する制限です。ホスト実行を許可した他のコマンドや
 同じ OS ユーザーのプロセス全体を隔離するものではありません。
 
-## 配備・更新
-
-変更したファイルだけを、基本セットアップ (`debian12.sh` / `ubuntu2404-wsl.sh`) の `copy` 行どおりに `sudo install` で配備します。
-基本セットアップ全体の再実行は時間がかかるため、環境全体をリセットして再設定するときだけにします。
-
-`copy SRC DST` は `install -D files/SRC DST` を実行し、`-m` の無い行ではコピー元と同じ権限にそろえます。
-該当する行は `grep -n '<ファイル名>' debian12.sh ubuntu2404-wsl.sh` で探せます。
-TypeSafe に関わる行をリポジトリのルートで実行する形にすると、次のとおりです。
-
-```bash
-sudo install -D -m 0755 files/jev /usr/local/bin/jev
-sudo install -D -m 0755 files/install_typesafe_extensions /usr/local/bin/install_typesafe_extensions
-sudo install -D -m 0644 files/jev_context_gate.py /usr/local/lib/jev/jev_context_gate.py
-sudo install -D -m 0644 files/claude_managed-settings.json /etc/claude-code/managed-settings.json
-sudo install -D -m 0644 files/claude_managed-extensions.json /etc/claude-code/managed-settings.d/extensions.json
-sudo install -D -m 0644 files/codex_config.toml /etc/codex/config.toml
-sudo install -D -m 0644 files/codex_sandbox_exclusions.rules /etc/codex/rules/terminal-configs-sandbox-exclusions.rules
-```
-
-配備したら `cmp files/<SRC> <DST>` でコピー元との一致を確かめます。
-SDK の依存 (`files/jev_requirements.txt`) を変えたときは、それを `/usr/local/lib/jev/requirements.txt` に配備したうえで、基本セットアップにある `uv pip install` の行を root で実行します。
-
-SDK の実行環境は `/usr/local/lib/jev` にインストールします。
-プラグイン・スキルの更新とユーザーの MCP 再登録は `install_typesafe_extensions` で行えます。
-エージェントを再起動し、対象ユーザーで `jev api-key set` と `jev hello` を実行してください。
-
 ## 公式資料
 
 - [TypeSafe Agent skill](https://docs.typesafe.ai/agent-skill)
