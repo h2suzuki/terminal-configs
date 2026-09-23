@@ -25,7 +25,8 @@ PURPOSE = "依頼を記録し、大きな作業を分解し、自分の計画を
 NUDGE = (
     "mytask: "
     + PURPOSE
-    + "未読なら mytask Skill（~/.claude/skills/mytask/SKILL.md）を読み、その手順に従う。"
+    + "未読なら mytask Skill（~/.claude/skills/mytask/SKILL.md）を Skill ツールか Read で単独に読み、"
+    "作業 tool より先に依頼を登録する。"
     "読込済みなら今回の依頼・追加・訂正を反映する。"
 )
 CODEX_NUDGE = (
