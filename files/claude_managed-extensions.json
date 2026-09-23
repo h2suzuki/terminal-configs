@@ -6,6 +6,13 @@
       "mcp__mytask__TaskList",
       "mcp__jev__evaluate",
       "Bash(python3 /usr/local/lib/jev/jev_context_gate.py gather *)"
+    ],
+    "deny": [
+      "TaskCreate",
+      "TaskGet",
+      "TaskUpdate",
+      "TaskList",
+      "TodoWrite"
     ]
   },
   "hooks": {
