@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Requirement-driven tests for agent_coord, written before the implementation.
 
-Each test names the requirement sentence it pins (REQUIREMENTS_AND_DESIGN.ja.md,
-chapter.section or F<n> / V<n>). Unit tests drive the in-process Coordinator with an
-injected clock; scenario tests run the daemon, the transport, the hook and MCP
-adapters, and fake wake channels, following the workflows of chapter 3 and V1-V13.
+Each test names the requirement it pins by its ID in the claim map below, which is
+the requirement list for agent_coord. Unit tests drive the in-process Coordinator with
+an injected clock; scenario tests run the daemon, the transport, the hook and MCP
+adapters, and fake wake channels through the multi-session workflows.
 
 Claim map (ID -> requirement):
   C42-1  4.2 memory is the current state; changes persist before the reply; restart rebuilds
