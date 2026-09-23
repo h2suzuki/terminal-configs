@@ -483,6 +483,45 @@ class JevContextGateTest(unittest.TestCase):
         self.assertIn("def helper():", hunk["style_of_this_place"])
         self.assertIn("responsibility", call["questions"]["fits_0_0"]["instructions"])
 
+    def test_new_code_function_with_blank_lines_is_one_piece(self):
+        """Split on blank lines, the tail of a new function was judged alone with no place of its own."""
+        (self.repo / "loader.py").write_text(CODE)
+        self.git("add", "loader.py")
+        self.git("commit", "-q", "-m", "code")
+        added = "def save(path, text):\n    handle = open(path, 'w')\n\n    handle.write(text)\n\n    return handle.close()"
+        (self.repo / "loader.py").write_text(CODE + "\n\n" + added + "\n")
+        self.run_hook('git commit -m "x" -- loader.py')
+        hunk = self.only_hunk()
+        self.assertEqual([p["added_lines"] for p in hunk["pieces"]], [added])
+        self.assertEqual(hunk["place_and_its_purpose"], "(top level of the file)")
+
+    def test_code_hunk_over_the_chunk_limit_is_still_split(self):
+        (self.repo / "loader.py").write_text(CODE)
+        self.git("add", "loader.py")
+        self.git("commit", "-q", "-m", "code")
+        body = "\n".join(f"    value_{i} = compute('{'x' * 30}', {i})" for i in range(60))
+        (self.repo / "loader.py").write_text(CODE + "\n\ndef build():\n" + body + "\n")
+        self.run_hook('git commit -m "x" -- loader.py')
+        pieces = [p for c in self.calls() for h in c["state"]["hunks"] for p in h["pieces"]]
+        self.assertGreater(len(pieces), 1)
+        self.assertTrue(all(len(p["added_lines"]) <= gate.CHUNK_LIMIT for p in pieces))
+        self.assertTrue(pieces[0]["added_lines"].startswith("def build():"))
+        self.assertTrue(pieces[-1]["added_lines"].endswith(f"value_59 = compute('{'x' * 30}', 59)"))
+
+    def test_code_block_is_judged_with_the_paragraph_that_introduces_it(self):
+        """A README example judged apart from its explanation lost what it illustrates."""
+        self.add_to_codex_section(
+            "Run the login once.\n\n```bash\ncodex login --device-auth\n\ncodex whoami\n```\n\nThen restart."
+        )
+        self.run_hook('git commit -m "x" -- README.md')
+        self.assertEqual(
+            [p["added_lines"] for p in self.only_hunk()["pieces"]],
+            [
+                "Run the login once.\n\n```bash\ncodex login --device-auth\n\ncodex whoami\n```",
+                "Then restart.",
+            ],
+        )
+
     def test_shape_does_not_count_code_block_contents_as_prose_or_inline_code(self):
         lines = "Run the login once.\n\n```bash\ncodex login --device-auth\n\ncodex whoami\n```".splitlines()
         self.assertEqual(

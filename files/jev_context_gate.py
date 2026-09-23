@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 DENY_BELOW = 0.5  # real README commits: misplaced text ≤ 0.25, fitting ≥ 0.72
-QUESTION_VERSION = "fdet-2"
+QUESTION_VERSION = "fdet-3"
 STATE_LIMIT = 12000  # characters of JSON state per request; Jev caps state plus question at 32k tokens
 CHUNK_LIMIT = 1500  # characters of added text per judged piece
 AROUND = 6
@@ -365,18 +365,26 @@ def code_scope(lines: list[str], index: int) -> str:
     return " > ".join(chain) or "(top level of the file)"
 
 
-def paragraphs(added: list[str], first: int) -> list[tuple[int, list[str]]]:
-    # Judged whole, a long new section scored as fitting; split on blank lines, keeping fences and headings attached.
+def paragraphs(
+    added: list[str], first: int, markdown: bool
+) -> list[tuple[int, list[str]]]:
+    # Judged whole, a long new section scored as fitting; so Markdown splits on blank lines, but a code fragment had no place of its own.
     found, chunk, fenced, begin = [], [], False, first
     for offset, line in enumerate([*added, None]):
         heading_only = all(HEADING_RE.match(c) or not c.strip() for c in chunk)
-        blank = line is not None and not line.strip() and not fenced
+        opens_block = line is not None and FENCE_RE.match(line) and not fenced
+        new_paragraph = (
+            markdown and not fenced and line is not None and line.strip() and chunk and not chunk[-1].strip()
+        )  # fmt: skip
         full = (
             line is not None and chunk and len("\n".join([*chunk, line])) > CHUNK_LIMIT
         )
-        if chunk and (line is None or full or (blank and not heading_only)):
-            if any(c.strip() for c in chunk):
-                found.append((begin, chunk))
+        if chunk and (
+            line is None or full or (new_paragraph and not heading_only and not opens_block)
+        ):  # fmt: skip
+            while not chunk[-1].strip():
+                chunk.pop()
+            found.append((begin, chunk))
             chunk = []
         if line is None:
             break
@@ -396,7 +404,7 @@ def places(hunks: list[dict]) -> list[dict]:
     for hunk in (h for h in hunks if not h["new"]):
         name, image, pre = hunk["file"], hunk["image"], hunk["pre"]
         markdown = Path(name).suffix in MARKDOWN
-        for begin, chunk in paragraphs(hunk["added"], hunk["start"] - 1):
+        for begin, chunk in paragraphs(hunk["added"], hunk["start"] - 1, markdown):
             at = min(begin, len(image) - 1)
             if markdown:
                 kind, (location, place) = "docs", markdown_place(image, at)
