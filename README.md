@@ -105,7 +105,7 @@ codex remote-control start
 codex remote-control pair
 ```
 
-ChatGPT アプリの **Remote** で **Pair manually instead** を選び、`pair` が表示するコードを入力します。
+ChatGPT アプリの「リモート」で「接続を追加」を選び、「手動でペアリング」に `pair` が表示するコード（`XXXX-XXXX`）を入力します。
 
 ### Antigravity
 
