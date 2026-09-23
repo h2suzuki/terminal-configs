@@ -60,6 +60,7 @@ debian12.sh or ubuntu2404-wsl.sh (run with sudo)
         ├── nodejs_clean_installer             Node.js
         ├── Install Codex CLI and enable remote connections
         ├── Configure the user's Claude Code
+        ├── Configure Antigravity permissions and register remote control (if already signed in)
         ├── install_claude_extensions          Plugins, MCP, hooks and skills
         └── install_typesafe_extensions        Jev plugins, skills and MCP
 ```
@@ -96,14 +97,7 @@ codex login
 
 For device-code authentication, run `codex login --device-auth` instead.
 
-Setup enables remote connections for each user. To connect remotely, run the following after logging in:
-
-```bash
-codex remote-control start
-codex remote-control pair
-```
-
-Use the code displayed by `pair` to pair your client. See [Remote connections](https://learn.chatgpt.com/docs/remote-connections) for the client instructions.
+See [Control from your phone (Remote Control)](#control-from-your-phone-remote-control) for controlling this from your phone.
 
 ### Antigravity
 
@@ -163,6 +157,58 @@ For the BigQuery MCP connection, also select the project:
 ```bash
 gcloud config set project <PROJECT_ID>
 ```
+
+## Control from your phone (Remote Control)
+
+You can operate the Claude Code, Codex, and Antigravity CLIs from your phone. Complete the initial authentication above first, then set this up as the OS user who will use it. Keep the host awake and connected to the network while you operate it.
+
+| CLI | What you open on your phone | How it stays running | One-time setup |
+|---|---|---|---|
+| Claude Code | **Code** in the Claude app | A running `claude` connects automatically. Or `claude remote-control` | Start `claude` once in the project directory and approve the trust prompt |
+| Codex | **Remote** in the ChatGPT app (through the Mac/Windows desktop app) | `codex remote-control start` launches the daemon | Connection setup in the desktop app, or `codex remote-control pair` |
+| Antigravity | [Remote Control Dashboard](https://antigravity.google.com) in a browser | `agy remote-control start` registers the daemon (starts automatically at machine boot) | None (sign in with the same Google account) |
+
+### Claude Code
+
+The deployed `~/.claude/settings.json` sets `remoteControlAtStartup: true`, so a running `claude` connects to Remote Control automatically. On your phone, open **Code** in the Claude app and choose the session with a green dot.
+
+Beforehand, start `claude` once in the project directory you want to operate and approve the trust prompt. Trust is not saved for the home directory, so start it from the project directory.
+
+If you want to start a new session from your phone, keep the following running in the project directory. Over an SSH connection, run it inside something like `tmux`.
+
+```bash
+claude remote-control
+```
+
+The first time, it asks `Enable Remote Control? (y/n)`; answer `y`. Press the space bar to show a QR code. If the app isn't installed, running `/mobile` inside Claude Code shows a QR code for installing it.
+
+In the Windows desktop app, **Settings > Claude Code > Enable remote control by default** is the same setting. [Official Remote Control docs](https://code.claude.com/docs/en/remote-control)
+
+### Codex
+
+Setup enables remote control for each user (`codex app-server daemon enable-remote-control`). A stopped daemon does not start automatically, so run the following after logging in.
+
+```bash
+codex remote-control start
+codex remote-control pair
+```
+
+While the daemon is running, `pair` prints a manual pairing code that is valid only for a short time. With `codex remote-control pair --json`, it prints `pairingCode`, `manualPairingCode`, `environmentId`, and `expiresAt` as JSON. [CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli#cli-codex-remote-control)
+
+According to the official documentation, the hosts you can control from **Remote** in the ChatGPT phone app are machines running the ChatGPT desktop app on macOS or Windows. Setup starts from the desktop app and cannot be done from the Codex CLI. To use a Linux machine, add it as an SSH host under **Settings > Connections** in that desktop app, and connect your phone to the desktop app's host. On the SSH host, `codex` must be on the login shell's `PATH` and signed in. The documentation does not say where to enter the manual pairing code. [Codex Remote](https://learn.chatgpt.com/docs/remote), [Remote connections](https://learn.chatgpt.com/docs/remote-connections)
+
+### Antigravity
+
+`setup_user_environment` registers the daemon only when `agy` is already signed in and the daemon is stopped. The first time, sign in with `agy`, then run the following.
+
+```bash
+agy remote-control start
+agy remote-control status
+```
+
+The daemon is registered as a systemd user service and starts automatically at machine boot. Choose the instance name shown by `status` in the [Remote Control Dashboard](https://antigravity.google.com) opened in your phone's browser (sign in with the same Google account). Adding it to your home screen as a web app lets you receive push notifications.
+
+You can change the name with `agy remote-control start --name <name>` (running it again restarts the daemon). If it doesn't appear in the list, check the logs with `journalctl --user -u antigravity-cli-daemon -n 50`. [Official Remote Control docs](https://antigravity.google/docs/remote-control)
 
 ## Optional setup
 

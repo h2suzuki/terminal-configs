@@ -60,6 +60,7 @@ debian12.sh または ubuntu2404-wsl.sh（sudo で実行）
         ├── nodejs_clean_installer             Node.js
         ├── Codex CLI の導入・リモート接続の有効化
         ├── Claude Code のユーザー設定
+        ├── Antigravity の権限設定・リモート操作の登録（サインイン済みの場合）
         ├── install_claude_extensions          プラグイン・MCP・hooks・skills
         └── install_typesafe_extensions        Jev のプラグイン・スキル・MCP
 ```
@@ -107,14 +108,7 @@ codex login
 
 デバイスコードで認証する場合は、代わりに `codex login --device-auth` を実行します。
 
-リモート接続の機能はセットアップ時にユーザーごとに有効化されます。リモートから利用する場合は、認証後に次を実行します。
-
-```bash
-codex remote-control start
-codex remote-control pair
-```
-
-`pair` が表示するコードを使って接続先とペアリングします。接続先の操作は [Remote connections](https://learn.chatgpt.com/docs/remote-connections) を参照してください。
+スマートフォンからの操作は [スマートフォンからの操作 (Remote Control)](#スマートフォンからの操作-remote-control) を参照してください。
 
 ### Antigravity
 
@@ -174,6 +168,58 @@ BigQuery の MCP 接続には、使用するプロジェクトも指定します
 ```bash
 gcloud config set project <プロジェクトID>
 ```
+
+## スマートフォンからの操作 (Remote Control)
+
+Claude Code・Codex・Antigravity の CLI を、スマートフォンから操作できます。上の初回認証を済ませてから、使う OS ユーザーで設定してください。操作する間は、ホストをスリープさせずネットワークにつないでおきます。
+
+| CLI | スマートフォンで開くもの | 常駐のしかた | 初回だけ必要な操作 |
+|---|---|---|---|
+| Claude Code | Claude アプリの **Code** | 起動した `claude` が自動で接続。または `claude remote-control` | プロジェクトのディレクトリで一度 `claude` を起動し、信頼確認を承認 |
+| Codex | ChatGPT アプリの **Remote**（Mac / Windows のデスクトップアプリ経由） | `codex remote-control start` で daemon を起動 | デスクトップアプリでの接続設定、または `codex remote-control pair` |
+| Antigravity | ブラウザーで [Remote Control Dashboard](https://antigravity.google.com) | `agy remote-control start` で daemon を登録（マシン起動時に自動起動） | なし（同じ Google アカウントでサインイン） |
+
+### Claude Code
+
+配布する `~/.claude/settings.json` は `remoteControlAtStartup: true` なので、起動した `claude` は自動で Remote Control に接続します。スマートフォンでは Claude アプリの **Code** を開き、緑の点が付いたセッションを選びます。
+
+事前に、操作したいプロジェクトのディレクトリで一度 `claude` を起動し、信頼確認を承認してください。ホームディレクトリでは信頼が保存されないため、プロジェクトのディレクトリから起動します。
+
+スマートフォンから新しいセッションを始めたい場合は、プロジェクトのディレクトリで次を起動したままにします。SSH 接続先では `tmux` などの中で実行します。
+
+```bash
+claude remote-control
+```
+
+初回だけ `Enable Remote Control? (y/n)` と聞かれるので `y` と答えます。スペースキーで QR コードを表示できます。アプリが入っていない場合は、Claude Code 内で `/mobile` を実行するとインストール用の QR コードが出ます。
+
+Windows のデスクトップアプリでは **Settings > Claude Code > Enable remote control by default** が同じ設定です。[公式の Remote Control](https://code.claude.com/docs/en/remote-control)
+
+### Codex
+
+セットアップ時にユーザーごとに remote control を有効化しています（`codex app-server daemon enable-remote-control`）。止まっている daemon は自動では起動しないため、認証後に次を実行します。
+
+```bash
+codex remote-control start
+codex remote-control pair
+```
+
+`pair` は、daemon の起動中に、短時間だけ有効な手動ペアリングコードを表示します。`codex remote-control pair --json` とすると、`pairingCode`・`manualPairingCode`・`environmentId`・`expiresAt` を JSON で出力します。[CLI リファレンス](https://learn.chatgpt.com/docs/developer-commands?surface=cli#cli-codex-remote-control)
+
+公式文書では、スマートフォンの ChatGPT アプリ **Remote** から操作できるホストは、macOS / Windows の ChatGPT デスクトップアプリを動かすマシンです。設定はデスクトップアプリから始め、Codex CLI からは設定できません。Linux のマシンを使う場合は、そのデスクトップアプリの **Settings > Connections** で SSH ホストとして追加し、スマートフォンはデスクトップアプリのホストにつなぎます。SSH ホスト側では、ログインシェルの `PATH` に `codex` があり、認証済みである必要があります。手動ペアリングコードを入力する画面は、公式文書には書かれていません。[Codex Remote](https://learn.chatgpt.com/docs/remote)・[Remote connections](https://learn.chatgpt.com/docs/remote-connections)
+
+### Antigravity
+
+`setup_user_environment` は、`agy` がサインイン済みで daemon が止まっている場合だけ daemon を登録します。初回は `agy` でサインインしてから次を実行します。
+
+```bash
+agy remote-control start
+agy remote-control status
+```
+
+daemon は systemd のユーザーサービスとして登録され、マシン起動時に自動で起動します。`status` が表示するインスタンス名を、スマートフォンのブラウザーで開いた [Remote Control Dashboard](https://antigravity.google.com) で選びます（同じ Google アカウントでサインイン）。ホーム画面に Web アプリとして追加すると、プッシュ通知を受け取れます。
+
+名前は `agy remote-control start --name <名前>` で変えられます（再実行すると daemon が再起動します）。一覧に出ないときは `journalctl --user -u antigravity-cli-daemon -n 50` でログを確認します。[公式の Remote Control](https://antigravity.google/docs/remote-control)
 
 ## 追加セットアップ
 
