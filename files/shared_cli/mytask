@@ -510,8 +510,9 @@ class MyTasksTest(unittest.TestCase):
         task_update({"id": "2", "status": "in_progress"})
         tasks = read_tasks(self.path)
         self.assertNotIn("owner", tasks[1])
-        self.assertEqual([task["status"] for task in tasks],
-                         ["pending", "in_progress", "delegated"])
+        self.assertEqual(
+            [task["status"] for task in tasks], ["pending", "in_progress", "delegated"]
+        )
         delegate = {"id": "1", "status": "delegated"}
         self.assertIsNotNone(_argument_error("TaskUpdate", {**delegate, "owner": 1}))
         self.assertIsNone(_argument_error("TaskUpdate", {**delegate, "owner": "x"}))
