@@ -23,7 +23,7 @@ description: Test a concrete feature benefit before retaining it
 metadata:
   type: feedback
 reminder: 機能を残す前に利用者にとっての利益を示せ
-keywords: 利用者利益 feature benefit agent_coord
+keywords: 利用者利益, feature benefit, agent_coord, 機能の価値
 models: gpt-6-astra
 check: 回答に具体的な利用者利益があるか確認せよ
 when: prompt

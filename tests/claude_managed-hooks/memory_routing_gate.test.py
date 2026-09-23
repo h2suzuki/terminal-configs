@@ -18,6 +18,11 @@ Contract (each claim maps to one or more tests):
       when: absent -> allowed (default prompt). check:/when: are read from
       the frontmatter only, via the same ^key:[ \\t]*(.+)$ MULTILINE regex
       style as reminder:/keywords:
+  K1  keywords: must split into at least 4 non-empty phrases on , or 、 because
+      the Stop route matches each phrase as a substring; a space-separated list
+      is one phrase -> deny naming the 4-phrase rule
+  K2  when: containing stop without a check: line -> deny naming check:, even
+      for an existing entry, because the Stop route skips entries without check:
   R1  regression: pre-existing denies (missing reminder:, missing keywords:,
       bad models: tag, oneline_summary: present, missing grant) and the
       current allow path (fully valid new entry with check: and
@@ -50,7 +55,7 @@ DEFAULT_FIELDS = {
     "description": "description: contract probe entry for memory_routing_gate tests",
     "metadata": "metadata:\n  type: feedback",
     "reminder": "reminder: 同じ日付を書く前に日付の生成元を確認せよ",
-    "keywords": "keywords: codex_broker_reap",
+    "keywords": "keywords: codex_broker_reap, 日付の生成元, 同じ日付, 日付の確認",
     "models": "models: fable-5",
     "check": "check: 直前の出力に codex_broker_reap の呼び出し有無を確認せよ",
     "when": "when: prompt stop",
@@ -189,6 +194,35 @@ class GateTest(unittest.TestCase):
         self.grant(NEW_ENTRY)
         proc = self.run_guard(NEW_ENTRY, make_entry({"when": None}))
         self.assert_allow(proc)
+
+    def test_k1_space_separated_keywords_denied(self) -> None:
+        """K1: a space-separated keywords: list is one phrase -> deny naming 4."""
+        self.grant(NEW_ENTRY)
+        val = "keywords: codex_broker_reap 日付の生成元 同じ日付 日付の確認"
+        proc = self.run_guard(NEW_ENTRY, make_entry({"keywords": val}))
+        self.assert_deny(proc, "4 個")
+
+    def test_k1_three_phrases_denied(self) -> None:
+        """K1: three comma-separated phrases are below the minimum -> deny."""
+        self.grant(NEW_ENTRY)
+        val = "keywords: codex_broker_reap, 日付の生成元, 同じ日付"
+        proc = self.run_guard(NEW_ENTRY, make_entry({"keywords": val}))
+        self.assert_deny(proc, "4 個")
+
+    def test_k1_four_touten_phrases_allowed(self) -> None:
+        """K1: four phrases separated by 、 meet the minimum -> allowed."""
+        self.grant(NEW_ENTRY)
+        val = "keywords: codex_broker_reap、日付の生成元、同じ日付、日付の確認"
+        proc = self.run_guard(NEW_ENTRY, make_entry({"keywords": val}))
+        self.assert_allow(proc)
+
+    def test_k2_existing_stop_entry_without_check_denied(self) -> None:
+        """K2: when: stop without check: -> deny even for an existing entry."""
+        self.grant(EXISTING_ENTRY)
+        proc = self.run_guard(
+            EXISTING_ENTRY, make_entry({"check": None, "when": "when: stop"})
+        )
+        self.assert_deny(proc, "check:")
 
     def test_n5_when_valid_subset_allowed(self) -> None:
         """N5: when: with a valid space-separated subset -> allowed."""

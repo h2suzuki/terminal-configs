@@ -108,6 +108,7 @@ ENTRY_PREFIXES = ("feedback_", "reference_")  # 行動是正の教訓 / 外部�
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 CHECK_MAX_LEN = 100  # check: は reminder より短く保つ (Stop 時 1 動作限定)
+KEYWORDS_MIN = 4  # 3 語句以下はまず一致せず、 区切りの付け忘れであることが多い
 WHEN_VALUES = {"prompt", "stop", "after-subagent"}
 # 禁止文のみ (肯定の検査動作 token を 1 つも含まない) を deny する判定用
 _CHECK_NEGATIVE_RE = re.compile(r"(するな|しないこと|禁止|べからず|NG)[。.!！]?$")
@@ -327,6 +328,12 @@ def _content_problem(path: str, content: str) -> str | None:
             "固有語が無い、 または一般語のみ)。 tool 名・path・error code・"
             "固有名詞など選択的な語を入れてください。"
         )
+    # Stop 経路 (stop_checks._keyword_hits) は , と 、 で区切った語句ごとに部分一致を数える
+    if len([p for p in re.split(r"[,、]", keywords) if p.strip()]) < KEYWORDS_MIN:
+        return (
+            f"keywords は , か 、 で区切った語句を {KEYWORDS_MIN} 個以上にしてください。 "
+            "space 区切りは 1 語句と数えられ、 Stop の memory-reminder で本文と一致しません。"
+        )
     mm = re.search(r"^models:[ \t]*(.+)$", fm, flags=re.MULTILINE)
     if not (mm and mm.group(1).strip()):
         return (
@@ -363,6 +370,11 @@ def _content_problem(path: str, content: str) -> str | None:
             return (
                 "when: の値は prompt / stop / after-subagent の space 区切り部分集合のみです "
                 "(省略時は既定 prompt)。"
+            )
+        if "stop" in mw.group(1).split() and not check_val:
+            return (
+                "when: に stop を含む entry には check: 行が必要です (既存 entry でも)。 "
+                "Stop の memory-reminder は check: の無い entry を選びません。"
             )
     if base.startswith("feedback_"):
         # fence 内の見出し様行を除外 (check_skill_writing と同じ手当て)
