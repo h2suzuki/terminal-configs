@@ -17,7 +17,7 @@ LEDGER_MIN_EDITS = 3
 TASK_TOOLS = {"TaskCreate", "TaskUpdate", "TodoWrite"}
 OPEN_TASK_REF_CAP = 16
 OPEN_TASK_REF_CHARS = 24
-CLOSED_STATUSES = {"completed", "cancelled", "deleted"}
+CLOSED_STATUSES = {"completed", "cancelled", "skipped", "deleted"}
 TASK_BODY_CHARS = 60
 TASK_STATUS_EMOJI = {
     "pending": "◻️",
@@ -682,7 +682,7 @@ def _task_close(payload, scan, tasks):
     return [
         f"task-close-nudge: 完了を述べたが open Task が {len(opened)} 件ある:\n"
         + "\n".join(_task_tree(opened))
-        + "\n終わった項目は completed に、不要な項目は cancelled にする"
+        + "\n終わった項目は completed に、不要な項目は cancelled に、理由があって実施しない項目は skipped にする"
     ]
 
 

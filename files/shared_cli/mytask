@@ -21,13 +21,21 @@ from unittest import mock
 
 Task = dict[str, object]
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 CLIENT = "claude"
 CODEX_THREAD: ContextVar[str | None] = ContextVar("codex_thread", default=None)
 DEFAULT_PROTOCOL_VERSION = "2025-11-25"
 TIME_FORMAT = "%Y-%m-%d %H:%M"
-STATUSES = ("pending", "in_progress", "delegated", "blocked", "completed", "cancelled")
-CLOSED_STATUSES = frozenset({"completed", "cancelled"})
+STATUSES = (
+    "pending",
+    "in_progress",
+    "delegated",
+    "blocked",
+    "completed",
+    "cancelled",
+    "skipped",
+)
+CLOSED_STATUSES = frozenset({"completed", "cancelled", "skipped"})
 EMOJI = {
     "pending": "◻️",
     "in_progress": "▶️",
@@ -35,13 +43,14 @@ EMOJI = {
     "blocked": "🚧",
     "completed": "✅",
     "cancelled": "✖️",
+    "skipped": "⏭️",
 }
 TASK_ID = re.compile(r"^[0-9]+(?:-[0-9]+)*$")
 
 TOOLS = [
     {
         "name": "TaskList",
-        "description": "List unfinished session work items in ID order. completed_limit optionally adds the most recently closed (completed or cancelled) items (default 0, maximum 100). Runs a court-bug contamination check and prepends a warning if the session transcript looks contaminated (#64108).",
+        "description": "List unfinished session work items in ID order. completed_limit optionally adds the most recently closed (completed, cancelled, or skipped) items (default 0, maximum 100). Runs a court-bug contamination check and prepends a warning if the session transcript looks contaminated (#64108).",
         "inputSchema": {"type": "object", "properties": {"completed_limit": {"type": "integer", "minimum": 0, "maximum": 100, "default": 0}}, "additionalProperties": False},
     },
     {
@@ -60,7 +69,7 @@ TOOLS = [
     },
     {
         "name": "TaskUpdate",
-        "description": "Update a work item's status and return only that item plus any auto-demoted IDs. Keep exactly one in_progress at a time (TodoWrite semantics): starting a new item auto-demotes the previous in_progress to pending. Use delegated for items a subagent or another session is working on; any number may be delegated and they are never auto-demoted. `owner` names the delegate (only kept while delegated). Use cancelled for items no longer needed; like completed, it closes the item.",
+        "description": "Update a work item's status and return only that item plus any auto-demoted IDs. Keep exactly one in_progress at a time (TodoWrite semantics): starting a new item auto-demotes the previous in_progress to pending. Use delegated for items a subagent or another session is working on; any number may be delegated and they are never auto-demoted. `owner` names the delegate (only kept while delegated). Use cancelled for items no longer needed, and skipped for items deliberately left undone with no plan to resume; both close the item like completed.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -544,22 +553,28 @@ class MyTasksTest(unittest.TestCase):
         self.assertTrue(task_create({"content": "Missing", "parent": "1-9"})[1])
         self.assertEqual(self.path.read_text(), before)
 
-    def test_cancelled_closes_like_completed(self):
-        tasks: list[Task] = [
-            {"id": "1", "content": "Dropped", "status": "pending"},
-            {"id": "2", "content": "Open", "status": "pending"},
-        ]
-        self.assertIsNone(write_tasks(self.path, tasks))
-        with mock.patch(f"{__name__}._now", return_value=datetime(2026, 7, 14, 10, 0)):
-            text, error = task_update({"id": "1", "status": "cancelled"})
-        self.assertFalse(error)
-        self.assertTrue(text.startswith("1 ✖️ Dropped"))
-        self.assertEqual(read_tasks(self.path)[0]["completed_at"], "2026-07-14 10:00")
-        self.assertEqual(task_list()[0], "2 ◻️ Open")
-        self.assertEqual(task_list(1)[0], "1 ✖️ Dropped\n2 ◻️ Open")
-        self.assertIsNone(
-            _argument_error("TaskUpdate", {"id": "1", "status": "cancelled"})
-        )
+    def test_cancelled_and_skipped_close_like_completed(self):
+        for status, emoji in (("cancelled", "✖️"), ("skipped", "⏭️")):
+            with self.subTest(status=status):
+                tasks: list[Task] = [
+                    {"id": "1", "content": "Closed", "status": "pending"},
+                    {"id": "2", "content": "Open", "status": "pending"},
+                ]
+                self.assertIsNone(write_tasks(self.path, tasks))
+                with mock.patch(
+                    f"{__name__}._now", return_value=datetime(2026, 7, 14, 10, 0)
+                ):
+                    text, error = task_update({"id": "1", "status": status})
+                self.assertFalse(error)
+                self.assertTrue(text.startswith(f"1 {emoji} Closed"))
+                self.assertEqual(
+                    read_tasks(self.path)[0]["completed_at"], "2026-07-14 10:00"
+                )
+                self.assertEqual(task_list()[0], "2 ◻️ Open")
+                self.assertEqual(task_list(1)[0], f"1 {emoji} Closed\n2 ◻️ Open")
+                self.assertIsNone(
+                    _argument_error("TaskUpdate", {"id": "1", "status": status})
+                )
 
     def test_nested_numeric_order_and_hidden_ids_are_not_reused(self):
         ids = ["4-10", "4-1-10", "5", "4-1-2", "4-1", "4", "4-2"]

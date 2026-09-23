@@ -1627,12 +1627,14 @@ class TaskCloseNudgeTest(StopChecksTest):
             [
                 "task-close-nudge: 完了を述べたが open Task が 1 件ある:",
                 "1 ▶️ 覚え書き",
-                "終わった項目は completed に、不要な項目は cancelled にする",
+                "終わった項目は completed に、不要な項目は cancelled に、理由があって実施しない項目は skipped にする",
             ],
         )
 
     def test_c21_blocked_counts_as_open_and_closed_states_do_not(self):
-        self.ledger(("1", "blocked"), ("2", "completed"), ("3", "cancelled"))
+        self.ledger(
+            ("1", "blocked"), ("2", "completed"), ("3", "cancelled"), ("4", "skipped")
+        )
         proc = run_hook(self.fx, self.DONE)
         self.assertWarnsFamily(proc, self.FAMILY)
         self.assertIn("open Task が 1 件ある", self.nudge(proc))

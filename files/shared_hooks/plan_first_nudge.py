@@ -37,8 +37,8 @@ CODEX_NUDGE = (
 )
 SYNTHETIC_PREFIX = "<task-notification>"
 
-CLOSE_NUDGE = "mytask: 終わった項目は completed に、不要な項目は cancelled にする"
-CLOSED_STATUSES = frozenset({"completed", "cancelled", "deleted"})
+CLOSE_NUDGE = "mytask: 終わった項目は completed に、不要な項目は cancelled に、理由があって実施しない項目は skipped にする"
+CLOSED_STATUSES = frozenset({"completed", "cancelled", "skipped", "deleted"})
 STATUS_EMOJI = {
     "pending": "◻️",
     "in_progress": "▶️",
@@ -319,7 +319,13 @@ class CloseNudgeTest(unittest.TestCase):
 
     def test_closed_ledger_and_missing_session_add_nothing(self):
         self.assertIsNone(_close_block(self.payload))
-        self.ledger([self.task("1", "completed"), self.task("2", "cancelled")])
+        self.ledger(
+            [
+                self.task("1", "completed"),
+                self.task("2", "cancelled"),
+                self.task("3", "skipped"),
+            ]
+        )
         self.assertIsNone(_close_block(self.payload))
         self.assertIsNone(_close_block({"prompt": "session_id なし"}))
 
