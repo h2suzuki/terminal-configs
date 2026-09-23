@@ -20,7 +20,7 @@ repo top の `todos.md` は、 session を跨いで引き継ぐ未完了作業�
 
 | 内容 | 置き場所 |
 |---|---|
-| session 内で終わる作業 | Task (TaskCreate / TaskUpdate。 Task tool が gate off なら mytask MCP)。 todos.md に書かない |
+| session 内で終わる作業 | mytask (mytask MCP の TaskCreate / TaskUpdate)。 todos.md に書かない |
 | session を跨ぐ未完了作業の概要 | todos.md に 1 項目 |
 | その作業の詳細 (状態・次の action・必読・注意) | repo top の `last-session-handoff.md` (handoff skill が書く) |
 | GitHub issue が使える repo の作業 | issue に起こして正本にしてよい。 todos.md は issue 番号と再開点の 1 行にする。 GitHub は使えるとは限らないので必須にしない |

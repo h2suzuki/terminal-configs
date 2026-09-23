@@ -26,7 +26,7 @@ session 終了時に作業が完結し次 session 再開不要なら、 該当 t
 
 1. **作業途中判定**: 次 session で再開が必要か? 完了済なら handoff section も todos.md の項目も不要、 commit log で充分
 2. `git status` で working tree clean か確認、 未 commit は `commit-discipline` skill で処理
-3. **Task 残処理**: TaskList (Task tool が gate off の session は mytask MCP) で open 項目を列挙し、 ゼロにする — 次 session へ持ち越す項目は、 詳細を handoff section に書き、 todos.md に「未完了」の概要を 1 項目置いて (GitHub issue が使えるなら issue に起こして番号の 1 行でもよい) から close、 持ち越さない項目はその場で close。 session 終了で Task list は死蔵され次 session から見えない。 open Task を残した wind-down は stop_checks hook (open-tasks-at-wind-down) が block する
+3. **Task 残処理**: mytask MCP の TaskList で open 項目を列挙し、 ゼロにする — 次 session へ持ち越す項目は、 詳細を handoff section に書き、 todos.md に「未完了」の概要を 1 項目置いて (GitHub issue が使えるなら issue に起こして番号の 1 行でもよい) から close、 持ち越さない項目はその場で close。 session 終了で Task list は死蔵され次 session から見えない。 open Task を残した wind-down は stop_checks hook (open-tasks-at-wind-down) が block する
 4. **background 残処理**: 本 session で起動した Agent / Workflow / Monitor / `run_in_background` の Bash が完了通知を返したかを確かめる。 返っていなければ **完了を待ち合わせる** (成果が要る) か **TaskStop で止める** (要らない) のどちらかを選び、 未回収のまま閉じない。 残したまま終了すると harness が「Background work is running」で終了を阻む
 5. `todos.md` に、 持ち越す作業ごとの 1 項目 (`- <作業名 または #issue 番号> — 再開点: <一言>`、 書式は `writing-todos` skill) があるか確認。 項目が無いまま handoff section だけ書くのは禁止 (lifecycle 紐付けが切れる)
 6. 本 session で触れた canonical doc (`.claude/CLAUDE.md` / `~/.claude/CLAUDE.md` / `/etc/claude-code/CLAUDE.md`) に新規 rule が反映済か確認 — rule 追加分は当該 file に書き、 handoff には pointer のみ

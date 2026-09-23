@@ -1,8 +1,10 @@
 ---
 name: mytask
-description: Record user requests, break large work into concrete steps, and review your own plan against the request as work evolves. Use when starting or resuming work, receiving additions or corrections, or deciding what remains. Use Claude native Task tools when available and mytask MCP otherwise, including Codex.
+description: Record user requests, break large work into concrete steps, and review your own plan against the request as work evolves. Use when starting or resuming work, receiving additions or corrections, or deciding what remains. Use the mytask MCP in both Claude Code and Codex, not Claude native Task tools.
 when_to_use: TRIGGER when starting or resuming work, when the user adds, corrects, or reprioritizes a request ("追加" / "訂正" / "やっぱり"), when splitting large work into steps, or before reporting completion or remaining work. SKIP for a one-shot answer that needs no tools.
 ---
+
+<!-- skill-lint: allow — Codex と共有する Skill のため、Claude Code 用 Skill の節構成に揃えない -->
 
 # Mytask
 
@@ -44,15 +46,14 @@ when_to_use: TRIGGER when starting or resuming work, when the user adds, correct
 
 - 親は `4`、子は `4-1`、孫は `4-1-2` のように、直属の親の番号へ `-連番` を追加する。兄弟ごとに 1 から採番し、完了・非表示になった番号も再利用せず、既存番号を振り直さない。
 - mytask MCP では返された自動採番 ID をそのまま項目番号として使う。子・孫は直属の親の ID を `parent` に指定し、本文の `#4` だけで親子関係を代用しない。訂正・計画変更を別項目に残す場合も、対象項目の子として登録する。
-- Claude 標準 Task ではツールが返す操作用 ID と階層番号を区別する。階層番号を subject の先頭に付け、description に親の操作用 ID を記録する。更新には操作用 ID、ユーザーへの表示には階層番号を使う。
 
 ### Claude Code
 
-標準の Task ツールが使える場合はそれを使う。同じ作業を mytask MCP に二重登録しない。標準 Task が利用できない場合は mytask MCP を使う。必要なら ToolSearch でツールを取得する。Skill の読み込みとツールの取得を済ませ、実作業のツールを呼ぶ前に依頼を登録・更新する。
+mytask MCP を使う。Claude 標準の Task ツール (`TaskCreate`・`TodoWrite` など) は使わない。必要なら ToolSearch でツールを取得する。Skill の読み込みとツールの取得を済ませ、実作業のツールを呼ぶ前に依頼を登録・更新する。
 
 ### Codex
 
-mytask MCP の `TaskList`、`TaskCreate`、`TaskUpdate` を使う。Claude Code 固有の ToolSearch や feature gate は前提にしない。
+mytask MCP の `TaskList`、`TaskCreate`、`TaskUpdate` を使う。Claude Code 固有の ToolSearch は前提にしない。
 
 ### mytask MCP
 
