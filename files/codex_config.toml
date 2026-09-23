@@ -77,6 +77,15 @@ type = "command"
 command = "/usr/local/bin/scratch_file_management hook"
 timeout = 30
 
+# Before git commit, Jev judges whether each added hunk fits its context; failures skip with a notice.
+[[hooks.PreToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "python3 /etc/codex/hooks/jev_context_gate.py"
+timeout = 60
+
 # Shared memory reminders; an empty match exits 0 silently and never blocks.
 [[hooks.SessionStart]]
 

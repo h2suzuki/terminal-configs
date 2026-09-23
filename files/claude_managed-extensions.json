@@ -46,7 +46,8 @@
           { "type": "command", "command": "/etc/claude-code/hooks/check_commit_format.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/deny_unsafe_git_reset.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/sandbox_exclusion_guard.py" },
-          { "type": "command", "command": "/etc/claude-code/hooks/root_dir_guard.py" }
+          { "type": "command", "command": "/etc/claude-code/hooks/root_dir_guard.py" },
+          { "type": "command", "command": "/etc/claude-code/hooks/jev_context_gate.py", "timeout": 60 }
         ]
       },
       {
