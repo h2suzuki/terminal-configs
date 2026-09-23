@@ -91,32 +91,13 @@ Claude Code から Codex を使う場合は、下記の Codex の認証後に Cl
 
 ### Codex
 
-共通の作業指針は `files/codex_user-AGENTS.md` を原本とし、システム導入時に
-`/etc/codex/skel/AGENTS.md`、`setup_user_environment` 実行時に各ユーザーの
-`~/.codex/AGENTS.md` へコピーします。既存の同名ファイルは更新されます。
-
-Claude Code の共通方針 (`files/claude_managed-CLAUDE.md`) も、この原本と本文・見出しを一致させます。差分は次の2点に限定します。
-
-- 個人の呼称: Codex は `~/.codex/AGENTS.md` に含め、Claude は `~/.claude/CLAUDE.md` (`files/claude_user-CLAUDE.md`) に分離します。Claude managed の配備先は `/etc/claude-code/CLAUDE.md` なので、個人の呼称は含めません。
-- Claude 固有の最終行書式: 既存の Stop hook `communication-lint` が検査するため、managed の独立した節に残します。Codex の共通方針には加えません。
-
-共通方針を変更するときは両方を更新し、`python3 tests/agent_guidance.test.py` で一致を確認します。
-
 ```bash
 codex login
 ```
 
 デバイスコードで認証する場合は、代わりに `codex login --device-auth` を実行します。
 
-スマートフォンからの操作は [スマートフォンからの操作 (Remote Control)](#スマートフォンからの操作-remote-control) を参照してください。
-
 ### Antigravity
-
-`setup_user_environment` は `setup_agy_permissions --sandbox-auto --shared-policy /etc/antigravity-cli/skel/permissions.json` を通して、`~/.gemini/antigravity-cli/settings.json` を更新します。sandbox 内は自動実行 (`toolPermission: proceed-in-sandbox`, `enableTerminalSandbox: true`)、agent-coord のツールはサーバー単位 (`mcp(agent-coord_agent_coord/*)`) で許可します。[公式の sandbox 設定](https://www.antigravity.google/docs/sandbox?tab=cli)
-
-共通許可の原本は `files/antigravity_user-permissions.json` です。Codex のレビュー済みコマンド例外11件とネットワーク許可、Claude の追加書込先と資格情報・ソケットの読取禁止を対応付け、`tests/setup_agy_permissions.test.py` で差分を検出します。実行形式の評価や拒否の優先順位は agy 自身の仕様に従い、Claude の動的な auto 判定や環境変数フィルターまで同一とはみなしません。広すぎる `command(*)`・`mcp(*)` や、曖昧な `node` の許可は追加しません。
-
-既存設定・`deny`・`ask` は保持し、再実行でもルールを重複させません。明示的な `deny` / `ask` は追加した許可より優先されます。これらの許可設定は、セッション識別や待機中の起床の修正とは別です。[公式の権限仕様](https://www.antigravity.google/docs/permissions?tab=cli)
 
 ```bash
 agy
@@ -169,64 +150,30 @@ BigQuery の MCP 接続には、使用するプロジェクトも指定します
 gcloud config set project <プロジェクトID>
 ```
 
-## スマートフォンからの操作 (Remote Control)
+## スマートフォンからの操作
 
-Claude Code・Codex・Antigravity の CLI を、スマートフォンから操作できます。上の初回認証を済ませてから、使う OS ユーザーで設定してください。操作する間は、ホストをスリープさせずネットワークにつないでおきます。
-
-| CLI | スマートフォンで開くもの | 常駐のしかた | 初回だけ必要な操作 |
-|---|---|---|---|
-| Claude Code | Claude アプリの **Code** | 起動した `claude` が自動で接続。または `claude remote-control` | プロジェクトのディレクトリで一度 `claude` を起動し、信頼確認を承認 |
-| Codex | ChatGPT アプリの **Remote** | `codex remote-control start` で daemon を起動 | `codex remote-control pair` のコードを **Pair manually instead** で入力 |
-| Antigravity | ブラウザーで [Remote Control Dashboard](https://antigravity.google.com) | `agy remote-control start` で daemon を登録（マシン起動時に自動起動） | なし（同じ Google アカウントでサインイン） |
+上の認証を済ませたあと、スマートフォンから各 CLI を操作できるようにします。
 
 ### Claude Code
 
-配布する `~/.claude/settings.json` は `remoteControlAtStartup: true` なので、起動した `claude` は自動で Remote Control に接続します。スマートフォンでは Claude アプリの **Code** を開き、緑の点が付いたセッションを選びます。
-
-事前に、操作したいプロジェクトのディレクトリで一度 `claude` を起動し、信頼確認を承認してください。ホームディレクトリでは信頼が保存されないため、プロジェクトのディレクトリから起動します。
-
-スマートフォンから新しいセッションを始めたい場合は、プロジェクトのディレクトリで次を起動したままにします。SSH 接続先では `tmux` などの中で実行します。
-
-```bash
-claude remote-control
-```
-
-初回だけ `Enable Remote Control? (y/n)` と聞かれるので `y` と答えます。スペースキーで QR コードを表示できます。アプリが入っていない場合は、Claude Code 内で `/mobile` を実行するとインストール用の QR コードが出ます。
-
-Windows のデスクトップアプリでは **Settings > Claude Code > Enable remote control by default** が同じ設定です。[公式の Remote Control](https://code.claude.com/docs/en/remote-control)
+設定済みなので、`claude` を起動すると自動で接続します。スマートフォンの Claude アプリで **Code** を開き、セッションを選びます。Windows のデスクトップアプリでは **Settings > Claude Code > Enable remote control by default** を有効にします。
 
 ### Codex
-
-セットアップ時にユーザーごとに remote control を有効化しています（`codex app-server daemon enable-remote-control`）。止まっている daemon は自動では起動しないため、上の `codex login` で認証してから次を実行します。
 
 ```bash
 codex remote-control start
 codex remote-control pair
 ```
 
-`start` は `This machine is available for remote control as <ホスト名>` と表示します。`pair` は、daemon の起動中に、短時間だけ有効なペアリングコードを `Pairing code: XXXX-XXXX` の形で表示します。`--json` を付けると、このコードは `manualPairingCode` に入ります（ほかに `pairingCode`・`environmentId`・`expiresAt`）。daemon を再起動するときは `codex remote-control stop` の後に `start` を実行します。[CLI リファレンス](https://learn.chatgpt.com/docs/developer-commands?surface=cli#cli-codex-remote-control)
-
-スマートフォンでは次のように接続します（ベータ機能。Debian 12・Codex 0.156.0 で接続を確認済み、2026-09-23）。
-
-1. ChatGPT アプリを最新版にし、**Remote** を開きます。
-2. **Pair manually instead** を押し、`pair` が表示したコードを入力します。コードは短時間で失効するので、切れたら `pair` をやり直します。
-3. OpenAI の認可画面で同じアカウントとワークスペースを確認し、多要素認証などを済ませます。
-4. **Remote** に `start` が表示したホスト名が出るので選び、プロジェクトを選んでタスクを始めます。コマンドの承認や変更の確認もここで行います。
-
-公式文書は Mac / Windows のデスクトップアプリからの設定だけを説明していますが、CLI の remote-control にデスクトップアプリは不要で、文書が古いと OpenAI の担当者が回答しています（[openai/codex#44762](https://github.com/openai/codex/issues/44762)）。**Pair manually instead** のボタン名は利用者の報告によります（[openai/codex#27565](https://github.com/openai/codex/issues/27565)）。[Codex Remote](https://learn.chatgpt.com/docs/remote)
+ChatGPT アプリの **Remote** で **Pair manually instead** を選び、`pair` が表示したコードを入力します。
 
 ### Antigravity
 
-`setup_user_environment` は、`agy` がサインイン済みで daemon が止まっている場合だけ daemon を登録します。初回は `agy` でサインインしてから次を実行します。
-
 ```bash
 agy remote-control start
-agy remote-control status
 ```
 
-daemon は systemd のユーザーサービスとして登録され、マシン起動時に自動で起動します。`status` が表示するインスタンス名を、スマートフォンのブラウザーで開いた [Remote Control Dashboard](https://antigravity.google.com) で選びます（同じ Google アカウントでサインイン）。ホーム画面に Web アプリとして追加すると、プッシュ通知を受け取れます。
-
-名前は `agy remote-control start --name <名前>` で変えられます（再実行すると daemon が再起動します）。一覧に出ないときは `journalctl --user -u antigravity-cli-daemon -n 50` でログを確認します。[公式の Remote Control](https://antigravity.google/docs/remote-control)
+スマートフォンのブラウザーで [antigravity.google.com](https://antigravity.google.com) を開き、このマシンを選びます。
 
 ## 追加セットアップ
 
