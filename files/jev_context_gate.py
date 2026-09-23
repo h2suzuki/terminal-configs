@@ -49,6 +49,7 @@ SCOPE_RE = re.compile(
     r"[A-Za-z_][\w:$-]*\s*\([^()]*\)(?:\s*:\s*[^{};=]+?)?\s*\{"
     r")"
 )
+HEREDOC_RE = re.compile(r"\A\$\(cat <<-?(['\"]?)(\w+)\1\n(.*?)\n\2\n?\)\Z", re.S)
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 LINK_RE = re.compile(r"\[[^\]]+\]\(https?://[^)]+\)")
 TABLE_RE = re.compile(r"^\s*\|.*\|\s*$")
@@ -136,6 +137,8 @@ def commit_message(options: list[str]) -> str:
             parts.append(option.split("=", 1)[1])
         elif option.startswith("-m") and len(option) > 2:
             parts.append(option[2:])
+    # shlex leaves -m "$(cat <<'EOF' ... EOF)" unexpanded; the commit hooks require that form.
+    parts = [(m.group(3) if (m := HEREDOC_RE.match(p)) else p) for p in parts]
     return "\n\n".join(p for p in parts if p)
 
 

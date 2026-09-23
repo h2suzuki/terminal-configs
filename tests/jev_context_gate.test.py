@@ -311,6 +311,18 @@ class JevContextGateTest(unittest.TestCase):
         background = self.calls()[0]["state"]["form"]["background_of_change"]
         self.assertEqual(background, f"docs: Add SSH login ({body.strip()[:300]})")
 
+    def test_heredoc_message_gives_its_text_as_the_background(self):
+        """Commit hooks require -m "$(cat <<'EOF' ...)"; unexpanded, the subject was the shell text itself."""
+        self.add_to_codex_section("Run `codex login --device-auth` over SSH.")
+        for opener in ("<<'EOF'", '<<"EOF"', "<<EOF", "<<-'EOF'"):
+            self.sent.clear()
+            self.run_hook(
+                f'git commit -q -m "$(cat {opener}\ndocs: Add SSH login\n\nExplain SSH login.\nEOF\n)" -- README.md'
+            )
+            background = self.calls()[0]["state"]["form"]["background_of_change"]
+            self.assertEqual(background, "docs: Add SSH login (Explain SSH login.)", opener)
+        self.assertEqual(self.records()[-1]["subject"], "docs: Add SSH login")
+
     def test_commit_without_a_message_has_an_empty_background(self):
         self.add_to_codex_section("Run `codex login --device-auth` over SSH.")
         self.assertEqual(self.run_hook("git commit -- README.md"), {})
