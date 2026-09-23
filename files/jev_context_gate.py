@@ -3,6 +3,7 @@ Only a clear "does not fit" denies; any Jev, key, or network failure skips the c
 
 from __future__ import annotations
 
+import argparse
 import datetime
 import hashlib
 import json
@@ -10,6 +11,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -629,3 +631,35 @@ def check(payload: dict, evaluate) -> dict:
 
 def skip_notice(reason: object) -> str:
     return f"jev-context-gate: Jev の文脈チェックを省略しました (理由: {reason})"
+
+
+def gather(cwd: str, command: str) -> list[dict]:
+    """The Jev requests check() would send for this Bash command, for a judge outside the jev server."""
+    target = commit_target(
+        {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd}
+    )
+    if target is None:
+        return []
+    cwd_path, paths, amend, all_tracked, message = target
+    hunks = changed_hunks(cwd_path, paths, amend, all_tracked)
+    return [
+        {"state": public(s), "questions": questions(s)}
+        for s in (requests(hunks, message) if hunks else [])
+    ]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Print the Jev requests for a git commit (gather)."
+    )
+    commands = parser.add_subparsers(dest="action", required=True)
+    gather_parser = commands.add_parser("gather")
+    gather_parser.add_argument("--cwd", required=True)
+    gather_parser.add_argument("--command", required=True)
+    args = parser.parse_args()
+    print(json.dumps({"requests": gather(args.cwd, args.command)}, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

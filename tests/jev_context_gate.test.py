@@ -9,6 +9,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -131,6 +132,26 @@ class JevContextGateTest(unittest.TestCase):
         (call,) = self.calls()
         (hunk,) = call["state"]["hunks"]
         return hunk
+
+    def test_gather_prints_exactly_the_requests_check_sends(self):
+        """An agent-type hook gathers with `gather`; it must see the same state and questions check() sends."""
+        self.add_to_codex_section("MAINTAINER note: keep AGENTS.md in sync.")
+        command = 'git commit -m "docs: Add a note" -- README.md'
+        self.run_hook(command)
+        gathered = subprocess.run(
+            [sys.executable, str(ROOT / "files" / "jev_context_gate.py"), "gather",
+             "--cwd", str(self.repo), "--command", command],
+            capture_output=True, text=True, check=True, env=self.env,
+        )  # fmt: skip
+        self.assertEqual(json.loads(gathered.stdout)["requests"], self.sent)
+
+    def test_gather_prints_no_requests_for_other_commands(self):
+        gathered = subprocess.run(
+            [sys.executable, str(ROOT / "files" / "jev_context_gate.py"), "gather",
+             "--cwd", str(self.repo), "--command", "git status"],
+            capture_output=True, text=True, check=True, env=self.env,
+        )  # fmt: skip
+        self.assertEqual(json.loads(gathered.stdout), {"requests": []})
 
     def test_non_commit_command_is_ignored(self):
         self.add_to_codex_section("MAINTAINER note")
@@ -562,6 +583,21 @@ class RegistrationTest(unittest.TestCase):
         self.assertEqual(hook["tool"], "context_gate")
         self.assertEqual(hook["if"], "Bash(git *)")
         self.assertEqual(hook["input"], self.CLAUDE_INPUT)
+
+    def test_agent_hook_probe_runs_only_on_its_marker_and_never_judges_without_jev(self):
+        """The subagent-type trial gathers with the deployed module, asks the connected Jev, and passes when Jev is unreachable."""
+        settings = json.loads((ROOT / "files" / "claude_managed-extensions.json").read_text())
+        hooks = [h for g in settings["hooks"]["PreToolUse"] for h in g["hooks"]]
+        (probe,) = [h for h in hooks if h.get("type") == "agent"]
+        self.assertEqual(probe["if"], "Bash(git -c jev.probe=1 *)")
+        prompt = probe["prompt"]
+        self.assertIn("$ARGUMENTS", prompt)
+        self.assertIn("python3 /usr/local/lib/jev/jev_context_gate.py gather", prompt)
+        self.assertIn("mcp__jev__evaluate", prompt)
+        self.assertIn("Never judge the text yourself", prompt)
+        allow = settings["permissions"]["allow"]
+        self.assertIn("mcp__jev__evaluate", allow)
+        self.assertIn("Bash(python3 /usr/local/lib/jev/jev_context_gate.py gather *)", allow)
 
     def test_codex_calls_the_connected_jev_server(self):
         config = tomllib.loads((ROOT / "files" / "codex_config.toml").read_text())

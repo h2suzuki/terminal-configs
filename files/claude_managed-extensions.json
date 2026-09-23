@@ -3,7 +3,9 @@
     "allow": [
       "mcp__mytask__TaskCreate",
       "mcp__mytask__TaskUpdate",
-      "mcp__mytask__TaskList"
+      "mcp__mytask__TaskList",
+      "mcp__jev__evaluate",
+      "Bash(python3 /usr/local/lib/jev/jev_context_gate.py gather *)"
     ]
   },
   "hooks": {
@@ -48,7 +50,9 @@
           { "type": "command", "command": "/etc/claude-code/hooks/sandbox_exclusion_guard.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/root_dir_guard.py" },
           { "type": "mcp_tool", "server": "jev", "tool": "context_gate", "if": "Bash(git *)", "timeout": 60,
-            "input": { "command": "${tool_input.command}", "cwd": "${cwd}", "session_id": "${session_id}" } }
+            "input": { "command": "${tool_input.command}", "cwd": "${cwd}", "session_id": "${session_id}" } },
+          { "type": "agent", "if": "Bash(git -c jev.probe=1 *)", "timeout": 180,
+            "prompt": "Trial of a subagent-type Jev context check. It fires only for `git -c jev.probe=1 commit`. Hook input: $ARGUMENTS\n1) Gather: run the Bash command `python3 /usr/local/lib/jev/jev_context_gate.py gather --cwd '<cwd>' --command '<tool_input.command>'` with cwd and tool_input.command from the input. It prints {\"requests\": [{\"state\": ..., \"questions\": ...}]}.\n2) Check: Read each changed file and confirm that state.hunks[*].place_and_its_purpose names the section or function the added lines really sit in. Correct it in the state when it is wrong, and note what you corrected.\n3) Ask Jev: call the MCP tool mcp__jev__evaluate with each state and its questions, unchanged except for step 2.\n4) Decide: ng when any answer's noul is below 0.5, otherwise ok. Never judge the text yourself: when gather or Jev fails for any reason, the decision is ok (skipped) with the exact error.\nWhile this is a trial, always answer {\"ok\": false, \"reason\": \"PIPELINE: gather=<ran, n requests, or the error> | check=<confirmed, or what you corrected> | jev=<noul per question, or the exact error> | decision=<ok, ng or skipped>\"}." }
         ]
       },
       {
