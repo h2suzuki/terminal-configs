@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import pwd
+import shutil
 import ssl
 import stat
 import sys
@@ -24,6 +25,9 @@ ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 MAX_BYTES = 8 * 1024 * 1024
 BACKOFF_S = 30
 BACKOFF_MAX_S = 1800
+ERROR_LOG_KEEP = 20
+ERROR_LOG_PART_BYTES = 256 * 1024
+ERROR_LOG_MIN_FREE = 512 * 1024 * 1024
 # The commit context check ships beside the SDK runtime (the venv prefix), not as a hook.
 GATE_MODULE = Path(sys.prefix) / "jev_context_gate.py"
 
@@ -175,6 +179,51 @@ def api_error_message(status_code):
     return f"HTTP {status_code}: TypeSafe rejected the request. Check the request and account settings."
 
 
+def error_log_dir():
+    return Path(pwd.getpwuid(os.getuid()).pw_dir) / ".local/state/jev/api-errors"
+
+
+def clipped(value):
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    if len(text.encode()) <= ERROR_LOG_PART_BYTES:
+        return value, False
+    return text.encode()[:ERROR_LOG_PART_BYTES].decode(errors="ignore"), True
+
+
+def save_api_error(error, request, key):
+    # A 403 on a valid key can come from the payload; its body is the only evidence.
+    folder = error_log_dir()
+    try:
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if shutil.disk_usage(folder).free < ERROR_LOG_MIN_FREE:
+            return None
+        parts = {name: clipped(request[name]) for name in ("state", "questions")}
+        body, body_cut = clipped(error.body)
+        record = {
+            "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "status": error.status,
+            "endpoint": error.endpoint or ENDPOINT,
+            "headers": dict(error.headers or {}),
+            "body": body,
+            "request": {
+                "model": request["model"],
+                **{n: v for n, (v, _) in parts.items()},
+            },
+            "truncated": body_cut or any(cut for _, cut in parts.values()),
+        }
+        text = json.dumps(record, ensure_ascii=False, indent=1)
+        for secret in {key, json.dumps(key)[1:-1]} if key else ():
+            text = text.replace(secret, "[REDACTED]")
+        path = folder / f"{time.time_ns()}.json"
+        path.touch(mode=0o600)
+        path.write_text(text)
+        for old in sorted(folder.glob("*.json"))[:-ERROR_LOG_KEEP]:
+            old.unlink(missing_ok=True)
+        return path
+    except OSError:
+        return None
+
+
 def credential_stamp():
     try:
         info = (credential_dir() / "credentials.json").stat()
@@ -292,6 +341,13 @@ class JevSession:
             ) from None
         except TypeSafeAPIError as error:
             message = api_error_message(error.status)
+            if error.status == 403:
+                saved = save_api_error(
+                    error,
+                    {"state": state, "questions": questions, "model": model},
+                    self.key,
+                )
+                message += f" Request and response saved to {saved}." if saved else ""
             if error.status in (401, 403):
                 self.rejected = (self.stamp, message)
             elif error.status == 429 or error.status >= 500:

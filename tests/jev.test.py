@@ -404,6 +404,83 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn(KEY, str(error.exception))
         self.assertEqual(len(self.requests), 5)  # no redirects or retries
 
+    def error_log(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        folder = Path(tmp.name) / "api-errors"
+        logdir = patch.object(jev, "error_log_dir", return_value=folder)
+        logdir.start()
+        self.addCleanup(logdir.stop)
+        return folder
+
+    async def refused(self, **request):
+        session = jev.JevSession()
+        self.addAsyncCleanup(session.close)
+        with self.assertRaisesRegex(jev.JevError, "HTTP 403") as error:
+            await session.evaluate(**(request or REQUEST))
+        return str(error.exception)
+
+    async def test_403_saves_request_and_response_without_the_key(self):
+        """A key-valid 403 on one payload could not be told from a revoked key without the response body."""
+        folder = self.error_log()
+        self.code, self.body = 403, {"error": "blocked for " + KEY}
+        message = await self.refused()
+        (saved,) = folder.iterdir()
+        self.assertIn(str(saved), message)
+        self.assertEqual(saved.stat().st_mode & 0o777, 0o600)
+        text = saved.read_text()
+        self.assertNotIn(KEY, text)
+        record = json.loads(text)
+        self.assertEqual(record["status"], 403)
+        self.assertEqual(record["endpoint"], "POST " + jev.ENDPOINT)
+        self.assertEqual(record["request"]["state"], "hello")
+        self.assertEqual(record["request"]["questions"], REQUEST["questions"])
+        self.assertIn("[REDACTED]", json.dumps(record["body"]))
+        self.assertEqual(record["headers"]["location"], "https://evil.invalid")
+
+    async def test_403_log_keeps_only_the_newest_records(self):
+        folder = self.error_log()
+        self.code = 403
+        with patch.object(jev, "ERROR_LOG_KEEP", 2):
+            for n in range(3):
+                await self.refused(state=f"call {n}", questions=REQUEST["questions"])
+        states = sorted(json.loads(p.read_text())["request"]["state"] for p in folder.iterdir())
+        self.assertEqual(states, ["call 1", "call 2"])
+
+    async def test_403_log_truncates_a_large_request_and_body(self):
+        folder = self.error_log()
+        self.code, self.body = 403, {"error": "x" * (jev.ERROR_LOG_PART_BYTES * 2)}
+        await self.refused(state="y" * (jev.ERROR_LOG_PART_BYTES * 2), questions=REQUEST["questions"])
+        (saved,) = folder.iterdir()
+        self.assertLess(saved.stat().st_size, jev.ERROR_LOG_PART_BYTES * 3)
+        self.assertTrue(json.loads(saved.read_text())["truncated"])
+
+    async def test_403_log_is_skipped_when_the_disk_is_nearly_full(self):
+        folder = self.error_log()
+        self.code = 403
+        low = jev.shutil._ntuple_diskusage(10**12, 10**12, jev.ERROR_LOG_MIN_FREE - 1)
+        with patch.object(jev.shutil, "disk_usage", return_value=low):
+            message = await self.refused()
+        self.assertFalse(folder.exists() and any(folder.iterdir()))
+        self.assertIn("permissions", message)
+
+    async def test_unwritable_403_log_keeps_the_error_message(self):
+        self.error_log()
+        self.code = 403
+        with patch.object(jev.Path, "write_text", side_effect=OSError("read-only")):
+            message = await self.refused()
+        self.assertIn("permissions", message)
+
+    async def test_other_errors_are_not_saved(self):
+        folder = self.error_log()
+        for code in (401, 429, 503):
+            self.code = code
+            session = jev.JevSession()
+            self.addAsyncCleanup(session.close)
+            with self.assertRaises(jev.JevError):
+                await session.evaluate(**REQUEST)
+        self.assertFalse(folder.exists())
+
     async def test_reflected_key_is_redacted(self):
         self.body = response_body(model=KEY)
         result = await self.session.evaluate(**REQUEST)
