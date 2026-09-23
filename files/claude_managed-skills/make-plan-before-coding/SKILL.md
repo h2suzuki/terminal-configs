@@ -41,6 +41,7 @@ coding に着手する前に plan を立てる discipline。 設計の option sp
 3. **具体的変更点**
 4. **合意が要る設計判断 fork**
 5. **検証順序**
+6. **制約ごとの目的と反証検査**: user が言葉で付けた制約 (「X 経由で」「Y を使って」「Z しない」) ごとに、目的を 1 行と、その制約を破ったら失敗する実行可能な検査を 1 つ書く。検査は文ではなく出した物 (process・呼び出し先・出力) を見る。実装前に置き、完了報告に結果を添える
 
 最後に 「この設計で合意か」 を問う。 user 合意 phrase が明示されるまで substantive Edit / Write は hold する。 user の 「進めて良い」 が設計合意を含むか曖昧なら概要を先に出す。
 
@@ -62,6 +63,15 @@ coding に着手する前に plan を立てる discipline。 設計の option sp
 
 概要は **合意可能な粒度** に絞る (冗長禁止、 詳細実装は合意後に展開)。 長時間調査後は user 側も lost track しやすいので概要再述で context を共有する。 改造が大きい / blast radius が広い 場合は特に厳守。
 
+### Blocked front path
+
+user の制約どおりの道が塞がって見えたら、取れる行動は 2 つだけ:
+
+1. 塞いでいる物が自分たちの部品 (この repo・自分の設定) なら、拡張して道を開く
+2. そうでなければ、代わりの案を実装する前に user に聞く
+
+「代わりの案でも制約を満たす」と言い換えて進むのは禁止。推奨としても書かない。委任文にも「なければ代わりに…」の逃げ道を書かず、「塞がっていたら塞いでいる物を報告せよ」と書く。委任先の報告がこの言い換えをしていたら、採用前に制約の原文と目的に照らして検証する。
+
 ### Inheritance gate
 
 過去 rejected 提案を再持出ししない:
@@ -75,6 +85,7 @@ coding に着手する前に plan を立てる discipline。 設計の option sp
 - 悪い (Phase 1 skip): 「思いついた A 案を出します」 → option space 未列挙
 - 悪い (Phase 2 skip): 「調査終わったので実装します」 → 概要提示なく substantive Edit
 - 悪い (Phase 3 skip): 「`TTL_SECONDS` を 7 日にしますか? 30 日にしますか?」 (docstring に 「7 days because session usually completes within a week」 記載済)
+- 悪い (Blocked front path): 「Jev は MCP 経由で」に対し、既存ツールでは足りないので hook が自分で `jev serve` を起動し「MCP で話すので満たす」とする → 接続済みの常駐サーバーを使う目的が消える。自分たちの `jev` に受付口のツールを足すのが正面の道
 - 良い: 「A / B / C を比較した結果 B を提案、 概要は…、 この設計で合意か?」
 - 良い: 「commit message に明記された通り fork 方式を採用、 実装に進みます」
 
