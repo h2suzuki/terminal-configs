@@ -1,7 +1,7 @@
 # terminal-configs system defaults for codex CLI -> /etc/codex/config.toml
 # User/project config and CLI options can override these defaults; this is not requirements.toml.
 # Write-capable non-interactive defaults: /codex:rescue network + interactive codex TUI (no approval prompts).
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 model_reasoning_effort = "xhigh"
 sandbox_mode = "workspace-write"
 approval_policy = "never"
