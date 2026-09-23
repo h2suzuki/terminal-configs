@@ -1,0 +1,5 @@
+# .refignore: <repo-relative path> <reference> per line — exempts one reference, not the whole file.
+tests/jev_backtest/cases.json drafts/sentinel-r55-fixes.md
+tests/jev_backtest/cases.json drafts/sentinel-r68-fixes.md
+tests/jev_backtest/cases.json drafts/sentinel-review-r54-report.md
+tests/jev_backtest/cases.json drafts/sentinel-r54-fixes.md
