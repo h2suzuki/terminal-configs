@@ -21,26 +21,27 @@ from unittest import mock
 
 Task = dict[str, object]
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 CLIENT = "claude"
 CODEX_THREAD: ContextVar[str | None] = ContextVar("codex_thread", default=None)
 DEFAULT_PROTOCOL_VERSION = "2025-11-25"
 TIME_FORMAT = "%Y-%m-%d %H:%M"
-# completed stays last: render_tasks treats STATUSES[:-1] as unfinished.
-STATUSES = ("pending", "in_progress", "delegated", "blocked", "completed")
+STATUSES = ("pending", "in_progress", "delegated", "blocked", "completed", "cancelled")
+CLOSED_STATUSES = frozenset({"completed", "cancelled"})
 EMOJI = {
     "pending": "◻️",
     "in_progress": "▶️",
     "delegated": "🤖",
     "blocked": "🚧",
     "completed": "✅",
+    "cancelled": "✖️",
 }
 TASK_ID = re.compile(r"^[0-9]+(?:-[0-9]+)*$")
 
 TOOLS = [
     {
         "name": "TaskList",
-        "description": "List unfinished session work items in ID order. completed_limit optionally adds the most recently completed items (default 0, maximum 100). Runs a court-bug contamination check and prepends a warning if the session transcript looks contaminated (#64108).",
+        "description": "List unfinished session work items in ID order. completed_limit optionally adds the most recently closed (completed or cancelled) items (default 0, maximum 100). Runs a court-bug contamination check and prepends a warning if the session transcript looks contaminated (#64108).",
         "inputSchema": {"type": "object", "properties": {"completed_limit": {"type": "integer", "minimum": 0, "maximum": 100, "default": 0}}, "additionalProperties": False},
     },
     {
@@ -59,7 +60,7 @@ TOOLS = [
     },
     {
         "name": "TaskUpdate",
-        "description": "Update a work item's status and return only that item plus any auto-demoted IDs. Keep exactly one in_progress at a time (TodoWrite semantics): starting a new item auto-demotes the previous in_progress to pending. Use delegated for items a subagent or another session is working on; any number may be delegated and they are never auto-demoted. `owner` names the delegate (only kept while delegated).",
+        "description": "Update a work item's status and return only that item plus any auto-demoted IDs. Keep exactly one in_progress at a time (TodoWrite semantics): starting a new item auto-demotes the previous in_progress to pending. Use delegated for items a subagent or another session is working on; any number may be delegated and they are never auto-demoted. `owner` names the delegate (only kept while delegated). Use cancelled for items no longer needed; like completed, it closes the item.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -124,9 +125,13 @@ def _sort_key(task: Task) -> tuple[int, tuple[int, ...], str]:
 
 def render_tasks(tasks: list[Task], completed_limit: int = 0) -> str:
     """Show unfinished work plus an optional recent completion window."""
-    active = [task for task in tasks if task.get("status") in STATUSES[:-1]]
+    active = [
+        task
+        for task in tasks
+        if task.get("status") in STATUSES and task.get("status") not in CLOSED_STATUSES
+    ]
     completed = sorted(
-        (task for task in tasks if task.get("status") == "completed"),
+        (task for task in tasks if task.get("status") in CLOSED_STATUSES),
         key=lambda task: (str(task.get("completed_at", "")), _sort_key(task)),
         reverse=True,
     )[:completed_limit]
@@ -240,7 +245,7 @@ def task_update(arguments: dict[str, object]) -> tuple[str, bool]:
         target["owner"] = owner
     elif status != "delegated":
         target.pop("owner", None)
-    if status == "completed":
+    if status in CLOSED_STATUSES:
         target["completed_at"] = stamp
     else:
         target.pop("completed_at", None)
@@ -321,7 +326,7 @@ def _argument_error(name: str, arguments: object) -> str | None:
         if not isinstance(arguments.get("id"), str):
             return "TaskUpdate requires string argument 'id'."
         if arguments.get("status") not in STATUSES:
-            return "TaskUpdate requires status pending, in_progress, delegated, blocked, or completed."
+            return f"TaskUpdate requires status {', '.join(STATUSES)}."
         if "owner" in typed_arguments and not isinstance(typed_arguments["owner"], str):
             return "TaskUpdate argument 'owner' must be a string."
     return None
@@ -538,6 +543,23 @@ class MyTasksTest(unittest.TestCase):
         before = self.path.read_text()
         self.assertTrue(task_create({"content": "Missing", "parent": "1-9"})[1])
         self.assertEqual(self.path.read_text(), before)
+
+    def test_cancelled_closes_like_completed(self):
+        tasks: list[Task] = [
+            {"id": "1", "content": "Dropped", "status": "pending"},
+            {"id": "2", "content": "Open", "status": "pending"},
+        ]
+        self.assertIsNone(write_tasks(self.path, tasks))
+        with mock.patch(f"{__name__}._now", return_value=datetime(2026, 7, 14, 10, 0)):
+            text, error = task_update({"id": "1", "status": "cancelled"})
+        self.assertFalse(error)
+        self.assertTrue(text.startswith("1 ✖️ Dropped"))
+        self.assertEqual(read_tasks(self.path)[0]["completed_at"], "2026-07-14 10:00")
+        self.assertEqual(task_list()[0], "2 ◻️ Open")
+        self.assertEqual(task_list(1)[0], "1 ✖️ Dropped\n2 ◻️ Open")
+        self.assertIsNone(
+            _argument_error("TaskUpdate", {"id": "1", "status": "cancelled"})
+        )
 
     def test_nested_numeric_order_and_hidden_ids_are_not_reused(self):
         ids = ["4-10", "4-1-10", "5", "4-1-2", "4-1", "4", "4-2"]
