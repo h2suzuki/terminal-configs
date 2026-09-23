@@ -18,6 +18,7 @@ import sys
 
 LLM_CALL_RE = re.compile(r"\bclaude(?:\s+|[\"']\s*,\s*[\"'])(?:-p|--bg)\b")
 EXEMPT_PREFIXES = ("claude-md-lint",)
+EXEMPT_NAMES = {"claude_md_lint.py"}  # the Python port of claude-md-lint; its helpers stay denied
 # Keep the matcher literal for the orderer's mutation seam.
 # fmt: off
 HOOK_DIR_RE = re.compile(r"(?:claude_managed-hooks|claude_user-hooks|\.claude/hooks|claude-code/hooks|skel/hooks)/[^/]+$")
@@ -53,7 +54,7 @@ def _run(payload: object) -> int:
     if not isinstance(path, str) or not HOOK_DIR_RE.search(path):
         return 0
     basename = os.path.basename(path)
-    if basename.startswith(EXEMPT_PREFIXES) or basename.endswith(
+    if basename in EXEMPT_NAMES or basename.startswith(EXEMPT_PREFIXES) or basename.endswith(
         (".test.py", ".mutants.py")
     ):
         return 0

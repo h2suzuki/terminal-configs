@@ -115,6 +115,7 @@ class GateTest(unittest.TestCase):
         base = "/home/u/terminal-configs/files/claude_managed-hooks/"
         self.allow("Write", write(base + "claude-md-lint", text))
         self.allow("Write", write(base + "claude-md-lint.py", text))
+        self.allow("Write", write(base + "claude_md_lint.py", text))
         self.allow("Write", write(base + "some_gate.test.py", text))
         self.allow("Write", write(base + "some_gate.mutants.py", text))
         self.deny("Write", write(base + "claude_md_lint_helper.py", text))
