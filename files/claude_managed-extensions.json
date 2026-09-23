@@ -55,7 +55,8 @@
         "matcher": "^(Task|Agent)$",
         "hooks": [
           { "type": "command", "command": "/etc/claude-code/hooks/subagent_gate_warn.py" },
-          { "type": "command", "command": "/etc/claude-code/hooks/subagent_model_gate.py" }
+          { "type": "command", "command": "/etc/claude-code/hooks/subagent_model_gate.py" },
+          { "type": "command", "command": "/etc/claude-code/hooks/subagent_watch_reminder.py" }
         ]
       },
       {
