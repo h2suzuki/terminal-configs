@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Credential handling and fixed-endpoint tests; no live API requests."""
 
+import asyncio
 import contextlib
 import importlib.machinery
 import importlib.util
@@ -396,8 +397,10 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         ]:
             with self.subTest(code=code):
                 self.code, self.body = code, {"error": KEY}
+                session = jev.JevSession()
+                self.addAsyncCleanup(session.close)
                 with self.assertRaisesRegex(jev.JevError, message) as error:
-                    await self.session.evaluate(**REQUEST)
+                    await session.evaluate(**REQUEST)
                 self.assertNotIn(KEY, str(error.exception))
         self.assertEqual(len(self.requests), 5)  # no redirects or retries
 
@@ -504,12 +507,54 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         )
         async with Client(jev.create_server()) as client:
             listed = await client.list_tools()
-            self.assertEqual([tool.name for tool in listed.tools], ["evaluate"])
+            self.assertEqual(
+                [tool.name for tool in listed.tools], ["evaluate", "context_gate"]
+            )
             properties = listed.tools[0].input_schema["properties"]
             self.assertEqual(set(properties), {"state", "questions", "model"})
             result = await client.call_tool("evaluate", REQUEST)
             self.assertTrue(result.is_error)
             self.assertIn("jev api-key set", str(result.content))
+
+    async def test_rejected_key_is_not_retried_until_the_saved_key_changes(self):
+        stamp = patch.object(jev, "credential_stamp", return_value=("inode", 1))
+        stamp.start()
+        self.addCleanup(stamp.stop)
+        self.code = 401
+        for _ in range(2):
+            with self.assertRaisesRegex(jev.JevError, "HTTP 401"):
+                await self.session.evaluate(**REQUEST)
+        self.assertEqual(len(self.requests), 1)  # the second call fails without asking
+        jev.credential_stamp.return_value = ("inode", 2)  # jev api-key set replaced the file
+        self.code = 200
+        await self.session.evaluate(**REQUEST)
+        self.assertEqual(len(self.requests), 2)
+        self.assertEqual(self.key_loader.call_count, 2)
+
+    async def test_saved_key_change_is_picked_up_by_the_running_server(self):
+        stamp = patch.object(jev, "credential_stamp", return_value=("inode", 1))
+        stamp.start()
+        self.addCleanup(stamp.stop)
+        await self.session.evaluate(**REQUEST)
+        jev.credential_stamp.return_value = ("inode", 2)
+        await self.session.evaluate(**REQUEST)
+        self.assertEqual(self.key_loader.call_count, 2)
+        self.assertEqual(self.factory.call_count, 2)
+
+    async def test_rate_limit_backs_off_before_asking_again(self):
+        now = patch.object(jev.time, "monotonic", return_value=1000.0)
+        now.start()
+        self.addCleanup(now.stop)
+        self.code = 429
+        with self.assertRaisesRegex(jev.JevError, "HTTP 429"):
+            await self.session.evaluate(**REQUEST)
+        with self.assertRaisesRegex(jev.JevError, "HTTP 429.*after"):
+            await self.session.evaluate(**REQUEST)
+        self.assertEqual(len(self.requests), 1)
+        jev.time.monotonic.return_value = 1000.0 + jev.BACKOFF_S + 1
+        self.code = 200
+        await self.session.evaluate(**REQUEST)
+        self.assertEqual(len(self.requests), 2)
 
     async def test_real_stdio_multiple_calls_in_one_process(self):
         params = StdioServerParameters(
@@ -524,6 +569,104 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                     result.structured_content["usage"]["input_tokens"], expected_count
                 )
                 self.assertNotIn(KEY, str(result.content))
+
+
+class ContextGateTests(unittest.IsolatedAsyncioTestCase):
+    """The hook intake: the connected server itself judges the commit; no process is started for it."""
+
+    respond = SessionTests.respond
+
+    async def asyncSetUp(self):
+        await SessionTests.asyncSetUp(self)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.repo = self.root / "repo"
+        env = patch.dict(
+            os.environ,
+            {
+                "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+                "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
+            },
+        )  # fmt: skip
+        env.start()
+        self.addCleanup(env.stop)
+        module = patch.object(jev, "GATE_MODULE", ROOT / "files" / "jev_context_gate.py")
+        module.start()
+        self.addCleanup(module.stop)
+        self.gate = jev.load_gate()
+        log = patch.object(self.gate, "LOG", str(self.root / "log.jsonl"))
+        log.start()
+        self.addCleanup(log.stop)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(self.repo)], check=True)
+        (self.repo / "README.md").write_text("# Tool\n\n## Sign in\n\nSign in once.\n\n## Update\n\nPull.\n")
+        subprocess.run(["git", "-C", str(self.repo), "add", "README.md"], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-q", "-m", "init"], check=True)
+        (self.repo / "README.md").write_text(
+            "# Tool\n\n## Sign in\n\nSign in once.\n\nMAINTAINER rule.\n\n## Update\n\nPull.\n"
+        )
+        self.spawned = []
+        real = subprocess.Popen
+
+        def spy(*args, **kwargs):
+            self.spawned.append(str((args[0] if args else kwargs["args"])[0]))
+            return real(*args, **kwargs)
+
+        popen = patch.object(subprocess, "Popen", side_effect=spy)
+        popen.start()
+        self.addCleanup(popen.stop)
+
+    async def call(self, command, tool_input=None):
+        arguments = {"cwd": str(self.repo), "session_id": "sess-1"}
+        if tool_input is None:
+            arguments["command"] = command  # the Claude Code form
+        else:
+            arguments["tool_input"] = tool_input  # the Codex form
+        async with Client(jev.create_server()) as client:
+            result = await client.call_tool("context_gate", arguments)
+        self.assertFalse(result.is_error, result.content)
+        self.assertEqual(set(self.spawned) - {"git"}, set())  # judged here, not in a new process
+        return json.loads(result.content[0].text)
+
+    async def test_misfit_is_denied_by_the_connected_server(self):
+        self.body = response_body() | {"answers": {"fits_0_0": {"type": "noul", "noul": 0.1}}}
+        output = await self.call('git commit -m "x" -- README.md')
+        decision = output["hookSpecificOutput"]
+        self.assertEqual(decision["permissionDecision"], "deny")
+        self.assertIn("MAINTAINER rule.", decision["permissionDecisionReason"])
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(json.loads(self.requests[0].content)["model"], "jev-latest")
+
+    async def test_codex_tool_input_object_and_text_are_accepted(self):
+        self.body = response_body() | {"answers": {"fits_0_0": {"type": "noul", "noul": 0.9}}}
+        command = {"command": 'git commit -m "x" -- README.md'}
+        self.assertEqual(await self.call("", tool_input=command), {})
+        self.assertEqual(await self.call("", tool_input=json.dumps(command)), {})
+        self.assertEqual(len(self.requests), 2)
+
+    async def test_other_commands_return_nothing_without_asking(self):
+        self.assertEqual(await self.call("git status"), {})
+        self.assertEqual(self.requests, [])
+
+    async def test_missing_key_skips_with_a_notice(self):
+        self.key_loader.side_effect = jev.JevError("No API key saved. Run jev api-key set.")
+        output = await self.call('git commit -m "x" -- README.md')
+        self.assertNotIn("hookSpecificOutput", output)
+        self.assertIn("No API key saved", output["systemMessage"])
+
+    async def test_slow_answer_skips_with_a_notice(self):
+        async def hang(*args, **kwargs):
+            await asyncio.sleep(5)
+
+        with patch.object(self.gate, "DEADLINE", 0.3), patch.object(jev.JevSession, "evaluate", hang):
+            output = await self.call('git commit -m "x" -- README.md')
+        self.assertIn("時間内", output["systemMessage"])
+
+    async def test_missing_module_skips_with_a_notice(self):
+        with patch.object(jev, "GATE_MODULE", self.root / "absent.py"), patch.object(jev, "load_gate", jev.load_gate.__wrapped__):
+            output = await self.call('git commit -m "x" -- README.md')
+        self.assertIn("jev_context_gate", output["systemMessage"])
 
 
 def serve_fixture():

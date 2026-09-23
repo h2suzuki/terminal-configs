@@ -1,6 +1,6 @@
 # Jev 文脈判定 hook (jev_context_gate)
 
-エージェントが既存ファイルの途中に書き足した内容が、置いた場所の文脈に合っているかを、コミットの直前に Jev で判定する hook です。合わないと判定した変更はコミットを止めます。本文は `files/shared_hooks/jev_context_gate.py`、テストは `tests/jev_context_gate.test.py` です。
+エージェントが既存ファイルの途中に書き足した内容が、置いた場所の文脈に合っているかを、コミットの直前に Jev で判定する hook です。合わないと判定した変更はコミットを止めます。判定するのはセッションに接続済みの Jev MCP サーバー (`jev serve`) で、hook はその受付口のツール `context_gate` を呼びます。判定の本体は `files/jev_context_gate.py`、受付口は `files/jev`、テストは `tests/jev_context_gate.test.py` と `tests/jev.test.py` です。
 
 ## 1. 目的
 
@@ -22,7 +22,7 @@
 
 ### 3.1 発火点
 
-Claude Code と Codex の PreToolUse hook として、Bash (Codex では `exec_command` も `Bash` として一致) の `git commit` を検出したときに動きます。Edit・Write・`apply_patch`・`sed` など、どの経路で書いた変更も最後はコミットを通るため、ここを判定の関門にしています。
+Claude Code と Codex の PreToolUse hook (`mcp_tool` 型) が、Bash (Codex では `exec_command` も `Bash` として一致) の呼び出しを、接続済みの `jev` サーバーの `context_gate` に渡します。サーバーは `git commit` のときだけ判定し、それ以外は API を呼ばずに空の結果を返します。Edit・Write・`apply_patch`・`sed` など、どの経路で書いた変更も最後はコミットを通るため、ここを判定の関門にしています。
 
 判定の対象は、コミットに入る差分です。`git commit -- <path>` と `git commit -a` は作業ツリーと `HEAD` の差分、パスなしのコミットはステージした差分、`--amend` は `HEAD^` からの差分を見ます。
 
@@ -31,7 +31,7 @@ Claude Code と Codex の PreToolUse hook として、Bash (Codex では `exec_c
 1. 差分を hunk に分け、追加行を段落ごとの piece に切ります (見出しとコードブロックは直後の段落に付けます)。
 2. piece ごとに、ファイルと場所の文脈を機械的に組み立てます (3.3)。
 3. 同じ場所に続く piece は同じ問い合わせにまとめます。問い合わせはファイルごとに分け、上限を超える場合だけ同じ場所の中で分けます。
-4. `jev serve` を MCP サーバーとして起動し、stdio で `evaluate` ツールを呼びます。
+4. 同じサーバーの Jev セッションで判定します。hook はプロセスを起動せず、サーバーが git の差分を読みます。
 5. どれか 1 つでも判定が閾値を下回れば、コミットを拒否します (3.4)。
 
 ### 3.3 Jev に渡す文脈
@@ -64,16 +64,21 @@ piece の追加行は 1500 字、1 回の問い合わせの state は 12000 字�
 
 次の場合は判定を省略してコミットを通し、`systemMessage` で「Jev の文脈チェックを省略しました (理由: …)」と利用者に表示します。
 
-- `jev` が見つからない、起動できない
+- 判定の本体がサーバーに配備されていない
 - API キーが無い、認証・通信・レート制限のエラー (Jev が返すエラーの本文を理由に載せます)
 - 25 秒以内に応答が無い (`JEV_CONTEXT_GATE_DEADLINE` で変更可)
+- サーバーが先の失敗を覚えている間 (下記)
 - 応答を読めない、判定が欠けている
+
+`jev` サーバーが未接続のとき、またはツールがエラーを返したときは、Claude Code と Codex が hook の失敗として扱い、コミットは止めません。
+
+サーバーは失敗を覚え、同じ問い合わせを繰り返しません。API がキーを拒否した (401・403) ときは、保存したキーのファイルが変わるまで問い合わせずに省略します。レート制限・サービス障害・通信エラーのときは、30 秒から 30 分まで倍々に延ばした待ち時間の間、問い合わせずに省略します。`jev api-key set` でキーのファイルが変わると、サーバーは次の呼び出しでキーを読み直します。
 
 ## 5. ログと有効性の評価
 
 hook は判定ごとに 1 行の JSON を `~/.claude/hooks/state/jev_context_gate/log.jsonl` に追記します (`JEV_CONTEXT_GATE_LOG` で変更可)。ログに書けなくても hook の動作は変わりません。
 
-記録する主な項目は、日時、セッション、リポジトリ、コミットの件名、結果 (拒否・許可・省略) と省略の理由、Jev のモデル名とトークン数、所要時間、閾値と質問の版 (`QUESTION_VERSION`) です。piece ごとにファイル・行・種類・場所・書き足した内容の形・追加行のハッシュと冒頭・確率・合否を、新しい節ごとに見出し・確率・合否を記録します。
+記録する主な項目は、日時、セッション、リポジトリ、コミットの件名、結果 (拒否・許可・省略) と省略の理由、Jev のモデル名とトークン数、所要時間、閾値と質問の版 (`QUESTION_VERSION`)、判定したサーバーのプロセス番号 (`server_pid`) です。piece ごとにファイル・行・種類・場所・書き足した内容の形・追加行のハッシュと冒頭・確率・合否を、新しい節ごとに見出し・確率・合否を記録します。
 
 ログから次のことを確かめます。
 
@@ -81,21 +86,23 @@ hook は判定ごとに 1 行の JSON を `~/.claude/hooks/state/jev_context_gat
 - **見逃し**: 後から人が削除・移動した書き足しのうち、許可されていたもの。追加行のハッシュで元の判定をたどれます。
 - **省略の多さ**: 省略の理由ごとの件数。多ければ、Jev の設定か通信を確かめます。
 - **閾値の妥当性**: 許可と拒否の確率の分布。質問を変えたら `QUESTION_VERSION` を上げ、版ごとに比べます。
+- **常駐サーバーでの判定**: 同じセッションのコミットで `server_pid` が変わらないこと。変わるなら、判定のたびにサーバーが起動し直されています。
 
 ## 6. 登録と設定
 
 | クライアント | 登録先 | 設定 |
 |---|---|---|
-| Claude Code | `files/claude_managed-extensions.json` の PreToolUse `Bash` | タイムアウト 60 秒 |
-| Codex | `files/codex_config.toml` の `[[hooks.PreToolUse]]` (`^Bash$`) | タイムアウト 60 秒 |
+| Claude Code | `files/claude_managed-extensions.json` の PreToolUse `Bash` | `mcp_tool` (`jev` / `context_gate`)、`if: "Bash(git *)"`、コマンド文字列を渡す、タイムアウト 60 秒 |
+| Codex | `files/codex_config.toml` の `[[hooks.PreToolUse]]` (`^Bash$`) | `mcp_tool` (`jev` / `context_gate`)、`tool_input` をそのまま渡す、タイムアウト 60 秒 |
 
-hook 本体は `files/shared_hooks/` にあり、導入スクリプトが `/etc/claude-code/hooks/` と `/etc/codex/hooks/` に配備します。Jev の API キーの設定は [Jev の利用手順](typesafe.md) を参照してください。
+判定の本体 `files/jev_context_gate.py` は、導入スクリプトが `jev` の実行環境 (`/usr/local/lib/jev/`) に配備し、サーバーが読み込みます。Jev の API キーの設定は [Jev の利用手順](typesafe.md) を参照してください。
 
 ## 7. 採らなかった案
 
 | 案 | 採らなかった理由 |
 |---|---|
 | git の pre-commit hook | git から外部サービスを呼ばない方針のため。git に入れるのはローカルで完結するツールだけにする |
+| hook が自分で `jev serve` を起動して問い合わせる | セッションに接続済みのサーバーを使わず、コミットのたびにプロセスの起動・プロセス間通信・MCP の初期化を行う。失敗の記憶もキーの状態も残らず、CLI を直接呼ぶより重い |
 | 編集ごと (Edit・Write) の判定 | 書きかけの状態まで止めてしまい、Bash での編集も捕まえられない |
 | 書き足した README のコミット自体を止める | README の更新は正当。問題は文脈に合わない内容 |
 | LLM (Haiku など) で英訳・要約してから渡す | 実験で精度が上がらなかった (付録 A)。`claude -p` は 1 回 11〜18 秒かかり、hook から LLM を呼ぶことは `deny_llm_call_in_hook.py` の方針 (同期の hook を止めるか、非同期では介入に間に合わない) にも反する |

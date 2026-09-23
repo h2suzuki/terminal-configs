@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-"""PreToolUse hook for Claude Code and Codex: before `git commit`, ask Jev over MCP whether each added hunk fits its context.
+"""Before `git commit`, judge with Jev whether each added hunk fits its context; the jev server calls check().
 Only a clear "does not fit" denies; any Jev, key, or network failure skips the check and tells the user."""
 
 from __future__ import annotations
@@ -9,10 +8,8 @@ import hashlib
 import json
 import os
 import re
-import select
 import shlex
 import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -520,77 +517,6 @@ def questions(state: dict) -> dict:
     return asked
 
 
-class Jev:
-    def __init__(self, deadline: float):
-        self.deadline = deadline
-        self.next_id = 0
-        try:
-            self.proc = subprocess.Popen(
-                ["jev", "serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL, text=True,
-            )  # fmt: skip
-        except OSError as exc:
-            raise Skip(f"jev を起動できません ({exc.strerror})") from exc
-        self.call("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
-                                 "clientInfo": {"name": "jev_context_gate", "version": "1"}})  # fmt: skip
-        self.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
-
-    def send(self, message: dict) -> None:
-        assert self.proc.stdin is not None
-        try:
-            self.proc.stdin.write(json.dumps(message, ensure_ascii=False) + "\n")
-            self.proc.stdin.flush()
-        except OSError as exc:
-            raise Skip("jev serve が応答しません") from exc
-
-    def call(self, method: str, params: dict) -> dict:
-        self.next_id += 1
-        self.send(
-            {"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params}
-        )
-        assert self.proc.stdout is not None
-        while True:
-            remaining = self.deadline - time.monotonic()
-            if (
-                remaining <= 0
-                or not select.select([self.proc.stdout], [], [], remaining)[0]
-            ):
-                raise Skip("Jev の応答が時間内に返りませんでした")
-            line = self.proc.stdout.readline()
-            if not line:
-                raise Skip("jev serve が終了しました")
-            try:
-                message = json.loads(line)
-            except ValueError:
-                continue
-            if message.get("id") == self.next_id:
-                if "result" not in message:
-                    raise Skip(f"MCP エラー: {str(message.get('error'))[:120]}")
-                return message["result"]
-
-    def evaluate(self, state: dict, asked: dict) -> dict:
-        result = self.call(
-            "tools/call",
-            {"name": "evaluate", "arguments": {"state": state, "questions": asked}},
-        )
-        text = "".join(
-            c.get("text", "") for c in result.get("content", []) if isinstance(c, dict)
-        )
-        if result.get("isError"):
-            raise Skip(text.strip()[:160] or "Jev がエラーを返しました")
-        try:
-            reply = json.loads(text)
-            if not isinstance(reply.get("answers"), dict):
-                raise TypeError
-            return reply
-        except (ValueError, TypeError, AttributeError) as exc:
-            raise Skip("Jev の応答を読めませんでした") from exc
-
-    def close(self) -> None:
-        self.proc.kill()
-        self.proc.wait()
-
-
 def noul(answers: dict, key: str) -> float:
     try:
         return float(answers[key]["noul"])
@@ -598,41 +524,42 @@ def noul(answers: dict, key: str) -> float:
         raise Skip("Jev の応答に判定が欠けていました") from exc
 
 
-def judge(states: list[dict], record: dict) -> list[tuple[dict, list[str], str, float]]:
-    jev = Jev(time.monotonic() + DEADLINE)
-    try:
-        failures = []
-        for state in states:
-            began = time.monotonic()
-            reply = jev.evaluate(public(state), questions(state))
-            record["request_latency_ms"].append(
-                round((time.monotonic() - began) * 1000)
-            )
-            record["model"] = reply.get("model") or record["model"]
-            usage = reply.get("usage")
-            tokens = usage.get("input_tokens") if isinstance(usage, dict) else None
-            if isinstance(tokens, int):
-                record["input_tokens"] = (record["input_tokens"] or 0) + tokens
-            answers = reply["answers"]
-            for i, place in enumerate(state["hunks"]):
-                for j, piece in enumerate(place["pieces"]):
-                    fit = piece["_log"]["fit"] = noul(answers, f"fits_{i}_{j}")
-                    if fit < DENY_BELOW:
-                        piece["_log"]["failed"] = True
-                        shown = [
-                            t for t in piece["added_lines"].splitlines() if t.strip()
-                        ][:2]
-                        failures.append((piece["_log"], shown, PLACEMENT_MISFIT, fit))
-            for k, section in enumerate(state.get("new_sections", [])):
-                style = section["_log"]["style"] = noul(answers, f"style_{k}")
-                if style < DENY_BELOW:
-                    section["_log"]["failed"] = True
-                    failures.append(
-                        (section["_log"], section["_shown"], STYLE_MISFIT, style)
-                    )
-        return failures
-    finally:
-        jev.close()
+def judge(
+    states: list[dict], record: dict, evaluate
+) -> list[tuple[dict, list[str], str, float]]:
+    deadline = time.monotonic() + DEADLINE
+    failures = []
+    for state in states:
+        began = time.monotonic()
+        if began >= deadline:
+            raise Skip("Jev の応答が時間内に返りませんでした")
+        reply = evaluate(public(state), questions(state), deadline - began)
+        if not isinstance(reply, dict) or not isinstance(reply.get("answers"), dict):
+            raise Skip("Jev の応答を読めませんでした")
+        record["request_latency_ms"].append(round((time.monotonic() - began) * 1000))
+        record["model"] = reply.get("model") or record["model"]
+        usage = reply.get("usage")
+        tokens = usage.get("input_tokens") if isinstance(usage, dict) else None
+        if isinstance(tokens, int):
+            record["input_tokens"] = (record["input_tokens"] or 0) + tokens
+        answers = reply["answers"]
+        for i, place in enumerate(state["hunks"]):
+            for j, piece in enumerate(place["pieces"]):
+                fit = piece["_log"]["fit"] = noul(answers, f"fits_{i}_{j}")
+                if fit < DENY_BELOW:
+                    piece["_log"]["failed"] = True
+                    shown = [t for t in piece["added_lines"].splitlines() if t.strip()][
+                        :2
+                    ]
+                    failures.append((piece["_log"], shown, PLACEMENT_MISFIT, fit))
+        for k, section in enumerate(state.get("new_sections", [])):
+            style = section["_log"]["style"] = noul(answers, f"style_{k}")
+            if style < DENY_BELOW:
+                section["_log"]["failed"] = True
+                failures.append(
+                    (section["_log"], section["_shown"], STYLE_MISFIT, style)
+                )
+    return failures
 
 
 def deny_reason(failures: list[tuple[dict, list[str], str, float]]) -> str:
@@ -660,16 +587,16 @@ def write_log(record: dict) -> None:
         pass
 
 
-def main() -> int:
-    payload = json.load(sys.stdin)
+def check(payload: dict, evaluate) -> dict:
+    """Hook output for one PreToolUse payload; evaluate(state, questions, seconds_left) returns Jev's reply or raises Skip."""
     target = commit_target(payload) if isinstance(payload, dict) else None
     if target is None:
-        return 0
+        return {}
     cwd, paths, amend, all_tracked, message = target
     hunks = changed_hunks(cwd, paths, amend, all_tracked)
     states = requests(hunks, message) if hunks else []
     if not states:
-        return 0
+        return {}
     began = time.monotonic()
     record = {
         "ts": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -678,18 +605,18 @@ def main() -> int:
         "subject": message.split("\n", 1)[0], "outcome": "allow", "skip_reason": None,
         "threshold": DENY_BELOW, "question_version": QUESTION_VERSION, "model": None,
         "input_tokens": None, "latency_ms": None, "request_latency_ms": [],
+        "server_pid": os.getpid(),
     }  # fmt: skip
-    output = None
+    output = {}
     try:
-        if failures := judge(states, record):
+        if failures := judge(states, record, evaluate):
             record["outcome"] = "deny"
             decision = {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                         "permissionDecisionReason": deny_reason(failures)}  # fmt: skip
             output = {"hookSpecificOutput": decision}
     except Skip as skip:
         record["outcome"], record["skip_reason"] = "skip", str(skip)
-        notice = f"jev-context-gate: Jev の文脈チェックを省略しました (理由: {skip})"
-        output = {"systemMessage": notice}
+        output = {"systemMessage": skip_notice(skip)}
     record["latency_ms"] = round((time.monotonic() - began) * 1000)
     units = [u for s in states for u in s["hunks"]]
     record["pieces"] = [p["_log"] for u in units for p in u["pieces"]]
@@ -697,10 +624,8 @@ def main() -> int:
         s["_log"] for st in states for s in st.get("new_sections", [])
     ]
     write_log(record)
-    if output:
-        print(json.dumps(output, ensure_ascii=False))
-    return 0
+    return output
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+def skip_notice(reason: object) -> str:
+    return f"jev-context-gate: Jev の文脈チェックを省略しました (理由: {reason})"

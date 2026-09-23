@@ -3,6 +3,8 @@
 
 import argparse
 import asyncio
+import functools
+import importlib.util
 import getpass
 import json
 import logging
@@ -12,6 +14,7 @@ import ssl
 import stat
 import sys
 import tempfile
+import time
 import warnings
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,6 +22,10 @@ from typing import Any
 
 ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 MAX_BYTES = 8 * 1024 * 1024
+BACKOFF_S = 30
+BACKOFF_MAX_S = 1800
+# The commit context check ships beside the SDK runtime (the venv prefix), not as a hook.
+GATE_MODULE = Path(sys.prefix) / "jev_context_gate.py"
 
 
 class JevError(Exception):
@@ -130,7 +137,7 @@ def remove_key():
         if path.exists() or path.is_symlink():
             check_private(path)
             path.unlink()
-    print("Saved key removed. Restart connected agents to discard cached keys.")
+    print("Saved key removed. Connected servers stop using it on their next call.")
 
 
 def create_client(key):
@@ -168,18 +175,65 @@ def api_error_message(status_code):
     return f"HTTP {status_code}: TypeSafe rejected the request. Check the request and account settings."
 
 
+def credential_stamp():
+    try:
+        info = (credential_dir() / "credentials.json").stat()
+    except OSError:
+        return None
+    return info.st_ino, info.st_mtime_ns
+
+
+@functools.cache
+def load_gate():
+    spec = importlib.util.spec_from_file_location("jev_context_gate", GATE_MODULE)
+    if spec is None or spec.loader is None or not GATE_MODULE.is_file():
+        raise JevError(f"jev_context_gate is not installed at {GATE_MODULE}.")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class JevSession:
     """One SDK client and connection pool per MCP connection."""
 
     def __init__(self, key=None):
         self.client = None
         self.key = key
+        self.stamp = None  # the saved key file the client was built from
+        self.rejected = None  # (stamp, message) after the API refused that key
+        self.failures = 0
+        self.retry_at = 0.0
+        self.last_error = ""
 
     async def close(self):
         if self.client is not None:
             await self.client.aclose()
         self.client = None
         self.key = None
+
+    def back_off(self, message):
+        self.failures += 1
+        self.retry_at = time.monotonic() + min(
+            BACKOFF_S * 2 ** (self.failures - 1), BACKOFF_MAX_S
+        )
+        self.last_error = message
+
+    async def refuse_known_failures(self):
+        # The live server remembers failures so hooks and agents fail fast instead of re-asking.
+        stamp = credential_stamp() if self.stamp is not None or self.rejected else None
+        if self.rejected is not None:
+            if stamp == self.rejected[0]:
+                raise JevError(
+                    f"{self.rejected[1]} Not retried until the saved key changes."
+                )
+            self.rejected = None
+            await self.close()
+        elif self.stamp is not None and stamp != self.stamp:
+            await self.close()
+            self.stamp = None
+        wait = self.retry_at - time.monotonic()
+        if wait > 0:
+            raise JevError(f"{self.last_error} Asking again after {int(wait) + 1} s.")
 
     async def evaluate(self, state, questions, model="jev-latest"):
         # SDK diagnostics can contain response bodies. Only our safe messages
@@ -209,30 +263,40 @@ class JevSession:
             raise JevError("Request must contain valid JSON values.") from None
         if len(request.encode()) > MAX_BYTES:
             raise JevError("Request exceeds 8 MiB.")
+        await self.refuse_known_failures()
         try:
             if self.client is None:
                 # No await between loading and assigning: concurrent calls share
                 # one client. Missing credentials do not prevent MCP startup.
-                key = self.key if self.key is not None else load_key()
+                if self.key is None:
+                    self.stamp, key = credential_stamp(), load_key()
+                else:
+                    key = self.key
                 self.client = create_client(key)
                 self.key = key
             result = await self.client.system_one(
                 state=state, questions=questions, model=model
             )
+            self.failures = 0
             output = result.model_dump_json()
             if len(output.encode()) > MAX_BYTES:
                 raise JevError("API response exceeds 8 MiB.")
             return json.loads(output.replace(json.dumps(self.key)[1:-1], "[REDACTED]"))
         except TypeSafeAPIConnectionError:
-            raise JevError(
-                "Unable to reach TypeSafe (network, TLS, or timeout). Check connectivity and retry."
-            ) from None
+            message = "Unable to reach TypeSafe (network, TLS, or timeout). Check connectivity and retry."
+            self.back_off(message)
+            raise JevError(message) from None
         except TypeSafeAPIResponseValidationError:
             raise JevError(
                 "TypeSafe returned an unexpected response. Check for a Jev integration update."
             ) from None
         except TypeSafeAPIError as error:
-            raise JevError(api_error_message(error.status)) from None
+            message = api_error_message(error.status)
+            if error.status in (401, 403):
+                self.rejected = (self.stamp, message)
+            elif error.status == 429 or error.status >= 500:
+                self.back_off(message)
+            raise JevError(message) from None
         except TypeSafeError:
             raise JevError(
                 "Invalid TypeSafe request. Check the question definitions."
@@ -244,6 +308,41 @@ class JevSession:
             raise JevError(
                 "Jev operation failed. Check local credentials, installation, and connectivity."
             ) from None
+
+    async def context_gate(self, tool_input, cwd, session_id=""):
+        if isinstance(tool_input, str):
+            try:
+                tool_input = json.loads(tool_input)
+            except ValueError:
+                tool_input = {"command": tool_input}
+        payload = {
+            "tool_name": "Bash",
+            "tool_input": tool_input,
+            "cwd": cwd,
+            "session_id": session_id,
+        }
+        try:
+            gate = load_gate()
+        except JevError as error:
+            return {"systemMessage": f"jev-context-gate: {error}"}
+        loop = asyncio.get_running_loop()
+
+        def evaluate(state, questions, seconds_left):
+            future = asyncio.run_coroutine_threadsafe(
+                self.evaluate(state, questions), loop
+            )
+            try:
+                return future.result(timeout=seconds_left)
+            except JevError as error:
+                raise gate.Skip(str(error)) from None
+            except TimeoutError:
+                future.cancel()
+                raise gate.Skip("Jev の応答が時間内に返りませんでした") from None
+
+        try:
+            return await asyncio.to_thread(gate.check, payload, evaluate)
+        except Exception as error:  # noqa: BLE001 - a broken check must never block a commit
+            return {"systemMessage": gate.skip_notice(type(error).__name__)}
 
 
 async def test_api(
@@ -325,6 +424,30 @@ def create_server():
             return await session.evaluate(state, questions, model)
         except JevError as error:
             raise ToolError(str(error)) from None
+
+    @server.tool(
+        structured_output=True,
+        annotations=ToolAnnotations(
+            readOnlyHint=True, destructiveHint=False, openWorldHint=True
+        ),
+    )
+    async def context_gate(
+        cwd: str,
+        command: str = "",
+        tool_input: dict | str | None = None,
+        session_id: str = "",
+    ) -> dict[str, Any]:
+        """Hook intake for PreToolUse on Bash: judge a `git commit` with this server's Jev session.
+
+        Pass the Bash command string (Claude Code) or the whole tool_input (Codex). Returns the hook
+        output: {} to allow, a deny decision, or a systemMessage when the check is skipped. Any other
+        command returns {} without calling the API.
+        """
+        return await session.context_gate(
+            tool_input if tool_input is not None else {"command": command},
+            cwd,
+            session_id,
+        )
 
     return server
 

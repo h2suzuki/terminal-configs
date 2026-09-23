@@ -352,6 +352,7 @@ run uv venv --python /usr/bin/python3 /usr/local/lib/jev
 copy jev_requirements.txt /usr/local/lib/jev/requirements.txt -m 0644
 run uv pip install --python /usr/local/lib/jev/bin/python -r /usr/local/lib/jev/requirements.txt
 copy jev                        /usr/local/bin/jev
+copy jev_context_gate.py         /usr/local/lib/jev/jev_context_gate.py -m 0644
 copy install_typesafe_extensions /usr/local/bin/install_typesafe_extensions
 
 

@@ -1,62 +1,28 @@
 #!/usr/bin/env python3
-"""Tests for jev_context_gate: a stub `jev serve` answers over MCP stdio, and throwaway repos provide the commits."""
+"""Tests for jev_context_gate: the connected jev server calls check() with its own evaluate; throwaway repos provide the commits."""
 
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import re
 import subprocess
 import tempfile
-import textwrap
+import tomllib
 import unittest
 from pathlib import Path
+from unittest import mock
 
-HOOK = (
-    Path(__file__).resolve().parent.parent
-    / "files"
-    / "shared_hooks"
-    / "jev_context_gate.py"
+ROOT = Path(__file__).resolve().parent.parent
+spec = importlib.util.spec_from_file_location(
+    "jev_context_gate", ROOT / "files" / "jev_context_gate.py"
 )
-
-STUB = textwrap.dedent(
-    """\
-    #!/usr/bin/env python3
-    import json, os, sys, time
-    mode = os.environ.get("JEV_STUB_MODE", "good")
-    for line in sys.stdin:
-        msg = json.loads(line)
-        if "id" not in msg:
-            continue
-        if msg["method"] == "initialize":
-            result = {"protocolVersion": "2025-06-18", "capabilities": {}, "serverInfo": {"name": "jev", "version": "0"}}
-        else:
-            args = msg["params"]["arguments"]
-            with open(os.environ["JEV_STUB_LOG"], "a") as log:
-                log.write(json.dumps(args, ensure_ascii=False) + "\\n")
-            if mode == "hang":
-                time.sleep(60)
-            if mode == "error":
-                result = {"content": [{"type": "text", "text": "No API key configured. Run jev api-key set."}], "isError": True}
-            else:
-                answers, state = {}, args["state"]
-                for key in args["questions"]:
-                    kind, *index = key.split("_")
-                    if kind == "fits":
-                        text = state["hunks"][int(index[0])]["pieces"][int(index[1])]["added_lines"]
-                    else:
-                        assert state["new_sections"][int(index[0])]["new_section"]["text"]
-                        text = ""
-                    bad = mode == "bad" or (mode == "bad-marked" and "MAINTAINER" in text)
-                    bad = bad or (mode == "bad-style" and kind == "style")
-                    low = float(os.environ.get("JEV_STUB_NOUL", "0.1"))
-                    answers[key] = {"type": "noul", "noul": low if bad else 0.9}
-                text = json.dumps({"answers": answers, "model": "stub-jev", "usage": {"input_tokens": 7}})
-                result = {"content": [{"type": "text", "text": text}], "isError": False}
-        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
-    """
-)
+assert spec and spec.loader
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+REAL_POPEN = subprocess.Popen
 
 README = (
     "# Tool\n\nTool sets up coding agents on a workstation.\n\n## Sign in\n\nSign in to each CLI once.\n\n"
@@ -71,21 +37,17 @@ class JevContextGateTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
-        self.bin = root / "bin"
-        self.bin.mkdir()
-        (self.bin / "jev").write_text(STUB)
-        (self.bin / "jev").chmod(0o755)
-        self.log = root / "calls.jsonl"
+        self.sent: list[dict] = []
+        self.spawned: list[list[str]] = []
+        self.noul = 0.1
         self.gate_log = root / "state" / "log.jsonl"
+        self.log_path = self.gate_log
         self.home = root / "home"
         self.home.mkdir()
         self.repo = root / "repo"
         self.env = {
             **os.environ,
             "HOME": str(self.home),
-            "PATH": f"{self.bin}:{os.environ['PATH']}",
-            "JEV_STUB_LOG": str(self.log),
-            "JEV_CONTEXT_GATE_LOG": str(self.gate_log),
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_AUTHOR_NAME": "t",
@@ -112,48 +74,51 @@ class JevContextGateTest(unittest.TestCase):
             readme.replace("```\n\n## Updating", f"```\n\n{text}\n\n## Updating")
         )
 
-    def run_hook(
-        self,
-        command: str,
-        mode: str = "good",
-        codex: bool = False,
-        path_env: str | None = None,
-    ) -> dict:
+    def evaluate(self, mode: str):
+        def answer(state: dict, questions: dict, timeout: float) -> dict:
+            self.assertGreater(timeout, 0)
+            self.sent.append(json.loads(json.dumps({"state": state, "questions": questions})))
+            if mode == "error":
+                raise gate.Skip("No API key configured. Run jev api-key set.")
+            answers = {}
+            for key in questions:
+                kind, *index = key.split("_")
+                if kind == "fits":
+                    text = state["hunks"][int(index[0])]["pieces"][int(index[1])]["added_lines"]
+                else:
+                    assert state["new_sections"][int(index[0])]["new_section"]["text"]
+                    text = ""
+                bad = mode == "bad" or (mode == "bad-marked" and "MAINTAINER" in text)
+                bad = bad or (mode == "bad-style" and kind == "style")
+                answers[key] = {"type": "noul", "noul": self.noul if bad else 0.9}
+            return {"answers": answers, "model": "stub-jev", "usage": {"input_tokens": 7}}
+
+        return answer
+
+    def spy(self, *args, **kwargs):
+        argv = args[0] if args else kwargs["args"]
+        self.spawned.append([str(a) for a in argv])
+        return REAL_POPEN(*args, **kwargs)
+
+    def run_hook(self, command: str, mode: str = "good", codex: bool = False) -> dict:
         payload: dict = (
-            {
-                "tool_name": "Bash",
-                "tool_input": {"cmd": command, "workdir": str(self.repo)},
-                "cwd": "/",
-            }
+            {"tool_name": "Bash", "tool_input": {"cmd": command, "workdir": str(self.repo)}, "cwd": "/"}
             if codex
-            else {
-                "tool_name": "Bash",
-                "tool_input": {"command": command},
-                "cwd": str(self.repo),
-            }
-        )
+            else {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(self.repo)}
+        )  # fmt: skip
         payload["session_id"] = "sess-1"
-        env = {**self.env, "JEV_STUB_MODE": mode}
-        if path_env is not None:
-            env["PATH"] = path_env
-        result = subprocess.run(
-            [str(HOOK)],
-            input=json.dumps({"hook_event_name": "PreToolUse", **payload}),
-            capture_output=True,
-            text=True,
-            check=False,
-            env=env,
-            timeout=90,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        return json.loads(result.stdout) if result.stdout.strip() else {}
+        with (
+            mock.patch.dict(os.environ, self.env, clear=True),
+            mock.patch.object(gate, "LOG", str(self.log_path)),
+            mock.patch.object(subprocess, "Popen", side_effect=self.spy),
+        ):
+            output = gate.check({"hook_event_name": "PreToolUse", **payload}, self.evaluate(mode))
+        # The check runs inside the connected jev server: it may run git, never start a process of its own.
+        self.assertEqual({argv[0] for argv in self.spawned} - {"git"}, set())
+        return output
 
     def calls(self) -> list[dict]:
-        return (
-            [json.loads(line) for line in self.log.read_text().splitlines()]
-            if self.log.exists()
-            else []
-        )
+        return self.sent
 
     def records(self) -> list[dict]:
         return (
@@ -246,21 +211,6 @@ class JevContextGateTest(unittest.TestCase):
         self.assertNotIn("hookSpecificOutput", output)
         self.assertIn("Jev", output["systemMessage"])
         self.assertIn("No API key", output["systemMessage"])
-
-    def test_missing_jev_skips_and_tells_the_user(self):
-        self.add_to_codex_section("MAINTAINER note")
-        output = self.run_hook(
-            'git commit -m "x" -- README.md', mode="bad", path_env="/usr/bin:/bin"
-        )
-        self.assertNotIn("hookSpecificOutput", output)
-        self.assertIn("Jev", output["systemMessage"])
-
-    def test_timeout_skips_and_tells_the_user(self):
-        self.add_to_codex_section("MAINTAINER note")
-        self.env = {**self.env, "JEV_CONTEXT_GATE_DEADLINE": "2"}
-        output = self.run_hook('git commit -m "x" -- README.md', mode="hang")
-        self.assertNotIn("hookSpecificOutput", output)
-        self.assertIn("Jev", output["systemMessage"])
 
     def test_pieces_of_one_hunk_are_sent_together(self):
         """A piece judged alone lost its neighbours' context and scored lower, so one place stays in one request."""
@@ -481,10 +431,10 @@ class JevContextGateTest(unittest.TestCase):
 
     def test_threshold_denies_below_one_half_only(self):
         self.add_to_codex_section("MAINTAINER note")
-        self.env = {**self.env, "JEV_STUB_NOUL": "0.45"}
+        self.noul = 0.45
         denied = self.run_hook('git commit -m "x" -- README.md', mode="bad")
         self.assertEqual(denied["hookSpecificOutput"]["permissionDecision"], "deny")
-        self.env = {**self.env, "JEV_STUB_NOUL": "0.55"}
+        self.noul = 0.55
         self.assertEqual(
             self.run_hook('git commit -m "x" -- README.md', mode="bad"), {}
         )
@@ -550,6 +500,7 @@ class JevContextGateTest(unittest.TestCase):
         self.assertEqual(record["model"], "stub-jev")
         self.assertEqual(record["input_tokens"], 7)
         self.assertEqual(len(record["request_latency_ms"]), 1)
+        self.assertEqual(record["server_pid"], os.getpid())
         self.assertGreaterEqual(record["latency_ms"], record["request_latency_ms"][0])
         self.assertEqual(
             record["pieces"],
@@ -589,10 +540,43 @@ class JevContextGateTest(unittest.TestCase):
         expected = self.run_hook('git commit -m "x" -- README.md', mode="bad")
         blocker = self.gate_log.parent.parent / "blocker"
         blocker.write_text("")
-        self.env = {**self.env, "JEV_CONTEXT_GATE_LOG": str(blocker / "log.jsonl")}
+        self.log_path = blocker / "log.jsonl"
         self.assertEqual(
             self.run_hook('git commit -m "x" -- README.md', mode="bad"), expected
         )
+
+
+
+class RegistrationTest(unittest.TestCase):
+    """Both clients hand the commit to the connected jev server; no hook starts a process to judge it."""
+
+    # Claude Code documents substitution into string values only, so it passes the command string.
+    CLAUDE_INPUT = {"command": "${tool_input.command}", "cwd": "${cwd}", "session_id": "${session_id}"}
+    CODEX_INPUT = {"tool_input": "${tool_input}", "cwd": "${cwd}", "session_id": "${session_id}"}
+
+    def test_claude_code_calls_the_connected_jev_server(self):
+        settings = json.loads((ROOT / "files" / "claude_managed-extensions.json").read_text())
+        hooks = [h for g in settings["hooks"]["PreToolUse"] for h in g["hooks"]]
+        self.assertFalse([h for h in hooks if "jev_context_gate" in h.get("command", "")])
+        (hook,) = [h for h in hooks if h.get("type") == "mcp_tool" and h.get("server") == "jev"]
+        self.assertEqual(hook["tool"], "context_gate")
+        self.assertEqual(hook["if"], "Bash(git *)")
+        self.assertEqual(hook["input"], self.CLAUDE_INPUT)
+
+    def test_codex_calls_the_connected_jev_server(self):
+        config = tomllib.loads((ROOT / "files" / "codex_config.toml").read_text())
+        hooks = [h for g in config["hooks"]["PreToolUse"] for h in g["hooks"]]
+        self.assertFalse([h for h in hooks if "jev_context_gate" in h.get("command", "")])
+        (hook,) = [h for h in hooks if h.get("type") == "mcp_tool" and h.get("server") == "jev"]
+        self.assertEqual(hook["tool"], "context_gate")
+        self.assertEqual(hook["input"], self.CODEX_INPUT)
+
+    def test_the_module_ships_with_the_jev_runtime_not_as_a_hook(self):
+        self.assertFalse((ROOT / "files" / "shared_hooks" / "jev_context_gate.py").exists())
+        for script in ("debian12.sh", "ubuntu2404-wsl.sh"):
+            text = (ROOT / script).read_text()
+            copied = re.search(r"^copy jev_context_gate\.py +/usr/local/lib/jev/jev_context_gate\.py", text, re.M)
+            self.assertTrue(copied, f"{script} does not ship the module with the jev runtime")
 
 
 if __name__ == "__main__":

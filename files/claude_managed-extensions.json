@@ -47,7 +47,8 @@
           { "type": "command", "command": "/etc/claude-code/hooks/deny_unsafe_git_reset.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/sandbox_exclusion_guard.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/root_dir_guard.py" },
-          { "type": "command", "command": "/etc/claude-code/hooks/jev_context_gate.py", "timeout": 60 }
+          { "type": "mcp_tool", "server": "jev", "tool": "context_gate", "if": "Bash(git *)", "timeout": 60,
+            "input": { "command": "${tool_input.command}", "cwd": "${cwd}", "session_id": "${session_id}" } }
         ]
       },
       {
