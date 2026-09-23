@@ -20,12 +20,12 @@ OPEN_TASK_REF_CHARS = 24
 CLOSED_STATUSES = {"completed", "cancelled", "deleted"}
 TASK_BODY_CHARS = 60
 TASK_STATUS_EMOJI = {
-    "pending": "🔳",
+    "pending": "◻️",
     "in_progress": "▶️",
     "delegated": "🤖",
     "blocked": "🚧",
 }
-DEFAULT_TASK_EMOJI = "🔳"
+DEFAULT_TASK_EMOJI = "◻️"
 NUMERIC_TASK_ID = re.compile(r"[0-9]+(?:-[0-9]+)*")
 TASK_CLOSE_WORDS = re.compile(
     r"(?<![未不])完了|終了|終わりました|クローズ|\bcompleted\b|\bdone\b", re.IGNORECASE

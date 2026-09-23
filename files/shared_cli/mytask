@@ -29,7 +29,7 @@ TIME_FORMAT = "%Y-%m-%d %H:%M"
 # completed stays last: render_tasks treats STATUSES[:-1] as unfinished.
 STATUSES = ("pending", "in_progress", "delegated", "blocked", "completed")
 EMOJI = {
-    "pending": "🔳",
+    "pending": "◻️",
     "in_progress": "▶️",
     "delegated": "🤖",
     "blocked": "🚧",
@@ -524,7 +524,7 @@ class MyTasksTest(unittest.TestCase):
         task_update({"id": "1-1-1", "status": "completed"})
         text, error = task_create({"content": "Grandchild two", "parent": "1-1"})
         self.assertFalse(error)
-        self.assertIn("    1-1-2 🔳 Grandchild two", text)
+        self.assertIn("    1-1-2 ◻️ Grandchild two", text)
         task_create({"content": "Great grandchild", "parent": "1-1-2"})
         task_create({"content": "Sibling", "parent": "1"})
         task_create({"content": "Next parent"})
@@ -551,7 +551,7 @@ class MyTasksTest(unittest.TestCase):
         self.assertNotIn("4-1-10", task_list()[0])
         text, error = task_create({"content": "After hidden", "parent": "4-1"})
         self.assertFalse(error)
-        self.assertIn("4-1-11 🔳 After hidden", text)
+        self.assertIn("4-1-11 ◻️ After hidden", text)
 
     def test_filter_order_rendering_and_legacy_fields(self):
         tasks: list[Task] = [
@@ -576,7 +576,7 @@ class MyTasksTest(unittest.TestCase):
             render_tasks(tasks).splitlines(),
             [
                 "1 ▶️ First",
-                "  1-2 🔳 Child two",
+                "  1-2 ◻️ Child two",
                 "2 🚧 Second",
             ],
         )
@@ -598,7 +598,7 @@ class MyTasksTest(unittest.TestCase):
         created, error = task_create({"content": "New request"})
         self.assertFalse(error)
         self.assertEqual(len(created.splitlines()), 1)
-        self.assertTrue(created.startswith("102 🔳 New request"))
+        self.assertTrue(created.startswith("102 ◻️ New request"))
         updated, error = task_update({"id": "102", "status": "completed"})
         self.assertFalse(error)
         self.assertEqual(len(updated.splitlines()), 1)

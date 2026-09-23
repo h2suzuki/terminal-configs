@@ -39,12 +39,12 @@ SYNTHETIC_PREFIX = "<task-notification>"
 CLOSE_NUDGE = "mytask: 終わった項目は completed に、不要な項目は cancelled にする"
 CLOSED_STATUSES = frozenset({"completed", "cancelled", "deleted"})
 STATUS_EMOJI = {
-    "pending": "🔳",
+    "pending": "◻️",
     "in_progress": "▶️",
     "delegated": "🤖",
     "blocked": "🚧",
 }
-DEFAULT_EMOJI = "🔳"
+DEFAULT_EMOJI = "◻️"
 TASK_BODY_CHARS = 60
 NUMERIC_ID = re.compile(r"[0-9]+(?:-[0-9]+)*")
 
@@ -283,13 +283,13 @@ class CloseNudgeTest(unittest.TestCase):
         self.assertEqual(
             block.splitlines()[:-1],
             [
-                "4 🔳 覚え書き",
-                "  4-1 🔳 覚え書き",
-                "    4-1-2 🔳 覚え書き",
-                "    4-1-10 🔳 覚え書き",
-                "  4-2 🔳 覚え書き",
-                "  4-10 🔳 覚え書き",
-                "5 🔳 覚え書き",
+                "4 ◻️ 覚え書き",
+                "  4-1 ◻️ 覚え書き",
+                "    4-1-2 ◻️ 覚え書き",
+                "    4-1-10 ◻️ 覚え書き",
+                "  4-2 ◻️ 覚え書き",
+                "  4-10 ◻️ 覚え書き",
+                "5 ◻️ 覚え書き",
             ],
         )
 
@@ -305,7 +305,7 @@ class CloseNudgeTest(unittest.TestCase):
         assert block is not None
         self.assertEqual(
             block.splitlines()[:-1],
-            ["root 🔳 覚え書き", "  child 🔳 覚え書き", "    grandchild 🔳 覚え書き"],
+            ["root ◻️ 覚え書き", "  child ◻️ 覚え書き", "    grandchild ◻️ 覚え書き"],
         )
 
     def test_long_bodies_are_cut_to_one_line(self):
@@ -314,7 +314,7 @@ class CloseNudgeTest(unittest.TestCase):
         assert block is not None
         line = block.splitlines()[0]
         self.assertEqual(len(block.splitlines()), 2)
-        self.assertEqual(line, "1 🔳 " + "詳細" * (TASK_BODY_CHARS // 2) + "…")
+        self.assertEqual(line, "1 ◻️ " + "詳細" * (TASK_BODY_CHARS // 2) + "…")
 
     def test_closed_ledger_and_missing_session_add_nothing(self):
         self.assertIsNone(_close_block(self.payload))
@@ -327,7 +327,7 @@ class CloseNudgeTest(unittest.TestCase):
         with mock.patch.object(sys.modules[__name__], "_emit_context") as emit:
             _run({**self.payload, "prompt": "続きをお願いします"})
         emitted = emit.call_args[0][0]
-        self.assertEqual(emitted.splitlines(), [NUDGE, "1 🔳 覚え書き", CLOSE_NUDGE])
+        self.assertEqual(emitted.splitlines(), [NUDGE, "1 ◻️ 覚え書き", CLOSE_NUDGE])
 
 
 if __name__ == "__main__":
