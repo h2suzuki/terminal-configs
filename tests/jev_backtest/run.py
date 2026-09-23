@@ -70,6 +70,8 @@ def read_jsonl(path):
 
 
 def select(cases, kinds=None, origins=None, ids=None):
+    if unknown := sorted(set(ids or ()) - {c["id"] for c in cases}):
+        raise SystemExit(f"unknown case id(s): {', '.join(unknown)}")
     return [
         c
         for c in cases
