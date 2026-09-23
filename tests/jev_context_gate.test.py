@@ -30,7 +30,7 @@ README = (
     "### Codex\n\n```bash\ncodex login\n```\n\n## Updating\n\nPull and rerun.\n"
 )
 CODE = '"""Loader for agent settings files."""\n\n\ndef load(path):\n    return open(path).read()\n\n\ndef helper():\n    return 1\n'
-FIT_KEY = re.compile(r"fits_\d+_\d+|style_\d+")
+FIT_KEY = re.compile(r"fits_\d+_\d+|style_\d+|placed_\d+")
 
 
 class JevContextGateTest(unittest.TestCase):
@@ -86,6 +86,8 @@ class JevContextGateTest(unittest.TestCase):
                 kind, *index = key.split("_")
                 if kind == "fits":
                     text = state["hunks"][int(index[0])]["pieces"][int(index[1])]["added_lines"]
+                elif kind == "placed":
+                    text = state["new_files"][int(index[0])]["opening"]
                 else:
                     assert state["new_sections"][int(index[0])]["new_section"]["text"]
                     text = ""
@@ -491,7 +493,128 @@ class JevContextGateTest(unittest.TestCase):
         files = sorted(call["state"]["document"]["file"] for call in self.calls())
         self.assertEqual(files, ["README.md", "loader.py"])
 
-    def test_new_file_and_deletion_only_changes_are_not_sent(self):
+    def add_new_file(self, name: str, text: str) -> None:
+        (self.repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (self.repo / name).write_text(text)
+        self.git("add", name)
+
+    def test_new_file_is_asked_whether_it_belongs_at_its_path(self):
+        """N1/N2: a file the commit adds gets one question about its path, filled from the file and its directory."""
+        self.add_new_file("NOTES.md", "# Notes\n\nDraft of the design.\n\n- keep it\n")
+        self.run_hook('git commit -m "Add design notes" -- NOTES.md')
+        (call,) = self.calls()
+        self.assertEqual(call["state"]["hunks"], [])
+        (new,) = call["state"]["new_files"]
+        self.assertEqual(new["path"], "NOTES.md")
+        self.assertEqual(new["file_kind_and_role"], "Notes: Draft of the design.")
+        text = (self.repo / "NOTES.md").read_text()
+        self.assertEqual(new["shape"], gate.shape_sentence(text.splitlines()))
+        self.assertEqual(new["opening"], text.rstrip("\n"))
+        self.assertEqual(new["directory_neighbors"], ["README.md"])
+        background = call["state"]["form"]["background_of_change"]
+        self.assertEqual(background, "Add design notes")
+        self.assertEqual(list(call["questions"]), ["placed_0"])
+        question = call["questions"]["placed_0"]
+        self.assertIn("new_files[0].directory_neighbors", question["instructions"])
+        self.assertEqual(question["type"], "noul")
+
+    def test_staged_new_file_is_judged_for_a_commit_without_paths(self):
+        self.add_new_file("NOTES.md", "# Notes\n\nStaged text.\n")
+        (self.repo / "NOTES.md").write_text("# Notes\n\nWorktree text.\n")
+        self.run_hook('git commit -m "x"')
+        (new,) = self.calls()[0]["state"]["new_files"]
+        self.assertIn("Staged text.", new["opening"])
+
+    def test_new_file_neighbors_are_the_entries_of_its_own_directory(self):
+        """N2: directories end in a slash; only the directory the file lands in is listed."""
+        self.add_new_file("docs/guide.md", "# Guide\n\nRead me.\n")
+        self.add_new_file("docs/deep/x.md", "# X\n\nx\n")
+        self.git("commit", "-q", "-m", "docs")
+        self.add_new_file("docs/plan.md", "# Plan\n\nNext steps.\n")
+        self.run_hook('git commit -m "x" -- docs/plan.md')
+        (new,) = self.calls()[0]["state"]["new_files"]
+        self.assertEqual(new["directory_neighbors"], ["deep/", "guide.md"])
+        self.git("reset", "-q", "--", "docs/plan.md")
+        self.add_new_file("PLAN.md", "# Plan\n\nNext steps.\n")
+        self.sent.clear()
+        self.run_hook('git commit -m "x" -- PLAN.md')
+        (new,) = self.calls()[0]["state"]["new_files"]
+        self.assertEqual(new["directory_neighbors"], ["README.md", "docs/"])
+
+    def test_new_file_in_a_new_directory_lists_the_nearest_existing_parent(self):
+        """N2: a new directory has no entries yet, so the question shows its nearest existing parent instead."""
+        self.add_new_file("docs/guide.md", "# Guide\n\nRead me.\n")
+        self.git("commit", "-q", "-m", "docs")
+        self.add_new_file("docs/skills/mytask/SKILL.md", "# Mytask\n\nRecord work.\n")
+        self.run_hook('git commit -m "x" -- docs/skills/mytask/SKILL.md')
+        (new,) = self.calls()[0]["state"]["new_files"]
+        self.assertEqual(new["directory"], "docs")
+        self.assertEqual(new["directory_neighbors"], ["guide.md"])
+        self.git("reset", "-q", "--", "docs/skills/mytask/SKILL.md")
+        self.add_new_file("NOTES.md", "# Notes\n\nx\n")
+        self.sent.clear()
+        self.run_hook('git commit -m "x" -- NOTES.md')
+        (new,) = self.calls()[0]["state"]["new_files"]
+        self.assertEqual(new["directory"], "(top level)")
+
+    def test_new_file_neighbors_do_not_depend_on_the_commit_directory(self):
+        self.add_new_file("docs/guide.md", "# Guide\n\nRead me.\n")
+        self.git("commit", "-q", "-m", "docs")
+        self.add_new_file("docs/plan.md", "# Plan\n\nNext steps.\n")
+        self.run_hook('git -C docs commit -m "x" -- plan.md')
+        (new,) = self.calls()[0]["state"]["new_files"]
+        self.assertEqual(new["path"], "docs/plan.md")
+        self.assertEqual(new["directory_neighbors"], ["guide.md"])
+
+    def test_new_file_neighbors_and_opening_are_limited(self):
+        for i in range(gate.OUTLINE_LIMIT + 5):
+            self.add_new_file(f"n{i:02d}.txt", "x\n")
+        self.git("commit", "-q", "-m", "many")
+        self.add_new_file("LONG.md", "# Long\n\n" + "word " * 2000)
+        self.run_hook('git commit -m "x" -- LONG.md')
+        (new,) = self.calls()[0]["state"]["new_files"]
+        self.assertEqual(len(new["opening"]), gate.OPENING_LIMIT)
+        self.assertEqual(len(new["directory_neighbors"]), gate.OUTLINE_LIMIT + 1)
+        self.assertEqual(new["directory_neighbors"][-1], "(and 6 more)")
+
+    def test_new_file_that_does_not_belong_is_denied_with_its_first_lines(self):
+        """N3: below the threshold the commit is denied, naming the file and the new-file question."""
+        self.add_new_file("NOTES.md", "# Notes\n\nDraft of the design.\n")
+        output = self.run_hook('git commit -m "x" -- NOTES.md', mode="bad")
+        decision = output["hookSpecificOutput"]
+        self.assertEqual(decision["permissionDecision"], "deny")
+        reason = decision["permissionDecisionReason"]
+        self.assertIn("NOTES.md:1", reason)
+        self.assertIn(gate.NEW_FILE_MISFIT, reason)
+        self.assertIn("+ # Notes", reason)
+        self.assertIn("+ Draft of the design.", reason)
+
+    def test_new_file_and_edit_in_one_commit_are_judged_in_their_own_requests(self):
+        self.add_new_file("NOTES.md", "# Notes\n\nMAINTAINER draft.\n")
+        self.add_to_codex_section("Run `codex login --device-auth` over SSH.")
+        output = self.run_hook(
+            'git commit -m "x" -- README.md NOTES.md', mode="bad-marked"
+        )
+        by_file = {c["state"]["document"]["file"]: c for c in self.calls()}
+        self.assertEqual(sorted(by_file), ["NOTES.md", "README.md"])
+        self.assertNotIn("new_files", by_file["README.md"]["state"])
+        reason = output["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("NOTES.md:1", reason)
+        self.assertNotIn("README.md:", reason)
+
+    def test_new_file_is_logged_with_its_score(self):
+        """N4: the log keeps the new-file judgment beside pieces and new sections."""
+        self.add_new_file("NOTES.md", "# Notes\n\nDraft.\n")
+        self.run_hook('git commit -m "x" -- NOTES.md')
+        (record,) = self.records()
+        self.assertEqual(record["outcome"], "allow")
+        self.assertEqual(record["pieces"], [])
+        self.assertEqual(
+            record["new_files"],
+            [{"file": "NOTES.md", "line": 1, "place": "(top level)", "placed": 0.9, "failed": False}],
+        )  # fmt: skip
+
+    def test_untracked_file_and_deletion_only_changes_are_not_sent(self):
         (self.repo / "NEW.md").write_text("# New\n\nMAINTAINER note\n")
         readme = (self.repo / "README.md").read_text()
         (self.repo / "README.md").write_text(readme.replace("Pull and rerun.\n", ""))

@@ -1,5 +1,5 @@
-"""Before `git commit`, judge with Jev whether each added hunk fits its context; the jev server calls check().
-Only a clear "does not fit" denies; any Jev, key, or network failure skips the check and tells the user."""
+"""Before `git commit`, judge with Jev whether each added hunk fits its context and each added file its place;
+the jev server calls check(). Only a clear "does not fit" denies; any Jev, key, or network failure skips and tells the user."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 DENY_BELOW = 0.5  # real README commits: misplaced text ≤ 0.25, fitting ≥ 0.72
-QUESTION_VERSION = "fdet-1"
+QUESTION_VERSION = "fdet-2"
 STATE_LIMIT = 12000  # characters of JSON state per request; Jev caps state plus question at 32k tokens
 CHUNK_LIMIT = 1500  # characters of added text per judged piece
 AROUND = 6
@@ -26,6 +26,7 @@ BODY_LIMIT = 300
 SECTION_LIMIT = 5000
 SIBLING_LIMIT = 1200
 HEAD_LIMIT = 200
+OPENING_LIMIT = 3000
 DEADLINE = float(os.environ.get("JEV_CONTEXT_GATE_DEADLINE", "25"))
 LOG = os.environ.get("JEV_CONTEXT_GATE_LOG") or os.path.expanduser(
     "~/.claude/hooks/state/jev_context_gate/log.jsonl"
@@ -104,8 +105,22 @@ STYLE = (
     "verification dates, caveats about what documentation does or does not say, or explanations of why "
     "something works; or much more text per topic than the siblings give.",
 )
+NEW_FILE = (
+    "`{f}.path` is a file this commit adds to the repository. `form.background_of_change` says what the commit "
+    "does; `{f}.file_kind_and_role`, `{f}.shape` and `{f}.opening` show what the file is; `{f}.directory_neighbors` "
+    "lists what the repository already keeps in `{f}.directory`, the file's directory or, when that directory is "
+    "new, its nearest existing parent (subdirectories end in a slash). Is this file "
+    "finished repository content that belongs at this path?",
+    "The file is maintained project content (source, test, configuration, or documentation written for its "
+    "readers) of the kind, naming and language that `{f}.directory_neighbors` shows this directory keeps.",
+    "The file is working material kept in its raw form (a draft, notes, a requirements or design memo, a plan, "
+    "a session log, a review report, or a conversation transcript) rather than content distilled for its readers; "
+    "or it is a kind of file that `{f}.directory_neighbors` shows this directory does not keep, such as a prose "
+    "document at the top level of a repository that keeps its documents in a docs directory.",
+)
 PLACEMENT_MISFIT = "置いた場所の文脈に合いません (配置の問い)"
 STYLE_MISFIT = "新しい節の書きぶりが同じ階層の節と合いません (節の書きぶりの問い)"
+NEW_FILE_MISFIT = "この場所に置く完成したファイルではありません (新規ファイルの問い)"
 
 
 class Skip(Exception):
@@ -182,9 +197,9 @@ def changed_hunks(
         elif line.startswith("--- /dev/null"):
             new_file = True
         elif line.startswith("+++ "):
-            name = None if new_file or line == "+++ /dev/null" else line[6:]
+            name = None if line == "+++ /dev/null" else line[6:]
         elif name and (match := HUNK_RE.match(line)):
-            hunks.append({"file": name, "start": int(match.group(1)), "added": []})
+            hunks.append({"file": name, "start": int(match.group(1)), "added": [], "new": new_file})  # fmt: skip
         elif name and hunks and hunks[-1]["file"] == name and line.startswith("+"):
             hunks[-1]["added"].append(line[1:])
     top = git(cwd, "rev-parse", "--show-toplevel").stdout.strip() or str(cwd)
@@ -199,7 +214,29 @@ def changed_hunks(
             pre = git(cwd, "show", f"{base}:{name}").stdout
             images[name] = (text.splitlines(), pre.splitlines())
         hunk["image"], hunk["pre"] = images[hunk["file"]]
+        if hunk["new"]:
+            hunk["neighbors"] = neighbors(cwd, base, hunk["file"])
     return [h for h in hunks if any(line.strip() for line in h["added"])]
+
+
+def neighbors(cwd: Path, base: str, name: str) -> tuple[str, list[str]]:
+    """(directory, entries) the base commit keeps where `name` is added, or in its nearest existing parent
+    when that directory is new; subdirectories end in a slash."""
+    folder, found = os.path.dirname(name), []
+    while True:
+        listing = git(cwd, "ls-tree", "--full-tree", base, *(["--", f"{folder}/"] if folder else []))  # fmt: skip
+        for row in listing.stdout.splitlines():
+            meta, _, path = row.partition("\t")
+            found.append(
+                os.path.basename(path) + ("/" if meta.split()[1] == "tree" else "")
+            )
+        if found or not folder:
+            break
+        folder = os.path.dirname(folder)
+    extra = len(found) - OUTLINE_LIMIT
+    return folder or "(top level)", found[:OUTLINE_LIMIT] + (
+        [f"(and {extra} more)"] if extra > 0 else []
+    )
 
 
 def headings(lines: list[str]) -> list[tuple[int, int, str]]:
@@ -353,7 +390,7 @@ def paragraphs(added: list[str], first: int) -> list[tuple[int, list[str]]]:
 def places(hunks: list[dict]) -> list[dict]:
     """Consecutive pieces of one file under the same place, each place with its slots filled in code."""
     found: list[dict] = []
-    for hunk in hunks:
+    for hunk in (h for h in hunks if not h["new"]):
         name, image, pre = hunk["file"], hunk["image"], hunk["pre"]
         markdown = Path(name).suffix in MARKDOWN
         for begin, chunk in paragraphs(hunk["added"], hunk["start"] - 1):
@@ -404,7 +441,7 @@ def new_sections(hunks: list[dict]) -> list[dict]:
     found = []
     for hunk in hunks:
         name, image = hunk["file"], hunk["image"]
-        if Path(name).suffix not in MARKDOWN:
+        if Path(name).suffix not in MARKDOWN or hunk["new"]:
             continue
         heads = headings(image)
         first, stop = hunk["start"] - 1, hunk["start"] - 1 + len(hunk["added"])
@@ -444,6 +481,22 @@ def new_sections(hunks: list[dict]) -> list[dict]:
                          "heading": title, "style": None, "failed": False},
             })  # fmt: skip
     return found
+
+
+def new_file(hunk: dict, role: str) -> dict:
+    """The file a commit adds, shown whole enough to tell finished content from a raw draft."""
+    name, image = hunk["file"], hunk["image"]
+    return {
+        "path": name,
+        "file_kind_and_role": role,
+        "shape": shape_sentence(image),
+        "opening": "\n".join(image)[:OPENING_LIMIT],
+        "directory": hunk["neighbors"][0],
+        "directory_neighbors": hunk["neighbors"][1],
+        "_shown": [line for line in image if line.strip()][:2],
+        "_log": {"file": name, "line": 1, "place": os.path.dirname(name) or "(top level)",
+                 "placed": None, "failed": False},
+    }  # fmt: skip
 
 
 def public(value):
@@ -500,6 +553,10 @@ def requests(hunks: list[dict], message: str) -> list[dict]:
         )
         base = {"form": {"background_of_change": background, "file_kind_and_role": kind},
                 "document": {"file": name, "file_role": role}}  # fmt: skip
+        if hunk["new"]:
+            found.append({**base, "form": {"background_of_change": background}, "hunks": [],
+                          "new_files": [new_file(hunk, role)]})  # fmt: skip
+            continue
         mine = [p for u in units if u["_file"] == name for p in fitted(base, u)]
         groups: list[list[dict]] = [[]]
         for unit in mine + [s for s in sections if s["_file"] == name]:
@@ -528,6 +585,8 @@ def questions(state: dict) -> dict:
             )
     for k in range(len(state.get("new_sections", []))):
         asked[f"style_{k}"] = noul_question(STYLE, s=f"new_sections[{k}]")
+    for k in range(len(state.get("new_files", []))):
+        asked[f"placed_{k}"] = noul_question(NEW_FILE, f=f"new_files[{k}]")
     return asked
 
 
@@ -573,6 +632,13 @@ def judge(
                 failures.append(
                     (section["_log"], section["_shown"], STYLE_MISFIT, style)
                 )
+        for k, added in enumerate(state.get("new_files", [])):
+            placed = added["_log"]["placed"] = noul(answers, f"placed_{k}")
+            if placed < DENY_BELOW:
+                added["_log"]["failed"] = True
+                failures.append(
+                    (added["_log"], added["_shown"], NEW_FILE_MISFIT, placed)
+                )
     return failures
 
 
@@ -586,7 +652,8 @@ def deny_reason(failures: list[tuple[dict, list[str], str, float]]) -> str:
         )
         lines += [f"  + {text[:120]}" for text in shown]
     lines.append(
-        "配置の問いは該当行を削るか文脈に合う場所へ移し、節の書きぶりの問いは同じ階層の節に分量と書き方を揃えてから、"
+        "配置の問いは該当行を削るか文脈に合う場所へ移し、節の書きぶりの問いは同じ階層の節に分量と書き方を揃え、"
+        "新規ファイルの問いは下書きを読み手向けに蒸留して内容に合うディレクトリへ置くかコミットから外してから、"
         "コミットし直してください。hook 自身はファイルを変更しません。"
     )
     return "\n".join(lines)
@@ -637,6 +704,7 @@ def check(payload: dict, evaluate) -> dict:
     record["new_sections"] = [
         s["_log"] for st in states for s in st.get("new_sections", [])
     ]
+    record["new_files"] = [f["_log"] for st in states for f in st.get("new_files", [])]
     write_log(record)
     return output
 
