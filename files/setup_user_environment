@@ -146,10 +146,7 @@ if [[ "$(agy remote-control status 2>/dev/null)" == "Daemon status: inactive"* ]
 fi
 
 run install_claude_extensions
-
-
-# TypeSafe / Jev: install after the coding agents and their extensions.
-run install_typesafe_extensions
+run install_typesafe_extensions     # Must install after the coding agents and their extensions.
 
 
 # Stop terminal bell
