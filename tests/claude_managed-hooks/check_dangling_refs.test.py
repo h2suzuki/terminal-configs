@@ -11,14 +11,17 @@ Contract (each claim maps to one test):
       existing ancestor decides) and git does not ignore it. Concrete = a `drafts` path component
       (preceded by start of text, `/`, or a character outside `[A-Za-z0-9_.-]`) followed by `/` and a
       name starting with `[A-Za-z0-9_]`
-  R3  exempt targets for R2: a `drafts` path component, basename `todos.md`, test files (`*.test.*`,
-      `*.mutants.*`, `test_*.py`, `*_test.py`, a `tests` component), git-ignored files, files outside any
-      git work tree, and payloads without `file_path`
-  R4  opt-out for R2: `dangling-ref-check: allow` in the new content or in the target's current on-disk
-      content
+  R3  exempt targets for R2: a `drafts` path component, git-ignored files, files outside any git work
+      tree, and payloads without `file_path`. A name alone (test file, `tests` component, `todos.md`)
+      exempts nothing
+  R4  opt-out for R2 is line-scoped, like shellcheck: `dangling-ref-check: allow` exempts a reference
+      only when it appears on the same line as that reference, or alone (as a comment) on the line
+      immediately before it in the resulting text — Edit/MultiEdit reconstruct that line from the
+      target's on-disk content when the edit itself supplies no context. A marker elsewhere in the
+      file (e.g. at the top) exempts nothing else
   R5  placeholders and bare mentions are not references
   R6  the pre-existing patterns keep their behavior: denied whatever the target path, skipped only by the
-      marker in the new content
+      marker anywhere in the new content (unlike R4, this opt-out is not line-scoped)
   R7  fail-open: unreadable payload or another tool → exit 0
 """
 
@@ -40,7 +43,7 @@ HOOK = os.path.join(
     "check_dangling_refs.py",
 )
 ENV = {**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
-REF = "see `drafts/plan.md` for details"
+REF = "see `drafts/plan.md` for details"  # dangling-ref-check: allow
 
 
 def run_hook(payload: object) -> subprocess.CompletedProcess:
@@ -79,11 +82,12 @@ class GateTest(unittest.TestCase):
     def path(self, rel: str) -> str:
         return os.path.join(self.repo, rel)
 
-    def deny(self, payload: dict, needle: str) -> None:
+    def deny(self, payload: dict, needle: str) -> str:
         out = run_hook(payload)
         self.assertEqual(out.returncode, 2, f"{payload}: {out.stderr}")
         self.assertTrue(out.stderr.startswith("dangling-ref-check:"), out.stderr)
         self.assertIn(needle, out.stderr)
+        return out.stderr
 
     def allow(self, payload: dict) -> None:
         out = run_hook(payload)
@@ -92,7 +96,9 @@ class GateTest(unittest.TestCase):
     def test_r1_r2_each_tool_shape(self) -> None:
         """R1 / R2: every content slot of Write, Edit, and MultiEdit is scanned."""
         target = self.path("docs/a.md")
-        self.deny(write_payload(target, REF), "drafts/plan.md")
+        self.deny(
+            write_payload(target, REF), "drafts/plan.md"
+        )  # dangling-ref-check: allow
         self.deny(
             {
                 "tool_name": "Edit",
@@ -102,7 +108,7 @@ class GateTest(unittest.TestCase):
                     "new_string": REF,
                 },
             },
-            "drafts/plan.md",
+            "drafts/plan.md",  # dangling-ref-check: allow
         )
         self.deny(
             {
@@ -115,34 +121,33 @@ class GateTest(unittest.TestCase):
                     ],
                 },
             },
-            "drafts/plan.md",
+            "drafts/plan.md",  # dangling-ref-check: allow
         )
-        self.deny(write_payload(self.path("docs/new/deep/x.md"), REF), "drafts/plan.md")
+        self.deny(
+            write_payload(self.path("docs/new/deep/x.md"), REF), "drafts/plan.md"
+        )  # dangling-ref-check: allow
 
     def test_r2_concrete_reference_forms(self) -> None:
         """R2: any concrete file or dir name under a drafts component is a reference."""
         for text, needle in (
-            ("`drafts/corpus-tools/extract.py`", "drafts/corpus-tools/extract.py"),
-            ("(spec: drafts/plan.md)", "drafts/plan.md"),
-            ('"drafts/a"', "drafts/a"),
-            ("./drafts/a.md", "drafts/a.md"),
-            ("sub/drafts/_x.md", "drafts/_x.md"),
-            ("/home/u/repo/drafts/9.md", "drafts/9.md"),
+            (
+                "`drafts/corpus-tools/extract.py`",
+                "drafts/corpus-tools/extract.py",
+            ),  # dangling-ref-check: allow
+            ("(spec: drafts/plan.md)", "drafts/plan.md"),  # dangling-ref-check: allow
+            ('"drafts/a"', "drafts/a"),  # dangling-ref-check: allow
+            ("./drafts/a.md", "drafts/a.md"),  # dangling-ref-check: allow
+            ("sub/drafts/_x.md", "drafts/_x.md"),  # dangling-ref-check: allow
+            ("/home/u/repo/drafts/9.md", "drafts/9.md"),  # dangling-ref-check: allow
         ):
             with self.subTest(text=text):
                 self.deny(write_payload(self.path("docs/a.md"), text), needle)
 
     def test_r3_exempt_targets(self) -> None:
-        """R3: scratch, ledgers, tests, ignored files, and files outside git may name drafts paths."""
+        """R3: scratch, ignored files, and files outside git may name drafts paths."""
         for target in (
-            self.path("drafts/notes.md"),
-            self.path("sub/drafts/notes.md"),
-            self.path("todos.md"),
-            self.path("files/x.test.py"),
-            self.path("files/x.mutants.py"),
-            self.path("files/test_x.py"),
-            self.path("files/x_test.py"),
-            self.path("tests/helper.py"),
+            self.path("drafts/notes.md"),  # dangling-ref-check: allow
+            self.path("sub/drafts/notes.md"),  # dangling-ref-check: allow
             self.path("ignored.md"),
             os.path.join(self.plain, "note.md"),
         ):
@@ -150,10 +155,60 @@ class GateTest(unittest.TestCase):
                 self.allow(write_payload(target, REF))
         self.allow({"tool_name": "Write", "tool_input": {"content": REF}})
 
-    def test_r4_opt_out_marker(self) -> None:
-        """R4: the marker in the new content or already on disk suppresses the drafts rule."""
+    def test_r3_name_alone_no_longer_exempts(self) -> None:
+        """R3: a test-like name or todos.md is no longer a free pass for a drafts reference."""
+        for target in (
+            self.path("todos.md"),
+            self.path("files/x.test.py"),
+            self.path("files/x.mutants.py"),
+            self.path("files/test_x.py"),
+            self.path("files/x_test.py"),
+            self.path("tests/helper.py"),
+        ):
+            with self.subTest(target=target):
+                self.deny(
+                    write_payload(target, REF), "drafts/plan.md"
+                )  # dangling-ref-check: allow
+
+    def test_r4_same_line_marker_allows(self) -> None:
+        """R4: a marker on the very line that holds the reference exempts it."""
         target = self.path("docs/a.md")
-        self.allow(write_payload(target, "<!-- dangling-ref-check: allow -->\n" + REF))
+        self.allow(write_payload(target, REF + " (dangling-ref-check: allow)"))
+
+    def test_r4_preceding_line_marker_allows_only_the_next_line(self) -> None:
+        """R4: a marker alone on the line before exempts that line only, not a later one."""
+        target = self.path("docs/a.md")
+        content = (
+            "<!-- dangling-ref-check: allow -->\n"
+            + REF
+            + "\nnotes\n"
+            + "also see drafts/other.md\n"  # dangling-ref-check: allow
+        )
+        out = self.deny(
+            write_payload(target, content), "drafts/other.md"
+        )  # dangling-ref-check: allow
+        self.assertNotIn("drafts/plan.md", out)  # dangling-ref-check: allow
+
+    def test_r4_marker_elsewhere_in_file_exempts_nothing(self) -> None:
+        """R4: a marker at the top of the file no longer exempts a reference further down."""
+        target = self.path("docs/a.md")
+        with open(target, "w", encoding="utf-8") as fh:
+            fh.write("# dangling-ref-check: allow\nfiller\nunrelated\n")
+        self.deny(
+            {
+                "tool_name": "Edit",
+                "tool_input": {
+                    "file_path": target,
+                    "old_string": "unrelated",
+                    "new_string": REF,
+                },
+            },
+            "drafts/plan.md",  # dangling-ref-check: allow
+        )
+
+    def test_r4_edit_reconstructs_the_preceding_on_disk_line(self) -> None:
+        """R4: Edit supplies no context of its own, so the preceding line comes from disk."""
+        target = self.path("docs/a.md")
         with open(target, "w", encoding="utf-8") as fh:
             fh.write("# dangling-ref-check: allow\nbody\n")
         self.allow(

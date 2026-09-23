@@ -15,9 +15,11 @@ Contract (each claim maps to one test):
       reference: a `drafts` path component (preceded by start of text, `/`, or a character outside
       `[A-Za-z0-9_.-]`) followed by `/` and a name starting with `[A-Za-z0-9_]`. Lines come from the same
       two diffs as D3; unchanged and deleted lines do not count
-  D5  exempt from D4: paths with a `drafts` component, basename `todos.md`, test files (`*.test.*`,
-      `*.mutants.*`, `test_*.py`, `*_test.py`, a `tests` component), and files whose working-tree
-      content holds `dangling-ref-check: allow`
+  D5  exempt from D4: paths with a `drafts` component, and, line-scoped like shellcheck,
+      `dangling-ref-check: allow` on the same added line or alone (as a comment) on the line
+      immediately before it (an added line or unchanged context, from the same diff). A name alone
+      (test file, `tests` component, `todos.md`) exempts nothing, nor does a marker elsewhere in the
+      file
   D6  `git -C DIR` selects the repo, otherwise the payload cwd; pathspecs resolve against it
   D7  commit message text (`-m` values, heredoc bodies) is never read as a path or a reference
   D8  fail-open and scope: non-Bash tool, unreadable payload, or a cwd outside any git repo → exit 0;
@@ -43,7 +45,7 @@ HOOK = os.path.join(
 )
 ENV = {**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
 COMMIT_A = "git commit -m 'docs: Update' -- docs/a.md"
-BASE_A = "intro\nsee `drafts/old.md`\n"
+BASE_A = "intro\nsee `drafts/old.md`\n"  # dangling-ref-check: allow
 
 
 def git(repo: str, *args: str) -> None:
@@ -116,84 +118,105 @@ class GateTest(unittest.TestCase):
     def test_d1_d8_contract_and_fail_open(self) -> None:
         """D1 / D8: only Bash payloads are gated; broken input and non-repo cwd never block."""
         self.assertEqual(
-            run_hook("git add drafts/x.md", self.repo, tool="Write").returncode, 0
+            run_hook("git add drafts/x.md", self.repo, tool="Write").returncode,
+            0,  # dangling-ref-check: allow
         )
         self.assertEqual(run_hook("", self.repo, body="{not json").returncode, 0)
-        self.allow("git add drafts/x.md", cwd=self.plain)
+        self.allow("git add drafts/x.md", cwd=self.plain)  # dangling-ref-check: allow
         self.allow(COMMIT_A, cwd=self.plain)
         for command in (
             "git status",
-            "git log -p -- drafts/x.md",
-            "git diff -- drafts/x.md",
+            "git log -p -- drafts/x.md",  # dangling-ref-check: allow
+            "git diff -- drafts/x.md",  # dangling-ref-check: allow
             "git stash",
             "ls drafts",
-            "cat drafts/x.md",
+            "cat drafts/x.md",  # dangling-ref-check: allow
         ):
             self.allow(command)
 
     def test_d2_git_add_of_drafts_paths(self) -> None:
         """D2: staging anything under a drafts/ component is the first step of a leak."""
-        self.deny("git add drafts/x.md", "drafts/x.md")
-        self.deny("git add -f drafts/x.md", "drafts/x.md")
-        self.deny("git add --force -- sub/drafts/y.md", "sub/drafts/y.md")
-        self.deny('git add "drafts/x.md"', "drafts/x.md")
+        self.deny("git add drafts/x.md", "drafts/x.md")  # dangling-ref-check: allow
+        self.deny("git add -f drafts/x.md", "drafts/x.md")  # dangling-ref-check: allow
+        self.deny(
+            "git add --force -- sub/drafts/y.md", "sub/drafts/y.md"
+        )  # dangling-ref-check: allow
+        self.deny('git add "drafts/x.md"', "drafts/x.md")  # dangling-ref-check: allow
         self.deny("git add ./drafts")
         self.deny("git add drafts")
-        self.deny("git add docs/a.md drafts/x.md", "drafts/x.md")
-        self.deny(f"git add {self.repo}/drafts/x.md", "drafts/x.md")
+        self.deny(
+            "git add docs/a.md drafts/x.md", "drafts/x.md"
+        )  # dangling-ref-check: allow
+        self.deny(
+            f"git add {self.repo}/drafts/x.md", "drafts/x.md"
+        )  # dangling-ref-check: allow
         for command in (
             "git add docs/a.md",
             "git add docs/drafts-notes.md",
             "git add mydrafts/x.md",
             "git add .drafts/x.md",
-            "git rm --cached drafts/x.md",
+            "git rm --cached drafts/x.md",  # dangling-ref-check: allow
         ):
             self.allow(command)
 
     def test_d3_staged_drafts_file_blocks_any_commit(self) -> None:
         """D3: a force-staged drafts file leaks through a pathspec or an amend commit."""
-        self.write("drafts/x.md", "scratch\n")
-        git(self.repo, "add", "-f", "drafts/x.md")
-        self.deny(COMMIT_A, "drafts/x.md")
-        self.deny("git commit --amend --no-edit", "drafts/x.md")
+        self.write("drafts/x.md", "scratch\n")  # dangling-ref-check: allow
+        git(self.repo, "add", "-f", "drafts/x.md")  # dangling-ref-check: allow
+        self.deny(COMMIT_A, "drafts/x.md")  # dangling-ref-check: allow
+        self.deny(
+            "git commit --amend --no-edit", "drafts/x.md"
+        )  # dangling-ref-check: allow
 
     def test_d3_nested_drafts_component(self) -> None:
         """D3: the drafts component may sit below the repo root."""
-        self.write("sub/drafts/y.md", "scratch\n")
-        git(self.repo, "add", "-f", "sub/drafts/y.md")
-        self.deny("git commit -m 'sub: Add' -- sub/drafts/y.md", "sub/drafts/y.md")
+        self.write("sub/drafts/y.md", "scratch\n")  # dangling-ref-check: allow
+        git(self.repo, "add", "-f", "sub/drafts/y.md")  # dangling-ref-check: allow
+        self.deny(
+            "git commit -m 'sub: Add' -- sub/drafts/y.md", "sub/drafts/y.md"
+        )  # dangling-ref-check: allow
 
     def test_d3_untracking_a_leaked_file_is_allowed(self) -> None:
         """D3: removing a leaked file from the index is the fix and must stay committable."""
-        self.write("drafts/x.md", "scratch\n")
-        git(self.repo, "add", "-f", "drafts/x.md")
+        self.write("drafts/x.md", "scratch\n")  # dangling-ref-check: allow
+        git(self.repo, "add", "-f", "drafts/x.md")  # dangling-ref-check: allow
         git(self.repo, "commit", "-q", "-m", "leak")
-        git(self.repo, "rm", "-q", "--cached", "drafts/x.md")
-        self.allow("git commit -m 'drafts: Untrack scratch' -- drafts/x.md")
+        git(
+            self.repo, "rm", "-q", "--cached", "drafts/x.md"
+        )  # dangling-ref-check: allow
+        self.allow(
+            "git commit -m 'drafts: Untrack scratch' -- drafts/x.md"
+        )  # dangling-ref-check: allow
 
     def test_d4_reference_added_in_working_tree_of_pathspec(self) -> None:
         """D4: a `-- PATH` commit records working-tree content that was never staged."""
-        self.write("docs/a.md", BASE_A + "details in `drafts/plan.md`\n")
-        self.deny(COMMIT_A, "docs/a.md", "drafts/plan.md")
+        self.write(
+            "docs/a.md", BASE_A + "details in `drafts/plan.md`\n"
+        )  # dangling-ref-check: allow
+        self.deny(COMMIT_A, "docs/a.md", "drafts/plan.md")  # dangling-ref-check: allow
 
     def test_d4_reference_added_in_staged_file(self) -> None:
         """D4: staged content is checked even when the pathspec names another file."""
-        self.write("docs/b.md", "see /home/u/repo/drafts/notes/n.md\n")
+        self.write(
+            "docs/b.md", "see /home/u/repo/drafts/notes/n.md\n"
+        )  # dangling-ref-check: allow
         git(self.repo, "add", "docs/b.md")
         self.deny(
-            "git commit -m 'docs: Add b' -- docs/b.md", "docs/b.md", "drafts/notes/n.md"
+            "git commit -m 'docs: Add b' -- docs/b.md",
+            "docs/b.md",
+            "drafts/notes/n.md",  # dangling-ref-check: allow
         )
         self.deny(COMMIT_A, "docs/b.md")
 
     def test_d4_concrete_reference_forms(self) -> None:
         """D4: any concrete file or dir name under a drafts component is a reference."""
         for line in (
-            "`drafts/corpus-tools/extract.py`",
-            "(spec: drafts/plan.md)",
-            '"drafts/a"',
-            "./drafts/a.md",
-            "sub/drafts/_x.md",
-            "/abs/repo/drafts/9.md",
+            "`drafts/corpus-tools/extract.py`",  # dangling-ref-check: allow
+            "(spec: drafts/plan.md)",  # dangling-ref-check: allow
+            '"drafts/a"',  # dangling-ref-check: allow
+            "./drafts/a.md",  # dangling-ref-check: allow
+            "sub/drafts/_x.md",  # dangling-ref-check: allow
+            "/abs/repo/drafts/9.md",  # dangling-ref-check: allow
         ):
             with self.subTest(line=line):
                 self.write("docs/a.md", BASE_A + line + "\n")
@@ -217,13 +240,15 @@ class GateTest(unittest.TestCase):
 
     def test_d4_only_added_lines_count(self) -> None:
         """D4: an untouched old reference or a deleted one does not block an unrelated edit."""
-        self.write("docs/a.md", "intro changed\nsee `drafts/old.md`\n")
+        self.write(
+            "docs/a.md", "intro changed\nsee `drafts/old.md`\n"
+        )  # dangling-ref-check: allow
         self.allow(COMMIT_A)
         self.write("docs/a.md", "intro\n")
         self.allow(COMMIT_A)
 
-    def test_d5_exempt_files(self) -> None:
-        """D5: ledgers, tests, and opted-out files may name drafts paths."""
+    def test_d5_name_alone_no_longer_exempts(self) -> None:
+        """D5: a test-like name or todos.md is no longer a free pass for a drafts reference."""
         for rel in (
             "todos.md",
             "files/x.test.py",
@@ -233,31 +258,71 @@ class GateTest(unittest.TestCase):
             "tests/helper.py",
         ):
             with self.subTest(rel=rel):
-                self.write(rel, "see drafts/plan.md\n")
+                self.write(rel, "see drafts/plan.md\n")  # dangling-ref-check: allow
                 git(self.repo, "add", rel)
-                self.allow(f"git commit -m 'x: Update' -- {rel}")
+                self.deny(
+                    f"git commit -m 'x: Update' -- {rel}", "drafts/plan.md"
+                )  # dangling-ref-check: allow
+
+    def test_d5_preceding_line_marker_allows(self) -> None:
+        """D5: a marker alone on the line immediately before an added reference exempts it."""
         self.write(
             "docs/c.md", "<!-- dangling-ref-check: allow -->\nsee drafts/plan.md\n"
         )
         git(self.repo, "add", "docs/c.md")
         self.allow("git commit -m 'docs: Add c' -- docs/c.md")
 
+    def test_d5_same_line_marker_allows(self) -> None:
+        """D5: a marker on the same added line as the reference exempts it."""
+        self.write("docs/c.md", "see drafts/plan.md (dangling-ref-check: allow)\n")
+        git(self.repo, "add", "docs/c.md")
+        self.allow("git commit -m 'docs: Add c' -- docs/c.md")
+
+    def test_d5_marker_elsewhere_in_file_exempts_nothing(self) -> None:
+        """D5: a marker at the top of the file does not exempt a reference added further down."""
+        self.write("docs/c.md", "# dangling-ref-check: allow\nintro\n")
+        git(self.repo, "add", "docs/c.md")
+        git(self.repo, "commit", "-q", "-m", "c: Add")
+        self.write(
+            "docs/c.md", "# dangling-ref-check: allow\nintro\nsee drafts/plan.md\n"
+        )
+        self.deny(
+            "git commit -m 'c: Update' -- docs/c.md", "drafts/plan.md"
+        )  # dangling-ref-check: allow
+
+    def test_d5_preceding_unchanged_context_line_marker_allows(self) -> None:
+        """D5: the preceding line may be pre-existing, unchanged context from the same diff."""
+        self.write("docs/e.md", "keep\n# dangling-ref-check: allow\n")
+        git(self.repo, "add", "docs/e.md")
+        git(self.repo, "commit", "-q", "-m", "e: Add")
+        self.write(
+            "docs/e.md", "keep\n# dangling-ref-check: allow\nsee drafts/plan.md\n"
+        )
+        git(self.repo, "add", "docs/e.md")
+        self.allow("git commit -m 'e: Update' -- docs/e.md")
+
     def test_d6_git_dash_c_selects_the_repo(self) -> None:
         """D6: `git -C` overrides a cwd that is not the repo."""
-        self.write("docs/a.md", BASE_A + "see drafts/plan.md\n")
+        self.write(
+            "docs/a.md", BASE_A + "see drafts/plan.md\n"
+        )  # dangling-ref-check: allow
         self.deny(
             f"git -C {self.repo} commit -m 'docs: Update' -- docs/a.md",
-            "drafts/plan.md",
+            "drafts/plan.md",  # dangling-ref-check: allow
             cwd=self.plain,
         )
-        self.deny(f"git -C {self.repo} add drafts/x.md", "drafts/x.md", cwd=self.plain)
+        self.deny(
+            f"git -C {self.repo} add drafts/x.md", "drafts/x.md", cwd=self.plain
+        )  # dangling-ref-check: allow
 
     def test_d7_commit_message_is_not_a_path(self) -> None:
         """D7: messages may mention drafts paths; only recorded content matters."""
         self.write("docs/a.md", BASE_A + "plain line\n")
-        self.allow("git commit -m 'docs: Mention drafts/x.md' -- docs/a.md")
         self.allow(
-            "git commit -m \"$(cat <<'EOF'\ndocs: Update\n\nsee drafts/x.md\nEOF\n)\" -- docs/a.md"
+            "git commit -m 'docs: Mention drafts/x.md' -- docs/a.md"
+        )  # dangling-ref-check: allow
+        self.allow(
+            "git commit -m \"$(cat <<'EOF'\ndocs: Update\n\nsee drafts/x.md\nEOF\n)\" -- docs/a.md"  # dangling-ref-check: allow
         )
 
 

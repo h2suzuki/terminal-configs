@@ -3,6 +3,10 @@
 
 dangling-ref-check: allow (this hook quotes the drafts/ rule it enforces)
 
+A reference is exempt from the commit-time check only when `dangling-ref-check: allow` is on
+the same added line, or alone (as a comment) on the line immediately before it — line-scoped,
+like shellcheck; a marker elsewhere in the file exempts nothing else.
+
 Exit:
   0: not `git add` / `git commit`, nothing drafts-related would be recorded, or any parse / git error
   2: `git add` of a drafts/ path, or a commit recording a drafts/ path or an added drafts/ reference
@@ -19,8 +23,8 @@ import sys
 from check_dangling_refs import (
     DRAFTS_REF,
     OPT_OUT_RE,
-    drafts_exempt,
     in_drafts,
+    marker_only_line,
     run_git,
 )
 
@@ -48,6 +52,9 @@ COMMIT_VALUE_LONGS = frozenset(
 )
 COMMIT_VALUE_SHORTS = frozenset("mFCct")
 DIFF = ("-c", "core.quotepath=false", "diff", "--no-renames", "--diff-filter=ACMR")
+# -U1: 1 line of context lets an added line's immediately-preceding line come straight out of
+# the diff (added or unchanged), instead of re-reading the target file out of band.
+PATCH_ARGS = ("--no-color", "--no-ext-diff", "-U1")
 
 # Deny text is deliberately verbose (cause, fix per case, no side effects); do not trim.
 GUIDANCE = (
@@ -143,30 +150,38 @@ def commit_pathspecs(args: list[str]) -> tuple[list[str], bool]:
     return paths, all_flag
 
 
-def recorded(repo: str, *args: str) -> tuple[list[str], dict[str, list[str]]] | None:
+# Each added line, paired with the text of the line immediately before it (or None at a hunk's start).
+Added = list[tuple[str, "str | None"]]
+
+
+def recorded(repo: str, *args: str) -> tuple[list[str], dict[str, Added]] | None:
     """(changed paths, added lines per path) of one diff, or None when git fails."""
     names = run_git(repo, *DIFF, "--name-only", "-z", *args)
-    patch = run_git(repo, *DIFF, "--no-color", "--no-ext-diff", "-U0", *args)
+    patch = run_git(repo, *DIFF, *PATCH_ARGS, *args)
     if names is None or patch is None or names.returncode or patch.returncode:
         return None
-    added: dict[str, list[str]] = {}
+    added: dict[str, Added] = {}
     current = None
     previous = ""
+    prev_line: str | None = None
     for line in patch.stdout.splitlines():
         if previous.startswith("--- ") and line.startswith("+++ "):
             current = line[6:] if line.startswith("+++ b/") else None
-        elif current is not None and line.startswith("+"):
-            added.setdefault(current, []).append(line[1:])
+            prev_line = None
+        elif current is None:
+            pass
+        elif line.startswith("@@"):
+            prev_line = None  # hunk boundary: no confirmed preceding line yet
+        elif line.startswith("+"):
+            text = line[1:]
+            added.setdefault(current, []).append((text, prev_line))
+            prev_line = text
+        elif line.startswith(("-", "\\")):
+            pass  # removed line, or a "no newline at end of file" annotation: not new content
+        else:
+            prev_line = line[1:] if line.startswith(" ") else line
         previous = line
     return [name for name in names.stdout.split("\0") if name], added
-
-
-def has_marker(top: str, rel: str) -> bool:
-    try:
-        with open(os.path.join(top, rel), encoding="utf-8", errors="replace") as fh:
-            return bool(OPT_OUT_RE.search(fh.read()))
-    except OSError:
-        return False
 
 
 def commit_findings(
@@ -190,11 +205,14 @@ def commit_findings(
         names, added = result
         files |= {name for name in names if in_drafts(name)}
         for rel, lines in added.items():
-            if in_drafts(rel) or drafts_exempt(rel) or has_marker(top, rel):
+            if in_drafts(rel):
                 continue
-            refs |= {
-                (rel, m.group(0)) for line in lines for m in DRAFTS_REF.finditer(line)
-            }
+            for text, prev_line in lines:
+                if OPT_OUT_RE.search(text):
+                    continue
+                if prev_line is not None and marker_only_line(prev_line):
+                    continue
+                refs |= {(rel, m.group(0)) for m in DRAFTS_REF.finditer(text)}
     return files, refs
 
 
