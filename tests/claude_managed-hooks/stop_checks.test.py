@@ -126,9 +126,9 @@ test 方針: 同一 final_text に対し Read 有り = pass / 無し = block、p
 UserPromptSubmit 側が毎 prompt `1` / `0` で上書きし、宣言の履歴は `<session_id>.sticky` に残す)。
 出力: Task store に open (status が `completed` / `cancelled` 以外) の task が 1 件以上あれば block し、
 件数と各 task の id (`id` が無ければ name の先頭 `OPEN_TASK_REF_CHARS` 文字) を `OPEN_TASK_REF_CAP` 件まで挙げ、
-超過分は `(+N)` に畳む (本文全体を並べると hook 出力が数 KB になる)。state file が無い / 中身が `1` でない session、
+超過分は `...` で続きを示す (本文全体を並べると hook 出力が数 KB になる)。state file が無い / 中身が `1` でない session、
 open が 0 件なら pass。`session_id` が無い / state dir が読めない場合は pass (fail-open)。
-test 方針: state file の有無 × open task の有無の 4 象限と、16 件 ledger で id 8 件 + `(+8)` に畳まれ本文が出ないこと。
+test 方針: state file の有無 × open task の有無の 4 象限と、20 件 ledger で id 16 件 + `...` に畳まれ本文が出ないこと。
 
 ### C10 wind-down-background-unreaped (block)
 
@@ -1297,7 +1297,7 @@ class WindDownTest(StopChecksTest):
         self.assertIn("未完了 Task 1 件: #契約 test を書く", proc.stderr)
 
     def test_c9_many_open_tasks_are_folded_into_ids(self):
-        """16 件の ledger でも hook 出力は id 8 件 + (+8) に収まり、本文は載らない。"""
+        """20 件の ledger でも hook 出力は id 16 件 + ... に収まり、本文は載らない。"""
         self.fx.wind_down()
         body = "詳細" * 40
         self.fx.mytask_tasks(
@@ -1307,7 +1307,7 @@ class WindDownTest(StopChecksTest):
                     "content": f"長い依頼文を抱えた Task {index} {body}",
                     "status": "pending",
                 }
-                for index in range(1, 17)
+                for index in range(1, 21)
             ]
         )
         proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
@@ -1315,9 +1315,10 @@ class WindDownTest(StopChecksTest):
         line = next(
             text for text in proc.stderr.splitlines() if "wind-down-open-tasks" in text
         )
-        self.assertIn("未完了 Task 16 件:", line)
-        self.assertEqual(line.count("#"), 8)
-        self.assertIn("(+8)", line)
+        self.assertIn("未完了 Task 20 件:", line)
+        self.assertEqual(line.count("#"), 16)
+        self.assertIn("#2-16, ...", line)
+        self.assertNotIn("#2-17", line)
         self.assertNotIn("詳細", line)
 
     def test_c9_no_open_task_after_wind_down_passes(self):

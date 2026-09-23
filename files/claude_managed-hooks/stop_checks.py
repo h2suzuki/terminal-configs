@@ -15,7 +15,7 @@ TURN_WINDOW_BYTES = 512 * 1024
 BACKGROUND_WINDOW_BYTES = 2 * 1024 * 1024
 LEDGER_MIN_EDITS = 3
 TASK_TOOLS = {"TaskCreate", "TaskUpdate", "TodoWrite"}
-OPEN_TASK_REF_CAP = 8
+OPEN_TASK_REF_CAP = 16
 OPEN_TASK_REF_CHARS = 24
 CLOSED_STATUSES = {"completed", "cancelled", "deleted"}
 TASK_BODY_CHARS = 60
@@ -611,7 +611,7 @@ def _open_task_block(tasks):
     refs = [_task_ref(task) for task in opened]
     shown = ", ".join("#" + ref for ref in refs[:OPEN_TASK_REF_CAP])
     if len(refs) > OPEN_TASK_REF_CAP:
-        shown += f", … (+{len(refs) - OPEN_TASK_REF_CAP})"
+        shown += ", ..."
     return [
         _line(
             "wind-down-open-tasks",
