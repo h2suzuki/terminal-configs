@@ -201,7 +201,9 @@ class InterruptedSessionsTest(unittest.TestCase):
         self.assertEqual(self._hits(), [(p, 3600, ["#1 x"], False)])
 
     def test_doc_mention_without_tasks_listed(self):
-        p = self._session("a", 3600, text='{"command": "cat drafts/x-handoff.md"}')
+        p = self._session(
+            "a", 3600, text='{"command": "cat drafts/x-handoff.md"}'
+        )  # dangling-ref-check: allow
         self.assertEqual(self._hits(), [(p, 3600, [], True)])
 
     def test_handoff_marker_excluded(self):

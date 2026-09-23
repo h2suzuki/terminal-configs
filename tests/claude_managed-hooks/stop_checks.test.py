@@ -104,7 +104,7 @@ test 方針: tool 順序を入れ替えた 3 transcript (Task 先行 / Task 後�
 
 入力: (a) `final_text` に作業遂行宣言、(b) 先送り発言 (「別タスクに切り出し」「今は処置しません」)、
 (c) `edited_paths` が 3 件以上 — のいずれか。
-出力: session の Task store (`~/.claude/tasks/<session_id>/*.json` と `drafts/tasks/<session_id>.json`、status 不問) が
+出力: session の Task store (`~/.claude/tasks/<session_id>/*.json` と `drafts/tasks/<session_id>.json`、status 不問) が  # dangling-ref-check: allow
 空、かつ turn 内に Task tool 呼び出しも無ければ warn 1 行。
 test 方針: (c) の境界を 2 件 = pass / 3 件 = warn で固定し、Task store 非空で全て pass。
 
@@ -1206,10 +1206,12 @@ class TaskLedgerDriftTest(StopChecksTest):
 class RulingWithoutReadingTest(StopChecksTest):
     """C8: a ruling that names entry paths must have opened them this turn."""
 
-    ONE = "`drafts/prep/alpha.md` の方針は妥当と判断しました。"
+    ONE = "`drafts/prep/alpha.md` の方針は妥当と判断しました。"  # dangling-ref-check: allow
 
     def test_c8_ruling_on_a_read_path_passes(self):
-        self.fx.write([prompt(), *SUBAGENT, read("drafts/prep/alpha.md")])
+        self.fx.write(
+            [prompt(), *SUBAGENT, read("drafts/prep/alpha.md")]
+        )  # dangling-ref-check: allow
         self.assertNotBlocked(
             run_hook(self.fx, self.ONE + TAIL), "ruling-without-reading"
         )
@@ -1219,9 +1221,11 @@ class RulingWithoutReadingTest(StopChecksTest):
         self.assertBlocks(run_hook(self.fx, self.ONE + TAIL), "ruling-without-reading")
 
     def test_c8_block_lists_only_the_unopened_paths(self):
-        self.fx.write([prompt(), *SUBAGENT, read("drafts/prep/alpha.md")])
+        self.fx.write(
+            [prompt(), *SUBAGENT, read("drafts/prep/alpha.md")]
+        )  # dangling-ref-check: allow
         text = (
-            "`drafts/prep/alpha.md` `drafts/prep/beta.md` `drafts/prep/gamma.md` "
+            "`drafts/prep/alpha.md` `drafts/prep/beta.md` `drafts/prep/gamma.md` "  # dangling-ref-check: allow
             "を読み、いずれも妥当と判断しました。"
         )
         proc = run_hook(self.fx, text + TAIL)
@@ -2195,7 +2199,9 @@ class TurnMarkerTest(StopChecksTest):
         self.assertIn("Turn #1", marker(run_hook(self.fx, self.CLEAN)))
         self.fx.write([prompt("次の依頼です。", uid="prompt-2"), say("報告します")])
         self.assertEqual(run_hook(self.fx, "この後 実装を進めます。").returncode, 2)
-        self.assertEqual(self.fx.read_turns().split()[0], "1", "block した Stop は書かない")
+        self.assertEqual(
+            self.fx.read_turns().split()[0], "1", "block した Stop は書かない"
+        )
         before = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
         proc = run_hook(self.fx, "この後 実装を進めます。", stop_hook_active=True)
         self.assertEqual(proc.stdout, "")
@@ -2462,7 +2468,7 @@ class MemoryCloneRootsTest(StopChecksTest):
 class CorpusContinuationClaimTest(StopChecksTest):
     """C4 (corpus correction): future forms the old hook blocked in 74 real turns must block.
 
-    The rewrite caught 0 of those 74 texts (drafts/replay-tools/replay_stop_fires.py, 2026-08-27),
+    The rewrite caught 0 of those 74 texts (drafts/replay-tools/replay_stop_fires.py, 2026-08-27),  # dangling-ref-check: allow
     so the contract now names the roster verbatim instead of giving two examples.
     """
 
@@ -2788,7 +2794,10 @@ class ReviewCorrectionTest(StopChecksTest):
         for offset, expected in (
             (7500, "経過 2 hr 5 min"),
             (150, "経過 2 min"),
-            (5, "経過 5 sec"),  # a second may tick during the run, so only " sec" is checked
+            (
+                5,
+                "経過 5 sec",
+            ),  # a second may tick during the run, so only " sec" is checked
         ):
             with open(
                 os.path.join(cache_dir, SESSION + ".json"), "w", encoding="utf-8"
@@ -2826,9 +2835,11 @@ class RecheckCorrectionTest(StopChecksTest):
     def test_c8_relative_mention_of_an_absolutely_read_path_passes(self):
         agent = call("Agent", subagent_type="general-purpose", prompt="調査")
         report = tool_result("subagent report: 候補を 3 件見つけました")
-        absolute = self.fx.repo_file("drafts/report.md")
+        absolute = self.fx.repo_file("drafts/report.md")  # dangling-ref-check: allow
         self.fx.turn(agent, report, read(absolute), say("読みました"))
-        text = "drafts/report.md の指摘は妥当と判断しました。" + TAIL
+        text = (
+            "drafts/report.md の指摘は妥当と判断しました。" + TAIL
+        )  # dangling-ref-check: allow
         self.assertNotBlocked(run_hook(self.fx, text), "ruling-without-reading")
 
     def test_c8_urls_versions_and_ratios_are_not_paths(self):

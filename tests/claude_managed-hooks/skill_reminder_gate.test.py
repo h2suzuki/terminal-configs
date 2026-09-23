@@ -856,7 +856,7 @@ class GateTest(unittest.TestCase):
         for command in (
             "cat > docs/x-handoff.md <<'EOF'\nx\nEOF\n",
             "printf 'x' > docs/x-handoff.md",
-            "tee drafts/old_handoff.md <<EOF\nx\nEOF\n",
+            "tee drafts/old_handoff.md <<EOF\nx\nEOF\n",  # dangling-ref-check: allow
         ):
             with self.subTest(command=command):
                 self.assertEqual(
@@ -902,7 +902,9 @@ class GateTest(unittest.TestCase):
                 "writing-code",
                 "writing-python",
             },
-            "git commit -m x -- drafts/old_handoff.md": {"handoff"},
+            "git commit -m x -- drafts/old_handoff.md": {
+                "handoff"
+            },  # dangling-ref-check: allow
         }
         for command, expected in cases.items():
             with self.subTest(command=command):

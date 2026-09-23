@@ -102,8 +102,8 @@ Run from the repository. `GIT_CEILING_DIRECTORIES` keeps legacy non-repository
 fixtures from discovering the enclosing checkout when temp lives under drafts.
 
 ```sh
-mkdir -p drafts/hygiene-checks
-export TMPDIR="$PWD/drafts/hygiene-checks"
+mkdir -p drafts/hygiene-checks  # dangling-ref-check: allow
+export TMPDIR="$PWD/drafts/hygiene-checks"  # dangling-ref-check: allow
 export GIT_CEILING_DIRECTORIES="$TMPDIR"
 python3 tests/scratch_file_management.test.py
 python3 tests/claude_managed-hooks/deny_drafts_commit.test.py

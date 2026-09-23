@@ -311,7 +311,7 @@ def _native_open_tasks(session_id: str) -> list[str]:
 
 
 def _mytask_open_tasks(session_id: str, cwd: str) -> list[str]:
-    """Open items from the mytask MCP store (<cwd>/drafts/tasks/<sid>.json)."""
+    """Open items from the mytask MCP store (<cwd>/drafts/tasks/<sid>.json)."""  # dangling-ref-check: allow
     path = os.path.join(cwd, "drafts", "tasks", f"{session_id}.json")
     try:
         with open(path, encoding="utf-8") as f:
@@ -546,10 +546,10 @@ class HandoffObservablesTest(unittest.TestCase):
     def test_canonical_doc_paths_detected(self):
         for path in (
             "last-session-handoff.md",
-            "/repo/drafts/rebuild-handoff.md",
+            "/repo/drafts/rebuild-handoff.md",  # dangling-ref-check: allow
             "/repo/handoff.md",
             "/repo/my_handoff.md",
-            "/repo/drafts/Feature-X-Handoff.md",
+            "/repo/drafts/Feature-X-Handoff.md",  # dangling-ref-check: allow
         ):
             with self.subTest(path=path):
                 self.assertTrue(is_handoff_doc(path))
@@ -576,7 +576,7 @@ class HandoffObservablesTest(unittest.TestCase):
         self.assertEqual(handoff_docs("/nonexistent-dir"), [])
 
     def test_mentions_handoff_doc_in_command_text(self):
-        cmd = "python3 - <<'EOF'\nopen('drafts/rebuild-handoff.md','w')\nEOF"
+        cmd = "python3 - <<'EOF'\nopen('drafts/rebuild-handoff.md','w')\nEOF"  # dangling-ref-check: allow
         self.assertTrue(mentions_handoff_doc(cmd))
         self.assertTrue(mentions_handoff_doc("cat last-session-handoff.md"))
         self.assertFalse(mentions_handoff_doc("grep handoff-notes.md; ls todos.md"))
@@ -609,13 +609,13 @@ class HandoffWriteIntentTest(unittest.TestCase):
     READS = (
         "ls -la last-session-handoff.md drafts/",
         "cat last-session-handoff.md",
-        "grep -n Status drafts/rebuild-handoff.md",
+        "grep -n Status drafts/rebuild-handoff.md",  # dangling-ref-check: allow
         "head -20 handoff.md",
         "wc -l last-session-handoff.md",
         "diff a-handoff.md b-handoff.md",
         "sed -n '1,10p' last-session-handoff.md",
         "git log --oneline -- last-session-handoff.md",
-        "echo a && cat drafts/rebuild-handoff.md",
+        "echo a && cat drafts/rebuild-handoff.md",  # dangling-ref-check: allow
     )
 
     WRITES = (
@@ -625,11 +625,11 @@ class HandoffWriteIntentTest(unittest.TestCase):
         "echo x | tee last-session-handoff.md",
         "cp draft.md last-session-handoff.md",
         "mv draft.md last-session-handoff.md",
-        "install -m 644 a.md drafts/rebuild-handoff.md",
+        "install -m 644 a.md drafts/rebuild-handoff.md",  # dangling-ref-check: allow
         "sed -i 's/a/b/' last-session-handoff.md",
         "vim last-session-handoff.md",
         "python3 -c \"open('handoff.md','w')\"",
-        "python3 - <<'EOF'\nopen('drafts/rebuild-handoff.md','w')\nEOF",
+        "python3 - <<'EOF'\nopen('drafts/rebuild-handoff.md','w')\nEOF",  # dangling-ref-check: allow
     )
 
     def test_read_only_commands_are_not_writes(self):

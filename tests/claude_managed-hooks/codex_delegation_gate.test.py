@@ -174,12 +174,18 @@ class Fixture:
         self.lint_log = os.path.join(self.tmp, "lint.log")
         for base in (self.primary, self.worktree):
             os.makedirs(os.path.join(base, "drafts"))
-            self.order(base, "drafts/o.md", "ORDER ok")
-            self.order(base, "drafts/plain.md", "PLAIN")
-            self.order(base, "drafts/bad.md", "ORDER findings")
-            self.order(base, "drafts/rep.md", "ORDER report")
-            self.order(base, "drafts/garbage.md", "GARBAGE")
-            self.order(base, "drafts/o2.md", "ORDER ok")
+            self.order(base, "drafts/o.md", "ORDER ok")  # dangling-ref-check: allow
+            self.order(base, "drafts/plain.md", "PLAIN")  # dangling-ref-check: allow
+            self.order(
+                base, "drafts/bad.md", "ORDER findings"
+            )  # dangling-ref-check: allow
+            self.order(
+                base, "drafts/rep.md", "ORDER report"
+            )  # dangling-ref-check: allow
+            self.order(
+                base, "drafts/garbage.md", "GARBAGE"
+            )  # dangling-ref-check: allow
+            self.order(base, "drafts/o2.md", "ORDER ok")  # dangling-ref-check: allow
 
     def order(self, base: str, rel: str, first_line: str) -> str:
         path = os.path.join(base, rel)
@@ -306,7 +312,9 @@ class GateTest(unittest.TestCase):
         return payload
 
     def agent(
-        self, prompt: str = "発注書 drafts/o.md に従って実装せよ", **extra
+        self,
+        prompt: str = "発注書 drafts/o.md に従って実装せよ",
+        **extra,  # dangling-ref-check: allow
     ) -> dict:
         return self.tool("Agent", {"subagent_type": RESCUE, "prompt": prompt, **extra})
 
@@ -335,9 +343,13 @@ class GateTest(unittest.TestCase):
 
     # -- C1 ------------------------------------------------------------------------------------
     def test_c1_deny_shape_and_corrective_text(self) -> None:
-        reason = self.deny(self.bash(f"{NODE} task --write drafts/o.md"), "route")
+        reason = self.deny(
+            self.bash(f"{NODE} task --write drafts/o.md"), "route"
+        )  # dangling-ref-check: allow
         self.assertIn("codex:codex-rescue", reason)
-        proc = run_hook(self.bash(f"{NODE} task --write drafts/o.md"), self.fx)
+        proc = run_hook(
+            self.bash(f"{NODE} task --write drafts/o.md"), self.fx
+        )  # dangling-ref-check: allow
         data = json.loads(proc.stdout.strip())
         self.assertEqual(data["hookSpecificOutput"]["hookEventName"], "PreToolUse")
         self.assertEqual(len(proc.stdout.strip().splitlines()), 1)
@@ -368,7 +380,7 @@ class GateTest(unittest.TestCase):
             f"ls -la {COMP}",
             f"cat {COMP} | head -20",
             f"python3 - <<'PY'\nSCRIPT = \"{COMP}\"\nprint(SCRIPT, 'codex exec')\nPY",
-            "cat > drafts/policy.md <<'EOF'\ncodex exec で直接叩かない\n"
+            "cat > drafts/policy.md <<'EOF'\ncodex exec で直接叩かない\n"  # dangling-ref-check: allow
             f"node {COMP} task を rescue 経由で使う\nEOF",
             "python3 - <<'PYEOF'\nimport re\nRX = re.compile(r\"\\bcodex\\s+exec\\b\")\nPYEOF",
             f"echo 'node {COMP} task'",
@@ -382,13 +394,13 @@ class GateTest(unittest.TestCase):
 
     def test_c2_launch_forms_are_found(self) -> None:
         for command in (
-            f"{NODE} task --write drafts/o.md",
+            f"{NODE} task --write drafts/o.md",  # dangling-ref-check: allow
             f"nodejs {COMP} status --json",
             f'S=$(node {COMP} status --json); echo "$S"',
             f"timeout 30 {NODE} task x",
             f"ls; {NODE} task x",
-            f"bash -c '{NODE} task --write drafts/o.md'",
-            f'node \\\n  "{COMP}" \\\n  task --write drafts/o.md',
+            f"bash -c '{NODE} task --write drafts/o.md'",  # dangling-ref-check: allow
+            f'node \\\n  "{COMP}" \\\n  task --write drafts/o.md',  # dangling-ref-check: allow
             f"for d in a b; do {NODE} task $d; done",
             f"sudo -E {NODE} task x",
             f"X=1 {NODE} task x",
@@ -407,18 +419,28 @@ class GateTest(unittest.TestCase):
 
     def test_c2_redirect_operand_is_not_an_order_argument(self) -> None:
         self.fx.seed()
-        self.deny(self.rescue(f"{NODE} task --write inline < drafts/o.md"), "order")
-        self.deny(self.rescue(f"{NODE} task --write inline > drafts/o.md"), "order")
+        self.deny(
+            self.rescue(f"{NODE} task --write inline < drafts/o.md"), "order"
+        )  # dangling-ref-check: allow
+        self.deny(
+            self.rescue(f"{NODE} task --write inline > drafts/o.md"), "order"
+        )  # dangling-ref-check: allow
 
     def test_c2_passthrough_tokens_are_prompt_text(self) -> None:
         self.fx.seed()
-        self.allow(self.rescue(f"{NODE} task --write drafts/o.md -- --resume"))
-        self.allow(self.rescue(f"{NODE} task --write drafts/o.md -- --workspace x"))
+        self.allow(
+            self.rescue(f"{NODE} task --write drafts/o.md -- --resume")
+        )  # dangling-ref-check: allow
+        self.allow(
+            self.rescue(f"{NODE} task --write drafts/o.md -- --workspace x")
+        )  # dangling-ref-check: allow
 
     def test_c2_short_cwd_alias(self) -> None:
         self.fx.seed()
         self.allow(
-            self.rescue(f"{NODE} task -C {self.fx.worktree} --write drafts/o.md")
+            self.rescue(
+                f"{NODE} task -C {self.fx.worktree} --write drafts/o.md"
+            )  # dangling-ref-check: allow
         )
         self.deny(self.rescue(f"{NODE} task -C {self.fx.other} x"), "same-root")
 
@@ -426,7 +448,7 @@ class GateTest(unittest.TestCase):
     def test_c3_main_agent_companion_is_denied_for_every_subcommand(self) -> None:
         self.fx.seed()
         for sub in (
-            "task --write drafts/o.md",
+            "task --write drafts/o.md",  # dangling-ref-check: allow
             "task-worker --cwd . --job-id j",
             "status --json",
             "result j",
@@ -441,7 +463,8 @@ class GateTest(unittest.TestCase):
             self.deny(self.bash(f"{NODE} {sub}"), "route")
         self.deny(self.bash(f"{NODE} task x", tool="Monitor"), "route")
         self.deny(
-            self.bash(f"CODEX_DELEGATION_OK=1 {NODE} task --write drafts/o.md"), "route"
+            self.bash(f"CODEX_DELEGATION_OK=1 {NODE} task --write drafts/o.md"),
+            "route",  # dangling-ref-check: allow
         )
 
     def test_c3_bare_cli_forms(self) -> None:
@@ -511,12 +534,16 @@ class GateTest(unittest.TestCase):
 
     def test_c4_skill_surface(self) -> None:
         self.deny(
-            self.tool("Skill", {"skill": "codex:rescue", "args": "drafts/o.md を実装"}),
+            self.tool(
+                "Skill", {"skill": "codex:rescue", "args": "drafts/o.md を実装"}
+            ),  # dangling-ref-check: allow
             "skill",
         )
         self.fx.seed()
         self.allow(
-            self.tool("Skill", {"skill": "codex:rescue", "args": "drafts/o.md を実装"})
+            self.tool(
+                "Skill", {"skill": "codex:rescue", "args": "drafts/o.md を実装"}
+            )  # dangling-ref-check: allow
         )
         for safe in (
             "codex:status",
@@ -566,23 +593,42 @@ class GateTest(unittest.TestCase):
         self.allow(
             self.tool(
                 "Skill",
-                {"skill": "codex:rescue", "args": "/abs/drafts/order-x.md --fresh"},
+                {
+                    "skill": "codex:rescue",
+                    "args": "/abs/drafts/order-x.md --fresh",
+                },  # dangling-ref-check: allow
             )
         )
 
     def test_c6_write_task_requires_one_lintable_order(self) -> None:
         self.fx.seed()
-        self.allow(self.rescue(f'{NODE} task --write "発注書 drafts/o.md に従う"'))
-        self.allow(self.rescue(f"{NODE} task --write --prompt-file drafts/o.md"))
         self.allow(
-            self.rescue(f"{NODE} task --write --cwd {self.fx.worktree} drafts/o.md")
+            self.rescue(f'{NODE} task --write "発注書 drafts/o.md に従う"')
+        )  # dangling-ref-check: allow
+        self.allow(
+            self.rescue(f"{NODE} task --write --prompt-file drafts/o.md")
+        )  # dangling-ref-check: allow
+        self.allow(
+            self.rescue(
+                f"{NODE} task --write --cwd {self.fx.worktree} drafts/o.md"
+            )  # dangling-ref-check: allow
         )
         self.deny(self.rescue(f'{NODE} task --write "この bug を直して"'), "order")
-        self.deny(self.rescue(f"{NODE} task --write drafts/o.md drafts/o2.md"), "order")
-        self.deny(self.rescue(f"{NODE} task --write drafts/missing.md"), "order")
-        self.deny(self.rescue(f"{NODE} task --write drafts/plain.md"), "order")
-        self.deny(self.rescue(f"{NODE} task --write drafts/bad.md"), "order")
-        self.deny(self.rescue(f"{NODE} task --write drafts/garbage.md"), "order")
+        self.deny(
+            self.rescue(f"{NODE} task --write drafts/o.md drafts/o2.md"), "order"
+        )  # dangling-ref-check: allow
+        self.deny(
+            self.rescue(f"{NODE} task --write drafts/missing.md"), "order"
+        )  # dangling-ref-check: allow
+        self.deny(
+            self.rescue(f"{NODE} task --write drafts/plain.md"), "order"
+        )  # dangling-ref-check: allow
+        self.deny(
+            self.rescue(f"{NODE} task --write drafts/bad.md"), "order"
+        )  # dangling-ref-check: allow
+        self.deny(
+            self.rescue(f"{NODE} task --write drafts/garbage.md"), "order"
+        )  # dangling-ref-check: allow
         self.deny(self.rescue(f"{NODE} task --write drafts"), "order")
         with open(self.fx.lint_log, encoding="utf-8") as fh:
             calls = fh.read().splitlines()
@@ -594,18 +640,28 @@ class GateTest(unittest.TestCase):
         self.fx.seed()
         self.allow(
             self.rescue(
-                f"{NODE} task --write --prompt-file drafts/o.md drafts/plain.md drafts/bad.md"
+                f"{NODE} task --write --prompt-file drafts/o.md drafts/plain.md drafts/bad.md"  # dangling-ref-check: allow
             )
         )
 
     def test_c6_read_only_ignores_findings_and_resume_skips_lint(self) -> None:
         self.fx.seed()
-        self.allow(self.rescue(f"{NODE} task drafts/plain.md"))
-        self.allow(self.rescue(f"{NODE} task drafts/bad.md"))
-        self.allow(self.rescue(f"{NODE} task drafts/garbage.md"))
+        self.allow(
+            self.rescue(f"{NODE} task drafts/plain.md")
+        )  # dangling-ref-check: allow
+        self.allow(
+            self.rescue(f"{NODE} task drafts/bad.md")
+        )  # dangling-ref-check: allow
+        self.allow(
+            self.rescue(f"{NODE} task drafts/garbage.md")
+        )  # dangling-ref-check: allow
         self.allow(self.rescue(f"{NODE} task 'この bug を調査して'"))
-        self.allow(self.rescue(f"{NODE} task --write --resume-last drafts/o.md"))
-        self.allow(self.rescue(f"{NODE} task --write --resume 続き drafts/o.md"))
+        self.allow(
+            self.rescue(f"{NODE} task --write --resume-last drafts/o.md")
+        )  # dangling-ref-check: allow
+        self.allow(
+            self.rescue(f"{NODE} task --write --resume 続き drafts/o.md")
+        )  # dangling-ref-check: allow
         calls = []
         if os.path.exists(self.fx.lint_log):
             with open(self.fx.lint_log, encoding="utf-8") as fh:
@@ -614,28 +670,39 @@ class GateTest(unittest.TestCase):
 
     def test_c6_report_requires_write(self) -> None:
         self.fx.seed()
-        self.deny(self.rescue(f"{NODE} task drafts/rep.md"), "order")
-        self.allow(self.rescue(f"{NODE} task --write drafts/rep.md"))
+        self.deny(
+            self.rescue(f"{NODE} task drafts/rep.md"), "order"
+        )  # dangling-ref-check: allow
+        self.allow(
+            self.rescue(f"{NODE} task --write drafts/rep.md")
+        )  # dangling-ref-check: allow
 
     def test_c6_lint_failure_denies_write_launch_only(self) -> None:
         self.fx.seed()
         missing = os.path.join(self.fx.tmp, "no-such-lint")
         self.deny(
-            self.rescue(f"{NODE} task --write drafts/o.md"), "order", lint=missing
+            self.rescue(f"{NODE} task --write drafts/o.md"),
+            "order",
+            lint=missing,  # dangling-ref-check: allow
         )
-        self.allow(self.rescue(f"{NODE} task drafts/o.md"), lint=missing)
+        self.allow(
+            self.rescue(f"{NODE} task drafts/o.md"), lint=missing
+        )  # dangling-ref-check: allow
 
     # -- C7 ------------------------------------------------------------------------------------
     def test_c7_unknown_task_flags(self) -> None:
         self.fx.seed()
         self.deny(
-            self.rescue(f"{NODE} task --write drafts/o.md --workspace /x"), "flag"
+            self.rescue(f"{NODE} task --write drafts/o.md --workspace /x"),
+            "flag",  # dangling-ref-check: allow
         )
         self.deny(self.rescue(f"{NODE} task --help"), "flag")
-        self.deny(self.rescue(f"{NODE} task --wait drafts/o.md"), "flag")
+        self.deny(
+            self.rescue(f"{NODE} task --wait drafts/o.md"), "flag"
+        )  # dangling-ref-check: allow
         self.allow(
             self.rescue(
-                f"{NODE} task --write drafts/o.md -m gpt-5.6-sol --effort high --background --fresh"
+                f"{NODE} task --write drafts/o.md -m gpt-5.6-sol --effort high --background --fresh"  # dangling-ref-check: allow
                 f" --json --model=gpt-5.6-luna -C {self.fx.worktree}"
             )
         )
@@ -651,20 +718,28 @@ class GateTest(unittest.TestCase):
         self.fx.seed()
         self.deny(self.rescue(f'{NODE} task "{CJK_250}"'), "cjk")
         self.allow(self.rescue(f'{NODE} task "{CJK_150}"'))
-        self.allow(self.rescue(f'{NODE} task --prompt-file drafts/o.md "{CJK_250}"'))
+        self.allow(
+            self.rescue(f'{NODE} task --prompt-file drafts/o.md "{CJK_250}"')
+        )  # dangling-ref-check: allow
 
     # -- C9 ------------------------------------------------------------------------------------
     def test_c9_write_task_on_primary_checkout(self) -> None:
         self.fx.seed()
         primary = self.fx.primary
-        self.deny(self.rescue(f"{NODE} task --write drafts/o.md", cwd=primary), "tree")
+        self.deny(
+            self.rescue(f"{NODE} task --write drafts/o.md", cwd=primary), "tree"
+        )  # dangling-ref-check: allow
         self.deny(
             self.rescue(f"{NODE} task --write --resume-last", cwd=primary), "tree"
         )
         self.deny(self.rescue(f"{NODE} task --resume x", cwd=primary), "tree")
-        self.allow(self.rescue(f"{NODE} task drafts/o.md", cwd=primary))
+        self.allow(
+            self.rescue(f"{NODE} task drafts/o.md", cwd=primary)
+        )  # dangling-ref-check: allow
         self.allow(self.rescue(f"{NODE} adversarial-review --wait", cwd=primary))
-        self.allow(self.rescue(f"{NODE} task --write drafts/o.md"))
+        self.allow(
+            self.rescue(f"{NODE} task --write drafts/o.md")
+        )  # dangling-ref-check: allow
         self.allow(
             self.rescue(
                 f"{NODE} task --write o.md",
@@ -676,7 +751,7 @@ class GateTest(unittest.TestCase):
         self.fx.seed()
         proc = run_hook(
             self.rescue(
-                f"CODEX_SHARED_TREE_OK=1 {NODE} task --write drafts/o.md",
+                f"CODEX_SHARED_TREE_OK=1 {NODE} task --write drafts/o.md",  # dangling-ref-check: allow
                 cwd=self.fx.primary,
             ),
             self.fx,
@@ -686,7 +761,7 @@ class GateTest(unittest.TestCase):
         self.assertIn("共有", context)
         self.deny(
             self.rescue(
-                f"{NODE} task --write drafts/o.md CODEX_SHARED_TREE_OK=1",
+                f"{NODE} task --write drafts/o.md CODEX_SHARED_TREE_OK=1",  # dangling-ref-check: allow
                 cwd=self.fx.primary,
             ),
             "tree",
@@ -790,7 +865,8 @@ class GateTest(unittest.TestCase):
     def test_c1_corrective_text_is_rule_specific(self) -> None:
         self.fx.seed()
         reason = self.deny(
-            self.rescue(f"{NODE} task --write drafts/o.md", cwd=self.fx.primary), "tree"
+            self.rescue(f"{NODE} task --write drafts/o.md", cwd=self.fx.primary),
+            "tree",  # dangling-ref-check: allow
         )
         self.assertIn("git worktree add", reason)
         self.assertIn("--cwd", reason)
@@ -804,7 +880,7 @@ class GateTest(unittest.TestCase):
     def test_c2_variable_bound_companion_path_is_a_launch(self) -> None:
         for command in (
             f'COMP={COMP}\nnode "$COMP" status --json',
-            f"C={COMP}; node $C task --write drafts/o.md",
+            f"C={COMP}; node $C task --write drafts/o.md",  # dangling-ref-check: allow
             f'C={COMP}\nnode "${{C}}" cancel j',
         ):
             self.deny(self.bash(command), "route")
@@ -815,9 +891,12 @@ class GateTest(unittest.TestCase):
         ):
             self.allow(self.bash(command))
         self.fx.seed()
-        self.allow(self.rescue(f'C={COMP}\nnode "$C" task --write drafts/o.md'))
+        self.allow(
+            self.rescue(f'C={COMP}\nnode "$C" task --write drafts/o.md')
+        )  # dangling-ref-check: allow
         self.deny(
-            self.rescue(f'C={COMP}\nnode "$C" task --write drafts/plain.md'), "order"
+            self.rescue(f'C={COMP}\nnode "$C" task --write drafts/plain.md'),
+            "order",  # dangling-ref-check: allow
         )
 
     def test_c2_brace_groups_backticks_and_quoted_substitution(self) -> None:
@@ -847,7 +926,7 @@ class GateTest(unittest.TestCase):
     def test_c2_every_launch_is_checked(self) -> None:
         self.fx.seed()
         command = (
-            f"CODEX_SHARED_TREE_OK=1 {NODE} task --write drafts/o.md; "
+            f"CODEX_SHARED_TREE_OK=1 {NODE} task --write drafts/o.md; "  # dangling-ref-check: allow
             f"{NODE} task --write --resume-last"
         )
         self.deny(self.rescue(command, cwd=self.fx.primary), "tree")
@@ -855,10 +934,10 @@ class GateTest(unittest.TestCase):
     def test_c6_order_path_followed_by_punctuation(self) -> None:
         self.fx.seed()
         for prompt in (
-            "(drafts/o.md)",
-            "発注書 drafts/o.md。",
-            "drafts/o.md、続き",
-            "see drafts/o.md, then",
+            "(drafts/o.md)",  # dangling-ref-check: allow
+            "発注書 drafts/o.md。",  # dangling-ref-check: allow
+            "drafts/o.md、続き",  # dangling-ref-check: allow
+            "see drafts/o.md, then",  # dangling-ref-check: allow
         ):
             self.allow(self.rescue(f'{NODE} task --write "{prompt}"'))
 
@@ -884,7 +963,7 @@ class GateTest(unittest.TestCase):
         self.deny(self.rescue(f"{NODE} task --cwd /tmp/oth\\er x"), "same-root")
         self.deny(
             self.rescue(
-                f"pushd {self.fx.worktree} >/dev/null && {NODE} task --write drafts/o.md",
+                f"pushd {self.fx.worktree} >/dev/null && {NODE} task --write drafts/o.md",  # dangling-ref-check: allow
                 cwd=self.fx.primary,
             ),
             "same-root",
@@ -1018,9 +1097,7 @@ class GateTest(unittest.TestCase):
 
     # -- final recheck trivial fixes (orderer) -------------------------------------------------
     def test_c2_heredoc_prompt_inside_substitution_is_a_body(self) -> None:
-        command = (
-            f"{NODE} task \"$(cat <<'EOF'\nread drafts/a.md and drafts/b.md\nEOF\n)\""
-        )
+        command = f"{NODE} task \"$(cat <<'EOF'\nread drafts/a.md and drafts/b.md\nEOF\n)\""  # dangling-ref-check: allow
         self.allow(self.rescue(command))
         self.deny(self.bash(command), "route")
 

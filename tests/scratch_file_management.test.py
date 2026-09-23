@@ -41,7 +41,7 @@ class HygieneTest(unittest.TestCase):
         self.write("src/main.py", "print('source')\n")
         self.git("add", ".")
         self.git("commit", "-qm", "initial")
-        self.write("drafts/peer/report.txt", "keep")
+        self.write("drafts/peer/report.txt", "keep")  # dangling-ref-check: allow
 
     def write(self, name, content):
         path = self.top / name
@@ -79,7 +79,9 @@ class HygieneTest(unittest.TestCase):
         self.assertEqual(
             self.git("ls-files", "--stage", "-z"), before, "hook changed index"
         )
-        self.assertEqual((self.top / "drafts/peer/report.txt").read_text(), "keep")
+        self.assertEqual(
+            (self.top / "drafts/peer/report.txt").read_text(), "keep"
+        )  # dangling-ref-check: allow
         return result
 
     def shells(self, command, expected=0):
@@ -93,9 +95,9 @@ class HygieneTest(unittest.TestCase):
 
     def test_explicit_drafts_add(self):
         for command in (
-            "git add drafts/peer/report.txt",
+            "git add drafts/peer/report.txt",  # dangling-ref-check: allow
             "git add -f drafts",
-            "git add --force -- drafts/peer/report.txt",
+            "git add --force -- drafts/peer/report.txt",  # dangling-ref-check: allow
         ):
             self.shells(command, 2)
 
@@ -108,7 +110,7 @@ class HygieneTest(unittest.TestCase):
         self.shells("git add .")
 
     def test_staged_drafts_commit(self):
-        self.git("add", "-f", "drafts/peer/report.txt")
+        self.git("add", "-f", "drafts/peer/report.txt")  # dangling-ref-check: allow
         for command in (
             "git commit -m test",
             "git commit --amend --no-edit",
@@ -117,23 +119,31 @@ class HygieneTest(unittest.TestCase):
             self.shells(command, 2)
 
     def test_untracking_is_allowed(self):
-        self.git("add", "-f", "drafts/peer/report.txt")
+        self.git("add", "-f", "drafts/peer/report.txt")  # dangling-ref-check: allow
         self.git("commit", "-qm", "leak")
-        self.git("rm", "--cached", "drafts/peer/report.txt")
+        self.git(
+            "rm", "--cached", "drafts/peer/report.txt"
+        )  # dangling-ref-check: allow
         self.shells("git commit -m untrack")
 
     def test_path_commit(self):
-        self.git("add", "-f", "drafts/peer/report.txt")
+        self.git("add", "-f", "drafts/peer/report.txt")  # dangling-ref-check: allow
         self.git("commit", "-qm", "leak")
-        self.shells("git commit -m test -- drafts/peer/report.txt", 2)
+        self.shells(
+            "git commit -m test -- drafts/peer/report.txt", 2
+        )  # dangling-ref-check: allow
 
     def test_references_still_checked(self):
-        self.write("src/readme.md", "see drafts/private.md\n")
+        self.write(
+            "src/readme.md", "see drafts/private.md\n"
+        )  # dangling-ref-check: allow
         self.git("add", "src/readme.md")
         self.shells("git commit -m update", 2)
 
     def test_commit_message_not_a_path(self):
-        self.shells("git commit -m 'mention drafts/peer/report.txt'")
+        self.shells(
+            "git commit -m 'mention drafts/peer/report.txt'"
+        )  # dangling-ref-check: allow
 
     def test_git_c_and_workdir(self):
         self.hook(
@@ -167,7 +177,9 @@ class HygieneTest(unittest.TestCase):
         for tool in ("Write", "Edit", "MultiEdit"):
             self.hook(tool, {"file_path": str(self.top / "reports/out.md")}, 2)
             self.hook(tool, {"file_path": str(self.top / "src/new.py")})
-            self.hook(tool, {"file_path": str(self.top / "drafts/own.md")})
+            self.hook(
+                tool, {"file_path": str(self.top / "drafts/own.md")}
+            )  # dangling-ref-check: allow
 
     def test_codex_patch_shapes(self):
         patch = "*** Begin Patch\n*** Add File: reports/out.md\n+report\n*** End Patch"
@@ -229,7 +241,9 @@ class HygieneTest(unittest.TestCase):
 
     def test_drafts_must_be_ignored(self):
         self.write(".gitignore", "")
-        self.hook("Write", {"file_path": "drafts/own.md"}, 2)
+        self.hook(
+            "Write", {"file_path": "drafts/own.md"}, 2
+        )  # dangling-ref-check: allow
 
     def test_tmpdir(self):
         for command in (
@@ -243,7 +257,7 @@ class HygieneTest(unittest.TestCase):
             self.shells(command, 2)
         self.shells(f'TMPDIR="{self.top}/drafts" mktemp')
         self.shells("mktemp -p /var/tmp")
-        self.shells("mktemp -d drafts/temp.XXXXXX")
+        self.shells("mktemp -d drafts/temp.XXXXXX")  # dangling-ref-check: allow
         self.shells('mkdir -p "$TMPDIR/output"', 2)
         self.shells("mktemp -p /var/tmp/owned")
 
@@ -291,7 +305,9 @@ class HygieneTest(unittest.TestCase):
         owned = Path(result.stdout.strip())
         self.assertEqual(owned.parent, self.top / "drafts")
         self.assertFalse(owned.exists())
-        self.assertEqual((self.top / "drafts/peer/report.txt").read_text(), "keep")
+        self.assertEqual(
+            (self.top / "drafts/peer/report.txt").read_text(), "keep"
+        )  # dangling-ref-check: allow
 
     def test_run_rejects_symlink_scratch(self):
         (self.top / "drafts").rename(self.top / "existing-output")
@@ -358,9 +374,7 @@ class HygieneTest(unittest.TestCase):
         peer.parent.mkdir(parents=True)
         peer.write_text("peer")
         retired = []
-        for client, name in (
-            ("claude-code", "browser-verification"),
-        ):
+        for client, name in (("claude-code", "browser-verification"),):
             old = stage / f"etc/{client}/skills/{name}/SKILL.md"
             old.parent.mkdir(parents=True, exist_ok=True)
             old.write_text("old managed skill")
@@ -427,7 +441,9 @@ class HygieneTest(unittest.TestCase):
                 ).read_bytes(),
                 (FILES / "shared_skills/scratch-file-management/SKILL.md").read_bytes(),
             )
-        deployed = stage / "usr/local/lib/scratch_file_management/scratch_file_management.py"
+        deployed = (
+            stage / "usr/local/lib/scratch_file_management/scratch_file_management.py"
+        )
         result = subprocess.run(
             [sys.executable, str(deployed)],
             input=json.dumps(
@@ -450,7 +466,8 @@ class HygieneTest(unittest.TestCase):
             subprocess.run(["bash", "-n", str(path)], check=True)
             source = path.read_text()
             self.assertIn(
-                'run python3 "$TOP_DIR/files/install_scratch_file_management.py"', source
+                'run python3 "$TOP_DIR/files/install_scratch_file_management.py"',
+                source,
             )
             self.assertNotIn("find /etc/codex -depth", source)
             self.assertNotIn("find /etc/claude-code -depth", source)
