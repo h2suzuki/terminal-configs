@@ -15,6 +15,8 @@ TURN_WINDOW_BYTES = 512 * 1024
 BACKGROUND_WINDOW_BYTES = 2 * 1024 * 1024
 LEDGER_MIN_EDITS = 3
 TASK_TOOLS = {"TaskCreate", "TaskUpdate", "TodoWrite"}
+OPEN_TASK_REF_CAP = 8
+OPEN_TASK_REF_CHARS = 24
 SCHEMA_TOOLS = {"ToolSearch"}
 EVIDENCE_TOOLS = {"Read", "Grep", "Glob", "WebSearch", "WebFetch"}
 PERSISTENCE_WORDS = ("memory", "skills", "hooks", "CLAUDE.md", "SKILL.md")
@@ -587,13 +589,27 @@ def _ruling(turn, normalized):
     return []
 
 
+def _task_ref(task):
+    value = task.get("id")
+    if isinstance(value, str) and value:
+        return value
+    return _task_name(task)[:OPEN_TASK_REF_CHARS]
+
+
 def _open_task_block(tasks):
     opened = _open_tasks(tasks)
     if not opened:
         return []
-    names = ", ".join(_task_name(task) for task in opened)
+    refs = [_task_ref(task) for task in opened]
+    shown = ", ".join("#" + ref for ref in refs[:OPEN_TASK_REF_CAP])
+    if len(refs) > OPEN_TASK_REF_CAP:
+        shown += f", … (+{len(refs) - OPEN_TASK_REF_CAP})"
     return [
-        _line("wind-down-open-tasks", "未完了 Task: " + names, "完了または取消にする")
+        _line(
+            "wind-down-open-tasks",
+            f"未完了 Task {len(refs)} 件: {shown}",
+            "完了または取消にする",
+        )
     ]
 
 
