@@ -197,19 +197,19 @@ Windows のデスクトップアプリでは **Settings > Claude Code > Enable r
 
 ### Codex
 
-セットアップ時にユーザーごとに remote control を有効化しています（`codex app-server daemon enable-remote-control`）。止まっている daemon は自動では起動しないため、認証後に次を実行します。
+セットアップ時にユーザーごとに remote control を有効化しています（`codex app-server daemon enable-remote-control`）。止まっている daemon は自動では起動しないため、上の `codex login` で認証してから次を実行します。
 
 ```bash
 codex remote-control start
 codex remote-control pair
 ```
 
-`start` は `This machine is available for remote control as <ホスト名>` と表示します。`pair` は、daemon の起動中に、短時間だけ有効な手動ペアリングコードを表示します。`codex remote-control pair --json` とすると、`pairingCode`・`manualPairingCode`・`environmentId`・`expiresAt` を JSON で出力します。手で入力するコードは `manualPairingCode`（`XXXX-XXXX` 形式）です。[CLI リファレンス](https://learn.chatgpt.com/docs/developer-commands?surface=cli#cli-codex-remote-control)
+`start` は `This machine is available for remote control as <ホスト名>` と表示します。`pair` は、daemon の起動中に、短時間だけ有効なペアリングコードを `Pairing code: XXXX-XXXX` の形で表示します。`--json` を付けると、このコードは `manualPairingCode` に入ります（ほかに `pairingCode`・`environmentId`・`expiresAt`）。daemon を再起動するときは `codex remote-control stop` の後に `start` を実行します。[CLI リファレンス](https://learn.chatgpt.com/docs/developer-commands?surface=cli#cli-codex-remote-control)
 
-スマートフォンでは次のように接続します（ベータ機能）。
+スマートフォンでは次のように接続します（ベータ機能。Debian 12・Codex 0.156.0 で接続を確認済み、2026-09-23）。
 
 1. ChatGPT アプリを最新版にし、**Remote** を開きます。
-2. **Pair manually instead** を押し、`manualPairingCode` を入力します。コードは短時間で失効するので、切れたら `pair` をやり直します。
+2. **Pair manually instead** を押し、`pair` が表示したコードを入力します。コードは短時間で失効するので、切れたら `pair` をやり直します。
 3. OpenAI の認可画面で同じアカウントとワークスペースを確認し、多要素認証などを済ませます。
 4. **Remote** に `start` が表示したホスト名が出るので選び、プロジェクトを選んでタスクを始めます。コマンドの承認や変更の確認もここで行います。
 

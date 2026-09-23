@@ -186,19 +186,19 @@ In the Windows desktop app, **Settings > Claude Code > Enable remote control by 
 
 ### Codex
 
-Setup enables remote control for each user (`codex app-server daemon enable-remote-control`). A stopped daemon does not start automatically, so run the following after logging in.
+Setup enables remote control for each user (`codex app-server daemon enable-remote-control`). A stopped daemon does not start automatically, so sign in with `codex login` above first, then run the following.
 
 ```bash
 codex remote-control start
 codex remote-control pair
 ```
 
-`start` prints `This machine is available for remote control as <hostname>`. While the daemon is running, `pair` prints a manual pairing code that is valid only for a short time. With `codex remote-control pair --json`, it prints `pairingCode`, `manualPairingCode`, `environmentId`, and `expiresAt` as JSON. The code to type by hand is `manualPairingCode` (in `XXXX-XXXX` form). [CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli#cli-codex-remote-control)
+`start` prints `This machine is available for remote control as <hostname>`. While the daemon is running, `pair` prints a short-lived pairing code as `Pairing code: XXXX-XXXX`. With `--json`, the same code is in `manualPairingCode` (along with `pairingCode`, `environmentId`, and `expiresAt`). To restart the daemon, run `codex remote-control stop` and then `start`. [CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli#cli-codex-remote-control)
 
-Connect from your phone as follows (beta feature).
+Connect from your phone as follows (beta feature; connection confirmed on Debian 12 with Codex 0.156.0, 2026-09-23).
 
 1. Update the ChatGPT app and open **Remote**.
-2. Tap **Pair manually instead** and enter `manualPairingCode`. The code expires quickly; run `pair` again if it does.
+2. Tap **Pair manually instead** and enter the code that `pair` printed. The code expires quickly; run `pair` again if it does.
 3. On the OpenAI authorization screen, confirm the same account and workspace and complete any multi-factor authentication.
 4. Choose the host name that `start` printed in **Remote**, pick a project, and start a task. You also approve commands and review changes there.
 
