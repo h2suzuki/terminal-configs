@@ -165,7 +165,7 @@ You can operate the Claude Code, Codex, and Antigravity CLIs from your phone. Co
 | CLI | What you open on your phone | How it stays running | One-time setup |
 |---|---|---|---|
 | Claude Code | **Code** in the Claude app | A running `claude` connects automatically. Or `claude remote-control` | Start `claude` once in the project directory and approve the trust prompt |
-| Codex | **Remote** in the ChatGPT app (through the Mac/Windows desktop app) | `codex remote-control start` launches the daemon | Connection setup in the desktop app, or `codex remote-control pair` |
+| Codex | **Remote** in the ChatGPT app | `codex remote-control start` launches the daemon | Enter the `codex remote-control pair` code with **Pair manually instead** |
 | Antigravity | [Remote Control Dashboard](https://antigravity.google.com) in a browser | `agy remote-control start` registers the daemon (starts automatically at machine boot) | None (sign in with the same Google account) |
 
 ### Claude Code
@@ -195,7 +195,14 @@ codex remote-control pair
 
 `start` prints `This machine is available for remote control as <hostname>`. While the daemon is running, `pair` prints a manual pairing code that is valid only for a short time. With `codex remote-control pair --json`, it prints `pairingCode`, `manualPairingCode`, `environmentId`, and `expiresAt` as JSON. The code to type by hand is `manualPairingCode` (in `XXXX-XXXX` form). [CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli#cli-codex-remote-control)
 
-According to the official documentation, the hosts you can control from **Remote** in the ChatGPT phone app are machines running the ChatGPT desktop app on macOS or Windows. Setup starts from the desktop app and cannot be done from the Codex CLI. To use a Linux machine, add it as an SSH host under **Settings > Connections** in that desktop app, and connect your phone to the desktop app's host. On the SSH host, `codex` must be on the login shell's `PATH` and signed in. The documentation does not say where to enter the manual pairing code. [Codex Remote](https://learn.chatgpt.com/docs/remote), [Remote connections](https://learn.chatgpt.com/docs/remote-connections)
+Connect from your phone as follows (beta feature).
+
+1. Update the ChatGPT app and open **Remote**.
+2. Tap **Pair manually instead** and enter `manualPairingCode`. The code expires quickly; run `pair` again if it does.
+3. On the OpenAI authorization screen, confirm the same account and workspace and complete any multi-factor authentication.
+4. Choose the host name that `start` printed in **Remote**, pick a project, and start a task. You also approve commands and review changes there.
+
+The official documentation only describes setup from the Mac/Windows desktop app, but an OpenAI staff member stated that the CLI's remote control does not need the desktop app and that the documentation is out of date ([openai/codex#44762](https://github.com/openai/codex/issues/44762)). The **Pair manually instead** button name comes from a user report ([openai/codex#27565](https://github.com/openai/codex/issues/27565)). [Codex Remote](https://learn.chatgpt.com/docs/remote)
 
 ### Antigravity
 

@@ -176,7 +176,7 @@ Claude Code・Codex・Antigravity の CLI を、スマートフォンから操�
 | CLI | スマートフォンで開くもの | 常駐のしかた | 初回だけ必要な操作 |
 |---|---|---|---|
 | Claude Code | Claude アプリの **Code** | 起動した `claude` が自動で接続。または `claude remote-control` | プロジェクトのディレクトリで一度 `claude` を起動し、信頼確認を承認 |
-| Codex | ChatGPT アプリの **Remote**（Mac / Windows のデスクトップアプリ経由） | `codex remote-control start` で daemon を起動 | デスクトップアプリでの接続設定、または `codex remote-control pair` |
+| Codex | ChatGPT アプリの **Remote** | `codex remote-control start` で daemon を起動 | `codex remote-control pair` のコードを **Pair manually instead** で入力 |
 | Antigravity | ブラウザーで [Remote Control Dashboard](https://antigravity.google.com) | `agy remote-control start` で daemon を登録（マシン起動時に自動起動） | なし（同じ Google アカウントでサインイン） |
 
 ### Claude Code
@@ -206,7 +206,14 @@ codex remote-control pair
 
 `start` は `This machine is available for remote control as <ホスト名>` と表示します。`pair` は、daemon の起動中に、短時間だけ有効な手動ペアリングコードを表示します。`codex remote-control pair --json` とすると、`pairingCode`・`manualPairingCode`・`environmentId`・`expiresAt` を JSON で出力します。手で入力するコードは `manualPairingCode`（`XXXX-XXXX` 形式）です。[CLI リファレンス](https://learn.chatgpt.com/docs/developer-commands?surface=cli#cli-codex-remote-control)
 
-公式文書では、スマートフォンの ChatGPT アプリ **Remote** から操作できるホストは、macOS / Windows の ChatGPT デスクトップアプリを動かすマシンです。設定はデスクトップアプリから始め、Codex CLI からは設定できません。Linux のマシンを使う場合は、そのデスクトップアプリの **Settings > Connections** で SSH ホストとして追加し、スマートフォンはデスクトップアプリのホストにつなぎます。SSH ホスト側では、ログインシェルの `PATH` に `codex` があり、認証済みである必要があります。手動ペアリングコードを入力する画面は、公式文書には書かれていません。[Codex Remote](https://learn.chatgpt.com/docs/remote)・[Remote connections](https://learn.chatgpt.com/docs/remote-connections)
+スマートフォンでは次のように接続します（ベータ機能）。
+
+1. ChatGPT アプリを最新版にし、**Remote** を開きます。
+2. **Pair manually instead** を押し、`manualPairingCode` を入力します。コードは短時間で失効するので、切れたら `pair` をやり直します。
+3. OpenAI の認可画面で同じアカウントとワークスペースを確認し、多要素認証などを済ませます。
+4. **Remote** に `start` が表示したホスト名が出るので選び、プロジェクトを選んでタスクを始めます。コマンドの承認や変更の確認もここで行います。
+
+公式文書は Mac / Windows のデスクトップアプリからの設定だけを説明していますが、CLI の remote-control にデスクトップアプリは不要で、文書が古いと OpenAI の担当者が回答しています（[openai/codex#44762](https://github.com/openai/codex/issues/44762)）。**Pair manually instead** のボタン名は利用者の報告によります（[openai/codex#27565](https://github.com/openai/codex/issues/27565)）。[Codex Remote](https://learn.chatgpt.com/docs/remote)
 
 ### Antigravity
 
