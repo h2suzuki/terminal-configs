@@ -447,7 +447,7 @@ run sed -i ~/.bashrc \
     -e '/eval\ \"\`dircolor/s/^\ *#*\ *//' \
     -e '/share_ssh_x11forwarding/d'
 
-setup_user_environment
+run setup_user_environment
 
 copy share_ssh_x11forwarding        ~/.share_ssh_x11forwarding
 run echo "~/.share_ssh_x11forwarding" '>>' ~/.bashrc
@@ -464,7 +464,7 @@ if [ -n "$LOGIN_USER" ]; then
     echo "----------------------------------------------------------------------------------------------------------------"
     echo -e "${COLOR_CLEAR}"
 
-    sudo -i -u $LOGIN_USER setup_user_environment
+    run sudo -i -u $LOGIN_USER setup_user_environment
 fi
 
 
@@ -507,6 +507,7 @@ EOF
 fi
 
 echo ''
+echo "*** $(basename "$0") finished: every step completed ***"
 echo '*** Please execute "wsl -t <this-machine>" on Windows to reflect /etc/wsl.conf ***'
 echo ''
 
