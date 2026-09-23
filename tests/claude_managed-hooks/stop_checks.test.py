@@ -92,11 +92,10 @@ test 方針: 完了語 × 7 証跡種別 (commit / push / merge / gate / E2E / �
 ### C6 task-plan-first (block)
 
 入力: turn の先頭が prompt boundary (= 新規 prompt に応答する turn) で、turn 内に 1 つ以上の tool 呼び出しがある。
-出力: 最初の非 Task tool 呼び出しより前に `TaskCreate` / `TaskUpdate` / `TodoWrite` / mytask MCP の呼び出しが無ければ block。
+出力: 最初の非 Task tool 呼び出しより前に mytask MCP の呼び出しが無ければ block。Claude 標準の Task tool (`TaskCreate` など) は数えない。
 `ToolSearch` (deferred tool の schema 読込) は順序判定で tool に数えない — mytask の schema 読込が Task upsert に先行するため。
 次の turn は pass — tool 呼び出しが 0 件、**tool 呼び出しが 2 件以下かつ `edited_paths` が 0 件** (質問への即答を block しない)、
-prompt boundary から始まらない (継続 Stop)、Task tool が gate off の session
-(`~/.claude.json` の `cachedGrowthBookFeatures.tengu_vellum_ash`)。
+prompt boundary から始まらない (継続 Stop)。
 test 方針: tool 順序を入れ替えた 3 transcript (Task 先行 / Task 後追い / Task 無し) で pass/block/block、
 `Read` 1 回だけの turn で pass (除外規則の固定)。
 
@@ -104,9 +103,10 @@ test 方針: tool 順序を入れ替えた 3 transcript (Task 先行 / Task 後�
 
 入力: (a) `final_text` に作業遂行宣言、(b) 先送り発言 (「別タスクに切り出し」「今は処置しません」)、
 (c) `edited_paths` が 3 件以上 — のいずれか。
-出力: session の Task store (`~/.claude/tasks/<session_id>/*.json` と `drafts/tasks/<session_id>.json`、status 不問) が  # dangling-ref-check: allow
+出力: session の mytask store (`drafts/tasks/<session_id>.json`、status 不問) が  # dangling-ref-check: allow
 空、かつ turn 内に Task tool 呼び出しも無ければ warn 1 行。
-test 方針: (c) の境界を 2 件 = pass / 3 件 = warn で固定し、Task store 非空で全て pass。
+新規 prompt の turn で (c) が成立すると C6 も block し、block 時は warn を出さないため、(c) は C6 の block として現れる。
+test 方針: (c) の 3 件で C6 が block し warn が出ないことを固定し、(b) で Task store 非空なら pass。
 
 ### C8 ruling-without-reading (block)
 
@@ -289,8 +289,8 @@ C16 の memory clone root は環境変数 `STOP_CHECKS_MEMORY_ROOT` で差し替
 不在でも C16 は pass する (実 clone を読みに行かない)。 未設定時は `CLAUDE_MEMORY_SYNC_CLI` の `load_clones()` が返す **全 clone** を走査し、 どの clone の
 entry も候補になる。 返りが空・CLI 不在・CLI が旧版で `load_clones` を持たない・読込例外のいずれでも、
 既定の `<CLAUDE_MEMORY_ROOT>/claude-lessons-learned` 単独へ落ちる (新 installer 未実行の機で挙動不変)。
-CLI は test 内で生成する stub で足りる (実 parser の契約は claude_memory_sync.clones.test.py が持つ)。同様に C6 / C7 / C9 / C10 / C11 / C15 / C17 が読む状態 file
-(`~/.claude/tasks/`、`~/.claude/hooks/state/wind_down_signal/`、`~/.claude.json`、
+CLI は test 内で生成する stub で足りる (実 parser の契約は claude_memory_sync.clones.test.py が持つ)。同様に C7 / C9 / C10 / C11 / C15 / C17 が読む状態 file
+(`~/.claude/hooks/state/wind_down_signal/`、
 `~/.cache/claude-tui-statusline/`) は全て `$HOME` / `$XDG_CACHE_HOME` 起点で解決し、
 mytask store は `$CLAUDE_PROJECT_DIR` と payload の `cwd` 起点で解決する。
 test 方針: memory root を空 dir に向けた Stop で memory-reminder が 0 件、entry を置いた dir に
@@ -509,6 +509,10 @@ def read(path: str) -> dict:
     return call("Read", file_path=path)
 
 
+def upsert() -> dict:
+    return call("mcp__mytask__TaskUpdate", id="1", status="in_progress")
+
+
 SUBAGENT = [
     call("Agent", subagent_type="general-purpose", prompt="調査してください"),
     tool_result("subagent report: 候補を 3 件見つけました"),
@@ -528,8 +532,6 @@ class Fixture:
             os.makedirs(path)
         self.transcript = os.path.join(self.tmp, "session.jsonl")
         self.write([])
-        # Task tools are gated off by default so C6 stays out of every other claim's way.
-        self.gate_tasks_off()
 
     def write(self, entries: list[dict], extra_lines: tuple[str, ...] = ()) -> None:
         with open(self.transcript, "w", encoding="utf-8") as stream:
@@ -553,14 +555,15 @@ class Fixture:
             stream.write(body)
         return path
 
-    def native_task(self, subject: str, status: str = "in_progress") -> None:
-        directory = os.path.join(self.home, ".claude", "tasks", SESSION)
-        os.makedirs(directory, exist_ok=True)
-        task = {"id": subject, "subject": subject, "status": status}
-        with open(
-            os.path.join(directory, subject + ".json"), "w", encoding="utf-8"
-        ) as stream:
-            json.dump(task, stream, ensure_ascii=False)
+    def task(self, content: str, status: str = "in_progress") -> None:
+        path = os.path.join(self.cwd, "drafts", "tasks", SESSION + ".json")
+        tasks = []
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as stream:
+                tasks = json.load(stream)
+        self.mytask_tasks(
+            [*tasks, {"id": content, "content": content, "status": status}]
+        )
 
     def mytask_tasks(self, tasks: list[dict]) -> None:
         directory = os.path.join(self.cwd, "drafts", "tasks")
@@ -579,20 +582,6 @@ class Fixture:
         with open(os.path.join(directory, SESSION), "w", encoding="utf-8") as stream:
             stream.write("1" if latest else "0")
         open(os.path.join(directory, SESSION + ".sticky"), "w").close()
-
-    def gate_tasks_off(self) -> None:
-        self.write_claude_json(
-            {"cachedGrowthBookFeatures": {"tengu_vellum_ash": [MODEL]}}
-        )
-
-    def enable_task_tools(self) -> None:
-        self.write_claude_json({"cachedGrowthBookFeatures": {}})
-
-    def write_claude_json(self, config: dict) -> None:
-        with open(
-            os.path.join(self.home, ".claude.json"), "w", encoding="utf-8"
-        ) as stream:
-            json.dump(config, stream)
 
     def memory_entry(
         self,
@@ -838,6 +827,7 @@ class TurnFunnelTest(StopChecksTest):
                 self.fx.write(
                     [
                         prompt(),
+                        upsert(),
                         edit(self.fx.repo_file("a.py")),
                         injected(injection),
                         edit(self.fx.repo_file("b.py")),
@@ -846,7 +836,7 @@ class TurnFunnelTest(StopChecksTest):
                     ]
                 )
                 proc = run_hook(self.fx, "3 file を編集しました。" + TAIL)
-                self.assertWarnsFamily(proc, "task-ledger-drift")
+                self.assertNotBlocked(proc, "task-plan-first")
 
     def test_c2_corrupt_jsonl_lines_are_skipped(self):
         self.fx.write(
@@ -871,7 +861,6 @@ class TurnFunnelTest(StopChecksTest):
 
     def test_c2_injected_skill_and_hook_feedback_entries_are_not_boundaries(self):
         """Harness-injected user entries must not cut the turn: the Task update before them still counts."""
-        self.fx.enable_task_tools()
         self.fx.write(
             [
                 prompt(),
@@ -893,7 +882,6 @@ class TurnFunnelTest(StopChecksTest):
 
     def test_c2_skill_reinvocation_entries_are_not_boundaries(self):
         """C2: skill-reminder-gate forces a skill re-invoke before commit, so its notice must not cut the turn."""
-        self.fx.enable_task_tools()
         self.fx.write(
             [
                 prompt(),
@@ -913,7 +901,6 @@ class TurnFunnelTest(StopChecksTest):
 
     def test_c2_skill_preamble_blocks_are_not_boundaries(self):
         """C2: a skill's first invoke arrives as list content, which is never a boundary whatever its text."""
-        self.fx.enable_task_tools()
         self.fx.write(
             [
                 prompt(),
@@ -984,7 +971,7 @@ class ContinuationClaimTest(StopChecksTest):
         self.assertNotBlocked(proc, "continuation-claim")
 
     def test_c4_past_tense_backed_by_a_tool_call_passes(self):
-        self.fx.turn(edit(self.fx.repo_file("impl.py")), say("編集しました"))
+        self.fx.turn(upsert(), edit(self.fx.repo_file("impl.py")), say("編集しました"))
         proc = run_hook(self.fx, "実装を進めました。" + TAIL)
         self.assertNotBlocked(proc, "continuation-claim")
 
@@ -1008,7 +995,7 @@ class DoneStateLedgerTest(StopChecksTest):
     """C5: a done word about commit / push / merge / gate / E2E needs its evidence."""
 
     def check(self, text: str, entries: list[dict], expected_block: bool) -> None:
-        self.fx.write([prompt(), *entries, say("報告します")])
+        self.fx.write([prompt(), upsert(), *entries, say("報告します")])
         proc = run_hook(self.fx, text + TAIL)
         if expected_block:
             self.assertBlocks(proc, "done-state-ledger")
@@ -1065,22 +1052,26 @@ class DoneStateLedgerTest(StopChecksTest):
 class TaskPlanFirstTest(StopChecksTest):
     """C6: a prompt-answering turn upserts a Task before its first non-Task tool."""
 
-    def setUp(self) -> None:
-        super().setUp()
-        self.fx.enable_task_tools()
-
     def work(self) -> list[dict]:
         return [edit(self.fx.repo_file("x.py")), edit(self.fx.repo_file("y.py"))]
 
     def test_c6_task_upsert_before_the_first_tool_passes(self):
-        self.fx.write([prompt(), call("TaskCreate", subject="契約 test"), *self.work()])
+        self.fx.write(
+            [
+                prompt(),
+                call("mcp__mytask__TaskCreate", content="契約 test"),
+                *self.work(),
+            ]
+        )
         self.assertNotBlocked(
             run_hook(self.fx, "編集しました。" + TAIL), "task-plan-first"
         )
 
     def test_c6_task_upsert_after_the_first_tool_blocks(self):
         entries = self.work()
-        self.fx.write([prompt(), entries[0], call("TaskUpdate", id="1"), entries[1]])
+        self.fx.write(
+            [prompt(), entries[0], call("mcp__mytask__TaskUpdate", id="1"), entries[1]]
+        )
         self.assertBlocks(run_hook(self.fx, "編集しました。" + TAIL), "task-plan-first")
 
     def test_c6_turn_without_any_task_tool_blocks(self):
@@ -1091,7 +1082,12 @@ class TaskPlanFirstTest(StopChecksTest):
         """C6: loading the mytask schema is not work, so it may precede the upsert."""
         schema = call("ToolSearch", query="select:mcp__mytask__TaskCreate")
         self.fx.write(
-            [prompt(), schema, call("TaskCreate", subject="契約"), *self.work()]
+            [
+                prompt(),
+                schema,
+                call("mcp__mytask__TaskCreate", content="契約"),
+                *self.work(),
+            ]
         )
         self.assertNotBlocked(
             run_hook(self.fx, "編集しました。" + TAIL), "task-plan-first"
@@ -1111,7 +1107,7 @@ class TaskPlanFirstTest(StopChecksTest):
                 [
                     prompt(),
                     preparation,
-                    call("TaskCreate", subject="依頼"),
+                    call("mcp__mytask__TaskCreate", content="依頼"),
                     *self.work(),
                 ]
             )
@@ -1128,7 +1124,7 @@ class TaskPlanFirstTest(StopChecksTest):
             [
                 prompt(),
                 read(self.fx.repo_file("x.py")),
-                call("TaskCreate", subject="依頼"),
+                call("mcp__mytask__TaskCreate", content="依頼"),
                 *self.work(),
             ]
         )
@@ -1151,26 +1147,15 @@ class TaskPlanFirstTest(StopChecksTest):
             run_hook(self.fx, "編集しました。" + TAIL), "task-plan-first"
         )
 
-    def test_c6_gated_off_task_tool_session_passes(self):
-        self.fx.gate_tasks_off()
-        self.fx.write([prompt(), *self.work()])
-        self.assertNotBlocked(
-            run_hook(self.fx, "編集しました。" + TAIL), "task-plan-first"
-        )
+    def test_c6_native_task_tool_does_not_count_as_an_upsert(self):
+        self.fx.write([prompt(), call("TaskCreate", subject="契約"), *self.work()])
+        self.assertBlocks(run_hook(self.fx, "編集しました。" + TAIL), "task-plan-first")
 
 
 class TaskLedgerDriftTest(StopChecksTest):
     """C7: work without any task record warns (never blocks)."""
 
-    def test_c7_two_edited_paths_pass(self):
-        self.fx.write(
-            [prompt(), edit(self.fx.repo_file("a.py")), edit(self.fx.repo_file("b.py"))]
-        )
-        self.assertNotWarned(
-            run_hook(self.fx, "編集しました。" + TAIL), "task-ledger-drift"
-        )
-
-    def test_c7_three_edited_paths_warn(self):
+    def test_c7_three_edited_paths_surface_as_task_plan_first(self):
         self.fx.write(
             [
                 prompt(),
@@ -1179,9 +1164,9 @@ class TaskLedgerDriftTest(StopChecksTest):
                 edit(self.fx.repo_file("c.py")),
             ]
         )
-        self.assertWarnsFamily(
-            run_hook(self.fx, "編集しました。" + TAIL), "task-ledger-drift"
-        )
+        proc = run_hook(self.fx, "編集しました。" + TAIL)
+        self.assertBlocks(proc, "task-plan-first")
+        self.assertNotIn("task-ledger-drift", blocked(proc))
 
     def test_c7_deferral_wording_warns(self):
         self.fx.turn(say("整理しました"))
@@ -1189,18 +1174,10 @@ class TaskLedgerDriftTest(StopChecksTest):
         self.assertWarnsFamily(proc, "task-ledger-drift")
 
     def test_c7_non_empty_task_store_passes(self):
-        self.fx.native_task("契約 test を書く", status="completed")
-        self.fx.write(
-            [
-                prompt(),
-                edit(self.fx.repo_file("a.py")),
-                edit(self.fx.repo_file("b.py")),
-                edit(self.fx.repo_file("c.py")),
-            ]
-        )
-        self.assertNotWarned(
-            run_hook(self.fx, "編集しました。" + TAIL), "task-ledger-drift"
-        )
+        self.fx.task("契約 test を書く", status="completed")
+        self.fx.turn(say("整理しました"))
+        proc = run_hook(self.fx, "この件は別タスクに切り出します。" + TAIL)
+        self.assertNotWarned(proc, "task-ledger-drift")
 
 
 class RulingWithoutReadingTest(StopChecksTest):
@@ -1296,7 +1273,7 @@ class WindDownTest(StopChecksTest):
 
     def test_c9_open_task_after_wind_down_blocks(self):
         self.fx.wind_down()
-        self.fx.native_task("契約 test を書く", status="in_progress")
+        self.fx.task("契約 test を書く", status="in_progress")
         proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
         self.assertBlocks(proc, "wind-down-open-tasks")
         self.assertIn("未完了 Task 1 件: #契約 test を書く", proc.stderr)
@@ -1328,25 +1305,25 @@ class WindDownTest(StopChecksTest):
 
     def test_c9_no_open_task_after_wind_down_passes(self):
         self.fx.wind_down()
-        self.fx.native_task("契約 test を書く", status="completed")
+        self.fx.task("契約 test を書く", status="completed")
         proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
         self.assertNotBlocked(proc, "wind-down-open-tasks")
 
     def test_c9_open_task_after_a_later_ordinary_prompt_passes(self):
         """C9 follows the latest prompt: a resumed session may hold open tasks again."""
         self.fx.wind_down(latest=False)
-        self.fx.native_task("契約 test を書く", status="in_progress")
+        self.fx.task("契約 test を書く", status="in_progress")
         proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
         self.assertNotBlocked(proc, "wind-down-open-tasks")
 
     def test_c9_open_task_without_wind_down_passes(self):
-        self.fx.native_task("契約 test を書く", status="in_progress")
+        self.fx.task("契約 test を書く", status="in_progress")
         proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
         self.assertNotBlocked(proc, "wind-down-open-tasks")
 
     def test_c9_missing_session_id_passes(self):
         self.fx.wind_down()
-        self.fx.native_task("契約 test を書く", status="in_progress")
+        self.fx.task("契約 test を書く", status="in_progress")
         proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL, session_id=None)
         self.assertNotBlocked(proc, "wind-down-open-tasks")
 
@@ -1709,14 +1686,14 @@ class HandoffMarkerTest(StopChecksTest):
     def test_c11_full_session_id_passes(self):
         self.fx.wind_down()
         path = self.handoff(SESSION)
-        self.fx.turn(edit(path), say("書きました"))
+        self.fx.turn(upsert(), edit(path), say("書きました"))
         proc = run_hook(self.fx, "handoff を書きました。" + TAIL)
         self.assertNotBlocked(proc, "handoff-doc-without-marker")
 
     def test_c11_truncated_session_id_blocks(self):
         self.fx.wind_down()
         path = self.handoff(SESSION[:8])
-        self.fx.turn(edit(path), say("書きました"))
+        self.fx.turn(upsert(), edit(path), say("書きました"))
         proc = run_hook(self.fx, "handoff を書きました。" + TAIL)
         self.assertBlocks(proc, "handoff-doc-without-marker")
         self.assertIn("2026-08-27.md", proc.stderr)
@@ -1725,7 +1702,7 @@ class HandoffMarkerTest(StopChecksTest):
         """C11 keys on the sticky declaration, not on the latest-prompt flag."""
         self.fx.wind_down(latest=False)
         path = self.handoff(SESSION[:8])
-        self.fx.turn(edit(path), say("書きました"))
+        self.fx.turn(upsert(), edit(path), say("書きました"))
         proc = run_hook(self.fx, "handoff を書きました。" + TAIL)
         self.assertBlocks(proc, "handoff-doc-without-marker")
 
@@ -1733,13 +1710,13 @@ class HandoffMarkerTest(StopChecksTest):
         """C11 accepts the marker on either side: the doc body or the final text."""
         self.fx.wind_down()
         path = self.handoff("(本文側に書く)")
-        self.fx.turn(edit(path), say("書きました"))
+        self.fx.turn(upsert(), edit(path), say("書きました"))
         proc = run_hook(self.fx, f"handoff を書きました。session: {SESSION}" + TAIL)
         self.assertNotBlocked(proc, "handoff-doc-without-marker")
 
     def test_c11_without_a_handoff_doc_edit_passes(self):
         self.fx.wind_down()
-        self.fx.turn(edit(self.fx.repo_file("notes.md")), say("書きました"))
+        self.fx.turn(upsert(), edit(self.fx.repo_file("notes.md")), say("書きました"))
         proc = run_hook(self.fx, "notes を書きました。" + TAIL)
         self.assertNotBlocked(proc, "handoff-doc-without-marker")
 
@@ -1757,7 +1734,9 @@ class SelfReportHonestyTest(StopChecksTest):
     def test_c12_meta_announce_of_a_real_action_passes(self):
         """Rule 1 fires on announcing a non-action, not on naming the rule behind a real edit."""
         self.fx.turn(
-            edit(self.fx.repo_file(".claude/skills/x/SKILL.md")), say("書きました")
+            upsert(),
+            edit(self.fx.repo_file(".claude/skills/x/SKILL.md")),
+            say("書きました"),
         )
         text = "rule に従って skill を追加しました。" + TAIL
         self.assertNotBlocked(run_hook(self.fx, text), self.FAMILY)
@@ -1767,7 +1746,9 @@ class SelfReportHonestyTest(StopChecksTest):
         self.fx.turn(say("整理しました"))
         self.assertBlocks(run_hook(self.fx, text), self.FAMILY)
         self.fx.turn(
-            edit(self.fx.repo_file(".claude/skills/x/SKILL.md")), say("書きました")
+            upsert(),
+            edit(self.fx.repo_file(".claude/skills/x/SKILL.md")),
+            say("書きました"),
         )
         self.assertNotBlocked(run_hook(self.fx, text), self.FAMILY)
 
@@ -1926,12 +1907,12 @@ class CommunicationLintTest(StopChecksTest):
         )
 
     def test_c15_short_ruling_prompt_with_an_open_decision_task_warns(self):
-        self.fx.native_task("決裁待ち: 変異器の形式", status="pending")
+        self.fx.task("決裁待ち: 変異器の形式", status="pending")
         self.fx.write([prompt("採用"), say("反映しました")])
         self.assertWarnsFamily(run_hook(self.fx, "反映しました。" + TAIL), self.FAMILY)
 
     def test_c15_question_referring_to_an_earlier_turn_warns(self):
-        self.fx.native_task("決裁待ち: 変異器の形式", status="pending")
+        self.fx.task("決裁待ち: 変異器の形式", status="pending")
         self.fx.turn(say("報告します"))
         text = "先ほどの案について、次はどこを見ればよいでしょうか？"
         self.assertWarnsFamily(run_hook(self.fx, text), self.FAMILY)
@@ -1939,10 +1920,10 @@ class CommunicationLintTest(StopChecksTest):
     def test_c15_decision_task_is_recognised_by_its_wording(self):
         """Decree 7: only 決裁 / 裁定 / 判断待ち / 承認待ち / 要確認 make a task a decision task."""
         question = "\U0001f537 [質問] どの案を採るべきでしょうか？"
-        self.fx.native_task("契約 test を書く", status="pending")
+        self.fx.task("契約 test を書く", status="pending")
         self.fx.turn(say("報告します"))
         self.assertWarnsFamily(run_hook(self.fx, question), self.FAMILY)
-        self.fx.native_task("変異器の形式を裁定する", status="pending")
+        self.fx.task("変異器の形式を裁定する", status="pending")
         self.assertNotWarned(run_hook(self.fx, question), self.FAMILY)
 
     def test_c15_final_line_without_a_tag_warns(self):
@@ -1954,7 +1935,7 @@ class CommunicationLintTest(StopChecksTest):
         )
 
     def test_c15_a_tag_that_contradicts_the_ending_warns(self):
-        self.fx.native_task("決裁待ち: 変異器の形式", status="pending")
+        self.fx.task("決裁待ち: 変異器の形式", status="pending")
         self.fx.turn(say("報告します"))
         for text in (
             "\U0001f537 [結論] どの案を採るべきでしょうか？",
@@ -1970,7 +1951,7 @@ class CommunicationLintTest(StopChecksTest):
         )
 
     def test_c15_a_tagged_question_passes(self):
-        self.fx.native_task("決裁待ち: 変異器の形式", status="pending")
+        self.fx.task("決裁待ち: 変異器の形式", status="pending")
         self.fx.turn(say("報告します"))
         self.assertNotWarned(
             run_hook(self.fx, "\U0001f537 [質問] どの案を採りますか?"), self.FAMILY
@@ -2318,7 +2299,7 @@ class FixtureSubstitutionTest(StopChecksTest):
         self.fx.turn(say("報告します"))
         self.assertClean(run_hook(self.fx, "調査を終えました。" + TAIL))
         self.fx.wind_down()
-        self.fx.native_task("契約 test を書く", status="in_progress")
+        self.fx.task("契約 test を書く", status="in_progress")
         proc = run_hook(self.fx, "調査を終えました。" + TAIL)
         self.assertBlocks(proc, "wind-down-open-tasks")
 
@@ -2727,7 +2708,7 @@ class ReviewCorrectionTest(StopChecksTest):
 
     def test_c2_final_text_and_state_families_survive_a_lost_boundary(self):
         self.fx.wind_down()
-        self.fx.native_task("報告書を書く")
+        self.fx.task("報告書を書く")
         self.fx.turn(
             read(self.fx.repo_file("big.txt")),
             tool_result("L" * 600_000),

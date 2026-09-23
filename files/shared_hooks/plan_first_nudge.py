@@ -2,8 +2,7 @@
 """Point real user prompts to the shared mytask skill; never block a turn.
 
 Only model-facing UserPromptSubmit additionalContext is emitted. Empty prompts
-and synthetic task notifications stay silent. Claude's native-task feature gate
-does not disable the reminder: the skill also covers the mytask MCP fallback.
+and synthetic task notifications stay silent.
 
 The reminder pushes work into the ledger every prompt but nothing pushed it
 back out, so finished items piled up open. When the session holds open Tasks
@@ -69,22 +68,11 @@ def _load_json(path: str) -> object:
 
 
 def _session_tasks(payload: dict) -> list[dict]:
-    """stop_checks.py と同じ 2 つの store を読む: native Task と mytask ledger。"""
+    """stop_checks.py と同じ mytask ledger を読む。"""
     session = payload.get("session_id")
     if not isinstance(session, str) or not session:
         return []
     records: list[dict] = []
-    native = os.path.join(os.environ.get("HOME", ""), ".claude", "tasks", session)
-    try:
-        names = sorted(os.listdir(native))
-    except OSError:
-        names = []
-    for name in names:
-        value = (
-            _load_json(os.path.join(native, name)) if name.endswith(".json") else None
-        )
-        if isinstance(value, dict):
-            records.append(value)
     roots: list[str] = []
     for root in (os.environ.get("CLAUDE_PROJECT_DIR"), payload.get("cwd")):
         if isinstance(root, str) and root and root not in roots:

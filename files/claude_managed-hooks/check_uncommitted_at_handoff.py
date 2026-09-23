@@ -54,7 +54,6 @@ HANDOFF_RE = re.compile(
 MAX_FILES_LISTED = 20
 MAX_TASKS_LISTED = 10
 
-NATIVE_TASKS_DIR = os.path.expanduser("~/.claude/tasks")
 OPEN_STATUSES = ("pending", "in_progress", "delegated", "blocked")
 
 # Stop payload は prompt を含まないので、 wind-down 判定は prompt を受け取れる本 hook が下し、
@@ -296,20 +295,6 @@ def _git_uncommitted(cwd: str) -> list[str]:
     return files
 
 
-def _native_open_tasks(session_id: str) -> list[str]:
-    """Open items from the native Task store (~/.claude/tasks/<sid>/<N>.json)."""
-    items: list[str] = []
-    for path in sorted(glob.glob(os.path.join(NATIVE_TASKS_DIR, session_id, "*.json"))):
-        try:
-            with open(path, encoding="utf-8") as f:
-                task = json.load(f)
-        except (OSError, ValueError):
-            continue
-        if isinstance(task, dict) and task.get("status") in OPEN_STATUSES:
-            items.append(f"#{task.get('id', '?')} {task.get('subject', '')}".strip())
-    return items
-
-
 def _mytask_open_tasks(session_id: str, cwd: str) -> list[str]:
     """Open items from the mytask MCP store (<cwd>/drafts/tasks/<sid>.json)."""  # dangling-ref-check: allow
     path = os.path.join(cwd, "drafts", "tasks", f"{session_id}.json")
@@ -328,11 +313,11 @@ def _mytask_open_tasks(session_id: str, cwd: str) -> list[str]:
 
 
 def open_tasks(session_id: str, cwd: str) -> list[str]:
-    """All open work items for the session across both task stores; [] on any error (fail-open)."""
+    """All open work items in the session's mytask store; [] on any error (fail-open)."""
     if not session_id:
         return []
     try:
-        return _native_open_tasks(session_id) + _mytask_open_tasks(session_id, cwd)
+        return _mytask_open_tasks(session_id, cwd)
     except Exception:
         return []
 
@@ -403,7 +388,7 @@ def main() -> int:
 
 
 class OpenTasksTest(unittest.TestCase):
-    """open_tasks: 両 store の open 抽出と fail-open。 Run: python3 -m unittest check_uncommitted_at_handoff"""
+    """open_tasks: mytask store の open 抽出と fail-open。 Run: python3 -m unittest check_uncommitted_at_handoff"""
 
     SID = "sid-test"
 
@@ -411,30 +396,12 @@ class OpenTasksTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.cwd = tmp.name
-        self.native = os.path.join(tmp.name, "native-tasks")
-        patcher = mock.patch.object(
-            sys.modules[__name__], "NATIVE_TASKS_DIR", self.native
-        )
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
-    def _native(self, tid: str, status: str, subject: str = "work") -> None:
-        d = os.path.join(self.native, self.SID)
-        os.makedirs(d, exist_ok=True)
-        with open(os.path.join(d, f"{tid}.json"), "w", encoding="utf-8") as f:
-            json.dump({"id": tid, "subject": subject, "status": status}, f)
 
     def _mytask(self, items: list) -> None:
         d = os.path.join(self.cwd, "drafts", "tasks")
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, f"{self.SID}.json"), "w", encoding="utf-8") as f:
             json.dump(items, f)
-
-    def test_native_filters_by_status(self):
-        self._native("1", "pending", "a")
-        self._native("2", "completed", "b")
-        self._native("3", "in_progress", "c")
-        self.assertEqual(open_tasks(self.SID, self.cwd), ["#1 a", "#3 c"])
 
     def test_mytask_filters_by_status(self):
         self._mytask(
@@ -446,20 +413,11 @@ class OpenTasksTest(unittest.TestCase):
         )
         self.assertEqual(open_tasks(self.SID, self.cwd), ["#1 x", "#3 z"])
 
-    def test_both_stores_concatenate(self):
-        self._native("1", "pending", "a")
-        self._mytask([{"id": "1", "content": "x", "status": "pending"}])
-        self.assertEqual(open_tasks(self.SID, self.cwd), ["#1 a", "#1 x"])
-
     def test_missing_stores_and_empty_sid(self):
         self.assertEqual(open_tasks(self.SID, self.cwd), [])
         self.assertEqual(open_tasks("", self.cwd), [])
 
     def test_malformed_store_files_ignored(self):
-        d = os.path.join(self.native, self.SID)
-        os.makedirs(d, exist_ok=True)
-        with open(os.path.join(d, "1.json"), "w", encoding="utf-8") as f:
-            f.write("not json")
         self._mytask([{"id": "1", "status": "pending"}, "not a dict"])
         self.assertEqual(open_tasks(self.SID, self.cwd), ["#1"])
 

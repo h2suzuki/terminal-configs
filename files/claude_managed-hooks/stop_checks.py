@@ -14,7 +14,6 @@ import unicodedata
 TURN_WINDOW_BYTES = 512 * 1024
 BACKGROUND_WINDOW_BYTES = 2 * 1024 * 1024
 LEDGER_MIN_EDITS = 3
-TASK_TOOLS = {"TaskCreate", "TaskUpdate", "TodoWrite"}
 OPEN_TASK_REF_CAP = 16
 OPEN_TASK_REF_CHARS = 24
 CLOSED_STATUSES = {"completed", "cancelled", "skipped", "deleted"}
@@ -195,7 +194,6 @@ def _empty_turn(path=""):
         "prompt_text": "",
         "prompt_identity": "",
         "has_workflow": False,
-        "models": [],
     }
 
 
@@ -235,8 +233,6 @@ def _turn_funnel(payload):
         if "<task-notification>" in _strip_code_and_quotes(user_text):
             result["has_workflow"] = True
         message = entry.get("message")
-        if isinstance(message, dict) and isinstance(message.get("model"), str):
-            result["models"].append(message["model"])
         if isinstance(message, dict) and isinstance(message.get("content"), list):
             for item in message["content"]:
                 if not isinstance(item, dict) or item.get("type") != "tool_result":
@@ -316,7 +312,7 @@ def _safe_family(function, *args):
 
 
 def _task_tool(name):
-    return name in TASK_TOOLS or "mytask" in name.lower()
+    return "mytask" in name.lower()
 
 
 def _load_json(path):
@@ -333,17 +329,6 @@ def _task_records(payload):
     if not isinstance(session, str) or not session:
         return []
     records = []
-    home = os.environ.get("HOME", "")
-    native = os.path.join(home, ".claude", "tasks", session)
-    try:
-        names = sorted(os.listdir(native))
-    except OSError:
-        names = []
-    for name in names:
-        if name.endswith(".json"):
-            value = _load_json(os.path.join(native, name))
-            if isinstance(value, dict):
-                records.append(value)
     roots = []
     for root in (os.environ.get("CLAUDE_PROJECT_DIR"), payload.get("cwd")):
         if isinstance(root, str) and root and root not in roots:
@@ -510,25 +495,9 @@ def _done_state(turn, scan):
     ]
 
 
-def _tasks_gated_off(turn):
-    home = os.environ.get("HOME", "")
-    config = _load_json(os.path.join(home, ".claude.json"))
-    if not isinstance(config, dict):
-        return False
-    features = config.get("cachedGrowthBookFeatures")
-    if not isinstance(features, dict):
-        return False
-    gate = features.get("tengu_vellum_ash")
-    if gate is True:
-        return True
-    if isinstance(gate, list):
-        return not turn["models"] or any(model in gate for model in turn["models"])
-    return False
-
-
 def _task_plan(turn):
     names = turn["tool_names"]
-    if not names or _tasks_gated_off(turn):
+    if not names:
         return []
     if len(names) <= 2 and not turn["edited_paths"]:
         return []
