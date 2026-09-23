@@ -295,7 +295,6 @@ def stats(lines: list[str]) -> dict:
 
 def shape_sentence(lines: list[str]) -> str:
     # Counted in code so that Jev compares stated numbers instead of estimating them.
-    text = "\n".join(lines)
     kinds = []
     if any(HEADING_RE.match(line) for line in lines):
         kinds.append("a heading")
@@ -305,13 +304,17 @@ def shape_sentence(lines: list[str]) -> str:
         kinds.append("a bullet or numbered list")
     if any(FENCE_RE.match(line) or line.startswith("    $") for line in lines):
         kinds.append("a command block")
+    outside, fenced = [], False
+    for line in lines:
+        fenced ^= bool(FENCE_RE.match(line))
+        outside.append("" if fenced or FENCE_RE.match(line) else line)
+    text = "\n".join(outside)
     prose = [
         p
         for p in re.split(r"\n\s*\n", text)
         if p.strip()
-        and not FENCE_RE.match(p)
-        and not TABLE_RE.match(p.splitlines()[0])
-        and not HEADING_RE.match(p)
+        and not TABLE_RE.match(p.strip().splitlines()[0])
+        and not HEADING_RE.match(p.strip())
     ]
     if prose:
         longest = max(len(p) for p in prose)

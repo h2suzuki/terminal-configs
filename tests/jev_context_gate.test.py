@@ -347,7 +347,7 @@ class JevContextGateTest(unittest.TestCase):
         self.assertEqual(
             self.only_hunk()["style_of_this_place"],
             "Existing content of the section 'Codex' before this change: 3 non-empty line(s): "
-            "a command block, no external links, 1 inline code span(s) (paths, commands, keys).",
+            "a command block, no external links, 0 inline code span(s) (paths, commands, keys).",
         )
 
     def test_amend_takes_the_style_from_the_parent_commit(self):
@@ -482,6 +482,14 @@ class JevContextGateTest(unittest.TestCase):
         self.assertEqual(hunk["place_and_its_purpose"], "def load(path):")
         self.assertIn("def helper():", hunk["style_of_this_place"])
         self.assertIn("responsibility", call["questions"]["fits_0_0"]["instructions"])
+
+    def test_shape_does_not_count_code_block_contents_as_prose_or_inline_code(self):
+        lines = "Run the login once.\n\n```bash\ncodex login --device-auth\n\ncodex whoami\n```".splitlines()
+        self.assertEqual(
+            gate.shape_sentence(lines),
+            "5 non-empty line(s): a command block, 1 prose paragraph(s), longest short (19 characters), "
+            "no external links, 0 inline code span(s) (paths, commands, keys).",
+        )
 
     def test_each_file_is_judged_in_its_own_request(self):
         (self.repo / "loader.py").write_text(CODE)
