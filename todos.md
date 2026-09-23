@@ -52,7 +52,7 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 
 session を跨いで引き継ぐ未完了作業の概要。詳細は last-session-handoff.md の同名節、経緯は git 履歴。
 
-- close nudge の Codex 台帳対応 — 再開点: plan_first_nudge.py の _session_tasks に drafts/tasks/codex-<thread>.json を読ませる (小)
+- close nudge の Codex 台帳対応 — 再開点: 実機で mytask の thread id と Codex hook の session_id が同じか測ってから、plan_first_nudge.py に codex 台帳を読ませる (小)
 - agent_coord 入れ子表示と auto-mode skill の追随 — 再開点: SubagentStart 注記の Parent 表示と auto-mode-denial-recovery Skill を直す (小)
 - memory surface 到達率の判定 — 再開点: 2026-09-25 に claude_memory_sync --reach を再実行
 - 一次ソース確認 nudge の効果判定 — 再開点: 2026-10-10 に claude_unverified_claims を実行
