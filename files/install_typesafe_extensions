@@ -78,3 +78,5 @@ run npx -y skills add typesafe-ai/skills --skill typesafe-ai --agent antigravity
 
 
 run claude plugin list
+# STATUS is "installed, enabled|disabled" or "not installed"; the comma keeps only installed rows.
+run codex plugin list \| grep installed,
