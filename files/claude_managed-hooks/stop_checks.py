@@ -1335,14 +1335,16 @@ def _gap(seconds):
 
 
 def _warn_json(lines, marker):
-    body = "\n\n".join(lines)
-    return {
+    # The transcript already shows additionalContext as Stop hook feedback; repeating it here showed it twice.
+    out = {
         "hookSpecificOutput": {
             "hookEventName": "Stop",
-            "additionalContext": body,
-        },
-        "systemMessage": body + ("\n\n" + marker if marker else ""),
+            "additionalContext": "\n\n".join(lines),
+        }
     }
+    if marker:
+        out["systemMessage"] = marker
+    return out
 
 
 def _marker_json(message):

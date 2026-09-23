@@ -23,8 +23,9 @@ test は `stop_checks.test.py` の `test_c<N>_*` に対応させる。
   成立したら全行を出す。指摘 1 件を直して同じ family を同 session で再発させる比率が 59% (transcript 134 本 /
   401 block の実測) ゆえ、修復指示は指摘箇所でなく class を対象にする。
 - **warn / context**: exit 0 / stdout に 1 行の JSON
-  `{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":<本文>},"systemMessage":<同じ本文 + turn-marker>}`。
-  本文は family 行を `"\n\n"` で連結。`systemMessage` は本文の後に `"\n\n"` と turn-marker 行 (C17) を続ける。stderr は空。
+  `{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":<本文>},"systemMessage":<turn-marker>}`。
+  本文は family 行を `"\n\n"` で連結。transcript は additionalContext を Stop hook feedback として表示するので、
+  `systemMessage` には本文を重ねず turn-marker 行 (C17) だけを載せる。stderr は空。
 - **pass**: exit 0 / stdout は turn-marker (C17) のみ / stderr 空。
 
 `stop_hook_active` が真の Stop では block を warn へ降格し (advise-once)、行頭に
@@ -778,9 +779,9 @@ class ProtocolTest(StopChecksTest):
         self.assertEqual(len(proc.stdout.splitlines()), 1, proc.stdout)
         data = json.loads(proc.stdout.splitlines()[0])
         self.assertEqual(data["hookSpecificOutput"]["hookEventName"], "Stop")
-        body, turn_marker = data["systemMessage"].rsplit("\n\n", 1)
-        self.assertEqual(data["hookSpecificOutput"]["additionalContext"], body)
-        self.assertIn("Turn #1", turn_marker)
+        body = data["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("Turn #1", data["systemMessage"])
+        self.assertNotIn(body, data["systemMessage"])
 
     def test_c1_pass_emits_only_the_turn_marker(self):
         self.fx.turn(say("調査しました"))
@@ -2275,7 +2276,7 @@ class PurityTest(StopChecksTest):
         outputs = []
         for proc in (first, second):
             data = json.loads(proc.stdout)
-            data["systemMessage"] = data["systemMessage"].rsplit("\n\n", 1)[0]
+            data.pop("systemMessage")
             outputs.append(data)
         self.assertEqual(outputs[0], outputs[1])
         self.assertEqual(first.stderr, second.stderr)
