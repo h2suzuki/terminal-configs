@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """WorktreeCreate / WorktreeRemove hook: Claude Code worktrees go to ~/worktrees/<repo>/<name>, as Codex's do.
-EnterWorktree(path) outside .claude/worktrees/ always prompts, so Claude enters these by name through this hook."""
+PreToolUse on EnterWorktree denies a path outside .claude/worktrees/, which always prompts, and steers to name."""
 
 from __future__ import annotations
 
@@ -76,11 +76,42 @@ def remove(payload: dict) -> int:
     return 0
 
 
+# Wording is deliberately explicit about the next action; keep it untrimmed.
+DENY_PATH = (
+    "EnterWorktree の path 指定で .claude/worktrees/ の外に入ると、許可ルールでは消せない確認が"
+    "毎回出るため拒否しました。path ではなく name を指定してください。name で指定すると"
+    " ~/worktrees/<repo>/<name> に worktree が作られ、同じ name の既存 worktree があればそこに入ります。"
+    "既に worktree の中にいて name が使えない場合は、その worktree で作業を続けてください。"
+    "hook 自身はファイルを変更しません。"
+)
+
+
+def guard(payload: dict) -> int:
+    path = (payload.get("tool_input") or {}).get("path")
+    if not path:
+        return 0
+    # Resolve ".." and symlinks so the spelling alone cannot pass the check.
+    parts = (Path(payload.get("cwd") or ".") / path).resolve().parts
+    inside = any(
+        parts[i : i + 2] == (".claude", "worktrees") for i in range(len(parts) - 2)
+    )
+    if not inside:
+        decision = {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": DENY_PATH,
+        }
+        print(json.dumps({"hookSpecificOutput": decision}, ensure_ascii=False))
+    return 0
+
+
 def main() -> int:
     payload = json.load(sys.stdin)
-    handler = {"WorktreeCreate": create, "WorktreeRemove": remove}.get(
-        payload.get("hook_event_name")
-    )
+    handler = {
+        "WorktreeCreate": create,
+        "WorktreeRemove": remove,
+        "PreToolUse": guard,
+    }.get(payload.get("hook_event_name"))
     return (
         handler(payload)
         if handler

@@ -163,6 +163,38 @@ class WorktreeHomeTest(unittest.TestCase):
             self.remove(self.home / "worktrees" / "proj" / "gone").returncode, 0
         )
 
+    def enter(self, tool_input: dict) -> subprocess.CompletedProcess[str]:
+        return self.hook(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_name": "EnterWorktree",
+                "tool_input": tool_input,
+                "cwd": str(self.repo),
+            }
+        )
+
+    def test_enter_by_path_outside_claude_worktrees_is_denied_toward_name(self):
+        result = self.enter({"path": str(self.home / "worktrees" / "proj" / "x")})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = json.loads(result.stdout)["hookSpecificOutput"]
+        self.assertEqual(output["permissionDecision"], "deny")
+        self.assertIn("name", output["permissionDecisionReason"])
+
+    def test_enter_by_relative_path_escaping_claude_worktrees_is_denied(self):
+        result = self.enter({"path": ".claude/worktrees/../../elsewhere"})
+        self.assertEqual(
+            json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"],
+            "deny",
+        )
+
+    def test_enter_by_path_under_claude_worktrees_passes(self):
+        result = self.enter({"path": str(self.repo / ".claude" / "worktrees" / "x")})
+        self.assertEqual((result.returncode, result.stdout), (0, ""))
+
+    def test_enter_by_name_passes(self):
+        result = self.enter({"name": "feat-h"})
+        self.assertEqual((result.returncode, result.stdout), (0, ""))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -68,6 +68,10 @@
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/cross_session_send_gate.py" } ]
       },
       {
+        "matcher": "^EnterWorktree$",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/worktree_home.py" } ]
+      },
+      {
         "matcher": "^(Grep|Read)$",
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/codegraph_first_gate.py" } ]
       },
