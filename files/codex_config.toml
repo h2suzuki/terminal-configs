@@ -36,6 +36,17 @@ command = "/usr/local/bin/mytask"
 args = ["--client", "codex"]
 default_tools_approval_mode = "approve"
 
+[mcp_servers.codegraph]
+command = "codegraph"
+args = ["serve", "--mcp"]
+default_tools_approval_mode = "approve"
+
+# "writes" keeps deploys behind a prompt, which approval_policy = "never" rejects.
+[mcp_servers.cloud-run]
+command = "npx"
+args = ["-y", "@google-cloud/cloud-run-mcp"]
+default_tools_approval_mode = "writes"
+
 # Disable Canva tools and their skill descriptions in Codex.
 # Remote plugin enablement is account-managed, so disable skills by stable name.
 [apps.connector_68df33b1a2d081918778431a9cfca8ba] # Canva

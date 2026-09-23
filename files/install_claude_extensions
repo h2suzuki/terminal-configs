@@ -247,10 +247,14 @@ claude mcp remove codex --scope user    # Codex MCP is supersedded by Codex plug
 claude mcp remove codegraph --scope user
 run npm install -g @colbymchenry/codegraph
 run claude mcp add codegraph --scope user -- codegraph serve --mcp
+codex mcp remove codegraph
+run codex mcp add codegraph -- codegraph serve --mcp
 
 # Cloud Run MCP
 claude mcp remove cloud-run --scope user
 run claude mcp add cloud-run --scope user -- npx -y @google-cloud/cloud-run-mcp
+codex mcp remove cloud-run
+run codex mcp add cloud-run -- npx -y @google-cloud/cloud-run-mcp
 
 # Toolbox MCP (launcher derives BIGQUERY_PROJECT, required at startup, from gcloud)
 claude mcp remove toolbox --scope user
@@ -278,6 +282,7 @@ run codex plugin remove vercel-plugin@plugins-cli
 
 
 run claude mcp list
+run codex mcp list
 
 
 echo ''
