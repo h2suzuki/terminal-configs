@@ -204,7 +204,7 @@ codex remote-control start
 codex remote-control pair
 ```
 
-`pair` は、daemon の起動中に、短時間だけ有効な手動ペアリングコードを表示します。`codex remote-control pair --json` とすると、`pairingCode`・`manualPairingCode`・`environmentId`・`expiresAt` を JSON で出力します。[CLI リファレンス](https://learn.chatgpt.com/docs/developer-commands?surface=cli#cli-codex-remote-control)
+`start` は `This machine is available for remote control as <ホスト名>` と表示します。`pair` は、daemon の起動中に、短時間だけ有効な手動ペアリングコードを表示します。`codex remote-control pair --json` とすると、`pairingCode`・`manualPairingCode`・`environmentId`・`expiresAt` を JSON で出力します。手で入力するコードは `manualPairingCode`（`XXXX-XXXX` 形式）です。[CLI リファレンス](https://learn.chatgpt.com/docs/developer-commands?surface=cli#cli-codex-remote-control)
 
 公式文書では、スマートフォンの ChatGPT アプリ **Remote** から操作できるホストは、macOS / Windows の ChatGPT デスクトップアプリを動かすマシンです。設定はデスクトップアプリから始め、Codex CLI からは設定できません。Linux のマシンを使う場合は、そのデスクトップアプリの **Settings > Connections** で SSH ホストとして追加し、スマートフォンはデスクトップアプリのホストにつなぎます。SSH ホスト側では、ログインシェルの `PATH` に `codex` があり、認証済みである必要があります。手動ペアリングコードを入力する画面は、公式文書には書かれていません。[Codex Remote](https://learn.chatgpt.com/docs/remote)・[Remote connections](https://learn.chatgpt.com/docs/remote-connections)
 
