@@ -11,7 +11,7 @@ Configuration files and setup scripts for terminal and AI coding environments on
 | OS settings | Bash, Git, SSH keepalive, Windows Terminal color and image support over SSH and sudo, display and audio forwarding to the SSH client (X11 and PulseAudio, also supported with sudo -i)<br>WSL2: enable systemd, resolve .local names, forward audio to WSLg |
 | Development tools | Neovim, ripgrep, delta, libsixel-bin, Node.js through nvm, Chrome |
 | AI tools | Claude Code CLI, Codex CLI, Antigravity CLI, Typesafe.ai Jev |
-| <div align="right">Tool settings</div> | `/etc/claude-code`, `/etc/codex`, Sandbox settings, and more |
+| <div align="right">Tool settings</div> | `/etc/claude-code`, `/etc/codex`, Sandbox settings, disabling Claude Code's built-in Task tools (work items are tracked only in mytask), and more |
 | <div align="right">Hooks</div> | mytask reminders\*, file-read checks before editing\*, commit message format checks\*, checks against unsupported completion claims and unnecessary permission questions\*, and more |
 | <div align="right">LSP</div> | clangd (C/C++), TypeScript Language Server, Pyright |
 | <div align="right">MCP</div> | Chrome DevTools, CodeGraph, Cloud Run, BigQuery (Toolbox), mytask\*, Jev\* |
