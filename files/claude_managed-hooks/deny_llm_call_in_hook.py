@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """PreToolUse(Write|Edit|MultiEdit) hook: block LLM calls written into hooks.
 
+Purpose: hooks run synchronously, and the claude CLI in print mode takes seconds to tens of seconds to start and
+answer, so a hook that calls it either stalls the turn or, run in the background, answers too late to intervene.
+
 Exit:
   0: allow the tool call or fail-open on parse/matcher errors.
   2: deny matching text in an in-scope hook file.
