@@ -1,6 +1,7 @@
 ---
 name: sandbox-host-recovery
 description: Diagnose Read-only file system, Permission denied, or Operation not permitted from an already-authorized host operation before declaring it blocked or handing it to the operator.
+when_to_use: TRIGGER when an already-authorized command fails with "Read-only file system", "Permission denied", or "Operation not permitted", or before saying the sandbox blocks an operation or handing a command to the operator. SKIP when policy forbids the operation or the user explicitly denied approval.
 ---
 
 # Read-only file system and Permission denied: fix the invocation first

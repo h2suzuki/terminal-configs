@@ -1,6 +1,7 @@
 ---
 name: scratch-file-management
 description: Choose locations for agent research notes, intermediate outputs, command temporary files, and Git worktrees; check scratch before staging or publishing. Use when creating these files or introducing a repository root directory.
+when_to_use: TRIGGER when creating research notes, intermediate outputs, command temporary files, or Git worktrees, when adding a new top-level directory, or before staging, committing, or publishing files. SKIP for ordinary edits to existing source files.
 ---
 
 # Scratch File Management

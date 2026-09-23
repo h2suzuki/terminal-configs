@@ -1,6 +1,7 @@
 ---
 name: mytask
 description: Record user requests, break large work into concrete steps, and review your own plan against the request as work evolves. Use when starting or resuming work, receiving additions or corrections, or deciding what remains. Use Claude native Task tools when available and mytask MCP otherwise, including Codex.
+when_to_use: TRIGGER when starting or resuming work, when the user adds, corrects, or reprioritizes a request ("追加" / "訂正" / "やっぱり"), when splitting large work into steps, or before reporting completion or remaining work. SKIP for a one-shot answer that needs no tools.
 ---
 
 # Mytask

@@ -1,6 +1,7 @@
 ---
 name: memory-routing
 description: Route user corrections and durable instructions among shared lessons learned, hooks, skills, AGENTS.md, and Claude Code organization CLAUDE.md. Use when asked to remember a lesson, corrected repeatedly, or deciding where persistent guidance belongs; check relevant lessons after repeated failure or before declaring an authorized action impossible.
+when_to_use: TRIGGER when the user asks to remember or record a lesson ("覚えて" / "記録して" / "教訓"), repeats a correction, or asks where persistent guidance belongs; also after repeated failure or before declaring an authorized action impossible. SKIP for in-session Task tracking and ordinary task notes.
 ---
 
 # Memory routing
