@@ -139,6 +139,12 @@ run uv tool install --force claude-monitor
 # Antigravity: preserve user settings and explicit deny/ask rules.
 run setup_agy_permissions --sandbox-auto --shared-policy /etc/antigravity-cli/skel/permissions.json
 
+# agy has no enable-only switch: start registers a boot-persistent daemon but needs a signed-in agy.
+# Start only an inactive daemon; a setup rerun leaves a running one as is.
+if [[ "$(agy remote-control status 2>/dev/null)" == "Daemon status: inactive"* ]]; then
+    agy remote-control start || echo "After signing in with agy, run: agy remote-control start"
+fi
+
 run install_claude_extensions
 
 
