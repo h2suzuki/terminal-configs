@@ -567,6 +567,111 @@ class JevContextGateTest(unittest.TestCase):
         )
 
 
+def scope_of(source: str, needle: str) -> str:
+    lines = source.splitlines()
+    index = next(i for i, line in enumerate(lines) if needle in line)
+    return gate.code_scope(lines, index)
+
+
+class ScopeDetectionTest(unittest.TestCase):
+    """P1: SCOPE_RE/code_scope must name JS/TS definitions, not fall back to top level."""
+
+    def test_export_function_is_the_place(self):
+        src = "export function foo(a) {\n  return a + 1;\n}\n"
+        self.assertEqual(scope_of(src, "return a"), "export function foo(a) {")
+
+    def test_export_default_function_is_the_place(self):
+        src = "export default function foo(a) {\n  return a + 1;\n}\n"
+        self.assertEqual(scope_of(src, "return a"), "export default function foo(a) {")
+
+    def test_export_async_function_is_the_place(self):
+        src = "export async function foo(a) {\n  return a + 1;\n}\n"
+        self.assertEqual(scope_of(src, "return a"), "export async function foo(a) {")
+
+    def test_bare_async_function_is_the_place(self):
+        src = "async function foo(a) {\n  return a + 1;\n}\n"
+        self.assertEqual(scope_of(src, "return a"), "async function foo(a) {")
+
+    def test_arrow_function_bound_to_a_name_is_the_place(self):
+        src = "const x = (a) => {\n  return a;\n};\n"
+        self.assertEqual(scope_of(src, "return a"), "const x = (a) => {")
+
+    def test_async_arrow_function_bound_to_a_name_is_the_place(self):
+        src = "const x = async (a) => {\n  return a;\n};\n"
+        self.assertEqual(scope_of(src, "return a"), "const x = async (a) => {")
+
+    def test_export_const_arrow_function_is_the_place(self):
+        src = "export const x = (a) => {\n  return a;\n};\n"
+        self.assertEqual(scope_of(src, "return a"), "export const x = (a) => {")
+
+    def test_class_method_with_arguments_is_the_place(self):
+        src = "class Foo {\n  method(a, b) {\n    return a + b;\n  }\n}\n"
+        self.assertEqual(scope_of(src, "return a + b"), "class Foo { > method(a, b) {")
+
+    def test_typed_method_and_arrow_are_the_place(self):
+        """TS return-type annotations sit between the parameters and `{` or `=>`."""
+        src = "class Foo {\n  method(a: number): number {\n    return a;\n  }\n}\n"
+        self.assertEqual(
+            scope_of(src, "return a"), "class Foo { > method(a: number): number {"
+        )
+        src = "const f = (a: T): Promise<T> => {\n  return a;\n};\n"
+        self.assertEqual(scope_of(src, "return a"), "const f = (a: T): Promise<T> => {")
+
+    def test_async_method_is_the_place(self):
+        src = "class Foo {\n  async method(a) {\n    return a;\n  }\n}\n"
+        self.assertEqual(scope_of(src, "return a"), "class Foo { > async method(a) {")
+
+    def test_static_method_is_the_place(self):
+        src = "class Foo {\n  static method(a) {\n    return a;\n  }\n}\n"
+        self.assertEqual(scope_of(src, "return a"), "class Foo { > static method(a) {")
+
+    def test_get_accessor_is_the_place(self):
+        src = "class Foo {\n  get value() {\n    return this._v;\n  }\n}\n"
+        self.assertEqual(scope_of(src, "return this"), "class Foo { > get value() {")
+
+    def test_set_accessor_is_the_place(self):
+        src = "class Foo {\n  set value(v) {\n    this._v = v;\n  }\n}\n"
+        self.assertEqual(scope_of(src, "this._v = v"), "class Foo { > set value(v) {")
+
+    def test_describe_it_nesting_chain(self):
+        src = (
+            "describe('a', () => {\n"
+            "  it('b', () => {\n"
+            "    expect(1).toBe(1);\n"
+            "  });\n"
+            "});\n"
+        )
+        self.assertEqual(
+            scope_of(src, "expect(1)"), "describe('a', () => { > it('b', () => {"
+        )
+
+    def test_test_block_is_the_place(self):
+        src = "test('does x', async t => {\n  t.is(1, 1);\n});\n"
+        self.assertEqual(scope_of(src, "t.is(1, 1)"), "test('does x', async t => {")
+
+    def test_if_statement_is_not_a_definition(self):
+        src = "function foo() {\n  if (x) {\n    return 1;\n  }\n}\n"
+        self.assertEqual(scope_of(src, "return 1"), "function foo() {")
+
+    def test_for_statement_is_not_a_definition(self):
+        src = "function foo() {\n  for (let i = 0; i < 1; i++) {\n    return 1;\n  }\n}\n"  # fmt: skip
+        self.assertEqual(scope_of(src, "return 1"), "function foo() {")
+
+    def test_while_statement_is_not_a_definition(self):
+        src = "function foo() {\n  while (x) {\n    return 1;\n  }\n}\n"
+        self.assertEqual(scope_of(src, "return 1"), "function foo() {")
+
+    def test_switch_statement_is_not_a_definition(self):
+        src = "function foo() {\n  switch (x) {\n    return 1;\n  }\n}\n"
+        self.assertEqual(scope_of(src, "return 1"), "function foo() {")
+
+    def test_catch_clause_is_not_a_definition(self):
+        src = "function foo() {\n  catch (e) {\n    return 1;\n  }\n}\n"
+        self.assertEqual(scope_of(src, "return 1"), "function foo() {")
+
+    def test_plain_call_statement_does_not_match_scope_re(self):
+        self.assertIsNone(gate.SCOPE_RE.match("foo(a);"))
+
 
 class RegistrationTest(unittest.TestCase):
     """Both clients hand the commit to the connected jev server; no hook starts a process to judge it."""

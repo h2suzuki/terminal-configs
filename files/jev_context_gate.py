@@ -34,7 +34,19 @@ MARKDOWN = {".md", ".markdown"}
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 SCOPE_RE = re.compile(
-    r"^\s*(?:(?:async\s+)?def\s|class\s|function\s|(?:pub\s+)?fn\s|func\s|\[[^\]]+\]\s*$|[A-Za-z_][\w:-]*\s*\(\)\s*\{)"
+    r"^\s*(?:"
+    r"(?:async\s+)?def\s"
+    r"|(?:export\s+)?(?:default\s+)?class\s"
+    r"|(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s"
+    r"|(?:export\s+)?(?:default\s+)?(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*(?::[^=]+)?=\s*(?:async\s*)?(?:\([^()]*\)(?:\s*:\s*[^=]+?)?|[A-Za-z_$][\w$]*)\s*=>\s*\{"
+    r"|(?:pub\s+)?fn\s"
+    r"|func\s"
+    r"|\[[^\]]+\]\s*$"
+    r"|(?:describe|it|test)\s*\(.*\{\s*$"
+    # method/accessor definitions, excluding control-flow statements of the same "name(...) {" shape
+    r"|(?:static\s+|async\s+|get\s+|set\s+){0,2}(?!if\b|for\b|while\b|switch\b|catch\b|else\b|function\b|return\b)"
+    r"[A-Za-z_][\w:$-]*\s*\([^()]*\)(?:\s*:\s*[^{};=]+?)?\s*\{"
+    r")"
 )
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 LINK_RE = re.compile(r"\[[^\]]+\]\(https?://[^)]+\)")
