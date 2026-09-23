@@ -595,6 +595,8 @@ class RegistrationTest(unittest.TestCase):
         self.assertIn("python3 /usr/local/lib/jev/jev_context_gate.py gather", prompt)
         self.assertIn("mcp__jev__evaluate", prompt)
         self.assertIn("Never judge the text yourself", prompt)
+        # The if filter still fires on any command with $VAR or $(), so other commands must pass at once.
+        self.assertIn('Unless tool_input.command contains the exact text `git -c jev.probe=1 commit`, answer {"ok": true} at once', prompt)
         allow = settings["permissions"]["allow"]
         self.assertIn("mcp__jev__evaluate", allow)
         self.assertIn("Bash(python3 /usr/local/lib/jev/jev_context_gate.py gather *)", allow)
