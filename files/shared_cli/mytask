@@ -194,11 +194,14 @@ def task_create(arguments: dict[str, object]) -> tuple[str, bool]:
         task_id = _next_subtask_id(tasks, parent)
     else:
         task_id = _next_top_id(tasks)
+    stamp = _now().strftime(TIME_FORMAT)
     task: Task = {
         "id": task_id,
         "content": content,
         "status": "pending",
-        "created": _now().strftime(TIME_FORMAT),
+        "created": stamp,
+        # 放置 Task を prompt 時に促す hook が最終 status 変更時刻として読む。
+        "updated": stamp,
     }
     if "activeForm" in arguments:
         task["activeForm"] = arguments["activeForm"]
@@ -217,15 +220,18 @@ def task_update(arguments: dict[str, object]) -> tuple[str, bool]:
     target = next((task for task in tasks if str(task.get("id", "")) == task_id), None)
     if target is None:
         return f"Error: task {task_id!r} was not found.\n{render_tasks(tasks)}", True
+    stamp = _now().strftime(TIME_FORMAT)
     demoted: list[str] = []
     if status == "in_progress":
         for task in tasks:
             if task is not target and task.get("status") == "in_progress":
                 task["status"] = "pending"
+                task["updated"] = stamp
                 demoted.append(str(task.get("id", "")))
     target["status"] = status
+    target["updated"] = stamp
     if status == "completed":
-        target["completed_at"] = _now().strftime(TIME_FORMAT)
+        target["completed_at"] = stamp
     else:
         target.pop("completed_at", None)
     if save_error := write_tasks(path, tasks):
@@ -437,6 +443,22 @@ class MyTasksTest(unittest.TestCase):
         self.assertEqual([task["id"] for task in tasks], ["1", "1-1"])
         self.assertEqual(tasks[0]["status"], "pending")
         self.assertEqual(tasks[0]["created"], "2026-07-14 09:05")
+        self.assertEqual(tasks[0]["updated"], "2026-07-14 09:05")
+
+    def test_status_changes_stamp_updated_on_target_and_demoted(self):
+        for content in ("One", "Two"):
+            with mock.patch(
+                f"{__name__}._now", return_value=datetime(2026, 7, 14, 9, 5)
+            ):
+                task_create({"content": content})
+        task_update({"id": "1", "status": "in_progress"})
+        with mock.patch(f"{__name__}._now", return_value=datetime(2026, 7, 14, 11, 30)):
+            task_update({"id": "2", "status": "in_progress"})
+        tasks = read_tasks(self.path)
+        self.assertEqual(tasks[0]["status"], "pending")
+        self.assertEqual(tasks[0]["updated"], "2026-07-14 11:30")
+        self.assertEqual(tasks[1]["updated"], "2026-07-14 11:30")
+        self.assertEqual(tasks[1]["created"], "2026-07-14 09:05")
 
     def test_update_completion_and_single_in_progress(self):
         tasks: list[Task] = [
