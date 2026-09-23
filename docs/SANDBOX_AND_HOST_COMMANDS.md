@@ -53,6 +53,34 @@ that decision only for the first Stop; `stop_hook_active`, missing memory,
 model mismatch, and unrelated final text pass silently. A quoted error name
 alone is not treated as a claim that the work cannot continue.
 
+## Deploy changed files
+
+To apply a change under `files/` to its installed location (`/etc/claude-code/`,
+`/etc/codex/`, `/usr/local/bin/`, `/usr/local/lib/`, and so on), install only the
+changed files with `sudo install`, following the setup script's `copy` line for
+each file. Rerun the full setup (`debian12.sh`, `ubuntu2404-wsl.sh`, or
+`extra/*.sh`) only when resetting and reconfiguring the whole environment, or
+when the change needs many setup steps such as package installation; a full
+run takes a long time.
+
+1. From `<repo>`, find the line that installs the file:
+   `grep -n '<basename>\|<dir>' debian12.sh ubuntu2404-wsl.sh extra/*.sh`.
+   A file installed as part of a directory appears on a `merge_dir` line.
+2. `copy SRC DST` runs `install -D files/SRC DST`. In `debian12.sh` and
+   `ubuntu2404-wsl.sh`, a line without `-m` keeps the source file's mode
+   through `chmod --reference`; in `extra/*.sh`, it defaults to 0644 for
+   `*.md`, `*.json`, and `*.jsonl` files and 0755 otherwise. A line with `-m`
+   uses that value. Read the source mode with `stat -c %a files/SRC`.
+3. Run `sudo install -D -m <mode> <repo>/files/SRC DST`.
+   `merge_dir DIR/ TARGET/` applies the same rule to each file under
+   `files/DIR`, installing it at `TARGET/<relative path>`.
+4. Confirm the result with `cmp files/SRC DST`.
+
+For example, `copy shared_cli/mytask /usr/local/bin/mytask` has no `-m`, and
+the source mode is 755:
+`sudo install -D -m 0755 <repo>/files/shared_cli/mytask /usr/local/bin/mytask`.
+Do not edit an installed file directly; the next deployment overwrites it.
+
 ## If a blocker remains
 
 Before asking the operator to act, report these fields: the original command

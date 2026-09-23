@@ -190,17 +190,19 @@ Docker と SigNoz を導入し、Claude Code の OpenTelemetry データを可�
 
 ## 更新・設定変更
 
-設定やスクリプトの変更は、リポジトリの `files/` 配下に反映します。変更したファイルだけを個別に `cp` して配備しても構いません。ファイル単体の変更でセットアップ全体を再実行する必要はありません。コピー先・所有者・権限は対象 OS の導入スクリプトに合わせ、複数箇所に配布されるファイルは各配布先に反映してください。
+設定やスクリプトの変更は、リポジトリの `files/` 配下に反映します。そのうえで、変更したファイルだけを、導入スクリプト（`debian12.sh`・`ubuntu2404-wsl.sh`・`extra/*.sh`）の `copy` 行（配備元・配備先・権限を決める行）のとおりに `sudo install` で配備します。複数箇所に配布されるファイルは、配布先ごとに配備します。セットアップ全体の再実行は時間がかかるため、環境全体をリセットして再設定するときと、パッケージの導入など多数の導入処理を伴うときに限ります。
 
 例えば `mytask` だけを変更した場合は、リポジトリのルートで次を実行します。
 
 ```bash
-sudo cp files/shared_cli/mytask /usr/local/bin/mytask
+sudo install -D -m 0755 files/shared_cli/mytask /usr/local/bin/mytask
 ```
+
+`copy` 行の探し方、権限の決まり方、配備後に `cmp` で内容が一致するか確かめる手順は、[docs/SANDBOX_AND_HOST_COMMANDS.md の「Deploy changed files」](docs/SANDBOX_AND_HOST_COMMANDS.md#deploy-changed-files)を参照してください。
 
 依存パッケージの追加や設定の生成・登録も伴う変更は、対応する導入処理も実行してください。配備先の `/etc/claude-code/`、`/etc/codex/`、`/usr/local/bin/` などだけを直接編集すると、次の配備で上書きされます。
 
-環境全体を更新する場合は、リポジトリを更新して `sudo ./debian12.sh` または `sudo ./ubuntu2404-wsl.sh` を実行します。[呼び出しツリー](#スクリプトの呼び出し関係)のとおり、システム全体と root・ログインユーザーの環境が更新されます。
+環境全体をリセットして再設定する場合は、リポジトリを更新して `sudo ./debian12.sh` または `sudo ./ubuntu2404-wsl.sh` を実行します。[呼び出しツリー](#スクリプトの呼び出し関係)のとおり、システム全体と root・ログインユーザーの環境が更新されます。
 
 追加ユーザーの環境を更新する場合は、そのユーザーで `setup_user_environment` を実行します。導入済みの音声通知や SigNoz を更新する場合は、それぞれの追加スクリプトを再実行してください。
 
