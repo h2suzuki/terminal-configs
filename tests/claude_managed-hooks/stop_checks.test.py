@@ -1605,13 +1605,12 @@ class TaskCloseNudgeTest(StopChecksTest):
         super().setUp()
         self.fx.turn(say("片付けました"))
 
-    def ledger(self, *rows: tuple[str, str]) -> None:
-        self.fx.mytask_tasks(
-            [
-                {"id": task_id, "content": "覚え書き", "status": status}
-                for task_id, status in rows
-            ]
-        )
+    def ledger(self, *rows: tuple[str, ...]) -> None:
+        tasks = []
+        for task_id, status, *owner in rows:
+            task = {"id": task_id, "content": "覚え書き", "status": status}
+            tasks.append({**task, "owner": owner[0]} if owner else task)
+        self.fx.mytask_tasks(tasks)
 
     def nudge(self, proc: subprocess.CompletedProcess) -> str:
         for part in warn_body(proc).split("\n\n"):
@@ -1638,6 +1637,17 @@ class TaskCloseNudgeTest(StopChecksTest):
         self.assertWarnsFamily(proc, self.FAMILY)
         self.assertIn("open Task が 1 件ある", self.nudge(proc))
         self.assertIn("1 🚧 覚え書き", self.nudge(proc))
+
+    def test_c21_delegated_tasks_show_beside_in_progress_with_owner(self):
+        self.ledger(
+            ("1", "in_progress"), ("2", "delegated", "agent-a"), ("3", "delegated")
+        )
+        proc = run_hook(self.fx, self.DONE)
+        self.assertWarnsFamily(proc, self.FAMILY)
+        self.assertEqual(
+            self.nudge(proc).splitlines()[1:-1],
+            ["1 ▶️ 覚え書き", "2 🤖 覚え書き [agent-a]", "3 🤖 覚え書き"],
+        )
 
     def test_c21_no_open_task_is_silent(self):
         self.ledger(("1", "completed"))

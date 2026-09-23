@@ -19,7 +19,12 @@ OPEN_TASK_REF_CAP = 16
 OPEN_TASK_REF_CHARS = 24
 CLOSED_STATUSES = {"completed", "cancelled", "deleted"}
 TASK_BODY_CHARS = 60
-TASK_STATUS_EMOJI = {"pending": "🔳", "in_progress": "▶️", "blocked": "🚧"}
+TASK_STATUS_EMOJI = {
+    "pending": "🔳",
+    "in_progress": "▶️",
+    "delegated": "🤖",
+    "blocked": "🚧",
+}
 DEFAULT_TASK_EMOJI = "🔳"
 NUMERIC_TASK_ID = re.compile(r"[0-9]+(?:-[0-9]+)*")
 TASK_CLOSE_WORDS = re.compile(
@@ -655,9 +660,11 @@ def _task_tree(tasks):
         body = " ".join(_task_name(task).split())
         if len(body) > TASK_BODY_CHARS:
             body = body[:TASK_BODY_CHARS] + "…"
-        emoji = TASK_STATUS_EMOJI.get(
-            str(task.get("status", "")).lower(), DEFAULT_TASK_EMOJI
-        )
+        status = str(task.get("status", "")).lower()
+        emoji = TASK_STATUS_EMOJI.get(status, DEFAULT_TASK_EMOJI)
+        owner = task.get("owner")
+        if status == "delegated" and isinstance(owner, str) and owner:
+            body += f" [{owner}]"
         indent = "  " * (len(chain) - 1)
         lines.append(f"{indent}{task.get('id', '?')} {emoji} {body}")
     return lines

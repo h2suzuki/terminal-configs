@@ -55,7 +55,7 @@ MAX_FILES_LISTED = 20
 MAX_TASKS_LISTED = 10
 
 NATIVE_TASKS_DIR = os.path.expanduser("~/.claude/tasks")
-OPEN_STATUSES = ("pending", "in_progress", "blocked")
+OPEN_STATUSES = ("pending", "in_progress", "delegated", "blocked")
 
 # Stop payload は prompt を含まないので、 wind-down 判定は prompt を受け取れる本 hook が下し、
 # 結果だけを session 単位で残す (Stop 側が transcript を遡ると harness entry と読取幅に潰される)。
@@ -441,9 +441,10 @@ class OpenTasksTest(unittest.TestCase):
             [
                 {"id": "1", "content": "x", "status": "blocked"},
                 {"id": "2", "content": "y", "status": "completed"},
+                {"id": "3", "content": "z", "status": "delegated"},
             ]
         )
-        self.assertEqual(open_tasks(self.SID, self.cwd), ["#1 x"])
+        self.assertEqual(open_tasks(self.SID, self.cwd), ["#1 x", "#3 z"])
 
     def test_both_stores_concatenate(self):
         self._native("1", "pending", "a")

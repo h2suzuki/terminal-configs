@@ -38,7 +38,12 @@ SYNTHETIC_PREFIX = "<task-notification>"
 
 CLOSE_NUDGE = "mytask: 終わった項目は completed に、不要な項目は cancelled にする"
 CLOSED_STATUSES = frozenset({"completed", "cancelled", "deleted"})
-STATUS_EMOJI = {"pending": "🔳", "in_progress": "▶️", "blocked": "🚧"}
+STATUS_EMOJI = {
+    "pending": "🔳",
+    "in_progress": "▶️",
+    "delegated": "🤖",
+    "blocked": "🚧",
+}
 DEFAULT_EMOJI = "🔳"
 TASK_BODY_CHARS = 60
 NUMERIC_ID = re.compile(r"[0-9]+(?:-[0-9]+)*")
@@ -141,8 +146,13 @@ def _task_tree(tasks: list[dict]) -> list[str]:
     rows.sort(key=lambda row: row[0])
     lines = []
     for _key, depth, task in rows:
-        emoji = STATUS_EMOJI.get(str(task.get("status", "")).lower(), DEFAULT_EMOJI)
-        lines.append(f"{'  ' * depth}{task.get('id', '?')} {emoji} {_task_body(task)}")
+        status = str(task.get("status", "")).lower()
+        emoji = STATUS_EMOJI.get(status, DEFAULT_EMOJI)
+        body = _task_body(task)
+        owner = task.get("owner")
+        if status == "delegated" and isinstance(owner, str) and owner:
+            body += f" [{owner}]"
+        lines.append(f"{'  ' * depth}{task.get('id', '?')} {emoji} {body}")
     return lines
 
 
@@ -246,6 +256,20 @@ class CloseNudgeTest(unittest.TestCase):
         self.ledger([self.task("1", "blocked"), self.task("2", "cancelled")])
         block = _close_block(self.payload)
         self.assertEqual(block, f"1 🚧 覚え書き\n{CLOSE_NUDGE}")
+
+    def test_delegated_tasks_show_their_owner(self):
+        self.ledger(
+            [
+                self.task("1", "in_progress"),
+                self.task("2", "delegated", owner="agent-a"),
+                self.task("3", "delegated"),
+            ]
+        )
+        block = _close_block(self.payload)
+        self.assertEqual(
+            block,
+            f"1 ▶️ 覚え書き\n2 🤖 覚え書き [agent-a]\n3 🤖 覚え書き\n{CLOSE_NUDGE}",
+        )
 
     def test_children_are_indented_under_their_parent(self):
         self.ledger(
