@@ -702,10 +702,13 @@ def places(hunks: list[dict]) -> list[dict]:
                         else "first in its parent section"
                     )
                     adds = f"{adds[:-1]}; a new section (heading '{head.group(2)}') placed {after}."
-            elif context in ("(module docstring)", "(docstring)"):
+            elif context in ("(module docstring)", "(docstring)", "(inside a comment)"):
+                # Docstrings and comments document the code around them, so they get the documentation question.
                 location = place = " > ".join(chain)
                 style = "Definitions before this change: " + ("; ".join(definitions(name, pre)[:OUTLINE_LIMIT]) or "(none)")  # fmt: skip
-                kind, adds = "docs", shape_sentence(chunk)
+                kind = "docs"
+                # A comment may hold prose or an example, so only its lines are counted.
+                adds = f"{count} line(s) inside a comment." if context == "(inside a comment)" else shape_sentence(chunk)  # fmt: skip
             else:
                 location = place = " > ".join(chain) or TOP_LEVEL
                 places_only = [c for c in chain if not c.startswith("(")]
@@ -725,14 +728,21 @@ def places(hunks: list[dict]) -> list[dict]:
                         if places_only and TEST_SCOPE_RE.match(places_only[-1])
                         else "code"
                     )
-                adds = f"{count} non-empty line(s) of {kind}"
-                defined = added_definition(name, image, range(at, at + len(chunk)))
-                if places_only and defined:
-                    # Stated so Jev sees a definition moved inside another one.
-                    adds += f", defining `{defined}` inside `{places_only[-1]}`"
-                adds += "."
+                if context:
+                    # The text of a here-document or string is data for the code around it, not statements.
+                    embedded = (
+                        context.split(" of `")[0].removeprefix("(inside ").rstrip(")")
+                    )
+                    adds = f"{count} line(s) inside {embedded}."
+                else:
+                    adds = f"{count} non-empty line(s) of {kind}"
+                    defined = added_definition(name, image, range(at, at + len(chunk)))
+                    if places_only and defined:
+                        # Stated so Jev sees a definition moved inside another one.
+                        adds += f", defining `{defined}` inside `{places_only[-1]}`"
+                    adds += "."
                 # A scope question has no scope to ask about at the top level of the file.
-                kind = kind if places_only else "module"
+                kind = kind if places_only or context else "module"
             text = "\n".join(chunk)
             piece = {
                 "what_the_edit_adds": adds,

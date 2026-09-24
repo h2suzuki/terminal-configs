@@ -523,15 +523,24 @@ class JevContextGateTest(unittest.TestCase):
         """Backtest: commands moved into a heredoc that writes a config file were judged as top-level shell code."""
         before = "#!/bin/bash\ncat > /etc/x.conf <<EOF\n[boot]\nsystemd=true\nEOF\necho done\n"
         self.commit_edit("setup.sh", before, before.replace("systemd=true\n", "systemd=true\nrun apt-get update\n"))
-        hunk = self.only_hunk()
+        call = self.calls()[0]
+        (hunk,) = call["state"]["hunks"]
         self.assertEqual(hunk["place_and_its_purpose"], "(inside the here-document of `cat > /etc/x.conf <<EOF`)")
         self.assertEqual(hunk["style_of_this_place"], "Definitions before this change: (none)")
+        self.assertEqual(hunk["pieces"][0]["what_the_edit_adds"], "1 line(s) inside the here-document.")
+        # Lines inside a here-document are not top-level statements, so the top-level question does not apply.
+        self.assertIn("responsibility", call["questions"]["fits_0_0"]["instructions"])
 
     def test_lines_inside_a_doc_comment_say_so(self):
         """Backtest: a field moved into a JSDoc code example was placed in the type the comment documents."""
         before = "export type Options = {\n\t/**\n\tRetry.\n\n\t```\n\tky(url)\n\t```\n\t*/\n\tretry?: number;\n};\n"
         self.commit_edit("options.ts", before, before.replace("\tky(url)\n", "\tky(url)\n\treadonly x: number;\n"))
-        self.assertEqual(self.only_hunk()["place_and_its_purpose"], "export type Options = { > (inside a comment)")
+        call = self.calls()[0]
+        (hunk,) = call["state"]["hunks"]
+        self.assertEqual(hunk["place_and_its_purpose"], "export type Options = { > (inside a comment)")
+        self.assertEqual(hunk["pieces"][0]["what_the_edit_adds"], "1 line(s) inside a comment.")
+        # A comment documents the code around it, so it gets the documentation question, as a docstring does.
+        self.assertIn("reader", call["questions"]["fits_0_0"]["instructions"])
 
     def test_module_docstring_lines_are_judged_as_prose(self):
         """Backtest: Japanese prose added to a module docstring was described as top-level code (0.47)."""
