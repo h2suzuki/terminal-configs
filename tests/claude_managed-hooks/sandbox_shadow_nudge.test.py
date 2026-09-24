@@ -27,6 +27,22 @@ Contract (each claim maps to one test):
   S9  the tail read tolerates a transcript far larger than the read window without crashing and still
       finds the trailing block (partial first line is dropped, not parsed as JSON)
   S10 the hook file is executable
+  L1  `config.lock` with lock-holder framing ("ロックされている", "stale lock") -> config-lock fires
+      with the lessons-learned path
+  L2  `config.lock` text that already names the sandbox mask -> silent
+  L3  lock-holder framing without `config.lock` -> silent
+  L4  a Bash command removing or probing `config.lock` (rm / lsof) fires once per session; one that
+      only reads `.git/config` is silent
+  E1  an excluded command and a sandbox-blame phrase in one sentence -> env-blame fires
+  E2  the same blame in a text that already names the invocation as the cause -> silent
+  E3  the blame phrase and the excluded command in different sentences -> silent; a command not in
+      excludedCommands (`ls`) never fires
+  T1  Stop with a config.lock or env-blame final message -> exit 2, stderr carries the rule and
+      the restate instruction; the same message on the next Stop ends the turn (exit 0)
+  T2  Stop with only a shadow hit -> exit 0 (the shadow rule nudges at PreToolUse only)
+  T3  Stop reads last_assistant_message when the transcript lacks the final text
+  T4  Stop is silent when CLAUDE_HOOK_CHILD is set (a hook-spawned one-off session)
+  C2  one text hitting two rules -> a single JSON line naming both
 """
 
 from __future__ import annotations
@@ -107,9 +123,35 @@ class SandboxShadowNudgeTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.state_dir = os.path.join(self.tmp.name, "state")
+        self.home = os.path.join(self.tmp.name, "home")
+        os.makedirs(os.path.join(self.home, ".claude"))
+        with open(
+            os.path.join(self.home, ".claude", "settings.json"), "w", encoding="utf-8"
+        ) as f:
+            json.dump({"sandbox": {"excludedCommands": ["git *", "gh *"]}}, f)
 
     def _env(self) -> dict:
-        return {"SANDBOX_SHADOW_NUDGE_STATE_DIR": self.state_dir}
+        return {
+            "SANDBOX_SHADOW_NUDGE_STATE_DIR": self.state_dir,
+            "HOME": self.home,
+            "CLAUDE_PROJECT_DIR": "",
+        }
+
+    def _stop(
+        self, entries: list[dict], session_id: str = "stop", final: str | None = None
+    ) -> subprocess.CompletedProcess:
+        payload = {
+            "hook_event_name": "Stop",
+            "session_id": session_id,
+            "transcript_path": _write_transcript(self.tmp.name, entries),
+        }
+        if final is not None:
+            payload["last_assistant_message"] = final
+        return run_hook(payload, self._env())
+
+    def _context(self, proc: subprocess.CompletedProcess) -> str:
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
 
     def _call(
         self,
@@ -274,6 +316,118 @@ class SandboxShadowNudgeTest(unittest.TestCase):
 
     def test_s10_hook_is_executable(self):
         self.assertTrue(os.access(HOOK, os.X_OK))
+
+    def test_l1_config_lock_with_lock_holder_framing_fires(self):
+        for i, text in enumerate(
+            (
+                "`.git/config.lock` がロックされているので git config が書けません",
+                "a stale lock: .git/config.lock was left by a crashed git",
+            )
+        ):
+            with self.subTest(text=text):
+                context = self._context(
+                    self._call([_user_prompt(), _assistant_text(text)], f"l1-{i}")
+                )
+                self.assertIn("config-lock", context)
+                self.assertIn("feedback_sandbox_mask_leaks_git_config_lock.md", context)
+
+    def test_l2_config_lock_named_as_mask_is_silent(self):
+        text = "config.lock は sandbox の mask で、ロックされているわけではない"
+        proc = self._call([_user_prompt(), _assistant_text(text)])
+        self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
+
+    def test_l3_lock_framing_without_config_lock_is_silent(self):
+        proc = self._call(
+            [_user_prompt(), _assistant_text("index.lock がロックされている")]
+        )
+        self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
+
+    def test_l4_command_touching_config_lock_fires_once_per_session(self):
+        def bash(command: str) -> subprocess.CompletedProcess:
+            payload = {
+                "session_id": "l4",
+                "tool_name": "Bash",
+                "tool_input": {"command": command},
+            }
+            return run_hook(payload, self._env())
+
+        self.assertEqual(bash("git config --get user.name .git/config").stdout, "")
+        self.assertIn("config-lock", self._context(bash("rm -f .git/config.lock")))
+        again = bash("lsof .git/config.lock")
+        self.assertEqual((again.returncode, again.stdout), (0, ""), again.stderr)
+
+    def test_e1_excluded_command_blamed_on_sandbox_fires(self):
+        for i, text in enumerate(
+            (
+                "この session では git も sandbox の中で動いており、config を書けません",
+                "gh is blocked by the sandbox here",
+            )
+        ):
+            with self.subTest(text=text):
+                context = self._context(
+                    self._call([_user_prompt(), _assistant_text(text)], f"e1-{i}")
+                )
+                self.assertIn("invocation-first", context)
+
+    def test_e2_blame_already_put_on_the_invocation_is_silent(self):
+        text = "git が sandbox 内で動いたのは、私の呼び出し方の誤りでした"
+        proc = self._call([_user_prompt(), _assistant_text(text)])
+        self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
+
+    def test_e3_blame_needs_an_excluded_command_in_the_same_sentence(self):
+        for i, text in enumerate(
+            (
+                "ls は sandbox 内で動く。git の結果は別に確認した",
+                "ls が sandbox の中で失敗した",
+            )
+        ):
+            with self.subTest(text=text):
+                proc = self._call([_user_prompt(), _assistant_text(text)], f"e3-{i}")
+                self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
+
+    def test_t1_stop_blocks_once_then_lets_the_restated_turn_end(self):
+        cases = (
+            ("config-lock", ".git/config.lock がロック中のため待ちます"),
+            ("invocation-first", "git は sandbox 内で実行されるので push できません"),
+        )
+        for rule, text in cases:
+            with self.subTest(rule=rule):
+                entries = [_user_prompt(), _assistant_text(text)]
+                first = self._stop(entries, session_id=f"t1-{rule}")
+                self.assertEqual(first.returncode, 2, first.stderr)
+                self.assertIn(rule, first.stderr)
+                self.assertIn("書き直して", first.stderr)
+                second = self._stop(entries, session_id=f"t1-{rule}")
+                self.assertEqual(second.returncode, 0, second.stderr)
+
+    def test_t4_stop_is_silent_in_a_hook_child(self):
+        payload = {
+            "hook_event_name": "Stop",
+            "session_id": "t4",
+            "last_assistant_message": ".git/config.lock がロック中のため待ちます",
+        }
+        proc = run_hook(payload, {**self._env(), "CLAUDE_HOOK_CHILD": "1"})
+        self.assertEqual((proc.returncode, proc.stderr), (0, ""))
+
+    def test_t2_stop_ignores_shadow_only_text(self):
+        proc = self._stop([_user_prompt(), _assistant_text(".bashrc が未追跡です")])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_t3_stop_reads_last_assistant_message(self):
+        proc = self._stop(
+            [_user_prompt()], final="stale lock の .git/config.lock を消しました"
+        )
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("config-lock", proc.stderr)
+
+    def test_c2_one_text_hitting_two_rules_emits_one_line(self):
+        text = "git は sandbox の中で動くので .git/config.lock がロックされている"
+        proc = self._call([_user_prompt(), _assistant_text(text)], session_id="c2")
+        lines = [line for line in proc.stdout.splitlines() if line.strip()]
+        self.assertEqual(len(lines), 1, proc.stdout)
+        context = json.loads(lines[0])["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("config-lock", context)
+        self.assertIn("invocation-first", context)
 
 
 if __name__ == "__main__":

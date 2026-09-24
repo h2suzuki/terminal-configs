@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""PreToolUse nudge: repo-root sandbox dotfile shadows look untracked but are not; stop investigating.
+"""PreToolUse / Stop nudge: sandbox misreadings (dotfile shadows, config.lock, blaming the sandbox).
 
 Transcript assistant text often lags the tool call, so this scans prior text blocks (past
-tool_result-only entries) and, for Bash, the command itself.
+tool_result-only entries) and, for Bash, the command itself. Rules marked for Stop also block
+the turn end so the final message is restated.
 """
 
 from __future__ import annotations
@@ -12,6 +13,10 @@ import json
 import os
 import re
 import sys
+from collections.abc import Callable
+from dataclasses import dataclass
+
+import sandbox_exclusions
 
 STATE_DIR = os.environ.get("SANDBOX_SHADOW_NUDGE_STATE_DIR") or os.path.join(
     os.path.expanduser("~"), ".claude", "hooks", "state", "sandbox_shadow_nudge"
@@ -66,6 +71,60 @@ MSG = (
     "教訓: /var/lib/claude-rag-memory/claude-lessons-learned/org/feedback_sandbox_dotfile_shadow.md"
 )
 
+CONFIG_LOCK_RE = re.compile(r"config\.lock")
+# lock-holder framing: someone holds, left or must release a lock
+LOCK_CUE_RE = re.compile(
+    r"ロック(?:され|中|を(?:保持|握|持|取得|解除|解放)|が(?:残|掛|かか|取れ)|解除|解放)"
+    r"|locked|lock\s+(?:is\s+)?held|hold(?:s|ing)?\s+the\s+lock|stale\s+lock"
+    r"|lock\s+(?:holder|owner)|lockfile|unlock|release\s+the\s+lock"
+    r"|別の\s*git|他の\s*git|git\s*プロセス|another\s+git|git\s+process|crash|クラッシュ|異常終了",
+    re.IGNORECASE,
+)
+# the text already names the sandbox mask, so it is the correct reading
+LOCK_CORRECT_RE = re.compile(
+    r"mask|マスク|/dev/null|bind|78818|ロックではな|not\s+a\s+lock", re.IGNORECASE
+)
+LOCK_CMD_RE = re.compile(r"\b(?:rm|unlink|lsof|fuser)\b")
+
+# 文面は意図的に冗長: 誤読の訂正と次の行動を両方書き下すため trim しない
+CONFIG_LOCK_MSG = (
+    "config-lock: `.git/config.lock` はロックではない。保持している git プロセスも、"
+    "crash の残した stale lock も存在しない。sandbox が `.git/config` を書かせないために "
+    "`/dev/null` を読み取り専用で被せた mask である (anthropics/claude-code#78818)。"
+    "保持者を探す・待つ・「ロックされている」と報告するのは誤りなので、直前の発言を訂正せよ。\n"
+    "`could not lock config file ... File exists` で git が失敗したら、sandbox の仕組みを調べ直さず、"
+    "まず自分の呼び出し方を直す (除外コマンドを裸名で Bash 呼び出しの先頭に置く。"
+    "`sandbox-host-recovery` の順序)。host に 0-byte・mode 444 の残骸が実在し、"
+    "使用中でないなら自分で消して作業を続ける。\n"
+    "教訓: /var/lib/claude-rag-memory/claude-lessons-learned/project/"
+    "github.com-h2suzuki-scorer/feedback_sandbox_mask_leaks_git_config_lock.md"
+)
+
+# blaming the environment: an excluded command "ran in" or "was blocked by" the sandbox
+SANDBOX_BLAME_RE = re.compile(
+    r"sandbox\s*(?:の)?\s*(?:内|中|の中|内部)\s*(?:で|に|の)"
+    r"|sandbox\s*(?:が|に|で)\s*(?:塞|阻|弾|ブロック|拒否|制限|止め|遮)"
+    r"|sandbox\s*の(?:仕組み|制限|制約)?\s*のせい|sandbox\s*(?:の外|外)\s*に\s*出(?:ら|せ)?れな"
+    r"|(?:inside|within|in)\s+the\s+sandbox|blocked\s+by\s+the\s+sandbox|sandbox\s+blocks",
+    re.IGNORECASE,
+)
+# the text already puts the fault on the invocation, so it is the correct reading
+BLAME_CORRECT_RE = re.compile(
+    r"呼び出し方|呼び方|invocation|裸名|先頭に置", re.IGNORECASE
+)
+
+# 文面は意図的に冗長: 同じ誤りが繰り返されているため、訂正と次の行動を両方書き下す
+ENV_BLAME_MSG = (
+    "invocation-first: 除外コマンド (git / gh 等) は sandbox の外で走る。"
+    "「sandbox 内で動いた」「sandbox が塞いだ」と環境のせいにしたのは誤りなので、直前の発言を訂正せよ。"
+    "sandbox 内に入ったなら原因は自分の呼び出し方である: 除外コマンドを裸名で Bash 呼び出しの"
+    "先頭に置いたか (変数代入の segment・path 前置・wrapper で始めていないか) を確かめ、"
+    "`sandbox-host-recovery` の順で呼び出しを直してから結論を書く。"
+    "sandbox の仕組みを調べ直したりユーザーに確かめ直したりするのは、"
+    "自分の発言を相手に尋ね返すのと同じ無駄であり、ユーザーの負担になる。"
+)
+STOP_SUFFIX = "\n最終発言に上の誤りが含まれている。該当箇所を訂正した回答を書き直してから終了せよ。"
+
 
 def _shadow_hit(text: str) -> str | None:
     """First shadow name literally present outside a real HOME path, or None."""
@@ -74,6 +133,73 @@ def _shadow_hit(text: str) -> str | None:
             if not HOME_PREFIX_RE.search(text[: m.start()]):
                 return name
     return None
+
+
+def _shadow_text(text: str) -> bool:
+    return _shadow_hit(text) is not None and bool(CUE_RE.search(text))
+
+
+def _shadow_command(command: str) -> bool:
+    return _shadow_hit(command) is not None
+
+
+def _lock_text(text: str) -> bool:
+    return (
+        bool(CONFIG_LOCK_RE.search(text))
+        and bool(LOCK_CUE_RE.search(text))
+        and not LOCK_CORRECT_RE.search(text)
+    )
+
+
+def _lock_command(command: str) -> bool:
+    return bool(CONFIG_LOCK_RE.search(command)) and bool(LOCK_CMD_RE.search(command))
+
+
+def _excluded_names() -> tuple[str, ...]:
+    """Single-word excluded command names; patterns with arguments (`systemctl --no-pager ...`) read as prose too often."""
+    try:
+        patterns = sandbox_exclusions.load_patterns()
+    except Exception:
+        return ()
+    names = {p.rstrip("*").strip() for p in patterns}
+    return tuple(sorted(n for n in names if n and not re.search(r"[\s*]", n)))
+
+
+def _names_excluded_command(text: str, names: tuple[str, ...]) -> bool:
+    return any(
+        re.search(r"(?<![\w/.-])" + re.escape(name) + r"(?![\w-])", text)
+        for name in names
+    )
+
+
+def _blame_text(text: str) -> bool:
+    if not SANDBOX_BLAME_RE.search(text) or BLAME_CORRECT_RE.search(text):
+        return False
+    names = _excluded_names()
+    return any(  # the command and the blame must share a sentence
+        SANDBOX_BLAME_RE.search(s) and _names_excluded_command(s, names)
+        for s in re.split(r"[。\n]|(?<=[.!?])\s", text)
+    )
+
+
+def _never(_: str) -> bool:
+    return False
+
+
+@dataclass(frozen=True)
+class Rule:
+    name: str
+    text_hit: Callable[[str], bool]
+    command_hit: Callable[[str], bool]
+    message: str
+    on_stop: bool
+
+
+RULES = (
+    Rule("shadow", _shadow_text, _shadow_command, MSG, on_stop=False),
+    Rule("config-lock", _lock_text, _lock_command, CONFIG_LOCK_MSG, on_stop=True),
+    Rule("env-blame", _blame_text, _never, ENV_BLAME_MSG, on_stop=True),
+)
 
 
 def _tail_bytes(path: str) -> bytes:
@@ -141,65 +267,90 @@ def _session_key(session_id: object) -> str:
     return re.sub(r"[^\w.-]", "_", session_id)[:80]
 
 
-def _already_nudged(session_id: object, digest: str) -> bool:
+def _already_nudged(session_id: object, key: str) -> bool:
     try:
         with open(
             os.path.join(STATE_DIR, _session_key(session_id)), encoding="utf-8"
         ) as f:
-            return digest in f.read().split()
+            return key in f.read().split()
     except OSError:
         return False
 
 
-def _mark_nudged(session_id: object, digest: str) -> None:
+def _mark_nudged(session_id: object, key: str) -> None:
     os.makedirs(STATE_DIR, exist_ok=True)
     with open(
         os.path.join(STATE_DIR, _session_key(session_id)), "a", encoding="utf-8"
     ) as f:
-        f.write(digest + "\n")
+        f.write(key + "\n")
 
 
-def _emit() -> None:
-    payload = {
-        "hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": MSG}
-    }
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+def _transcript_blocks(payload: dict) -> list[str]:
+    path = payload.get("transcript_path")
+    return _scan_blocks(path) if isinstance(path, str) and path else []
 
 
-CMD_MARKER = "bash-cmd-nudged"  # one flag per session; not a sha256 digest, so it can't collide with one
-
-
-def _run(payload: dict) -> int:
-    session_id = payload.get("session_id")
-    fired = False
-    to_mark: list[str] = []
-
-    transcript_path = payload.get("transcript_path")
-    if isinstance(transcript_path, str) and transcript_path:
-        for block in _scan_blocks(transcript_path):
-            if not block or _shadow_hit(block) is None or not CUE_RE.search(block):
+def _text_hits(
+    rules: tuple[Rule, ...], blocks: list[str], session_id: object
+) -> tuple[list[Rule], list[str]]:
+    """Rules with a hit block not yet nudged, and the per-rule block keys to mark."""
+    fired: list[Rule] = []
+    keys: list[str] = []
+    for rule in rules:
+        for block in blocks:
+            if not block or not rule.text_hit(block):
                 continue
-            digest = hashlib.sha256(block.encode("utf-8")).hexdigest()
-            if not _already_nudged(session_id, digest):
-                fired = True
-                to_mark.append(digest)
+            key = rule.name + ":" + hashlib.sha256(block.encode("utf-8")).hexdigest()
+            if key in keys or _already_nudged(session_id, key):
+                continue
+            keys.append(key)
+            if rule not in fired:
+                fired.append(rule)
+    return fired, keys
 
-    if payload.get("tool_name") == "Bash":
-        tool_input = payload.get("tool_input")
-        command = tool_input.get("command") if isinstance(tool_input, dict) else None
-        if (
-            isinstance(command, str)
-            and _shadow_hit(command) is not None
-            and not _already_nudged(session_id, CMD_MARKER)
-        ):
-            fired = True
-            to_mark.append(CMD_MARKER)
+
+def _pre_tool_use(payload: dict) -> int:
+    session_id = payload.get("session_id")
+    fired, keys = _text_hits(RULES, _transcript_blocks(payload), session_id)
+
+    tool_input = payload.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if payload.get("tool_name") == "Bash" and isinstance(command, str):
+        for rule in RULES:
+            marker = rule.name + ":bash-cmd"  # one flag per session per rule
+            if rule.command_hit(command) and not _already_nudged(session_id, marker):
+                keys.append(marker)
+                if rule not in fired:
+                    fired.append(rule)
 
     if fired:
-        _emit()
-        for key in to_mark:
+        out = {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": "\n\n".join(rule.message for rule in fired),
+            }
+        }
+        sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
+        for key in keys:
             _mark_nudged(session_id, key)
     return 0
+
+
+def _stop(payload: dict) -> int:
+    session_id = payload.get("session_id")
+    blocks = _transcript_blocks(payload)
+    final = payload.get("last_assistant_message")
+    if isinstance(final, str) and final and final not in blocks:
+        blocks.append(final)
+    fired, keys = _text_hits(
+        tuple(rule for rule in RULES if rule.on_stop), blocks, session_id
+    )
+    if not fired:
+        return 0
+    for key in keys:  # per-block dedupe lets a restated answer end the turn
+        _mark_nudged(session_id, key)
+    sys.stderr.write("\n\n".join(rule.message for rule in fired) + STOP_SUFFIX + "\n")
+    return 2
 
 
 def main() -> int:
@@ -207,8 +358,13 @@ def main() -> int:
         payload = json.loads(sys.stdin.read() or "{}")
     except json.JSONDecodeError:
         return 0
+    if not isinstance(payload, dict):
+        return 0
     try:
-        return _run(payload) if isinstance(payload, dict) else 0
+        if payload.get("hook_event_name") == "Stop":
+            # a one-off session spawned by another hook has no user to restate for
+            return 0 if os.environ.get("CLAUDE_HOOK_CHILD") else _stop(payload)
+        return _pre_tool_use(payload)
     except Exception:
         return 0
 
