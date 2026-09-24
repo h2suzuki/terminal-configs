@@ -287,7 +287,8 @@ def main() -> int:
         if payload.get("tool_name") == "AskUserQuestion":
             return _ask_gate(payload)
         if payload.get("hook_event_name") == "Stop":
-            return _stop_gate(payload)
+            # a one-off session spawned by another hook runs no session hooks
+            return 0 if os.environ.get("CLAUDE_HOOK_CHILD") else _stop_gate(payload)
     except Exception:
         return 0  # fail-open: hook bug が tool / turn を止めない
     return 0

@@ -33,7 +33,8 @@ def should_sweep(payload: dict) -> tuple[bool, str | None]:
     """Return (trigger, command) — command is set only for a matched PostToolUse worktree call."""
     event = payload.get("hook_event_name")
     if event == "SessionStart":
-        return True, None
+        # a one-off session spawned by another hook runs no session hooks
+        return not os.environ.get("CLAUDE_HOOK_CHILD"), None
     if event == "PostToolUse" and payload.get("tool_name") == "Bash":
         tool_input = payload.get("tool_input")
         command = tool_input.get("command") if isinstance(tool_input, dict) else None

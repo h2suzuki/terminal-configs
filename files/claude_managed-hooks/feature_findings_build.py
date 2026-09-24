@@ -352,6 +352,8 @@ def cmd_hook(output: str) -> int:
 
 
 def main() -> int:
+    if os.environ.get("CLAUDE_HOOK_CHILD"):
+        return 0  # a one-off session spawned by another hook runs no session hooks
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--input", help="read Claude Code changelog from FILE instead of fetching"

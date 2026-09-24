@@ -101,7 +101,8 @@ def _main(argv: list[str] | None = None) -> int:
         sys.stdout.write(USAGE)
         return 0
     if args == ["--hook"]:
-        return _hook_mode()
+        # a one-off session spawned by another hook has no transcript to guard
+        return 0 if os.environ.get("CLAUDE_HOOK_CHILD") else _hook_mode()
     try:
         if args == ["--stdin"]:
             text = sys.stdin.read()

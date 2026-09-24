@@ -1407,6 +1407,8 @@ def _emit(payload, turn, blocks, warnings):
 
 
 def main():
+    if os.environ.get("CLAUDE_HOOK_CHILD"):
+        return 0  # a one-off session spawned by another hook runs no session hooks
     try:
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict):

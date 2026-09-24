@@ -355,6 +355,8 @@ def handle_event(payload: dict) -> None:
 
 
 def main() -> None:
+    if os.environ.get("CLAUDE_HOOK_CHILD"):
+        return  # a one-off session spawned by another hook runs no session hooks
     payload = json.loads(sys.stdin.read() or "{}")
     if not isinstance(payload, dict):
         return

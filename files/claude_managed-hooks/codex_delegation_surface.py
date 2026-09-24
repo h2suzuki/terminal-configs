@@ -181,6 +181,8 @@ def cmd(payload: object) -> int:
     if not isinstance(payload, dict):
         return 0
     event = payload.get("hook_event_name")
+    if event != "PreToolUse" and os.environ.get("CLAUDE_HOOK_CHILD"):
+        return 0  # a one-off session spawned by another hook runs no session hooks
     now = time.time()
     if event == "SubagentStop":
         if "codex-rescue" in str(payload.get("agent_type", "")).lower():

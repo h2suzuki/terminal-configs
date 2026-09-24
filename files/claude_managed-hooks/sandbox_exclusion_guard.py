@@ -203,6 +203,8 @@ def _run(payload: object, patterns: list[str] | None = None) -> int:
     patterns = load_patterns() if patterns is None else patterns
     event = payload.get("hook_event_name")
     if event == "SessionStart":
+        if os.environ.get("CLAUDE_HOOK_CHILD"):
+            return 0  # a one-off session spawned by another hook runs no session hooks
         if not claim_once(payload, "session-start-roster"):
             return 0
         _emit("SessionStart", roster_text(patterns))

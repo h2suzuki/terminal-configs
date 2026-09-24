@@ -29,6 +29,7 @@ Exit:
 from __future__ import annotations
 
 import json
+import os
 import sys
 import unittest
 from unittest import mock
@@ -65,6 +66,8 @@ def _run(payload: dict) -> int:
 
 
 def main() -> int:
+    if os.environ.get("CLAUDE_HOOK_CHILD"):
+        return 0  # a one-off session spawned by another hook runs no session hooks
     try:
         return _run(json.loads(sys.stdin.read() or "{}"))
     except Exception:

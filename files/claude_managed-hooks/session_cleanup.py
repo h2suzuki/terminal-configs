@@ -64,6 +64,8 @@ def _clean_tmp_scratch(session_id):
 
 
 def main():
+    if os.environ.get("CLAUDE_HOOK_CHILD"):
+        return  # a one-off session spawned by another hook runs no session hooks
     payload = json.load(sys.stdin)
     cache = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
     sl_dir = os.path.join(cache, "claude-tui-statusline")

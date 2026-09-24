@@ -488,6 +488,8 @@ def main() -> int:
         if len(sys.argv) > 1 and sys.argv[1] == "--lint-worker":
             _guard(lambda: run_lint(sys.argv[2], sys.argv[3:]))
             return 0
+        if os.environ.get("CLAUDE_HOOK_CHILD"):
+            return 0  # a one-off session spawned by another hook runs no session hooks
         run_hook()
     except Exception:
         return 0

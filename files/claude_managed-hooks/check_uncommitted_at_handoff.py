@@ -377,6 +377,8 @@ def _run(payload: dict) -> int:
 
 
 def main() -> int:
+    if os.environ.get("CLAUDE_HOOK_CHILD"):
+        return 0  # a one-off session spawned by another hook runs no session hooks
     try:
         payload = json.loads(sys.stdin.read() or "{}")
     except Exception:

@@ -60,6 +60,8 @@ def _nag_auth_failure() -> None:
 
 
 def main() -> int:
+    if os.environ.get("CLAUDE_HOOK_CHILD"):
+        return 0  # a one-off session spawned by another hook runs no session hooks
     os.umask(0o002)
     try:
         sys.stdin.read()
