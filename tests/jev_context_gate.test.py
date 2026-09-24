@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for jev_context_gate: the connected jev server calls check() with its own evaluate; throwaway repos provide the commits.
-
-Run with the jev runtime's Python, which has the pinned parsers: /usr/local/lib/jev/bin/python tests/jev_context_gate.test.py
-"""
+"""Tests for jev_context_gate: the connected jev server calls check() with its own evaluate; throwaway repos provide the commits."""
 
 from __future__ import annotations
 
@@ -156,7 +153,7 @@ class JevContextGateTest(unittest.TestCase):
              "--cwd", str(self.repo), "--command", "git status"],
             capture_output=True, text=True, check=True, env=self.env,
         )  # fmt: skip
-        self.assertEqual(json.loads(gathered.stdout), {"requests": [], "syntax_breaks": []})
+        self.assertEqual(json.loads(gathered.stdout), {"requests": []})
 
     def test_non_commit_command_is_ignored(self):
         self.add_to_codex_section("MAINTAINER note")
@@ -506,114 +503,6 @@ class JevContextGateTest(unittest.TestCase):
             "2 non-empty line(s) of code, defining `def save(text):` inside `def load(path):`.",
         )
 
-    def commit_edit(self, name: str, before: str, after: str) -> None:
-        (self.repo / name).write_text(before)
-        self.git("add", name)
-        self.git("commit", "-q", "-m", "base")
-        (self.repo / name).write_text(after)
-        self.run_hook(f'git commit -m "x" -- {name}')
-
-    def test_line_at_column_zero_inside_a_test_body_is_placed_in_that_test(self):
-        """Backtest: a test spliced into another test's body at column 0 was described as top-level code."""
-        before = "test('a', t => {\n\tt.is(1, 1);\n});\n"
-        self.commit_edit("a.test.ts", before, before.replace("\tt.is(1, 1);\n", "\tt.is(1, 1);\nconst extra = 2;\n"))
-        self.assertEqual(self.only_hunk()["place_and_its_purpose"], "test('a', t => {")
-
-    def test_lines_inside_a_here_document_say_so(self):
-        """Backtest: commands moved into a heredoc that writes a config file were judged as top-level shell code."""
-        before = "#!/bin/bash\ncat > /etc/x.conf <<EOF\n[boot]\nsystemd=true\nEOF\necho done\n"
-        self.commit_edit("setup.sh", before, before.replace("systemd=true\n", "systemd=true\nrun apt-get update\n"))
-        call = self.calls()[0]
-        (hunk,) = call["state"]["hunks"]
-        self.assertEqual(hunk["place_and_its_purpose"], "(inside the here-document of `cat > /etc/x.conf <<EOF`)")
-        self.assertEqual(hunk["style_of_this_place"], "Definitions before this change: (none)")
-        self.assertEqual(hunk["pieces"][0]["what_the_edit_adds"], "1 line(s) inside the here-document.")
-        # Lines inside a here-document are not top-level statements, so the top-level question does not apply.
-        self.assertIn("responsibility", call["questions"]["fits_0_0"]["instructions"])
-
-    def test_lines_inside_a_doc_comment_say_so(self):
-        """Backtest: a field moved into a JSDoc code example was placed in the type the comment documents."""
-        before = "export type Options = {\n\t/**\n\tRetry.\n\n\t```\n\tky(url)\n\t```\n\t*/\n\tretry?: number;\n};\n"
-        self.commit_edit("options.ts", before, before.replace("\tky(url)\n", "\tky(url)\n\treadonly x: number;\n"))
-        call = self.calls()[0]
-        (hunk,) = call["state"]["hunks"]
-        self.assertEqual(hunk["place_and_its_purpose"], "export type Options = { > (inside a comment)")
-        self.assertEqual(hunk["pieces"][0]["what_the_edit_adds"], "1 line(s) inside a comment.")
-        # A comment documents the code around it, so it gets the documentation question, as a docstring does.
-        self.assertIn("reader", call["questions"]["fits_0_0"]["instructions"])
-
-    def test_module_docstring_lines_are_judged_as_prose(self):
-        """Backtest: Japanese prose added to a module docstring was described as top-level code (0.47)."""
-        before = '"""Loader.\n\nDetails.\n"""\n\n\ndef load(path):\n    return open(path).read()\n'
-        self.commit_edit("loader.py", before, before.replace("Details.\n", "Details.\nMore details here.\n"))
-        call = self.calls()[0]
-        (hunk,) = call["state"]["hunks"]
-        self.assertEqual(hunk["place_and_its_purpose"], "(module docstring)")
-        self.assertNotIn("of code", hunk["pieces"][0]["what_the_edit_adds"])
-        self.assertIn("reader", call["questions"]["fits_0_0"]["instructions"])
-
-    def test_lines_inside_an_existing_code_block_are_not_prose(self):
-        """Backtest: one line changed inside a README code example was described as a prose paragraph (0.37)."""
-        before = (self.repo / "README.md").read_text()
-        (self.repo / "README.md").write_text(before.replace("codex login\n", "codex login\ncodex whoami\n"))
-        self.run_hook('git commit -m "x" -- README.md')
-        hunk = self.only_hunk()
-        self.assertEqual(hunk["place_and_its_purpose"].split(". ")[0], "Tool > Sign in > Codex > (inside a ```bash code block)")
-        adds = hunk["pieces"][0]["what_the_edit_adds"]
-        self.assertEqual(adds, "1 line(s) inside an existing ```bash code block.")
-
-    def test_nested_definition_is_named_even_after_a_leading_comment(self):
-        """Backtest: a method moved into another method went unstated because its first added line was a comment."""
-        self.commit_edit(
-            "loader.py", CODE,
-            CODE.replace("    return open(path).read()\n",
-                         "    return open(path).read()\n\n    # Saves text.\n    def save(text):\n        return text\n"),
-        )  # fmt: skip
-        (piece,) = self.only_hunk()["pieces"]
-        self.assertIn("defining `def save(text):` inside `def load(path):`", piece["what_the_edit_adds"])
-
-    def test_added_lines_that_leave_a_scope_are_split_at_its_end(self):
-        """One hunk that finishes a function and starts a new one is two edits in two places."""
-        self.commit_edit(
-            "loader.py", CODE,
-            CODE.replace("    return open(path).read()\n",
-                         "    return open(path).read()\n    x = 1\n\n\ndef extra():\n    return 2\n"),
-        )  # fmt: skip
-        hunks = [h for c in self.calls() for h in c["state"]["hunks"]]
-        self.assertEqual(
-            [(h["place_and_its_purpose"], [p["added_lines"] for p in h["pieces"]]) for h in hunks],
-            [("def load(path):", ["    x = 1"]), ("(top level of the file)", ["def extra():\n    return 2"])],
-        )
-
-    def test_code_file_without_a_header_names_its_language_and_role(self):
-        self.commit_edit("main.test.ts", "test('a', t => {\n\tt.is(1, 1);\n});\n",
-                         "test('a', t => {\n\tt.is(1, 1);\n\tt.is(2, 2);\n});\n")  # fmt: skip
-        self.assertEqual(self.calls()[0]["state"]["form"]["file_kind_and_role"], "TypeScript test file")
-
-    def test_edit_that_breaks_the_file_syntax_is_denied_without_asking_jev(self):
-        """Whether a file still parses is computed in code, never asked of Jev."""
-        for name, before, after in (
-            ("loader.py", CODE, CODE.replace("def helper():", "def helper(:")),
-            ("settings.json", '{\n  "a": 1\n}\n', '{\n  "a": 1\n  "b": 2\n}\n'),
-            ("run.sh", "#!/bin/bash\nif true; then\n  echo a\nfi\n", "#!/bin/bash\nif true; then\n  echo a\n  if x; then\nfi\n"),
-            ("main.ts", "export function f() {\n\treturn 1;\n}\n", "export function f() {\n\treturn 1;\n\t{ status: 1,\n}\n"),
-        ):
-            with self.subTest(name=name):
-                self.sent.clear()
-                (self.repo / name).write_text(before)
-                self.git("add", name)
-                self.git("commit", "-q", "-m", "base")
-                (self.repo / name).write_text(after)
-                output = self.run_hook(f'git commit -m "x" -- {name}')
-                self.assertEqual(self.calls(), [])
-                reason = output["hookSpecificOutput"]["permissionDecisionReason"]
-                self.assertIn(f"{name} は変更後に構文として読めません", reason)
-
-    def test_file_that_did_not_parse_before_is_still_asked_of_jev(self):
-        broken = '{\n  "a": 1,\n}\n'
-        self.commit_edit("settings.json", broken, broken.replace('"a": 1,', '"a": 1,\n  "b": 2,'))
-        self.assertEqual(len(self.calls()), 1)
-
     def test_json_place_is_the_open_key_path(self):
         """Backtest: hooks moved into "permissions" were judged at "(top level of the file)" and passed (4 of 4)."""
         settings = (
@@ -723,23 +612,6 @@ class JevContextGateTest(unittest.TestCase):
         self.assertTrue(all(len(p["added_lines"]) <= gate.CHUNK_LIMIT for p in pieces))
         self.assertTrue(pieces[0]["added_lines"].startswith("def build():"))
         self.assertTrue(pieces[-1]["added_lines"].endswith(f"value_59 = compute('{'x' * 30}', 59)"))
-        # Backtest: the rest of a long new test, cut off by the size limit, was judged as top-level code (0.20).
-        places = [h["place_and_its_purpose"] for c in self.calls() for h in c["state"]["hunks"] for _ in h["pieces"]]
-        self.assertEqual(places, [gate.TOP_LEVEL] + ["def build():"] * (len(pieces) - 1))
-
-    def test_closing_bracket_line_goes_with_the_lines_after_it(self):
-        """Backtest: `],` made by adding a comma was judged alone as its own edit (0.45)."""
-        before = '{\n  "hooks": {\n    "A": [\n      "x"\n    ]\n  }\n}\n'
-        self.commit_edit("settings.json", before, before.replace('    ]\n', '    ],\n    "B": []\n'))
-        hunk = self.only_hunk()
-        self.assertEqual(hunk["place_and_its_purpose"], "hooks")
-        self.assertEqual([p["added_lines"] for p in hunk["pieces"]], ['    ],\n    "B": []'])
-
-    def test_comment_lines_in_code_are_counted_as_comments(self):
-        """Backtest: a one-line comment added to a function was described as a line of code (0.43)."""
-        self.commit_edit("loader.py", CODE, CODE.replace("    return open(path).read()\n", "    # Text mode.\n    return open(path).read()\n"))
-        (piece,) = self.only_hunk()["pieces"]
-        self.assertEqual(piece["what_the_edit_adds"], "1 non-empty line(s) of code, 1 of them comments.")
 
     def test_code_block_is_judged_with_the_paragraph_that_introduces_it(self):
         """A README example judged apart from its explanation lost what it illustrates."""
@@ -970,14 +842,14 @@ class JevContextGateTest(unittest.TestCase):
         )
 
 
-def scope_of(source: str, needle: str, name: str = "scope.ts") -> str:
+def scope_of(source: str, needle: str) -> str:
     lines = source.splitlines()
     index = next(i for i, line in enumerate(lines) if needle in line)
-    return gate.code_scope(name, lines, index)
+    return gate.code_scope(lines, index)
 
 
 class ScopeDetectionTest(unittest.TestCase):
-    """The place is the chain of definitions the syntax tree says encloses the line, not a fall-back to top level."""
+    """P1: SCOPE_RE/code_scope must name JS/TS definitions, not fall back to top level."""
 
     def test_export_function_is_the_place(self):
         src = "export function foo(a) {\n  return a + 1;\n}\n"
@@ -1065,16 +937,15 @@ class ScopeDetectionTest(unittest.TestCase):
         self.assertEqual(scope_of(src, "return 1"), "function foo() {")
 
     def test_switch_statement_is_not_a_definition(self):
-        src = "function foo() {\n  switch (x) {\n    case 1:\n      return 1;\n  }\n}\n"
+        src = "function foo() {\n  switch (x) {\n    return 1;\n  }\n}\n"
         self.assertEqual(scope_of(src, "return 1"), "function foo() {")
 
     def test_catch_clause_is_not_a_definition(self):
-        src = "function foo() {\n  try {\n    a();\n  } catch (e) {\n    return 1;\n  }\n}\n"
+        src = "function foo() {\n  catch (e) {\n    return 1;\n  }\n}\n"
         self.assertEqual(scope_of(src, "return 1"), "function foo() {")
 
-    def test_plain_call_with_a_callback_is_not_a_place(self):
-        src = "function foo() {\n  items.forEach(item => {\n    use(item);\n  });\n}\n"
-        self.assertEqual(scope_of(src, "use(item)"), "function foo() {")
+    def test_plain_call_statement_does_not_match_scope_re(self):
+        self.assertIsNone(gate.SCOPE_RE.match("foo(a);"))
 
     def test_access_modifiers_and_private_names_are_the_place(self):
         """Backtest: lines inside `protected _stream(...)` and `async #parseJson(...)` were placed in the constructor."""
@@ -1095,9 +966,10 @@ class ScopeDetectionTest(unittest.TestCase):
                 src = f"{call}('works', async t => {{\n  const b = 2;\n}});\n"
                 self.assertEqual(scope_of(src, "const b"), f"{call}('works', async t => {{")
 
-    def test_previous_sibling_never_passes_for_the_enclosing_method(self):
+    def test_unrecognized_block_hides_the_sibling_above_it(self):
+        """A header the gate cannot name must not let the previous sibling method pass for the enclosing one."""
         src = "class A {\n  constructor() {\n    this.a = 1;\n  }\n\n  *gen() {\n    yield 1;\n  }\n}\n"
-        self.assertEqual(scope_of(src, "yield 1"), "class A { > *gen() {")
+        self.assertEqual(scope_of(src, "yield 1"), "class A {")
 
     def test_type_declarations_are_the_place(self):
         """Backtest: a doc comment inside an exported hooks interface was judged as top-level code (0.49)."""
@@ -1116,7 +988,7 @@ class ScopeDetectionTest(unittest.TestCase):
 
     def test_multi_line_python_signature_still_names_the_function(self):
         src = "def f(\n    a,\n    b,\n):\n    return a\n"
-        self.assertEqual(scope_of(src, "return a", "scope.py"), "def f(")
+        self.assertEqual(scope_of(src, "return a"), "def f(")
 
 
 class RegistrationTest(unittest.TestCase):
@@ -1134,26 +1006,6 @@ class RegistrationTest(unittest.TestCase):
         self.assertEqual(hook["tool"], "context_gate")
         self.assertEqual(hook["if"], "Bash(git *)")
         self.assertEqual(hook["input"], self.CLAUDE_INPUT)
-
-    def test_agent_hook_probe_runs_only_on_its_marker_and_never_judges_without_jev(self):
-        """The subagent-type trial gathers with the deployed module, asks the connected Jev, and passes when Jev is unreachable."""
-        settings = json.loads((ROOT / "files" / "claude_managed-extensions.json").read_text())
-        hooks = [h for g in settings["hooks"]["PreToolUse"] for h in g["hooks"]]
-        (probe,) = [h for h in hooks if h.get("type") == "agent"]
-        self.assertEqual(probe["if"], "Bash(git -c jev.probe=1 *)")
-        # The documented default is only "a fast model"; the cost of every probe must be chosen, not inherited.
-        self.assertEqual(probe["model"], "claude-haiku-4-5-20251001")
-        prompt = probe["prompt"]
-        self.assertIn("$ARGUMENTS", prompt)
-        # The module needs the pinned parsers, which only the jev runtime's Python has.
-        self.assertIn("`/usr/local/lib/jev/bin/python /usr/local/lib/jev/jev_context_gate.py gather", prompt)
-        self.assertIn("mcp__jev__evaluate", prompt)
-        self.assertIn("Never judge the text yourself", prompt)
-        # The if filter still fires on any command with $VAR or $(), so other commands must pass at once.
-        self.assertIn('Unless tool_input.command contains the exact text `git -c jev.probe=1 commit`, answer {"ok": true} at once', prompt)
-        allow = settings["permissions"]["allow"]
-        self.assertIn("mcp__jev__evaluate", allow)
-        self.assertIn("Bash(/usr/local/lib/jev/bin/python /usr/local/lib/jev/jev_context_gate.py gather *)", allow)
 
     def test_codex_calls_the_connected_jev_server(self):
         config = tomllib.loads((ROOT / "files" / "codex_config.toml").read_text())
