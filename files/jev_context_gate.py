@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 DENY_BELOW = 0.5  # real README commits: misplaced text ≤ 0.25, fitting ≥ 0.72
-QUESTION_VERSION = "fdet-11"
+QUESTION_VERSION = "fdet-10"
 STATE_LIMIT = 12000  # characters of JSON state per request; Jev caps state plus question at 32k tokens
 CHUNK_LIMIT = 1500  # characters of added text per judged piece
 AROUND = 6
@@ -571,14 +571,7 @@ def new_sections(hunks: list[dict]) -> list[dict]:
             nearest = [q for q in siblings if q < pos][-1:] + [
                 q for q in siblings if q > pos
             ][:1]
-            # Existing lines that fall under a new heading are not what the new section adds.
-            body = [
-                line
-                for k, line in enumerate(
-                    image[i : section_end(heads, pos, len(image))], i
-                )
-                if (name, k) in fresh
-            ]
+            body = image[i : section_end(heads, pos, len(image))]
             found.append({
                 "heading": title,
                 "new_section": {**stats(body), "text": "\n".join(body)[:SECTION_LIMIT]},

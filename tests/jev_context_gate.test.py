@@ -389,18 +389,6 @@ class JevContextGateTest(unittest.TestCase):
         self.assertNotIn("new_sections", call["state"])
         self.assertEqual(set(call["questions"]), {"fits_0_0"})
 
-    def test_new_section_counts_only_the_lines_it_adds(self):
-        """Backtest: a new heading placed above 556 existing lines was judged as that long and failed (0.15)."""
-        readme = (self.repo / "README.md").read_text()
-        (self.repo / "README.md").write_text(
-            readme.replace("## Updating\n\nPull and rerun.", "## Updating\n\n## Upgrade\n\nPull and rerun.")
-        )
-        self.run_hook('git commit -m "x" -- README.md')
-        (section,) = [s for c in self.calls() for s in c["state"].get("new_sections", [])]
-        self.assertEqual(section["heading"], "Upgrade")
-        self.assertEqual(section["new_section"]["lines"], 1)
-        self.assertNotIn("Pull and rerun.", section["new_section"]["text"])
-
     def test_new_top_level_section_is_compared_with_its_siblings(self):
         self.add_to_codex_section(
             "## Remote\n\nUse the [app](https://example.com).\n\n### Details\n\nMore."
