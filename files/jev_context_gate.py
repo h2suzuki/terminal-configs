@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 DENY_BELOW = 0.5  # real README commits: misplaced text ≤ 0.25, fitting ≥ 0.72
-QUESTION_VERSION = "fdet-7"
+QUESTION_VERSION = "fdet-8"
 STATE_LIMIT = 12000  # characters of JSON state per request; Jev caps state plus question at 32k tokens
 CHUNK_LIMIT = 1500  # characters of added text per judged piece
 AROUND = 6
@@ -376,6 +376,38 @@ def markdown_style(pre: list[str], location: str) -> str:
     return f"Section is new; whole document before this change: {shape_sentence(pre)}"
 
 
+def json_walk(lines: list[str]) -> tuple[list[list[str]], list[str]]:
+    """Every key path in order of appearance, and the keys still open after the last line."""
+    stack: list[str | None] = []
+    keys: list[list[str]] = []
+    pending = last = None
+    in_string = escaped = False
+    buffer: list[str] = []
+    for ch in "\n".join(lines):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string, last = False, "".join(buffer)
+            else:
+                buffer.append(ch)
+        elif ch == '"':
+            in_string, buffer = True, []
+        elif ch == ":" and last is not None:
+            pending = last
+            keys.append([k for k in stack if k is not None] + [last])
+        elif ch in "{[":
+            stack.append(pending)
+            pending = last = None
+        elif ch in "}],":
+            if ch != "," and stack:
+                stack.pop()
+            pending = last = None
+    return keys, [k for k in stack if k is not None]
+
+
 def code_scope(lines: list[str], index: int) -> str:
     indent, chain = len(lines[index]) - len(lines[index].lstrip()), []
     for line in reversed(lines[:index]):
@@ -435,6 +467,18 @@ def places(hunks: list[dict]) -> list[dict]:
             if markdown:
                 kind, (location, place) = "docs", markdown_place(image, at)
                 style, adds = markdown_style(pre, location), shape_sentence(chunk)
+            elif Path(name).suffix == ".json":
+                location = place = " > ".join(json_walk(image[:at])[1]) or TOP_LEVEL
+                outline = dict.fromkeys(
+                    " > ".join(path) for path in json_walk(pre)[0] if len(path) <= 2
+                )
+                style = "Keys before this change: " + (
+                    "; ".join(list(outline)[:OUTLINE_LIMIT]) or "(none)"
+                )
+                adds = (
+                    f"{sum(1 for c in chunk if c.strip())} non-empty line(s) of code."
+                )
+                kind = "module" if location == TOP_LEVEL else "code"
             else:
                 location = place = code_scope(image, at)
                 # Fixtures and helpers in a test file have a job to do, not a behavior to check.

@@ -474,6 +474,31 @@ class JevContextGateTest(unittest.TestCase):
             self.run_hook('git commit -m "x" -- README.md', mode="bad"), {}
         )
 
+    def test_json_place_is_the_open_key_path(self):
+        """Backtest: hooks moved into "permissions" were judged at "(top level of the file)" and passed (4 of 4)."""
+        settings = (
+            '{\n  "permissions": {\n    "allow": [\n      "Bash(ls)"\n    ],\n    "defaultMode": "auto"\n  },\n'
+            '  "hooks": {\n    "Stop": []\n  }\n}\n'
+        )
+        (self.repo / "settings.json").write_text(settings)
+        self.git("add", "settings.json")
+        self.git("commit", "-q", "-m", "settings")
+        (self.repo / "settings.json").write_text(
+            settings.replace('      "Bash(ls)"\n', '      "Bash(ls)",\n      "Bash(pwd)"\n').replace(
+                '    "defaultMode": "auto"\n', '    "SessionStart": [],\n    "defaultMode": "auto"\n'
+            )
+        )
+        self.run_hook('git commit -m "x" -- settings.json')
+        hunks = [h for c in self.calls() for h in c["state"]["hunks"]]
+        self.assertEqual(
+            [h["place_and_its_purpose"] for h in hunks],
+            ["permissions > allow", "permissions"],
+        )
+        self.assertEqual(
+            hunks[0]["style_of_this_place"],
+            "Keys before this change: permissions; permissions > allow; permissions > defaultMode; hooks; hooks > Stop",
+        )
+
     def test_helpers_in_test_files_get_the_code_question(self):
         """Backtest: a cleanup line in setUp scored 0.21 when asked whether it checks what "that test" is about."""
         suite = (
