@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 DENY_BELOW = 0.5  # real README commits: misplaced text ≤ 0.25, fitting ≥ 0.72
-QUESTION_VERSION = "fdet-9"
+QUESTION_VERSION = "fdet-10"
 STATE_LIMIT = 12000  # characters of JSON state per request; Jev caps state plus question at 32k tokens
 CHUNK_LIMIT = 1500  # characters of added text per judged piece
 AROUND = 6
@@ -351,12 +351,17 @@ def shape_sentence(lines: list[str]) -> str:
     return f"{count} non-empty line(s): " + ", ".join(kinds) + "."
 
 
-def markdown_place(lines: list[str], index: int) -> tuple[str, str]:
+def markdown_place(
+    lines: list[str], index: int, below: int | None = None
+) -> tuple[str, str]:
     heads, chain = headings(lines), []
     for head in heads:
-        if head[0] > index:
+        if head[0] > index or (below and head[0] == index):
             break
         chain = [c for c in chain if c[1] < head[1]] + [head]
+    if below:
+        # A new heading joins its parent section; placed in itself, it always fits.
+        chain = [c for c in chain if c[1] < below]
     location = " > ".join(c[2] for c in chain) or "(before the first heading)"
     # The title's intro is already in file_kind_and_role; an intro stops before the edit so it never quotes it.
     intros = [
@@ -465,8 +470,18 @@ def places(hunks: list[dict]) -> list[dict]:
         for begin, chunk in paragraphs(hunk["added"], hunk["start"] - 1, markdown):
             at = min(begin, len(image) - 1)
             if markdown:
-                kind, (location, place) = "docs", markdown_place(image, at)
+                head = HEADING_RE.match(next(c for c in chunk if c.strip()))
+                level = len(head.group(1)) if head else None
+                kind, (location, place) = "docs", markdown_place(image, at, level)
                 style, adds = markdown_style(pre, location), shape_sentence(chunk)
+                if head:
+                    before = [h for h in headings(image[:at]) if h[1] <= (level or 0)]
+                    after = (
+                        f"after the section '{before[-1][2]}'"
+                        if before and before[-1][1] == level
+                        else "first in its parent section"
+                    )
+                    adds = f"{adds[:-1]}; a new section (heading '{head.group(2)}') placed {after}."
             elif Path(name).suffix == ".json":
                 location = place = " > ".join(json_walk(image[:at])[1]) or TOP_LEVEL
                 outline = dict.fromkeys(

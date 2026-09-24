@@ -443,6 +443,18 @@ class JevContextGateTest(unittest.TestCase):
         self.assertNotIn("置いた場所", line)
         self.assertIn("## Remote", reason)
 
+    def test_new_heading_is_placed_in_the_section_it_joins(self):
+        """Backtest: a section moved or inserted elsewhere was asked whether it fits itself, and passed (5 of 5)."""
+        self.add_to_codex_section("### Proxy\n\nSet HTTPS_PROXY before signing in.")
+        self.run_hook('git commit -m "x" -- README.md')
+        hunk = self.only_hunk()
+        self.assertTrue(hunk["place_and_its_purpose"].startswith("Tool > Sign in."))
+        (piece,) = hunk["pieces"]
+        self.assertIn(
+            "a new section (heading 'Proxy') placed after the section 'Codex'",
+            piece["what_the_edit_adds"],
+        )
+
     def test_new_section_paragraphs_are_judged_one_by_one_under_their_own_heading(self):
         self.add_to_codex_section(
             "## Remote\n\nUse the app.\n\n### Details\n\nMAINTAINER evidence link."
@@ -457,11 +469,10 @@ class JevContextGateTest(unittest.TestCase):
         ]
         self.assertEqual(len(marked), 1)
         self.assertNotIn("Use the app.", marked[0][1]["added_lines"])
-        self.assertTrue(
-            marked[0][0]["place_and_its_purpose"].startswith("Tool > Remote > Details.")
-        )
+        self.assertTrue(marked[0][0]["place_and_its_purpose"].startswith("Tool > Remote."))
+        self.assertIn("new section (heading 'Details')", marked[0][1]["what_the_edit_adds"])
         reason = output["hookSpecificOutput"]["permissionDecisionReason"]
-        self.assertIn("Remote > Details", reason)
+        self.assertIn("Tool > Remote", reason)
         self.assertNotIn("Use the app.", reason)
 
     def test_threshold_denies_below_one_half_only(self):
