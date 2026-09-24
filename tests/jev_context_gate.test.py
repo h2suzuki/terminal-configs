@@ -917,6 +917,21 @@ class ScopeDetectionTest(unittest.TestCase):
         src = "class A {\n  constructor() {\n    this.a = 1;\n  }\n\n  *gen() {\n    yield 1;\n  }\n}\n"
         self.assertEqual(scope_of(src, "yield 1"), "class A {")
 
+    def test_type_declarations_are_the_place(self):
+        """Backtest: a doc comment inside an exported hooks interface was judged as top-level code (0.49)."""
+        for header in (
+            "export interface Hooks {",
+            "interface Options extends Base {",
+            "export type Options = {",
+            "type State<T> = {",
+            "export enum Kind {",
+            "declare module 'ky' {",
+            "namespace Ky {",
+        ):
+            with self.subTest(header=header):
+                src = f"{header}\n  beforeRetry: Hook[];\n}}\n"
+                self.assertEqual(scope_of(src, "beforeRetry"), header)
+
     def test_multi_line_python_signature_still_names_the_function(self):
         src = "def f(\n    a,\n    b,\n):\n    return a\n"
         self.assertEqual(scope_of(src, "return a"), "def f(")

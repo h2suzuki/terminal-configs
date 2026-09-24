@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 DENY_BELOW = 0.5  # real README commits: misplaced text ≤ 0.25, fitting ≥ 0.72
-QUESTION_VERSION = "fdet-6"
+QUESTION_VERSION = "fdet-7"
 STATE_LIMIT = 12000  # characters of JSON state per request; Jev caps state plus question at 32k tokens
 CHUNK_LIMIT = 1500  # characters of added text per judged piece
 AROUND = 6
@@ -41,6 +41,8 @@ SCOPE_RE = re.compile(
     r"|(?:export\s+)?(?:default\s+)?class\s"
     r"|(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s"
     r"|(?:export\s+)?(?:default\s+)?(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*(?::[^=]+)?=\s*(?:async\s*)?(?:\([^()]*\)(?:\s*:\s*[^=]+?)?|[A-Za-z_$][\w$]*)\s*=>\s*\{"
+    r"|(?:export\s+)?(?:declare\s+)?(?:interface|enum|namespace|module)\s"
+    r"|(?:export\s+)?(?:declare\s+)?type\s+[A-Za-z_$][\w$]*(?:<[^=]*>)?\s*=\s*\{"
     r"|(?:pub\s+)?fn\s"
     r"|func\s"
     r"|\[[^\]]+\]\s*$"
