@@ -1128,14 +1128,15 @@ class RegistrationTest(unittest.TestCase):
         self.assertEqual(probe["model"], "claude-haiku-4-5-20251001")
         prompt = probe["prompt"]
         self.assertIn("$ARGUMENTS", prompt)
-        self.assertIn("python3 /usr/local/lib/jev/jev_context_gate.py gather", prompt)
+        # The module needs the pinned parsers, which only the jev runtime's Python has.
+        self.assertIn("`/usr/local/lib/jev/bin/python /usr/local/lib/jev/jev_context_gate.py gather", prompt)
         self.assertIn("mcp__jev__evaluate", prompt)
         self.assertIn("Never judge the text yourself", prompt)
         # The if filter still fires on any command with $VAR or $(), so other commands must pass at once.
         self.assertIn('Unless tool_input.command contains the exact text `git -c jev.probe=1 commit`, answer {"ok": true} at once', prompt)
         allow = settings["permissions"]["allow"]
         self.assertIn("mcp__jev__evaluate", allow)
-        self.assertIn("Bash(python3 /usr/local/lib/jev/jev_context_gate.py gather *)", allow)
+        self.assertIn("Bash(/usr/local/lib/jev/bin/python /usr/local/lib/jev/jev_context_gate.py gather *)", allow)
 
     def test_codex_calls_the_connected_jev_server(self):
         config = tomllib.loads((ROOT / "files" / "codex_config.toml").read_text())
