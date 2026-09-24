@@ -138,3 +138,21 @@ hook は判定ごとに 1 行の JSON を `~/.claude/hooks/state/jev_context_gat
 - 英訳と LLM による前置きは、機械的な前置きに比べて差が小さく、hook から LLM を呼ぶ遅さ (1 回 11〜18 秒) に見合わないと判断しました。
 
 **限界**: 評価したのは README の日本語の変更だけです。コードとテストの判定、新しい節の問いの誤拒否率は、運用のログで確かめます (5 章)。
+
+## 付録 B: 設計の原則にした TypeSafe 公式の指針
+
+この hook は、[TypeSafe 公式文書](https://docs.typesafe.ai) にある次の指針を設計の原則にしています。指針から外れる部分は、理由と実測をここに書きます。引用は原文のままで、括弧内は出典のページ名です。「未対応」は、今の実装が指針に合っていないことを示します。
+
+- **コードで決まることはコードで決める**: "Keep deterministic work in code. It is reliable and cheap." (How to build with System One)、"Direct evidence stays in code." (Autoformat)。場所と形の数は構文木と数え上げで求め、構文が壊れたかどうかは Jev に問わずに拒否します (3.2・3.3)。
+- **渡した前提はそのまま読まれる**: "`jev-1.13` answers the question you wrote, not the one you meant." (jev-1.13 の癖)。場所の求め方は、テストと、別の解析器 (Python の ast、TypeScript のコンパイラなど) との照合で確かめます。
+- **1 つの問いには 1 つの判断だけを入れる**: "System One models work best when each question asks one specific, well-scoped thing." (Introduction)。避けることとして "Hiding several judgments inside one question." (jev-1.13 の癖)。未対応: 配置の問いは、合わない例 (保守者向けの規則、根拠や確認日、別の見出しの内容など) を 1 つの問いにまとめています。
+- **判断は分けて問い、コードで組み合わせる**: "If the question you want to ask would require extended reasoning or weighs multiple independent factors, decompose it. Ask each factor as a separate question, then combine the results with logic in your code." (Introduction)。未対応。
+- **閾値が決める事実を狭く問う**: "When a judgment call feeds a threshold, the question should name the narrowest fact that decides it." (Autoformat)。未対応: 今は「この場所に合うか」という広い問いです。
+- **悪い側を真にする**: "Bad = TRUE, with explicit criteria." と "Per-field, then aggregate with `max`." (SDE cascade)。1 つでも悪ければ拒否する点は同じですが、今の問いは「合う」を真にしています (未対応)。
+- **閾値は 1 つの数ではない**: "A confidence threshold is not one number." (Confidence)、"With a threshold of `0.5`, probabilities `0.49` and `0.51` cause opposite actions even though both express substantial uncertainty." (Noul の一貫性)。未対応: すべての問いに 0.5 を使い、決めきれない帯を設けていません。閾値は "Test thresholds by plotting confidence against accuracy on your data." (How to build with System One) のとおり、正解の分かっている実際のコミットで測って決めます。
+- **モデルの版を固定する**: "If you have tuned confidence thresholds against a specific version, pin that version's ID instead of the alias and move to the new one on your own schedule." (Models)。未対応: 別名の `jev-latest` で呼んでいます。
+- **日本語は精度が下がりうる**: "Other languages, including CJK scripts, are handled but not equally well" (Models)。本文は訳さずに渡します (付録 A)。言語ごとの成績は分けて測っていません (未対応)。
+- **関係ない内容を渡さない**: "Unrelated detail acts as a distractor" (jev-1.13 の癖)。問い合わせはファイルごとに分け、場所の見出しと前後 6 行だけを添えます。
+- **問いはまとめて送る**: "Send many questions in a single call, including speculative ones, and let your code decide what's relevant." (Fan-out)。同じファイルの問いは 1 回の問い合わせにまとめます。
+
+差分を piece に切る方法、既存ファイルの中の置き場所を判定する使い方、コミットを止める使い方は、公式文書に例がありません。これらはこのリポジトリで決めたもので、上の指針に反しないように作ります。
