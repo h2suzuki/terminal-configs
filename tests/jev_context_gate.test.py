@@ -1013,6 +1013,8 @@ class RegistrationTest(unittest.TestCase):
         hooks = [h for g in settings["hooks"]["PreToolUse"] for h in g["hooks"]]
         (probe,) = [h for h in hooks if h.get("type") == "agent"]
         self.assertEqual(probe["if"], "Bash(git -c jev.probe=1 *)")
+        # The documented default is only "a fast model"; the cost of every probe must be chosen, not inherited.
+        self.assertEqual(probe["model"], "claude-haiku-4-5-20251001")
         prompt = probe["prompt"]
         self.assertIn("$ARGUMENTS", prompt)
         self.assertIn("python3 /usr/local/lib/jev/jev_context_gate.py gather", prompt)
