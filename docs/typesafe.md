@@ -20,7 +20,7 @@ jev api-key clear # 保存済みキーを削除するとき
 ファイル権限は `600`、ディレクトリは `700` とし、シンボリックリンクは受け付けません。
 この保存先は本リポジトリの規約で、TypeSafe 公式 CLI の保存先ではありません。
 
-どのコマンドも `--profile <名前>` で使うキーを選べます。AWS CLI と同じく、キーは同じ `credentials.json` に名前 (profile) ごとに並べて保存し、省略時は `default` を使います。本番のキーと検証用のキーを分けるときに使います。
+`jev api-key` と `jev hello` は `--profile <名前>` で使うキーを選べます。AWS CLI と同じく、キーは同じ `credentials.json` に名前 (profile) ごとに並べて保存し、省略時は `default` を使います。本番のキーと検証用のキーを分けるときに使います。
 
 ```bash
 jev api-key set --profile verify   # 検証用のキーを default とは別に保存
