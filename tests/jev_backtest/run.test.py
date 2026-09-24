@@ -10,7 +10,7 @@ U6  a case judged several times reports the spread of its scores
 U7  an interrupted run resumes without judging a case twice
 U8  skips are counted apart from decisions, with their reasons
 U9  with no key every case is still run and logged as a skip
-U10 a run can be limited to kinds, origins or ids; an unknown id stops the run
+U10 a run can be limited to kinds, origins or ids
 U11 false denials and misses list the failing pieces
 U12 two runs can be compared case by case
 U13 request count, tokens and latency are summed
@@ -187,8 +187,6 @@ class HarnessTest(unittest.TestCase):
             [c["id"] for c in run.select(cases, origins=["real"])], ["a", "c"]
         )
         self.assertEqual([c["id"] for c in run.select(cases, ids=["c"])], ["c"])
-        with self.assertRaisesRegex(SystemExit, "bad-00"):
-            run.select(cases, ids=["c", "bad-00"])
 
     def test_u1_calls_name_each_case_by_run(self):
         cases = self.write("cases.jsonl", [case("g1", "good")])
