@@ -64,7 +64,6 @@ def main() -> int:
                     "id": case["id"],
                     "label": case["label"],
                     "kind": case["kind"],
-                    "origin": case["origin"],
                     "cwd": str(repo),
                     "command": f'git commit -m "{message}" -- {case["file"]}',
                 },
