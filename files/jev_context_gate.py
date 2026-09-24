@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 DENY_BELOW = 0.5  # real README commits: misplaced text ≤ 0.25, fitting ≥ 0.72
-QUESTION_VERSION = "fdet-5"
+QUESTION_VERSION = "fdet-6"
 STATE_LIMIT = 12000  # characters of JSON state per request; Jev caps state plus question at 32k tokens
 CHUNK_LIMIT = 1500  # characters of added text per judged piece
 AROUND = 6
@@ -50,6 +50,9 @@ SCOPE_RE = re.compile(
     r"(?!if\b|for\b|while\b|switch\b|catch\b|else\b|function\b|return\b)"
     r"#?[A-Za-z_][\w:$-]*\s*\([^()]*\)(?:\s*:\s*[^{};=]+?)?\s*\{"
     r")"
+)
+TEST_SCOPE_RE = re.compile(
+    r"(?:async\s+)?def\s+test|(?:describe|it|test)(?:\.\w+)*\s*\("
 )
 HEREDOC_RE = re.compile(r"\A\$\(cat <<-?(['\"]?)(\w+)\1\n(.*?)\n\2\n?\)\Z", re.S)
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
@@ -432,8 +435,10 @@ def places(hunks: list[dict]) -> list[dict]:
                 style, adds = markdown_style(pre, location), shape_sentence(chunk)
             else:
                 location = place = code_scope(image, at)
-                test = "test" in name.lower() or "def test" in location
-                kind = "test" if test else "code"
+                # Fixtures and helpers in a test file have a job to do, not a behavior to check.
+                kind = (
+                    "test" if TEST_SCOPE_RE.match(location.split(" > ")[-1]) else "code"
+                )
                 scopes = [line.strip()[:80] for line in pre if SCOPE_RE.match(line)]
                 style = "Definitions before this change: " + (
                     "; ".join(scopes[:OUTLINE_LIMIT]) or "(none)"

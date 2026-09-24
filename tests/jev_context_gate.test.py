@@ -474,6 +474,30 @@ class JevContextGateTest(unittest.TestCase):
             self.run_hook('git commit -m "x" -- README.md', mode="bad"), {}
         )
 
+    def test_helpers_in_test_files_get_the_code_question(self):
+        """Backtest: a cleanup line in setUp scored 0.21 when asked whether it checks what "that test" is about."""
+        suite = (
+            "import unittest\n\n\nclass Base(unittest.TestCase):\n    def setUp(self):\n        self.tmp = 1\n\n"
+            "    def test_value(self):\n        self.assertEqual(self.tmp, 1)\n"
+        )
+        (self.repo / "suite_test.py").write_text(suite)
+        self.git("add", "suite_test.py")
+        self.git("commit", "-q", "-m", "tests")
+        (self.repo / "suite_test.py").write_text(
+            suite.replace("        self.tmp = 1\n", "        self.tmp = 1\n        self.extra = 2\n").replace(
+                "self.assertEqual(self.tmp, 1)\n", "self.assertEqual(self.tmp, 1)\n        self.assertTrue(self.extra)\n"
+            )
+        )
+        self.run_hook('git commit -m "x" -- suite_test.py')
+        asked = {
+            h["place_and_its_purpose"].split(" > ")[-1]: q["instructions"]
+            for c in self.calls()
+            for i, h in enumerate(c["state"]["hunks"])
+            for q in [c["questions"][f"fits_{i}_0"]]
+        }
+        self.assertIn("responsibility", asked["def setUp(self):"])
+        self.assertIn("check what that test is about", asked["def test_value(self):"])
+
     def test_top_level_code_is_asked_whether_it_belongs_at_the_top_level(self):
         """Asked whether it did the job of the place "(top level of the file)", a needed import line scored 0.09."""
         for name in ("loader.py", "loader_test.py"):
