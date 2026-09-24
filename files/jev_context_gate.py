@@ -4,7 +4,9 @@ the jev server calls check(). Only a clear "does not fit" denies; any Jev, key, 
 from __future__ import annotations
 
 import argparse
+import ast
 import datetime
+import functools
 import hashlib
 import json
 import os
@@ -13,10 +15,22 @@ import shlex
 import subprocess
 import sys
 import time
+import warnings
 from pathlib import Path
+from typing import Any
+
+try:
+    import tree_sitter
+    import tree_sitter_bash
+    import tree_sitter_json
+    import tree_sitter_markdown
+    import tree_sitter_python
+    import tree_sitter_typescript
+except ImportError:  # without the parsers the gate skips and says why, instead of breaking the jev server
+    tree_sitter = None
 
 DENY_BELOW = 0.5  # real README commits: misplaced text ≤ 0.25, fitting ≥ 0.72
-QUESTION_VERSION = "fdet-10"
+QUESTION_VERSION = "struct-1"
 STATE_LIMIT = 12000  # characters of JSON state per request; Jev caps state plus question at 32k tokens
 CHUNK_LIMIT = 1500  # characters of added text per judged piece
 AROUND = 6
@@ -35,23 +49,30 @@ LOG = os.environ.get("JEV_CONTEXT_GATE_LOG") or os.path.expanduser(
 MARKDOWN = {".md", ".markdown"}
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
-SCOPE_RE = re.compile(
-    r"^\s*(?:"
-    r"(?:async\s+)?def\s"
-    r"|(?:export\s+)?(?:default\s+)?class\s"
-    r"|(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s"
-    r"|(?:export\s+)?(?:default\s+)?(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*(?::[^=]+)?=\s*(?:async\s*)?(?:\([^()]*\)(?:\s*:\s*[^=]+?)?|[A-Za-z_$][\w$]*)\s*=>\s*\{"
-    r"|(?:export\s+)?(?:declare\s+)?(?:interface|enum|namespace|module)\s"
-    r"|(?:export\s+)?(?:declare\s+)?type\s+[A-Za-z_$][\w$]*(?:<[^=]*>)?\s*=\s*\{"
-    r"|(?:pub\s+)?fn\s"
-    r"|func\s"
-    r"|\[[^\]]+\]\s*$"
-    r"|(?:describe|it|test)(?:\.\w+)*\s*\(.*\{\s*$"
-    # method/accessor definitions, excluding control-flow statements of the same "name(...) {" shape
-    r"|(?:(?:static|async|get|set|public|private|protected|readonly|override|abstract)\s+){0,4}"
-    r"(?!if\b|for\b|while\b|switch\b|catch\b|else\b|function\b|return\b)"
-    r"#?[A-Za-z_][\w:$-]*\s*\([^()]*\)(?:\s*:\s*[^{};=]+?)?\s*\{"
-    r")"
+GRAMMAR_OF_SUFFIX = {
+    ".py": "python", ".ts": "typescript", ".mts": "typescript", ".cts": "typescript", ".tsx": "tsx",
+    ".js": "tsx", ".jsx": "tsx", ".mjs": "tsx", ".cjs": "tsx", ".sh": "bash", ".bash": "bash",
+    ".json": "json", ".md": "markdown", ".markdown": "markdown",
+}  # fmt: skip
+GRAMMAR_OF_SHEBANG = {"python": "python", "bash": "bash", "sh": "bash", "node": "tsx"}
+LANGUAGE_OF_SUFFIX = {
+    ".py": "Python", ".ts": "TypeScript", ".mts": "TypeScript", ".cts": "TypeScript", ".tsx": "TypeScript",
+    ".js": "JavaScript", ".jsx": "JavaScript", ".mjs": "JavaScript", ".cjs": "JavaScript",
+    ".sh": "Shell", ".bash": "Shell", ".json": "JSON",
+}  # fmt: skip
+LANGUAGE_OF_GRAMMAR = {"python": "Python", "bash": "Shell", "tsx": "JavaScript"}
+# Syntax-tree nodes that are a place of their own; everything else (if, for, callbacks) belongs to the place around it.
+PLACE_NODES = {
+    "python": {"function_definition", "class_definition"},
+    "typescript": {"function_declaration", "generator_function_declaration", "class_declaration",
+                   "abstract_class_declaration", "method_definition", "interface_declaration",
+                   "type_alias_declaration", "enum_declaration", "internal_module", "module"},
+    "bash": {"function_definition"},
+}  # fmt: skip
+PLACE_NODES["tsx"] = PLACE_NODES["typescript"]
+TEST_CALL_RE = re.compile(r"(?:describe|it|test)(?:\.\w+)*")
+TEST_FILE_RE = re.compile(
+    r"(?:^|/)(?:tests?|__tests__)/|[._-](?:test|spec)\.[^/]+$|(?:^|/)test_[^/]+$"
 )
 TEST_SCOPE_RE = re.compile(
     r"(?:async\s+)?def\s+test|(?:describe|it|test)(?:\.\w+)*\s*\("
@@ -302,6 +323,20 @@ def file_role(lines: list[str], markdown: bool) -> str:
     return " ".join(comments)[:ROLE_LIMIT]
 
 
+def default_role(name: str, lines: list[str]) -> str:
+    """For a file with no docstring or header comment: its language and whether it is a test."""
+    language = LANGUAGE_OF_SUFFIX.get(Path(name).suffix) or LANGUAGE_OF_GRAMMAR.get(
+        grammar_of(name, lines) or ""
+    )
+    if not language:
+        return ""
+    return (
+        f"{language} {'test' if TEST_FILE_RE.search(name) else 'source'} file"
+        if language != "JSON"
+        else "JSON file"
+    )
+
+
 def stats(lines: list[str]) -> dict:
     text = "\n".join(lines)
     return {
@@ -367,8 +402,9 @@ def markdown_place(
     intros = [
         (c[2], first_paragraph(lines, c[0] + 1, index)) for c in chain if c != heads[0]
     ]
-    purpose = " ".join(f"Section '{title}: {text}'" for title, text in intros if text)
-    return location, f"{location}. {purpose}".rstrip()
+    return location, " ".join(
+        f"Section '{title}: {text}'" for title, text in intros if text
+    )
 
 
 def markdown_style(pre: list[str], location: str) -> str:
@@ -381,51 +417,203 @@ def markdown_style(pre: list[str], location: str) -> str:
     return f"Section is new; whole document before this change: {shape_sentence(pre)}"
 
 
-def json_walk(lines: list[str]) -> tuple[list[list[str]], list[str]]:
-    """Every key path in order of appearance, and the keys still open after the last line."""
-    stack: list[str | None] = []
-    keys: list[list[str]] = []
-    pending = last = None
-    in_string = escaped = False
-    buffer: list[str] = []
-    for ch in "\n".join(lines):
-        if in_string:
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_string, last = False, "".join(buffer)
-            else:
-                buffer.append(ch)
-        elif ch == '"':
-            in_string, buffer = True, []
-        elif ch == ":" and last is not None:
-            pending = last
-            keys.append([k for k in stack if k is not None] + [last])
-        elif ch in "{[":
-            stack.append(pending)
-            pending = last = None
-        elif ch in "}],":
-            if ch != "," and stack:
-                stack.pop()
-            pending = last = None
-    return keys, [k for k in stack if k is not None]
+def grammar_of(name: str, lines: list[str]) -> str | None:
+    if (suffix := Path(name).suffix) in GRAMMAR_OF_SUFFIX:
+        return GRAMMAR_OF_SUFFIX[suffix]
+    head = lines[0] if lines and lines[0].startswith("#!") else ""
+    return next(
+        (
+            g
+            for word, g in GRAMMAR_OF_SHEBANG.items()
+            if re.search(rf"\b{word}\d*\b", head)
+        ),
+        None,
+    )
 
 
-def code_scope(lines: list[str], index: int) -> str:
-    indent, chain = len(lines[index]) - len(lines[index].lstrip()), []
-    for line in reversed(lines[:index]):
-        depth, text = len(line) - len(line.lstrip()), line.strip()
-        if not text or depth >= indent or text[0] in ")]}":
-            continue
-        if SCOPE_RE.match(line):
-            chain.insert(0, text[:80])
-            indent = depth
-        elif text.endswith(("{", ":")):
-            # An unnamed block still encloses the line, so a sibling above it must not pass for the scope.
-            indent = depth
-    return " > ".join(chain) or TOP_LEVEL
+@functools.cache
+def parser(grammar: str):
+    if tree_sitter is None:
+        raise Skip("構文解析器 (tree-sitter) が jev の実行環境に入っていません")
+    language = {
+        "python": tree_sitter_python.language, "typescript": tree_sitter_typescript.language_typescript,
+        "tsx": tree_sitter_typescript.language_tsx, "bash": tree_sitter_bash.language,
+        "json": tree_sitter_json.language, "markdown": tree_sitter_markdown.language,
+    }[grammar]()  # fmt: skip
+    return tree_sitter.Parser(tree_sitter.Language(language))
+
+
+@functools.lru_cache(maxsize=16)
+def parse(grammar: str, text: str):
+    return parser(grammar).parse(text.encode())
+
+
+def node_at(tree, lines: list[str], row: int):
+    """The smallest node at the first non-blank character of line `row`."""
+    line = lines[row] if row < len(lines) else ""
+    column = len(line[: len(line) - len(line.lstrip())].encode())
+    return tree.root_node.descendant_for_point_range((row, column), (row, column))
+
+
+def node_text(node) -> str:
+    return node.text.decode(errors="replace") if node is not None else ""
+
+
+def is_place(node, grammar: str) -> bool:
+    if node.type in PLACE_NODES.get(grammar, ()):
+        return True
+    if grammar in ("typescript", "tsx") and node.type == "call_expression":
+        return bool(
+            TEST_CALL_RE.fullmatch(node_text(node.child_by_field_name("function")))
+        )
+    # An arrow or function expression is a place only when a name is bound to it.
+    return node.type in ("arrow_function", "function_expression", "function") and (
+        node.parent is not None and node.parent.type == "variable_declarator"
+    )
+
+
+def context_of(node, grammar: str, lines: list[str]) -> str | None:
+    """How a comment, docstring, string or embedded document that holds the line is named in the place."""
+    if node.end_point.row == node.start_point.row:
+        return None
+    if node.type == "comment":
+        return "(inside a comment)"
+    if node.type == "heredoc_redirect":
+        return f"(inside the here-document of `{lines[node.start_point.row].strip()[:80]}`)"
+    if node.type == "fenced_code_block":
+        info = next((c for c in node.named_children if c.type == "info_string"), None)
+        return f"(inside a ```{node_text(info).strip()} code block)"
+    if node.type in ("string", "template_string") and grammar != "json":
+        statement = node.parent
+        if (
+            grammar == "python"
+            and statement is not None
+            and statement.type == "expression_statement"
+        ):
+            body = statement.parent
+            first = (
+                next((c for c in body.named_children if c.type != "comment"), None)
+                if body
+                else None
+            )
+            if first == statement:
+                return "(module docstring)" if body.type == "module" else "(docstring)"
+        return "(inside a multi-line string)"
+    return None
+
+
+def enclosing(name: str, lines: list[str], row: int, since: int) -> list[str]:
+    """The places that hold line `row` and began before line `since`, outermost first, then the innermost context."""
+    if (grammar := grammar_of(name, lines)) is None:
+        return []
+    tree = parse(grammar, "\n".join(lines))
+    chain: list[tuple[int, str]] = []
+    inner = None
+    node = node_at(tree, lines, row)
+    while node is not None:
+        if node.start_point.row < since:
+            if grammar == "json" and node.type == "pair":
+                key = node.child_by_field_name("key")
+                label = (
+                    json.loads(node_text(key))
+                    if key is not None and key.type == "string"
+                    else node_text(key)
+                )
+                chain.append((node.start_point.row, str(label)))
+            elif is_place(node, grammar) and (
+                not chain or chain[-1][0] != node.start_point.row
+            ):
+                chain.append(
+                    (node.start_point.row, lines[node.start_point.row].strip()[:80])
+                )
+            elif inner is None and not chain:
+                inner = context_of(node, grammar, lines)
+        node = node.parent
+    return [label for _, label in reversed(chain)] + ([inner] if inner else [])
+
+
+def code_scope(name: str, lines: list[str], index: int) -> str:
+    return " > ".join(enclosing(name, lines, index, index)) or TOP_LEVEL
+
+
+def definitions(name: str, lines: list[str]) -> list[str]:
+    """Header lines of the places the file defines, or for JSON its key paths two levels deep, in file order."""
+    if (grammar := grammar_of(name, lines)) is None:
+        return []
+    tree = parse(grammar, "\n".join(lines))
+    found: list[tuple[int, str]] = []
+    stack: list[tuple[Any, tuple[str, ...]]] = [(tree.root_node, ())]
+    while stack:
+        node, keys = stack.pop()
+        if grammar == "json" and node.type == "pair":
+            key = node.child_by_field_name("key")
+            keys = (*keys, str(json.loads(node_text(key)) if key is not None and key.type == "string" else node_text(key)))  # fmt: skip
+            if len(keys) <= 2:
+                found.append((node.start_point.row, " > ".join(keys)))
+        elif grammar != "json" and is_place(node, grammar):
+            found.append(
+                (node.start_point.row, lines[node.start_point.row].strip()[:80])
+            )
+        stack.extend((child, keys) for child in reversed(node.children))
+    return list(dict.fromkeys(label for _, label in sorted(found, key=lambda f: f[0])))
+
+
+def added_definition(name: str, lines: list[str], rows: range) -> str | None:
+    """The header of the first place that the added rows begin."""
+    if (grammar := grammar_of(name, lines)) is None:
+        return None
+    tree = parse(grammar, "\n".join(lines))
+    for row in rows:
+        node = node_at(tree, lines, row)
+        while node is not None and node.start_point.row == row:
+            if is_place(node, grammar):
+                return lines[row].strip()[:80]
+            node = node.parent
+    return None
+
+
+def syntax_error(name: str, lines: list[str]) -> str | None:
+    """Why the file does not parse in its own language, or None when it does or has no grammar."""
+    grammar, text = grammar_of(name, lines), "\n".join(lines)
+    if grammar == "json":
+        try:
+            json.loads(text)
+        except ValueError as error:
+            return f"行 {getattr(error, 'lineno', '?')}: {getattr(error, 'msg', error)}"
+        return None
+    if grammar == "python":
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                ast.parse(text)
+        except SyntaxError as error:
+            return f"行 {error.lineno}: {error.msg}"
+        return None
+    if (
+        grammar in ("typescript", "tsx", "bash")
+        and (tree := parse(grammar, text)).root_node.has_error
+    ):
+        stack = [tree.root_node]
+        while stack:
+            node = stack.pop()
+            if node.type == "ERROR" or node.is_missing:
+                return f"行 {node.start_point.row + 1}: 構文エラー"
+            stack.extend(
+                reversed([c for c in node.children if c.has_error or c.is_missing])
+            )
+        return "構文エラー"
+    return None
+
+
+def syntax_breaks(hunks: list[dict]) -> list[dict]:
+    """Files that parsed before this change and do not after it."""
+    files = {h["file"]: h for h in hunks if not h["new"]}
+    return [
+        {"file": name, "why": why}
+        for name, hunk in files.items()
+        if syntax_error(name, hunk["pre"]) is None
+        and (why := syntax_error(name, hunk["image"]))
+    ]
 
 
 def paragraphs(
@@ -461,19 +649,51 @@ def paragraphs(
     return found
 
 
+def pieces_by_place(
+    name: str, image: list[str], chunks: list[tuple[int, list[str]]], since: int
+) -> list[tuple[int, list[str]]]:
+    """Split each chunk where its lines leave one enclosing place for another; blank lines stay with the lines above."""
+    found = []
+    for begin, chunk in chunks:
+        start, current = 0, None
+        for offset, line in enumerate(chunk):
+            if not line.strip():
+                continue
+            chain = enclosing(name, image, begin + offset, since)
+            if current is not None and chain != current:
+                kept = chunk[start:offset]
+                while not kept[-1].strip():
+                    kept.pop()
+                found.append((begin + start, kept))
+                start = offset
+            current = chain
+        found.append((begin + start, chunk[start:]))
+    return found
+
+
 def places(hunks: list[dict]) -> list[dict]:
     """Consecutive pieces of one file under the same place, each place with its slots filled in code."""
     found: list[dict] = []
     for hunk in (h for h in hunks if not h["new"]):
         name, image, pre = hunk["file"], hunk["image"], hunk["pre"]
         markdown = Path(name).suffix in MARKDOWN
-        for begin, chunk in paragraphs(hunk["added"], hunk["start"] - 1, markdown):
+        since = hunk["start"] - 1
+        for begin, chunk in pieces_by_place(
+            name, image, paragraphs(hunk["added"], since, markdown), since
+        ):
             at = min(begin, len(image) - 1)
+            count = sum(1 for c in chunk if c.strip())
+            chain = enclosing(name, image, at, since)
+            context = chain[-1] if chain and chain[-1].startswith("(") else None
             if markdown:
                 head = HEADING_RE.match(next(c for c in chunk if c.strip()))
                 level = len(head.group(1)) if head else None
-                kind, (location, place) = "docs", markdown_place(image, at, level)
+                location, purpose = markdown_place(image, at, level)
                 style, adds = markdown_style(pre, location), shape_sentence(chunk)
+                if context:
+                    location = f"{location} > {context}"
+                    adds = f"{count} line(s) inside an existing {context[len('(inside a ') : -len(' code block)')]} code block."
+                kind, place = "docs", f"{location}. {purpose}".rstrip()
                 if head:
                     before = [h for h in headings(image[:at]) if h[1] <= (level or 0)]
                     after = (
@@ -482,38 +702,37 @@ def places(hunks: list[dict]) -> list[dict]:
                         else "first in its parent section"
                     )
                     adds = f"{adds[:-1]}; a new section (heading '{head.group(2)}') placed {after}."
-            elif Path(name).suffix == ".json":
-                location = place = " > ".join(json_walk(image[:at])[1]) or TOP_LEVEL
-                outline = dict.fromkeys(
-                    " > ".join(path) for path in json_walk(pre)[0] if len(path) <= 2
-                )
-                style = "Keys before this change: " + (
-                    "; ".join(list(outline)[:OUTLINE_LIMIT]) or "(none)"
-                )
-                adds = (
-                    f"{sum(1 for c in chunk if c.strip())} non-empty line(s) of code."
-                )
-                kind = "module" if location == TOP_LEVEL else "code"
+            elif context in ("(module docstring)", "(docstring)"):
+                location = place = " > ".join(chain)
+                style = "Definitions before this change: " + ("; ".join(definitions(name, pre)[:OUTLINE_LIMIT]) or "(none)")  # fmt: skip
+                kind, adds = "docs", shape_sentence(chunk)
             else:
-                location = place = code_scope(image, at)
-                # Fixtures and helpers in a test file have a job to do, not a behavior to check.
-                kind = (
-                    "test" if TEST_SCOPE_RE.match(location.split(" > ")[-1]) else "code"
-                )
-                scopes = [line.strip()[:80] for line in pre if SCOPE_RE.match(line)]
-                style = "Definitions before this change: " + (
-                    "; ".join(scopes[:OUTLINE_LIMIT]) or "(none)"
-                )
-                adds = (
-                    f"{sum(1 for c in chunk if c.strip())} non-empty line(s) of {kind}"
-                )
-                first = next((c for c in chunk if c.strip()), "")
-                if location != TOP_LEVEL and SCOPE_RE.match(first):
+                location = place = " > ".join(chain) or TOP_LEVEL
+                places_only = [c for c in chain if not c.startswith("(")]
+                listed = definitions(name, pre)[:OUTLINE_LIMIT]
+                if grammar_of(name, image) == "json":
+                    style = "Keys before this change: " + (
+                        "; ".join(listed) or "(none)"
+                    )
+                    kind = "code"
+                else:
+                    style = "Definitions before this change: " + (
+                        "; ".join(listed) or "(none)"
+                    )
+                    # Fixtures and helpers in a test file have a job to do, not a behavior to check.
+                    kind = (
+                        "test"
+                        if places_only and TEST_SCOPE_RE.match(places_only[-1])
+                        else "code"
+                    )
+                adds = f"{count} non-empty line(s) of {kind}"
+                defined = added_definition(name, image, range(at, at + len(chunk)))
+                if places_only and defined:
                     # Stated so Jev sees a definition moved inside another one.
-                    adds += f", defining `{first.strip()[:80]}` inside `{location.split(' > ')[-1]}`"
+                    adds += f", defining `{defined}` inside `{places_only[-1]}`"
                 adds += "."
                 # A scope question has no scope to ask about at the top level of the file.
-                kind = "module" if location == TOP_LEVEL else kind
+                kind = kind if places_only else "module"
             text = "\n".join(chunk)
             piece = {
                 "what_the_edit_adds": adds,
@@ -650,7 +869,7 @@ def requests(hunks: list[dict], message: str) -> list[dict]:
     for name in dict.fromkeys(h["file"] for h in hunks):
         hunk = next(h for h in hunks if h["file"] == name)
         markdown = Path(name).suffix in MARKDOWN
-        role = file_role(hunk["image"], markdown)
+        role = file_role(hunk["image"], markdown) or default_role(name, hunk["image"])
         kind = (
             f"{role} Whole document: {shape_sentence(hunk['pre'])}"
             if markdown
@@ -764,6 +983,14 @@ def deny_reason(failures: list[tuple[dict, list[str], str, float]]) -> str:
     return "\n".join(lines)
 
 
+def syntax_reason(broken: list[dict]) -> str:
+    lines = [f"jev-context-gate: {b['file']} は変更後に構文として読めません ({b['why']})。変更前は読めていました。" for b in broken]  # fmt: skip
+    lines.append(
+        "構文を直してからコミットし直してください。hook 自身はファイルを変更しません。"
+    )
+    return "\n".join(lines)
+
+
 def write_log(record: dict) -> None:
     try:
         os.makedirs(os.path.dirname(LOG), exist_ok=True)
@@ -780,8 +1007,12 @@ def check(payload: dict, evaluate) -> dict:
         return {}
     cwd, paths, amend, all_tracked, message = target
     hunks = changed_hunks(cwd, paths, amend, all_tracked)
-    states = requests(hunks, message) if hunks else []
-    if not states:
+    try:
+        broken = syntax_breaks(hunks)
+        states = [] if broken else requests(hunks, message) if hunks else []
+    except Skip as skip:
+        return {"systemMessage": skip_notice(skip)}
+    if not states and not broken:
         return {}
     began = time.monotonic()
     record = {
@@ -795,7 +1026,13 @@ def check(payload: dict, evaluate) -> dict:
     }  # fmt: skip
     output = {}
     try:
-        if failures := judge(states, record, evaluate):
+        if broken:
+            # Whether a file parses is computed in code; Jev is not asked about a file that no longer does.
+            record["outcome"], record["syntax_breaks"] = "deny", broken
+            decision = {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                        "permissionDecisionReason": syntax_reason(broken)}  # fmt: skip
+            output = {"hookSpecificOutput": decision}
+        elif failures := judge(states, record, evaluate):
             record["outcome"] = "deny"
             decision = {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                         "permissionDecisionReason": deny_reason(failures)}  # fmt: skip
@@ -818,19 +1055,24 @@ def skip_notice(reason: object) -> str:
     return f"jev-context-gate: Jev の文脈チェックを省略しました (理由: {reason})"
 
 
-def gather(cwd: str, command: str) -> list[dict]:
-    """The Jev requests check() would send for this Bash command, for a judge outside the jev server."""
+def gathered(cwd: str, command: str) -> tuple[list[dict], list[dict]]:
+    """The Jev requests check() would send for this Bash command, and the files it denies without asking Jev."""
     target = commit_target(
         {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd}
     )
     if target is None:
-        return []
+        return [], []
     cwd_path, paths, amend, all_tracked, message = target
     hunks = changed_hunks(cwd_path, paths, amend, all_tracked)
-    return [
-        {"state": public(s), "questions": questions(s)}
-        for s in (requests(hunks, message) if hunks else [])
-    ]
+    if broken := syntax_breaks(hunks):
+        return [], broken
+    states = requests(hunks, message) if hunks else []
+    return [{"state": public(s), "questions": questions(s)} for s in states], []
+
+
+def gather(cwd: str, command: str) -> list[dict]:
+    """The Jev requests check() would send for this Bash command, for a judge outside the jev server."""
+    return gathered(cwd, command)[0]
 
 
 def main() -> int:
@@ -842,7 +1084,8 @@ def main() -> int:
     gather_parser.add_argument("--cwd", required=True)
     gather_parser.add_argument("--command", required=True)
     args = parser.parse_args()
-    print(json.dumps({"requests": gather(args.cwd, args.command)}, ensure_ascii=False))
+    sent, broken = gathered(args.cwd, args.command)
+    print(json.dumps({"requests": sent, "syntax_breaks": broken}, ensure_ascii=False))
     return 0
 
 

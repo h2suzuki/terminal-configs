@@ -1,3 +1,10 @@
 # Official TypeSafe and MCP Python SDKs; runtime shared under /usr/local/lib/jev.
 typesafe-sdk==0.7.1
 mcp==2.2.0
+# Parsers the context gate reads file structure with; tree-sitter 0.26.0 crashes on Markdown trees when every grammar is loaded.
+tree-sitter==0.25.2
+tree-sitter-bash==0.25.1
+tree-sitter-json==0.24.8
+tree-sitter-markdown==0.5.1
+tree-sitter-python==0.25.0
+tree-sitter-typescript==0.23.2
