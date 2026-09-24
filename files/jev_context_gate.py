@@ -70,6 +70,7 @@ PLACE_NODES = {
     "bash": {"function_definition"},
 }  # fmt: skip
 PLACE_NODES["tsx"] = PLACE_NODES["typescript"]
+CLOSING_ONLY_RE = re.compile(r"^[\s)\]}>,;]*$")
 TEST_CALL_RE = re.compile(r"(?:describe|it|test)(?:\.\w+)*")
 TEST_FILE_RE = re.compile(
     r"(?:^|/)(?:tests?|__tests__)/|[._-](?:test|spec)\.[^/]+$|(?:^|/)test_[^/]+$"
@@ -572,6 +573,18 @@ def added_definition(name: str, lines: list[str], rows: range) -> str | None:
     return None
 
 
+def comment_lines(name: str, lines: list[str], rows: range) -> int:
+    """How many of the rows hold nothing but a comment."""
+    if (grammar := grammar_of(name, lines)) is None or grammar in ("json", "markdown"):
+        return 0
+    tree = parse(grammar, "\n".join(lines))
+    return sum(
+        1
+        for row in rows
+        if lines[row].strip() and node_at(tree, lines, row).type == "comment"
+    )
+
+
 def syntax_error(name: str, lines: list[str]) -> str | None:
     """Why the file does not parse in its own language, or None when it does or has no grammar."""
     grammar, text = grammar_of(name, lines), "\n".join(lines)
@@ -652,12 +665,13 @@ def paragraphs(
 def pieces_by_place(
     name: str, image: list[str], chunks: list[tuple[int, list[str]]], since: int
 ) -> list[tuple[int, list[str]]]:
-    """Split each chunk where its lines leave one enclosing place for another; blank lines stay with the lines above."""
+    """Split each chunk where its lines leave one enclosing place for another; blank and closing-bracket lines
+    stay with the piece they fall in."""
     found = []
     for begin, chunk in chunks:
         start, current = 0, None
         for offset, line in enumerate(chunk):
-            if not line.strip():
+            if CLOSING_ONLY_RE.match(line):
                 continue
             chain = enclosing(name, image, begin + offset, since)
             if current is not None and chain != current:
@@ -683,7 +697,12 @@ def places(hunks: list[dict]) -> list[dict]:
         ):
             at = min(begin, len(image) - 1)
             count = sum(1 for c in chunk if c.strip())
-            chain = enclosing(name, image, at, since)
+            # A closing bracket belongs to what it closes, so the first line with content names the place.
+            anchor = at + next(
+                (i for i, c in enumerate(chunk) if not CLOSING_ONLY_RE.match(c)), 0
+            )
+            # In code, a piece cut from a longer addition sits inside whatever that addition began before it.
+            chain = enclosing(name, image, anchor, since if markdown else anchor)
             context = chain[-1] if chain and chain[-1].startswith("(") else None
             if markdown:
                 head = HEADING_RE.match(next(c for c in chunk if c.strip()))
@@ -736,6 +755,10 @@ def places(hunks: list[dict]) -> list[dict]:
                     adds = f"{count} line(s) inside {embedded}."
                 else:
                     adds = f"{count} non-empty line(s) of {kind}"
+                    if comments := comment_lines(
+                        name, image, range(at, at + len(chunk))
+                    ):
+                        adds += f", {comments} of them comments"
                     defined = added_definition(name, image, range(at, at + len(chunk)))
                     if places_only and defined:
                         # Stated so Jev sees a definition moved inside another one.

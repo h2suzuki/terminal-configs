@@ -723,6 +723,23 @@ class JevContextGateTest(unittest.TestCase):
         self.assertTrue(all(len(p["added_lines"]) <= gate.CHUNK_LIMIT for p in pieces))
         self.assertTrue(pieces[0]["added_lines"].startswith("def build():"))
         self.assertTrue(pieces[-1]["added_lines"].endswith(f"value_59 = compute('{'x' * 30}', 59)"))
+        # Backtest: the rest of a long new test, cut off by the size limit, was judged as top-level code (0.20).
+        places = [h["place_and_its_purpose"] for c in self.calls() for h in c["state"]["hunks"] for _ in h["pieces"]]
+        self.assertEqual(places, [gate.TOP_LEVEL] + ["def build():"] * (len(pieces) - 1))
+
+    def test_closing_bracket_line_goes_with_the_lines_after_it(self):
+        """Backtest: `],` made by adding a comma was judged alone as its own edit (0.45)."""
+        before = '{\n  "hooks": {\n    "A": [\n      "x"\n    ]\n  }\n}\n'
+        self.commit_edit("settings.json", before, before.replace('    ]\n', '    ],\n    "B": []\n'))
+        hunk = self.only_hunk()
+        self.assertEqual(hunk["place_and_its_purpose"], "hooks")
+        self.assertEqual([p["added_lines"] for p in hunk["pieces"]], ['    ],\n    "B": []'])
+
+    def test_comment_lines_in_code_are_counted_as_comments(self):
+        """Backtest: a one-line comment added to a function was described as a line of code (0.43)."""
+        self.commit_edit("loader.py", CODE, CODE.replace("    return open(path).read()\n", "    # Text mode.\n    return open(path).read()\n"))
+        (piece,) = self.only_hunk()["pieces"]
+        self.assertEqual(piece["what_the_edit_adds"], "1 non-empty line(s) of code, 1 of them comments.")
 
     def test_code_block_is_judged_with_the_paragraph_that_introduces_it(self):
         """A README example judged apart from its explanation lost what it illustrates."""
