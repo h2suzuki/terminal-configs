@@ -869,6 +869,34 @@ class ScopeDetectionTest(unittest.TestCase):
     def test_plain_call_statement_does_not_match_scope_re(self):
         self.assertIsNone(gate.SCOPE_RE.match("foo(a);"))
 
+    def test_access_modifiers_and_private_names_are_the_place(self):
+        """Backtest: lines inside `protected _stream(...)` and `async #parseJson(...)` were placed in the constructor."""
+        for header in (
+            "protected _stream(response: Response) {",
+            "async #parseJson(text: string): Promise<unknown> {",
+            "private static helper(): void {",
+            "public readonly get size(): number {",
+            "#decorate(response) {",
+        ):
+            with self.subTest(header=header):
+                src = f"class Ky {{\n  constructor() {{\n    this.a = 1;\n  }}\n\n  {header}\n    return 1;\n  }}\n}}\n"
+                self.assertEqual(scope_of(src, "return 1"), f"class Ky {{ > {header}")
+
+    def test_test_modifier_calls_are_the_place(self):
+        for call in ("test.serial", "test.failing", "it.only", "describe.skip"):
+            with self.subTest(call=call):
+                src = f"{call}('works', async t => {{\n  const b = 2;\n}});\n"
+                self.assertEqual(scope_of(src, "const b"), f"{call}('works', async t => {{")
+
+    def test_unrecognized_block_hides_the_sibling_above_it(self):
+        """A header the gate cannot name must not let the previous sibling method pass for the enclosing one."""
+        src = "class A {\n  constructor() {\n    this.a = 1;\n  }\n\n  *gen() {\n    yield 1;\n  }\n}\n"
+        self.assertEqual(scope_of(src, "yield 1"), "class A {")
+
+    def test_multi_line_python_signature_still_names_the_function(self):
+        src = "def f(\n    a,\n    b,\n):\n    return a\n"
+        self.assertEqual(scope_of(src, "return a"), "def f(")
+
 
 class RegistrationTest(unittest.TestCase):
     """Both clients hand the commit to the connected jev server; no hook starts a process to judge it."""

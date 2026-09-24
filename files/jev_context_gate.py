@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 DENY_BELOW = 0.5  # real README commits: misplaced text ≤ 0.25, fitting ≥ 0.72
-QUESTION_VERSION = "fdet-4"
+QUESTION_VERSION = "fdet-5"
 STATE_LIMIT = 12000  # characters of JSON state per request; Jev caps state plus question at 32k tokens
 CHUNK_LIMIT = 1500  # characters of added text per judged piece
 AROUND = 6
@@ -44,10 +44,11 @@ SCOPE_RE = re.compile(
     r"|(?:pub\s+)?fn\s"
     r"|func\s"
     r"|\[[^\]]+\]\s*$"
-    r"|(?:describe|it|test)\s*\(.*\{\s*$"
+    r"|(?:describe|it|test)(?:\.\w+)*\s*\(.*\{\s*$"
     # method/accessor definitions, excluding control-flow statements of the same "name(...) {" shape
-    r"|(?:static\s+|async\s+|get\s+|set\s+){0,2}(?!if\b|for\b|while\b|switch\b|catch\b|else\b|function\b|return\b)"
-    r"[A-Za-z_][\w:$-]*\s*\([^()]*\)(?:\s*:\s*[^{};=]+?)?\s*\{"
+    r"|(?:(?:static|async|get|set|public|private|protected|readonly|override|abstract)\s+){0,4}"
+    r"(?!if\b|for\b|while\b|switch\b|catch\b|else\b|function\b|return\b)"
+    r"#?[A-Za-z_][\w:$-]*\s*\([^()]*\)(?:\s*:\s*[^{};=]+?)?\s*\{"
     r")"
 )
 HEREDOC_RE = re.compile(r"\A\$\(cat <<-?(['\"]?)(\w+)\1\n(.*?)\n\2\n?\)\Z", re.S)
@@ -373,9 +374,14 @@ def markdown_style(pre: list[str], location: str) -> str:
 def code_scope(lines: list[str], index: int) -> str:
     indent, chain = len(lines[index]) - len(lines[index].lstrip()), []
     for line in reversed(lines[:index]):
-        depth = len(line) - len(line.lstrip())
-        if line.strip() and depth < indent and SCOPE_RE.match(line):
-            chain.insert(0, line.strip()[:80])
+        depth, text = len(line) - len(line.lstrip()), line.strip()
+        if not text or depth >= indent or text[0] in ")]}":
+            continue
+        if SCOPE_RE.match(line):
+            chain.insert(0, text[:80])
+            indent = depth
+        elif text.endswith(("{", ":")):
+            # An unnamed block still encloses the line, so a sibling above it must not pass for the scope.
             indent = depth
     return " > ".join(chain) or TOP_LEVEL
 
