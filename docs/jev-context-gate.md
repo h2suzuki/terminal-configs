@@ -141,7 +141,7 @@ hook は判定ごとに 1 行の JSON を `~/.claude/hooks/state/jev_context_gat
 
 ## 付録 B: 設計の原則にした TypeSafe 公式の指針
 
-この hook は、[TypeSafe 公式文書](https://docs.typesafe.ai) にある次の指針を設計の原則にしています。指針から外れる部分は、理由と実測をここに書きます。引用は原文のままで、括弧内は出典のページ名です。「未対応」は、今の実装が指針に合っていないことを示します。
+この hook は、[TypeSafe 公式文書](https://docs.typesafe.ai) にある次の指針を設計の原則にしています。設計を変えるときは、まず公式文書に同じ場面の指針があるかを調べ、あればそれに従います。指針を自分で作り直したり、黙って外したりはしません。外すときは、理由と実測をここに書きます。引用は原文のままで、括弧内は出典のページ名です。「未対応」は、今の実装が指針に合っていないことを示します。
 
 - **コードで決まることはコードで決める**: "Keep deterministic work in code. It is reliable and cheap." (How to build with System One)、"Direct evidence stays in code." (Autoformat)。場所と形の数は構文木と数え上げで求め、構文が壊れたかどうかは Jev に問わずに拒否します (3.2・3.3)。
 - **渡した前提はそのまま読まれる**: "`jev-1.13` answers the question you wrote, not the one you meant." (jev-1.13 の癖)。場所の求め方は、テストと、別の解析器 (Python の ast、TypeScript のコンパイラなど) との照合で確かめます。
