@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import pwd
+import re
 import shutil
 import ssl
 import stat
@@ -30,6 +31,8 @@ EVALUATE_FILE_DIR = "jev-evaluate-files"
 ERROR_LOG_KEEP = 20
 ERROR_LOG_PART_BYTES = 256 * 1024
 ERROR_LOG_MIN_FREE = 512 * 1024 * 1024
+DEFAULT_PROFILE = "default"
+PROFILE_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
 # The commit context check ships beside the SDK runtime (the venv prefix), not as a hook.
 GATE_MODULE = Path(sys.prefix) / "jev_context_gate.py"
 
@@ -70,7 +73,62 @@ def validate_key(key):
     return key
 
 
-def api_key():
+def check_profile(profile):
+    if not isinstance(profile, str) or not PROFILE_NAME.fullmatch(profile):
+        raise JevError("Profile name must be 1-64 letters, digits, - or _.")
+    return profile
+
+
+def missing_key(profile):
+    if profile == DEFAULT_PROFILE:
+        return JevError("No API key saved. Run jev api-key set in your terminal.")
+    return JevError(
+        f"No API key saved for profile {profile}. Run jev api-key set --profile {profile} in your terminal."
+    )
+
+
+def read_profiles(directory):
+    # Named profiles side by side, as in the AWS CLI credentials file; a bare api_key is "default".
+    check_private(directory, directory=True)
+    path = directory / "credentials.json"
+    check_private(path)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "r", encoding="utf-8") as handle:
+        info = os.fstat(handle.fileno())
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_mode & 0o077
+        ):
+            raise JevError("Credential file must be private and owned by this user.")
+        data = json.loads(handle.read(65536))
+    if not isinstance(data, dict):
+        raise ValueError("not an object")
+    if "api_key" in data:
+        return {DEFAULT_PROFILE: {"api_key": data["api_key"]}}
+    return data
+
+
+def write_profiles(directory, profiles):
+    target = directory / "credentials.json"
+    if target.exists() or target.is_symlink():
+        check_private(target)
+    # Atomic replacement keeps existing keys intact if writing fails.
+    fd, temporary = tempfile.mkstemp(prefix=".credentials-", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(profiles, handle)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def api_key(profile=DEFAULT_PROFILE):
+    check_profile(profile)
     if not sys.stdin.isatty():
         raise JevError("Run jev api-key set in your own interactive terminal.")
     try:
@@ -84,64 +142,46 @@ def api_key():
         raise JevError(
             "Hidden input is unavailable. Use your own interactive terminal."
         ) from None
-    asyncio.run(test_api(success_message=None, key=key))
+    asyncio.run(test_api(success_message=None, key=key, profile=profile))
     directory = credential_dir()
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     check_private(directory, directory=True)
-    target = directory / "credentials.json"
-    if target.exists() or target.is_symlink():
-        check_private(target)
-    # Atomic replacement keeps an existing key intact if writing fails.
-    fd, temporary = tempfile.mkstemp(prefix=".credentials-", dir=directory)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump({"api_key": key}, handle)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, target)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+        profiles = read_profiles(directory)
+    except (FileNotFoundError, ValueError, UnicodeError):
+        profiles = {}
+    write_profiles(directory, {**profiles, profile: {"api_key": key}})
     print("API is set")
 
 
-def load_key():
-    directory = credential_dir()
+def load_key(profile=DEFAULT_PROFILE):
+    check_profile(profile)
     try:
-        check_private(directory, directory=True)
-        path = directory / "credentials.json"
-        check_private(path)
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(fd, "r", encoding="utf-8") as handle:
-            info = os.fstat(handle.fileno())
-            if (
-                not stat.S_ISREG(info.st_mode)
-                or info.st_uid != os.getuid()
-                or info.st_mode & 0o077
-            ):
-                raise JevError(
-                    "Credential file must be private and owned by this user."
-                )
-            data = json.loads(handle.read(8192))
-        if not isinstance(data, dict):
-            raise JevError("Invalid credential file. Run jev api-key set again.")
-        return validate_key(data.get("api_key"))
+        entry = read_profiles(credential_dir()).get(profile)
     except FileNotFoundError:
-        raise JevError(
-            "No API key saved. Run jev api-key set in your terminal."
-        ) from None
+        raise missing_key(profile) from None
     except (ValueError, UnicodeError):
         raise JevError("Invalid credential file. Run jev api-key set again.") from None
+    if entry is None:
+        raise missing_key(profile)
+    if not isinstance(entry, dict):
+        raise JevError("Invalid credential file. Run jev api-key set again.")
+    return validate_key(entry.get("api_key"))
 
 
-def remove_key():
+def remove_key(profile=DEFAULT_PROFILE):
+    check_profile(profile)
     directory = credential_dir()
-    if directory.exists():
-        check_private(directory, directory=True)
-        path = directory / "credentials.json"
-        if path.exists() or path.is_symlink():
-            check_private(path)
+    path = directory / "credentials.json"
+    if directory.exists() and (path.exists() or path.is_symlink()):
+        try:
+            profiles = read_profiles(directory)
+        except (ValueError, UnicodeError):
+            profiles = {}  # an unreadable file holds no key worth keeping
+        profiles.pop(profile, None)
+        if profiles:
+            write_profiles(directory, profiles)
+        else:
             path.unlink()
     print("Saved key removed. Connected servers stop using it on their next call.")
 
@@ -247,9 +287,10 @@ def load_gate():
 class JevSession:
     """One SDK client and connection pool per MCP connection."""
 
-    def __init__(self, key=None):
+    def __init__(self, key=None, profile=DEFAULT_PROFILE):
         self.client = None
         self.key = key
+        self.profile = profile
         self.stamp = None  # the saved key file the client was built from
         self.rejected = None  # (stamp, message) after the API refused that key
         self.failures = 0
@@ -320,7 +361,7 @@ class JevSession:
                 # No await between loading and assigning: concurrent calls share
                 # one client. Missing credentials do not prevent MCP startup.
                 if self.key is None:
-                    self.stamp, key = credential_stamp(), load_key()
+                    self.stamp, key = credential_stamp(), load_key(self.profile)
                 else:
                     key = self.key
                 self.client = create_client(key)
@@ -428,7 +469,11 @@ class JevSession:
 
 
 async def test_api(
-    success_message="Hello! Jev is ready.", *, key=None, show_exchange=False
+    success_message="Hello! Jev is ready.",
+    *,
+    key=None,
+    show_exchange=False,
+    profile=DEFAULT_PROFILE,
 ):
     request = {
         "model": "jev-latest",
@@ -437,7 +482,7 @@ async def test_api(
             "test": {"type": "noul", "instructions": "Is this a connectivity test?"}
         },
     }
-    session = JevSession(key=key)
+    session = JevSession(key=key, profile=profile)
     try:
         if show_exchange:
             print("Query:")
@@ -459,24 +504,33 @@ async def test_api(
         await session.close()
 
 
-async def api_key_status():
-    load_key()
-    await test_api("API key is valid.")
+async def api_key_status(profile=DEFAULT_PROFILE):
+    load_key(profile)
+    await test_api("API key is valid.", profile=profile)
 
 
-def create_server():
+def create_server(profile=DEFAULT_PROFILE):
     from mcp.server import MCPServer
     from mcp.server.mcpserver.exceptions import ToolError
     from mcp.types import ToolAnnotations
 
-    session = JevSession()
+    check_profile(profile)
+    sessions = {}
+
+    def session_for(name):
+        try:
+            name = check_profile(profile if name is None else name)
+        except JevError as error:
+            raise ToolError(str(error)) from None
+        return sessions.setdefault(name, JevSession(profile=name))
 
     @asynccontextmanager
     async def lifespan(server):
         try:
             yield
         finally:
-            await session.close()
+            for session in sessions.values():
+                await session.close()
 
     server = MCPServer(
         "jev",
@@ -491,7 +545,10 @@ def create_server():
         ),
     )
     async def evaluate(
-        state: str | dict | list, questions: dict, model: str = "jev-latest"
+        state: str | dict | list,
+        questions: dict,
+        model: str = "jev-latest",
+        profile: str | None = None,
     ) -> dict[str, Any]:
         """Ask Jev typed questions via the official Python SDK (a billed API call).
 
@@ -501,7 +558,10 @@ def create_server():
         also supported; consult the TypeSafe skill. Batch independent questions
         in one call. Returns typed answers, model, and usage. No key is needed
         in arguments; run `jev api-key set` and `jev hello` in your terminal to set up.
+        profile names a saved key (`jev api-key set --profile NAME`); it defaults to the
+        profile this server was started with. Tests and harnesses pass their own profile.
         """
+        session = session_for(profile)
         try:
             return await session.evaluate(state, questions, model)
         except JevError as error:
@@ -513,13 +573,15 @@ def create_server():
             readOnlyHint=True, destructiveHint=False, openWorldHint=True
         ),
     )
-    async def evaluate_file(path: str) -> dict[str, Any]:
+    async def evaluate_file(path: str, profile: str | None = None) -> dict[str, Any]:
         """Send the state and questions of a JSON file to Jev unchanged (a billed API call).
 
         For backtest harnesses: the file must sit in a jev-evaluate-files directory or one of its
         subdirectories and hold {"state": ..., "questions": ..., "model"?: ...}. Returns the answers
-        plus the resolved file and the sha256 of the sent state and questions.
+        plus the resolved file and the sha256 of the sent state and questions. profile works as
+        in evaluate.
         """
+        session = session_for(profile)
         try:
             return await session.evaluate_file(path)
         except JevError as error:
@@ -543,7 +605,7 @@ def create_server():
         output: {} to allow, a deny decision, or a systemMessage when the check is skipped. Any other
         command returns {} without calling the API.
         """
-        return await session.context_gate(
+        return await session_for(None).context_gate(
             tool_input if tool_input is not None else {"command": command},
             cwd,
             session_id,
@@ -552,37 +614,58 @@ def create_server():
     return server
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
+    profile = argparse.ArgumentParser(add_help=False)
+    profile.add_argument(
+        "--profile",
+        default=DEFAULT_PROFILE,
+        help="Saved key to use, as in the AWS CLI (default: %(default)s)",
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     key_parser = commands.add_parser("api-key", help="Manage the locally saved API key")
     key_commands = key_parser.add_subparsers(dest="key_command")
     key_commands.add_parser(
-        "set", help="Save or replace a key from a hidden terminal prompt"
+        "set",
+        parents=[profile],
+        help="Save or replace a key from a hidden terminal prompt",
     )
-    key_commands.add_parser("clear", help="Delete the saved API key")
+    key_commands.add_parser("clear", parents=[profile], help="Delete the saved API key")
     key_commands.add_parser(
         "status",
+        parents=[profile],
         help="Check saved key status and usability with one small, billed test query",
     )
     commands.add_parser(
         "hello",
+        parents=[profile],
         help="Send one small, billed test query and diagnose authentication/connectivity",
     )
-    commands.add_parser("serve", help="Run the persistent stdio MCP server")
+    commands.add_parser(
+        "serve",
+        parents=[profile],
+        help="Run the persistent stdio MCP server; --profile sets its default key",
+    )
+    return parser, key_parser
+
+
+def main():
+    parser, key_parser = build_parser()
     args = parser.parse_args()
     if args.command == "api-key" and args.key_command is None:
         key_parser.print_help()
         return 0
     try:
         if args.command == "serve":
-            create_server().run()
+            create_server(args.profile).run()
         elif args.command == "hello":
-            asyncio.run(test_api(show_exchange=True))
+            asyncio.run(test_api(show_exchange=True, profile=args.profile))
         elif args.key_command == "status":
-            asyncio.run(api_key_status())
+            asyncio.run(api_key_status(args.profile))
+        elif args.key_command == "clear":
+            remove_key(args.profile)
         else:
-            remove_key() if args.key_command == "clear" else api_key()
+            api_key(args.profile)
     except (JevError, OSError, ValueError) as error:
         print(
             str(error)

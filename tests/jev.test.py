@@ -323,6 +323,77 @@ class JevTests(unittest.TestCase):
         self.assertNotIn(KEY, output.getvalue())
         self.assertFalse((self.directory / "credentials.json").exists())
 
+    def save_profile_key(self, profile, key):
+        with (
+            patch.object(jev, "test_api", new_callable=AsyncMock) as tested,
+            patch.object(jev.sys.stdin, "isatty", return_value=True),
+            patch.object(jev.getpass, "getpass", return_value=key),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            jev.api_key(profile)
+        self.assertEqual(tested.call_args.kwargs["key"], key)
+
+    def test_profiles_share_one_private_file_like_aws_credentials(self):
+        """A verification key sits beside the production key; neither replaces the other."""
+        self.save_key()
+        self.save_profile_key("verify", "verify-only-key")
+        path = self.directory / "credentials.json"
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(
+            json.loads(path.read_text()),
+            {"default": {"api_key": KEY}, "verify": {"api_key": "verify-only-key"}},
+        )
+        self.assertEqual(jev.load_key(), KEY)
+        self.assertEqual(jev.load_key("verify"), "verify-only-key")
+        self.assertEqual(list(self.directory.iterdir()), [path])
+
+    def test_a_single_key_file_is_the_default_profile(self):
+        self.directory.mkdir(mode=0o700)
+        path = self.directory / "credentials.json"
+        path.write_text(json.dumps({"api_key": KEY}))
+        path.chmod(0o600)
+        self.assertEqual(jev.load_key(), KEY)
+        with self.assertRaisesRegex(jev.JevError, "profile verify.*--profile verify"):
+            jev.load_key("verify")
+        self.save_profile_key("verify", "verify-only-key")
+        self.assertEqual(jev.load_key(), KEY)
+        self.assertEqual(jev.load_key("verify"), "verify-only-key")
+
+    def test_clear_removes_only_the_named_profile(self):
+        self.save_key()
+        self.save_profile_key("verify", "verify-only-key")
+        with contextlib.redirect_stdout(io.StringIO()):
+            jev.remove_key("verify")
+        self.assertEqual(jev.load_key(), KEY)
+        with self.assertRaisesRegex(jev.JevError, "profile verify"):
+            jev.load_key("verify")
+        with contextlib.redirect_stdout(io.StringIO()):
+            jev.remove_key()
+        self.assertFalse((self.directory / "credentials.json").exists())
+
+    def test_profile_names_are_plain_words(self):
+        for name in ("", "../x", "a b", "x" * 65, "日本"):
+            with (
+                self.subTest(name=name),
+                self.assertRaisesRegex(jev.JevError, "Profile name"),
+            ):
+                jev.load_key(name)
+
+    def test_every_command_accepts_an_optional_profile(self):
+        parser, _ = jev.build_parser()
+        for argv in (
+            ["hello"],
+            ["serve"],
+            ["api-key", "set"],
+            ["api-key", "clear"],
+            ["api-key", "status"],
+        ):
+            with self.subTest(argv=argv):
+                self.assertEqual(parser.parse_args(argv).profile, "default")
+                self.assertEqual(
+                    parser.parse_args([*argv, "--profile", "verify"]).profile, "verify"
+                )
+
 
 def response_body(model="jev-latest", count=1):
     return {
@@ -645,11 +716,45 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                 ["evaluate", "evaluate_file", "context_gate"],
             )
             properties = listed.tools[0].input_schema["properties"]
-            self.assertEqual(set(properties), {"state", "questions", "model"})
-            self.assertEqual(set(listed.tools[1].input_schema["properties"]), {"path"})
+            self.assertEqual(set(properties), {"state", "questions", "model", "profile"})
+            self.assertEqual(
+                set(listed.tools[1].input_schema["properties"]), {"path", "profile"}
+            )
             result = await client.call_tool("evaluate", REQUEST)
             self.assertTrue(result.is_error)
             self.assertIn("jev api-key set", str(result.content))
+
+    async def test_each_profile_uses_its_own_key(self):
+        """Verification queries name their profile; the production key is never used for them."""
+        verify = jev.JevSession(profile="verify")
+        self.addAsyncCleanup(verify.close)
+        await verify.evaluate(**REQUEST)
+        await self.session.evaluate(**REQUEST)
+        self.assertEqual(
+            [c.args for c in self.key_loader.call_args_list], [("verify",), ("default",)]
+        )
+
+    async def test_mcp_profile_argument_and_server_default(self):
+        """A tool call's profile wins; otherwise the profile the server was started with."""
+        for server_profile, argument, expected in (
+            ("default", {}, "default"),
+            ("default", {"profile": "verify"}, "verify"),
+            ("verify", {}, "verify"),
+        ):
+            with self.subTest(server=server_profile, argument=argument):
+                self.key_loader.reset_mock()
+                async with Client(jev.create_server(server_profile)) as client:
+                    result = await client.call_tool("evaluate", {**REQUEST, **argument})
+                    self.assertFalse(result.is_error, result.content)
+                self.assertEqual(self.key_loader.call_args.args, (expected,))
+
+    async def test_mcp_rejects_a_bad_profile_name_without_reading_keys(self):
+        async with Client(jev.create_server()) as client:
+            result = await client.call_tool("evaluate", {**REQUEST, "profile": "../x"})
+        self.assertTrue(result.is_error)
+        self.assertIn("Profile name", str(result.content))
+        self.key_loader.assert_not_called()
+
 
     async def test_rejected_key_is_not_retried_until_the_saved_key_changes(self):
         stamp = patch.object(jev, "credential_stamp", return_value=("inode", 1))
