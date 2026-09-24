@@ -474,6 +474,24 @@ class JevContextGateTest(unittest.TestCase):
             self.run_hook('git commit -m "x" -- README.md', mode="bad"), {}
         )
 
+    def test_definition_nested_in_another_scope_is_named_in_what_the_edit_adds(self):
+        """Backtest: new tests moved inside test('PATCH request') passed at 0.53; the nesting was never stated."""
+        (self.repo / "loader.py").write_text(CODE)
+        self.git("add", "loader.py")
+        self.git("commit", "-q", "-m", "code")
+        (self.repo / "loader.py").write_text(
+            CODE.replace(
+                "    return open(path).read()\n",
+                "    return open(path).read()\n\n    def save(text):\n        return text\n",
+            )
+        )
+        self.run_hook('git commit -m "x" -- loader.py')
+        (piece,) = self.only_hunk()["pieces"]
+        self.assertEqual(
+            piece["what_the_edit_adds"],
+            "2 non-empty line(s) of code, defining `def save(text):` inside `def load(path):`.",
+        )
+
     def test_json_place_is_the_open_key_path(self):
         """Backtest: hooks moved into "permissions" were judged at "(top level of the file)" and passed (4 of 4)."""
         settings = (

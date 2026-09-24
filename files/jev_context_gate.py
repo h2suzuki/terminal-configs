@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 DENY_BELOW = 0.5  # real README commits: misplaced text ≤ 0.25, fitting ≥ 0.72
-QUESTION_VERSION = "fdet-8"
+QUESTION_VERSION = "fdet-9"
 STATE_LIMIT = 12000  # characters of JSON state per request; Jev caps state plus question at 32k tokens
 CHUNK_LIMIT = 1500  # characters of added text per judged piece
 AROUND = 6
@@ -490,8 +490,13 @@ def places(hunks: list[dict]) -> list[dict]:
                     "; ".join(scopes[:OUTLINE_LIMIT]) or "(none)"
                 )
                 adds = (
-                    f"{sum(1 for c in chunk if c.strip())} non-empty line(s) of {kind}."
+                    f"{sum(1 for c in chunk if c.strip())} non-empty line(s) of {kind}"
                 )
+                first = next((c for c in chunk if c.strip()), "")
+                if location != TOP_LEVEL and SCOPE_RE.match(first):
+                    # Stated so Jev sees a definition moved inside another one.
+                    adds += f", defining `{first.strip()[:80]}` inside `{location.split(' > ')[-1]}`"
+                adds += "."
                 # A scope question has no scope to ask about at the top level of the file.
                 kind = "module" if location == TOP_LEVEL else kind
             text = "\n".join(chunk)
