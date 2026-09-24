@@ -30,13 +30,16 @@ Contract (each claim maps to one test):
   L1  `config.lock` with lock-holder framing ("ロックされている", "stale lock") -> config-lock fires
       with the lessons-learned path
   L2  `config.lock` text that already names the sandbox mask -> silent
-  L3  lock-holder framing without `config.lock` -> silent
+  L3  lock-holder framing without `config.lock`, or only in a quote under discussion
+      (「…」と誤解する) -> silent
   L4  a Bash command removing or probing `config.lock` (rm / lsof) fires once per session; one that
       only reads `.git/config` is silent
-  E1  an excluded command and a sandbox-blame phrase in one sentence -> env-blame fires
-  E2  the same blame in a text that already names the invocation as the cause -> silent
-  E3  the blame phrase and the excluded command in different sentences -> silent; a command not in
-      excludedCommands (`ls`) never fires
+  E1  a sandbox word, a give-up or ran-inside cue and an excluded command (or its alias: GitHub for
+      gh, judge for jev; katakana サンドボックス; a name glued to Japanese) in one sentence -> fires
+  E2  the same blame in a sentence that already names the invocation as the cause -> silent
+  E3  the cue and the excluded command in different sentences, a command not in excludedCommands
+      (`ls`), a calling-form fix (pipe), a root-owned deploy target or a quote under discussion
+      (「…」と書いても) -> silent; a quote written as a claim (「…」旨を追記) still fires (E1)
   T1  Stop with a config.lock or env-blame final message -> exit 2, stderr carries the rule and
       the restate instruction; the same message on the next Stop ends the turn (exit 0)
   T2  Stop with only a shadow hit -> exit 0 (the shadow rule nudges at PreToolUse only)
@@ -322,6 +325,7 @@ class SandboxShadowNudgeTest(unittest.TestCase):
             (
                 "`.git/config.lock` がロックされているので git config が書けません",
                 "a stale lock: .git/config.lock was left by a crashed git",
+                ".git/config.lock で失敗しました。この lock を持っている session は居ますか",
             )
         ):
             with self.subTest(text=text):
@@ -337,10 +341,15 @@ class SandboxShadowNudgeTest(unittest.TestCase):
         self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
 
     def test_l3_lock_framing_without_config_lock_is_silent(self):
-        proc = self._call(
-            [_user_prompt(), _assistant_text("index.lock がロックされている")]
-        )
-        self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
+        for i, text in enumerate(
+            (
+                "index.lock がロックされている",
+                "`.git/config.lock` を「ロックされている」と誤解する発言を直します",
+            )
+        ):
+            with self.subTest(text=text):
+                proc = self._call([_user_prompt(), _assistant_text(text)], f"l3-{i}")
+                self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
 
     def test_l4_command_touching_config_lock_fires_once_per_session(self):
         def bash(command: str) -> subprocess.CompletedProcess:
@@ -361,6 +370,10 @@ class SandboxShadowNudgeTest(unittest.TestCase):
             (
                 "この session では git も sandbox の中で動いており、config を書けません",
                 "gh is blocked by the sandbox here",
+                "GitHub に反映されたかは、sandbox の中からは確かめられませんでした",
+                "サンドボックスの制約で gitの管理情報が一部残りました",
+                "`judge`はキーを読むためClaude Codeのsandboxでは使えない",
+                "説明に「`judge`はClaude Codeのsandboxでは使えない」旨を追記します",
             )
         ):
             with self.subTest(text=text):
@@ -379,6 +392,10 @@ class SandboxShadowNudgeTest(unittest.TestCase):
             (
                 "ls は sandbox 内で動く。git の結果は別に確認した",
                 "ls が sandbox の中で失敗した",
+                "パイプを付けたことで gh が sandbox の中で実行されたので、単独で実行し直します",
+                "配備先は root 所有で sandbox から書けないため、agent_coord の配備をお願いします",
+                "「git は sandbox 内で動いている」と書いても、止めるものがありませんでした",
+                "「git は sandbox 内で動いている」という私の発言は誤りで、撤回します",
             )
         ):
             with self.subTest(text=text):

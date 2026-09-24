@@ -74,7 +74,7 @@ MSG = (
 CONFIG_LOCK_RE = re.compile(r"config\.lock")
 # lock-holder framing: someone holds, left or must release a lock
 LOCK_CUE_RE = re.compile(
-    r"ロック(?:され|中|を(?:保持|握|持|取得|解除|解放)|が(?:残|掛|かか|取れ)|解除|解放)"
+    r"(?:ロック|lock)\s*(?:され|中|を\s*(?:保持|握|持|取得|解除|解放)|が\s*(?:残|掛|かか|取れ)|解除|解放)"
     r"|locked|lock\s+(?:is\s+)?held|hold(?:s|ing)?\s+the\s+lock|stale\s+lock"
     r"|lock\s+(?:holder|owner)|lockfile|unlock|release\s+the\s+lock"
     r"|別の\s*git|他の\s*git|git\s*プロセス|another\s+git|git\s+process|crash|クラッシュ|異常終了",
@@ -100,18 +100,24 @@ CONFIG_LOCK_MSG = (
     "github.com-h2suzuki-scorer/feedback_sandbox_mask_leaks_git_config_lock.md"
 )
 
-# blaming the environment: an excluded command "ran in" or "was blocked by" the sandbox
-SANDBOX_BLAME_RE = re.compile(
-    r"sandbox\s*(?:の)?\s*(?:内|中|の中|内部)\s*(?:で|に|の)"
-    r"|sandbox\s*(?:が|に|で)\s*(?:塞|阻|弾|ブロック|拒否|制限|止め|遮)"
-    r"|sandbox\s*の(?:仕組み|制限|制約)?\s*のせい|sandbox\s*(?:の外|外)\s*に\s*出(?:ら|せ)?れな"
-    r"|(?:inside|within|in)\s+the\s+sandbox|blocked\s+by\s+the\s+sandbox|sandbox\s+blocks",
+SANDBOX_WORD_RE = re.compile(r"sandbox|サンドボックス", re.IGNORECASE)
+# giving up because of the sandbox, or claiming the command ran inside it
+BLAME_CUE_RE = re.compile(
+    r"できな|できませ|できず|られませ|られず|られな|られていませ|読めず|読めな|書けず|書けな"
+    r"|消せず|消せな|使えず|使えな|制約|制限|のせい|権限では|はずなのに|行き詰|外で(?:の)?実行"
+    r"|(?:sandbox|サンドボックス)\s*の?\s*(?:内|中|側|内部)\s*(?:で|の|から)?\s*(?:動|走|実行)"
+    r"|Permission denied|Read-only|cannot|can't|unable|blocked|not allowed"
+    r"|runs?\s+(?:inside|in)\s+the\s+sandbox",
     re.IGNORECASE,
 )
-# the text already puts the fault on the invocation, so it is the correct reading
-BLAME_CORRECT_RE = re.compile(
-    r"呼び出し方|呼び方|invocation|裸名|先頭に置", re.IGNORECASE
+# the sentence names a calling form, or a target no excluded command can write (root-owned deploy)
+BLAME_EXEMPT_RE = re.compile(
+    r"呼び出し方|呼び方|invocation|裸名|先頭|パイプ|pipe|リダイレクト|標準入力|stdin|ループ"
+    r"|--jq|segment|代入|wrapper|前置|root\s*所有|/etc/|/usr/local|deploy|デプロイ|配備|sudo",
+    re.IGNORECASE,
 )
+# prose names an excluded command by what it serves
+NAME_ALIASES = {"gh": ("GitHub",), "jev": ("judge",)}
 
 # 文面は意図的に冗長: 同じ誤りが繰り返されているため、訂正と次の行動を両方書き下す
 ENV_BLAME_MSG = (
@@ -143,7 +149,19 @@ def _shadow_command(command: str) -> bool:
     return _shadow_hit(command) is not None
 
 
+# a quote followed by "と誤解する" / "と書いても" is a claim under discussion, not one being made
+DISCUSSED_QUOTE_RE = re.compile(
+    r"(?:「[^」]*」|“[^”]*”)(?=\s*(?:と|という|って)[^。\n「]{0,6}?"
+    r"(?:誤解|勘違い|思い込|書|言|発言|断定|主張|報告))"
+)
+
+
+def _unquoted(text: str) -> str:
+    return DISCUSSED_QUOTE_RE.sub("", text)
+
+
 def _lock_text(text: str) -> bool:
+    text = _unquoted(text)
     return (
         bool(CONFIG_LOCK_RE.search(text))
         and bool(LOCK_CUE_RE.search(text))
@@ -166,18 +184,24 @@ def _excluded_names() -> tuple[str, ...]:
 
 
 def _names_excluded_command(text: str, names: tuple[str, ...]) -> bool:
+    words = [a for n in names for a in (n, *NAME_ALIASES.get(n, ()))]
+    # ASCII-only boundaries: Japanese right after a name (`gitの`) still counts as a mention
     return any(
-        re.search(r"(?<![\w/.-])" + re.escape(name) + r"(?![\w-])", text)
-        for name in names
+        re.search(r"(?<![A-Za-z0-9_/.-])" + re.escape(w) + r"(?![A-Za-z0-9_-])", text)
+        for w in words
     )
 
 
 def _blame_text(text: str) -> bool:
-    if not SANDBOX_BLAME_RE.search(text) or BLAME_CORRECT_RE.search(text):
+    text = _unquoted(text)
+    if not SANDBOX_WORD_RE.search(text):
         return False
     names = _excluded_names()
-    return any(  # the command and the blame must share a sentence
-        SANDBOX_BLAME_RE.search(s) and _names_excluded_command(s, names)
+    return any(  # the sandbox, the give-up cue and the command must share a sentence
+        SANDBOX_WORD_RE.search(s)
+        and BLAME_CUE_RE.search(s)
+        and not BLAME_EXEMPT_RE.search(s)
+        and _names_excluded_command(s, names)
         for s in re.split(r"[。\n]|(?<=[.!?])\s", text)
     )
 
