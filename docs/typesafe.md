@@ -27,7 +27,7 @@ jev api-key set --profile verify   # 検証用のキーを default とは別に�
 jev hello --profile verify
 ```
 
-MCP サーバーは `jev serve --profile <名前>` で既定の profile を決め、`evaluate` と `evaluate_file` は呼び出しごとに `profile` 引数で切り替えられます。コミットの文脈判定はサーバーの既定の profile を使います。テストと検証の仕組みからの問い合わせは、必ず検証用の profile を指定します。
+MCP の `evaluate` と `evaluate_file` は、呼び出しごとに `profile` 引数で使うキーを選びます。省略時は CLI と同じく `default` です。コミットの文脈判定は `default` を使います。テストと検証の仕組みからの問い合わせは、必ず検証用の profile を指定します。
 
 `.env`、`.bashrc`、MCP 設定へのキーの記載や `TYPESAFE_API_KEY` の export は不要です。
 `set` は入力したキーでテストクエリーを 1 回送り、正常な応答を確認してから保存します（API 利用が発生します）。認証・通信・応答の診断に失敗した場合は保存せず、既存のキーも変更しません。OAuth 認証は行いません。

@@ -383,7 +383,6 @@ class JevTests(unittest.TestCase):
         parser, _ = jev.build_parser()
         for argv in (
             ["hello"],
-            ["serve"],
             ["api-key", "set"],
             ["api-key", "clear"],
             ["api-key", "status"],
@@ -393,6 +392,13 @@ class JevTests(unittest.TestCase):
                 self.assertEqual(
                     parser.parse_args([*argv, "--profile", "verify"]).profile, "verify"
                 )
+        # The server has no default of its own: each request picks its profile, as the CLI does.
+        self.assertFalse(hasattr(parser.parse_args(["serve"]), "profile"))
+        with (
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit),
+        ):
+            parser.parse_args(["serve", "--profile", "verify"])
 
 
 def response_body(model="jev-latest", count=1):
@@ -734,16 +740,16 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
             [c.args for c in self.key_loader.call_args_list], [("verify",), ("default",)]
         )
 
-    async def test_mcp_profile_argument_and_server_default(self):
-        """A tool call's profile wins; otherwise the profile the server was started with."""
-        for server_profile, argument, expected in (
-            ("default", {}, "default"),
-            ("default", {"profile": "verify"}, "verify"),
-            ("verify", {}, "verify"),
+    async def test_mcp_request_picks_the_profile_and_defaults_like_the_cli(self):
+        """Each request names its profile; without one it is "default", exactly as in the CLI."""
+        for argument, expected in (
+            ({}, "default"),
+            ({"profile": "verify"}, "verify"),
+            ({"profile": "default"}, "default"),
         ):
-            with self.subTest(server=server_profile, argument=argument):
+            with self.subTest(argument=argument):
                 self.key_loader.reset_mock()
-                async with Client(jev.create_server(server_profile)) as client:
+                async with Client(jev.create_server()) as client:
                     result = await client.call_tool("evaluate", {**REQUEST, **argument})
                     self.assertFalse(result.is_error, result.content)
                 self.assertEqual(self.key_loader.call_args.args, (expected,))

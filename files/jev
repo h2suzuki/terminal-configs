@@ -509,17 +509,16 @@ async def api_key_status(profile=DEFAULT_PROFILE):
     await test_api("API key is valid.", profile=profile)
 
 
-def create_server(profile=DEFAULT_PROFILE):
+def create_server():
     from mcp.server import MCPServer
     from mcp.server.mcpserver.exceptions import ToolError
     from mcp.types import ToolAnnotations
 
-    check_profile(profile)
     sessions = {}
 
     def session_for(name):
         try:
-            name = check_profile(profile if name is None else name)
+            name = check_profile(name)
         except JevError as error:
             raise ToolError(str(error)) from None
         return sessions.setdefault(name, JevSession(profile=name))
@@ -548,7 +547,7 @@ def create_server(profile=DEFAULT_PROFILE):
         state: str | dict | list,
         questions: dict,
         model: str = "jev-latest",
-        profile: str | None = None,
+        profile: str = DEFAULT_PROFILE,
     ) -> dict[str, Any]:
         """Ask Jev typed questions via the official Python SDK (a billed API call).
 
@@ -558,8 +557,8 @@ def create_server(profile=DEFAULT_PROFILE):
         also supported; consult the TypeSafe skill. Batch independent questions
         in one call. Returns typed answers, model, and usage. No key is needed
         in arguments; run `jev api-key set` and `jev hello` in your terminal to set up.
-        profile names a saved key (`jev api-key set --profile NAME`); it defaults to the
-        profile this server was started with. Tests and harnesses pass their own profile.
+        profile names a saved key (`jev api-key set --profile NAME`) and defaults to
+        "default", as in the CLI. Tests and harnesses pass their own profile.
         """
         session = session_for(profile)
         try:
@@ -573,7 +572,9 @@ def create_server(profile=DEFAULT_PROFILE):
             readOnlyHint=True, destructiveHint=False, openWorldHint=True
         ),
     )
-    async def evaluate_file(path: str, profile: str | None = None) -> dict[str, Any]:
+    async def evaluate_file(
+        path: str, profile: str = DEFAULT_PROFILE
+    ) -> dict[str, Any]:
         """Send the state and questions of a JSON file to Jev unchanged (a billed API call).
 
         For backtest harnesses: the file must sit in a jev-evaluate-files directory or one of its
@@ -605,7 +606,7 @@ def create_server(profile=DEFAULT_PROFILE):
         output: {} to allow, a deny decision, or a systemMessage when the check is skipped. Any other
         command returns {} without calling the API.
         """
-        return await session_for(None).context_gate(
+        return await session_for(DEFAULT_PROFILE).context_gate(
             tool_input if tool_input is not None else {"command": command},
             cwd,
             session_id,
@@ -643,8 +644,7 @@ def build_parser():
     )
     commands.add_parser(
         "serve",
-        parents=[profile],
-        help="Run the persistent stdio MCP server; --profile sets its default key",
+        help="Run the persistent stdio MCP server; each request picks its profile",
     )
     return parser, key_parser
 
@@ -657,7 +657,7 @@ def main():
         return 0
     try:
         if args.command == "serve":
-            create_server(args.profile).run()
+            create_server().run()
         elif args.command == "hello":
             asyncio.run(test_api(show_exchange=True, profile=args.profile))
         elif args.key_command == "status":
