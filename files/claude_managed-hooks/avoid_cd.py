@@ -4,7 +4,7 @@ Avoid-cd hook for Claude Code.
 
 PreToolUse hook on Bash. Detects leading-`cd` (or bare `cd`) and emits
 hookSpecificOutput.additionalContext suggesting alternatives (pushd/popd,
-absolute paths, bare `git` from the current repo).
+absolute paths, `git -C <repo>`).
 
 Scope is INTENTIONALLY narrow: only leading-`cd` is flagged. Embedded forms
 (`; cd`, `bash -c 'cd ...'`, `(cd /tmp; ls)`) are NOT flagged here; the
@@ -104,8 +104,7 @@ DENY_REASON = (
     "複合コマンドの先頭に `cd` があり、cwd が後続 turn に残るため deny しました。"
     "実害として、後続コマンドの相対 path と `git commit -- <path>` の pathspec が壊れます"
     "（`git commit -- <path>` の pathspec 破壊を実測）。"
-    "絶対 path を使ってください。 git は cwd の repo に対して裸名で先頭に置きます"
-    "（`git -C <repo>` と `cd` 付きの呼び出しは sandbox 内で走り、`.git/config` の書き込みや network が失敗します）。"
+    "絶対 path を使うか、`git -C <repo> ...` を使ってください。"
     "どうしても cwd の移動が必要なら `pushd` と `popd` を使うか、"
     "`cd` を単独の Bash 呼び出しに分けてください。"
     "単独の `cd` と `pushd` / `popd` は deny されません。"
@@ -133,8 +132,7 @@ def _run(payload: object) -> int:
         f"cd で始まる Bash コマンドが検出されました: `{snippet}`\n"
         "次のいずれかへの置換を検討してください:\n"
         "- 絶対パスで直接コマンドを書く (例: `mkdir /a/b/c && mv /a/b/x /a/b/c/`)\n"
-        "- git は cwd の repo に対して裸名で先頭に置く (例: `git status`)。 "
-        "`git -C <repo>` は sandbox 内で走り、`.git/config` の書き込みや network が失敗する\n"
+        "- git なら `git -C <repo>` を使う (例: `git -C /repo status`)\n"
         "- どうしても cd が必要なら `pushd` / `popd` / `dirs` でスタックを意識する\n"
         "例外: `git push origin main` のみ allowlist 文字列マッチのため `-C` 抜き必須 "
         "(詳細は project memory `feedback_git_push_allowlist.md`)。"

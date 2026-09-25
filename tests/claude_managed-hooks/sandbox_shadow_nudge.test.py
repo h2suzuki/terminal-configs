@@ -37,7 +37,7 @@ Contract (each claim maps to one test):
       and still runs
   P2  a second such look in the same turn, by another method, is denied
   P3  a new real prompt starts a new turn: the next look is nudged again, not denied
-  P4  a Bash call whose every command is excluded (so it leaves the sandbox), one that names no covered file,
+  P4  a Bash call taken out of the sandbox by an excluded command, one that names no covered file,
       one that only mentions it as text (a grep pattern, a heredoc body), or one whose look is an
       operand of an excluded command (docker exec into another container) is silent
   X1  --codex PreToolUse: a sandboxed look at a covered file (Codex `cmd` or `command`) gets
@@ -383,11 +383,6 @@ class SandboxShadowNudgeTest(unittest.TestCase):
             ("Bash", {"command": "cat /proc/self/mountinfo"}, "/proc/self/mountinfo"),
             (
                 "Bash",
-                {"command": "git status && ls .git/config.lock"},
-                ".git/config.lock",
-            ),
-            (
-                "Bash",
                 {"command": "findmnt -T /root/repo/.git/config.lock"},
                 ".git/config.lock",
             ),
@@ -427,7 +422,7 @@ class SandboxShadowNudgeTest(unittest.TestCase):
     def test_p4_host_bound_or_unrelated_calls_are_silent(self):
         for i, command in enumerate(
             (
-                "git status && git diff --no-index .git/config.lock x",
+                "git status && ls .git/config.lock",
                 "grep -rn TODO src/",
                 'grep -n "config.lock\\|stale lock" docs/workflow.md',
                 "cat >> /var/tmp/note.md <<'EOF'\nthe .git/config.lock is a mask\nEOF",

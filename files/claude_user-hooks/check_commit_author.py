@@ -166,7 +166,7 @@ def _run(payload: dict, expected_email: str) -> int:
         f"commit author mismatch in {payload_cwd}:\n"
         f"  effective user.email = {actual or '(unset)'}\n"
         f"  expected user.email  = {expected_email}\n"
-        f"Fix: run `git config user.email '{expected_email}'` as its own Bash call in {payload_cwd}  "
+        f"Fix: git -C {payload_cwd} config user.email '{expected_email}'  "
         f"(or set globally: git config --global user.email '{expected_email}')\n"
         "Blocking commit.\n"
     )

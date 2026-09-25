@@ -2,7 +2,7 @@
 """
 Root-directory litter guard for Bash.
 
-A Bash call whose every command matches sandbox.excludedCommands runs on the host, where
+A Bash call that matches sandbox.excludedCommands runs on the host, where
 TMPDIR is unset, so `$TMPDIR/x` expands to `/x` and a root session litters
 `/` in silence. PreToolUse denies that form outright and snapshots the root
 directory listing; PostToolUse / PostToolUseFailure diff the snapshot and
@@ -23,13 +23,14 @@ import re
 import sys
 import time
 
-from sandbox_exclusions import host_run, load_patterns, sandbox_restricts_commands
+from sandbox_exclusions import glob_match, load_patterns, sandbox_restricts_commands
 
 ROOT_DIR = os.environ.get("ROOT_DIR_GUARD_ROOT") or "/"
 STATE_DIR = os.environ.get("ROOT_DIR_GUARD_STATE_DIR") or os.path.join(
     os.path.expanduser("~"), ".claude", "hooks", "state", "root_dir_guard"
 )
 SNAPSHOT_TTL = 3600
+SEGMENT_CAP = 10000  # Claude Code matches a longer command as one segment
 SAFE_VAR = "CLAUDE_TMPDIR"
 SANDBOX_VARS = ("TMPDIR", "TMP", "TEMP", "TEMPDIR")
 
@@ -37,6 +38,119 @@ HEREDOC = re.compile(
     r"<<-?\s*(['\"]?)(\w+)\1([^\n]*)\n[\s\S]*?^[ \t]*\2\b", re.MULTILINE
 )
 QUOTED = re.compile(r'"(?:\\[\s\S]|[^"\\])*"|\'[^\']*\'')
+SUBST = re.compile(r"\$\((?:[^()]|\([^()]*\))*\)|`[^`]*`|\$\{[^}]*\}")
+COMMENT = re.compile(r"(?:^|(?<=\s))#[^\n]*")
+TOKEN = re.compile(r"\|&|&&|\|\||[;|&\n(){}]|[^\s;|&(){}]+")
+BREAKERS = re.compile(r"[\s;|&(){}#]")  # quoted text stays one word after unquoting
+SEPARATORS = frozenset({"&&", "||", "|", "|&", ";", "&", "\n"})
+OPENERS = frozenset({"if", "while", "until", "for", "select", "case"})
+CLOSERS = frozenset({"fi", "done", "esac"})
+ASSIGNMENT = re.compile(r"^([A-Za-z_]\w*)(?:\[[^\]]*\])?\+?=")
+UNSTRIPPED = re.compile(r"^(?:LD_|DYLD_|PATH$)")
+TIMEOUT_FLAG = re.compile(
+    r"^(?:--(?:foreground|preserve-status|verbose)|-v|--(?:kill-after|signal)=\S+|-[ks]\S+)$"
+)
+TIMEOUT_VALUED = frozenset({"--kill-after", "--signal", "-k", "-s"})
+DURATION = re.compile(r"^\d+(?:\.\d+)?[smhd]?$")
+
+
+def _statements(cmd: str) -> list[str]:
+    """Return the top-level statements Claude Code matches against excludedCommands."""
+    scanned = HEREDOC.sub(lambda m: "_" + m.group(3), cmd)
+    scanned = QUOTED.sub(lambda m: BREAKERS.sub("_", m.group(0)[1:-1]), scanned)
+    scanned = COMMENT.sub("", SUBST.sub("_", scanned))
+    if len(cmd) > SEGMENT_CAP:
+        return [scanned.strip()]
+    statements: list[str] = []
+    current: list[str] = []
+    paren = brace = compound = 0
+    at_start, opaque = True, False
+    for token in TOKEN.findall(scanned):
+        if token in SEPARATORS:
+            if current and not opaque and not (paren or brace or compound):
+                statements.append(" ".join(current))
+            current, at_start, opaque = [], True, False
+            continue
+        if token in "({":
+            paren, brace = paren + (token == "("), brace + (token == "{")
+            at_start = True
+            continue
+        if token in ")}":
+            paren = max(paren - (token == ")"), 0)
+            brace = max(brace - (token == "}"), 0)
+        elif at_start and token in OPENERS:
+            compound += 1
+        elif at_start and token in CLOSERS:
+            compound = max(compound - 1, 0)
+        elif at_start and token == "!":
+            opaque = True
+        elif not (paren or brace or compound or opaque):
+            current.append(token)
+        at_start = False
+    if current and not opaque and not (paren or brace or compound):
+        statements.append(" ".join(current))
+    return statements
+
+
+def _wrapper_span(tokens: list[str]) -> int:
+    """Return how many leading tokens a stripped wrapper occupies, 0 if none."""
+    head, n = tokens[0], 1
+    if head == "timeout":
+        while n < len(tokens) and TIMEOUT_FLAG.match(tokens[n]):
+            n += 1
+        while n + 1 < len(tokens) and tokens[n] in TIMEOUT_VALUED:
+            n += 2
+        n += n < len(tokens) and tokens[n] == "--"
+        return n + 1 if n < len(tokens) and DURATION.match(tokens[n]) else 0
+    if head == "nice":
+        if (
+            n + 1 < len(tokens)
+            and tokens[n] == "-n"
+            and re.match(r"^-?\d+$", tokens[n + 1])
+        ):
+            n += 2
+        elif n < len(tokens) and re.match(r"^-\d+$", tokens[n]):
+            n += 1
+    elif head == "stdbuf":
+        while n < len(tokens) and re.match(r"^-[ioe][LN0-9]+$", tokens[n]):
+            n += 1
+    elif head == "command":
+        while n < len(tokens) and re.match(r"^-p+$", tokens[n]):
+            n += 1
+    elif head not in ("time", "nohup", "builtin", "noglob"):
+        return 0
+    n += n < len(tokens) and tokens[n] == "--" and head != "noglob"
+    if head in ("command", "builtin", "noglob") and (
+        n >= len(tokens) or tokens[n].startswith("-")
+    ):
+        return 0
+    return n
+
+
+def _bare_command(statement: str) -> str:
+    """Strip the assignment and wrapper prefixes Claude Code strips before matching."""
+    tokens = statement.split()
+    while tokens:
+        assignment = ASSIGNMENT.match(tokens[0])
+        if assignment:
+            if UNSTRIPPED.match(assignment.group(1)):
+                break
+            tokens.pop(0)
+            continue
+        span = _wrapper_span(tokens)
+        if not span:
+            break
+        del tokens[:span]
+    return " ".join(tokens)
+
+
+def host_run(cmd: str, patterns: list[str]) -> str:
+    """Return the statement that makes Claude Code run the whole call on the host."""
+    for statement in _statements(cmd):
+        bare = _bare_command(statement)
+        if bare and any(glob_match(bare, pattern) for pattern in patterns):
+            return bare
+    return ""
 
 
 def hazard_vars() -> tuple[str, ...]:
@@ -73,7 +187,7 @@ def _deny_reason(
         host = host_run(cmd, patterns)
         if not host:
             return ""
-        where = f"全 command が除外コマンド (`{host}` など) に一致するため、 呼び出し全体が sandbox の外 (host) で実行されます"
+        where = f"除外コマンド `{host}` を含むため、 呼び出し全体が sandbox の外 (host) で実行されます"
     if ref == f"${SAFE_VAR}":
         why = f"この環境では `{ref}` が設定されていないため"
         safe = "絶対 path (例: `/var/tmp/<name>`)"
