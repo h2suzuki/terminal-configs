@@ -119,3 +119,28 @@ timeout = 5
 type = "command"
 command = "python3 /etc/claude-code/skel/hooks/memory_surface.py --codex-stop"
 timeout = 10
+
+# Looking at a sandbox-covered file, or reading git's config-lock error as a held lock, gets a
+# correction; the Stop check restates such a final answer at most once.
+[[hooks.PreToolUse]]
+matcher = "^(Bash|exec_command|shell_command)$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "python3 /etc/claude-code/hooks/sandbox_shadow_nudge.py --codex"
+timeout = 10
+
+[[hooks.PostToolUse]]
+matcher = "^(Bash|exec_command|shell_command)$"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "python3 /etc/claude-code/hooks/sandbox_shadow_nudge.py --codex"
+timeout = 10
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "python3 /etc/claude-code/hooks/sandbox_shadow_nudge.py --codex"
+timeout = 10

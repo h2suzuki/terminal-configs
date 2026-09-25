@@ -449,6 +449,82 @@ def _stop(payload: dict) -> int:
     return 2
 
 
+CODEX_TOOLS = frozenset({"Bash", "exec_command", "shell_command"})
+CODEX_LOCK_OUTPUT_RE = re.compile(r"could not lock config file", re.IGNORECASE)
+# 文面は意図的に冗長: Codex では外へ出す形が Claude と違うので、確かめ方まで書き下す
+CODEX_HOW_TO_CHECK = (
+    "確かめるなら、git を sandbox の外で正しく実行する: prefix rule に合う単独の呼び出しにし "
+    "(`&&` などのつなぎやリダイレクトを付けない)、作業ディレクトリは workdir で渡す。"
+    "それでもエラーなら実物がある。その場合も、隣の session が居ないか、その repo で作業して"
+    "いないなら残骸なので、自分で消して作業を続ける。作業中の session が居るなら、その session に確かめる。"
+)
+CODEX_PROBE_MSG = (
+    "masked-probe: sandbox の中から、sandbox が覆った・保護したファイルか sandbox の仕組み ({what}) を"
+    "調べようとしている。中から見えるのは sandbox の姿だけで、実物の有無も中身も分からない。"
+    "この行動は誤った方向へ進んでいる兆候なので、ここで止めて元の作業に戻れ。"
+    + CODEX_HOW_TO_CHECK
+)
+CODEX_LOCK_MSG = (
+    "config-lock: `could not lock config file` や sandbox の中から見える `.git/config.lock` は、"
+    "誰かがロックを持っている証拠にならない。sandbox の中の git は `.git/config` を書けないので、"
+    "ロックの有無に関係なくこのエラーになり、本物のロックがあっても中からは見分けられない。"
+    "確かめずに「ロックされている」「stale lock」と書いたのなら訂正せよ。"
+    + CODEX_HOW_TO_CHECK
+)
+
+
+def _codex_runs_on_host(command: str) -> bool:
+    """Codex prefix rules take only a standalone call out of the sandbox, never a combined one."""
+    segments = _segments(command)
+    return len(segments) == 1 and any(
+        sandbox_exclusions.glob_match(" ".join(segments[0]), p)
+        for p in sandbox_exclusions.load_patterns()
+    )
+
+
+def _codex_output(event: str, context: str) -> None:
+    out = {"hookSpecificOutput": {"hookEventName": event, "additionalContext": context}}
+    sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
+
+
+def _codex(payload: dict) -> int:
+    """Codex adapter: nudge before a look at covers, after a config-lock error, and restate once at Stop."""
+    session_id = payload.get("session_id")
+    event = payload.get("hook_event_name")
+    if event == "Stop":
+        final = payload.get("last_assistant_message")
+        if payload.get("stop_hook_active") or not isinstance(final, str):
+            return 0
+        if _lock_text(final):
+            out = {"decision": "block", "reason": CODEX_LOCK_MSG + STOP_SUFFIX}
+            sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
+        return 0
+    if payload.get("tool_name") not in CODEX_TOOLS:
+        return 0
+    tool_input = payload.get("tool_input")
+    tool_input = tool_input if isinstance(tool_input, dict) else {}
+    command = tool_input.get("command") or tool_input.get("cmd")
+    if not isinstance(command, str):
+        return 0
+    if event == "PostToolUse":
+        response = payload.get("tool_response")
+        text = response if isinstance(response, str) else json.dumps(response)
+        marker = "codex-lock-output"  # once per session: the same error repeats
+        if CODEX_LOCK_OUTPUT_RE.search(text) and not _already_nudged(
+            session_id, marker
+        ):
+            _mark_nudged(session_id, marker)
+            _codex_output("PostToolUse", CODEX_LOCK_MSG)
+        return 0
+    if event == "PreToolUse" and not _codex_runs_on_host(command):
+        target = next((hit for w in _operands(command) if (hit := _looked_at(w))), None)
+        key = "codex-probe:" + hashlib.sha256(command.encode("utf-8")).hexdigest()
+        if target and not _already_nudged(session_id, key):
+            _mark_nudged(session_id, key)
+            _codex_output("PreToolUse", CODEX_PROBE_MSG.format(what=target))
+    return 0
+
+
 def main() -> int:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
@@ -457,6 +533,8 @@ def main() -> int:
     if not isinstance(payload, dict):
         return 0
     try:
+        if "--codex" in sys.argv[1:]:
+            return _codex(payload)
         if payload.get("hook_event_name") == "Stop":
             # a one-off session spawned by another hook has no user to restate for
             return 0 if os.environ.get("CLAUDE_HOOK_CHILD") else _stop(payload)

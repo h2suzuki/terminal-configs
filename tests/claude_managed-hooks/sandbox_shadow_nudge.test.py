@@ -38,6 +38,13 @@ Contract (each claim maps to one test):
   P3  a new real prompt starts a new turn: the next look is nudged again, not denied
   P4  a Bash call taken out of the sandbox by an excluded command, one that names no covered file,
       or one that only mentions it as text (a grep pattern, a heredoc body) is silent
+  X1  --codex PreToolUse: a sandboxed look at a covered file (Codex `cmd` or `command`) gets
+      masked-probe as context and is never denied; a combined call is sandboxed even when it
+      starts with an excluded command, and only a standalone excluded call is host-bound
+  X2  --codex PostToolUse: git's `could not lock config file` gets config-lock context once per
+      session; other output is silent
+  X3  --codex Stop: a config.lock lock-holder final message gets {"decision": "block"} once;
+      stop_hook_active and correct readings are silent
   T1  Stop with a config.lock lock-holder final message -> exit 2, stderr carries the rule and the
       restate instruction; the same message on the next Stop ends the turn (exit 0)
   T2  Stop with only a shadow hit -> exit 0 (the shadow rule nudges at PreToolUse only)
@@ -106,11 +113,13 @@ def _write_transcript(
     return path
 
 
-def run_hook(payload: object, env: dict) -> subprocess.CompletedProcess:
+def run_hook(
+    payload: object, env: dict, args: tuple[str, ...] = ()
+) -> subprocess.CompletedProcess:
     body = payload if isinstance(payload, str) else json.dumps(payload)
     full_env = {**os.environ, **env}
     return subprocess.run(
-        [sys.executable, HOOK],
+        [sys.executable, HOOK, *args],
         input=body,
         capture_output=True,
         text=True,
@@ -417,6 +426,70 @@ class SandboxShadowNudgeTest(unittest.TestCase):
                     [_user_prompt()], "Bash", {"command": command}, f"p4-{i}"
                 )
                 self.assertEqual(out, {})
+
+    def _codex(self, payload: dict) -> subprocess.CompletedProcess:
+        proc = run_hook({"session_id": "codex", **payload}, self._env(), ("--codex",))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return proc
+
+    def test_x1_codex_looks_are_nudged_never_denied(self):
+        looks = (
+            ("exec_command", {"cmd": "ls -la .git/config.lock"}),
+            ("Bash", {"command": "stat .git/config.lock"}),
+            ("Bash", {"command": "git status && ls .git/config.lock"}),
+        )
+        for tool, tool_input in looks:
+            with self.subTest(tool_input=tool_input):
+                proc = self._codex(
+                    {
+                        "hook_event_name": "PreToolUse",
+                        "tool_name": tool,
+                        "tool_input": tool_input,
+                    }
+                )
+                out = json.loads(proc.stdout)["hookSpecificOutput"]
+                self.assertNotIn("permissionDecision", out)
+                self.assertIn("masked-probe", out["additionalContext"])
+                self.assertIn("workdir", out["additionalContext"])
+        host = self._codex(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": {"command": "git config --get core.bare"},
+            }
+        )
+        self.assertEqual(host.stdout, "")
+
+    def test_x2_codex_config_lock_error_is_explained_once(self):
+        def after(output: str) -> str:
+            return self._codex(
+                {
+                    "hook_event_name": "PostToolUse",
+                    "tool_name": "Bash",
+                    "tool_input": {"command": "git config x.y 1"},
+                    "tool_response": output,
+                }
+            ).stdout
+
+        self.assertEqual(after("On branch main"), "")
+        error = "error: could not lock config file .git/config: Read-only file system"
+        context = json.loads(after(error))["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("config-lock", context)
+        self.assertIn("証拠にならない", context)
+        self.assertEqual(after(error), "")
+
+    def test_x3_codex_stop_restates_a_lock_claim_once(self):
+        claim = ".git/config.lock がロックされているので待ちます"
+        stop = {"hook_event_name": "Stop", "last_assistant_message": claim}
+        out = json.loads(self._codex(stop).stdout)
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("config-lock", out["reason"])
+        self.assertEqual(self._codex({**stop, "stop_hook_active": True}).stdout, "")
+        correct = {
+            **stop,
+            "last_assistant_message": "config.lock は sandbox の mask です",
+        }
+        self.assertEqual(self._codex(correct).stdout, "")
 
     def test_t1_stop_blocks_once_then_lets_the_restated_turn_end(self):
         entries = [
