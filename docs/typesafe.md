@@ -23,8 +23,8 @@ jev api-key clear # 保存済みキーを削除するとき
 `jev api-key` と `jev hello` は `--profile <名前>` で使うキーを選べます。AWS CLI と同じく、キーは同じ `credentials.json` に名前 (profile) ごとに並べて保存し、省略時は `default` を使います。本番のキーと検証用のキーを分けるときに使います。
 
 ```bash
-jev api-key set --profile verify   # 検証用のキーを default とは別に保存
-jev hello --profile verify
+jev api-key set --profile test   # 検証用のキーを default とは別に保存
+jev hello --profile test
 ```
 
 MCP の `evaluate` と `evaluate_file` は、呼び出しごとに `profile` 引数で使うキーを選びます。省略時は CLI と同じく `default` です。コミットの文脈判定は `default` を使います。テストと検証の仕組みからの問い合わせは、必ず検証用の profile を指定します。
@@ -72,8 +72,8 @@ Claude Code と Codex の MCP 登録名は `jev`、主な公開ツールは `eva
 ```
 
 `model` の省略時は `jev-latest` を使います。質問形式は公式スキル・ドキュメントを参照してください。
-MCP は `state`、`questions`、任意の `model` だけを受け取り、型付き回答と利用量を返します。
-キーや送信先を指定する引数、キーを読み出すツールはありません。
+MCP は `state`、`questions`、任意の `model` と `profile` だけを受け取り、型付き回答と利用量を返します。
+`profile` は保存済みのキーを名前で選ぶだけで、キーや送信先を指定する引数、キーを読み出すツールはありません。
 
 `evaluate_file` は、`jev-evaluate-files` ディレクトリにある JSON ファイルの `state` と `questions` をそのまま送ります (検証ハーネス用の仮のツール)。
 

@@ -336,15 +336,15 @@ class JevTests(unittest.TestCase):
     def test_profiles_share_one_private_file_like_aws_credentials(self):
         """A verification key sits beside the production key; neither replaces the other."""
         self.save_key()
-        self.save_profile_key("verify", "verify-only-key")
+        self.save_profile_key("test", "test-profile-key")
         path = self.directory / "credentials.json"
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(
             json.loads(path.read_text()),
-            {"default": {"api_key": KEY}, "verify": {"api_key": "verify-only-key"}},
+            {"default": {"api_key": KEY}, "test": {"api_key": "test-profile-key"}},
         )
         self.assertEqual(jev.load_key(), KEY)
-        self.assertEqual(jev.load_key("verify"), "verify-only-key")
+        self.assertEqual(jev.load_key("test"), "test-profile-key")
         self.assertEqual(list(self.directory.iterdir()), [path])
 
     def test_a_single_key_file_is_the_default_profile(self):
@@ -353,20 +353,20 @@ class JevTests(unittest.TestCase):
         path.write_text(json.dumps({"api_key": KEY}))
         path.chmod(0o600)
         self.assertEqual(jev.load_key(), KEY)
-        with self.assertRaisesRegex(jev.JevError, "profile verify.*--profile verify"):
-            jev.load_key("verify")
-        self.save_profile_key("verify", "verify-only-key")
+        with self.assertRaisesRegex(jev.JevError, "profile test.*--profile test"):
+            jev.load_key("test")
+        self.save_profile_key("test", "test-profile-key")
         self.assertEqual(jev.load_key(), KEY)
-        self.assertEqual(jev.load_key("verify"), "verify-only-key")
+        self.assertEqual(jev.load_key("test"), "test-profile-key")
 
     def test_clear_removes_only_the_named_profile(self):
         self.save_key()
-        self.save_profile_key("verify", "verify-only-key")
+        self.save_profile_key("test", "test-profile-key")
         with contextlib.redirect_stdout(io.StringIO()):
-            jev.remove_key("verify")
+            jev.remove_key("test")
         self.assertEqual(jev.load_key(), KEY)
-        with self.assertRaisesRegex(jev.JevError, "profile verify"):
-            jev.load_key("verify")
+        with self.assertRaisesRegex(jev.JevError, "profile test"):
+            jev.load_key("test")
         with contextlib.redirect_stdout(io.StringIO()):
             jev.remove_key()
         self.assertFalse((self.directory / "credentials.json").exists())
@@ -390,7 +390,7 @@ class JevTests(unittest.TestCase):
             with self.subTest(argv=argv):
                 self.assertEqual(parser.parse_args(argv).profile, "default")
                 self.assertEqual(
-                    parser.parse_args([*argv, "--profile", "verify"]).profile, "verify"
+                    parser.parse_args([*argv, "--profile", "test"]).profile, "test"
                 )
         # The server has no default of its own: each request picks its profile, as the CLI does.
         self.assertFalse(hasattr(parser.parse_args(["serve"]), "profile"))
@@ -398,7 +398,7 @@ class JevTests(unittest.TestCase):
             contextlib.redirect_stderr(io.StringIO()),
             self.assertRaises(SystemExit),
         ):
-            parser.parse_args(["serve", "--profile", "verify"])
+            parser.parse_args(["serve", "--profile", "test"])
 
 
 def response_body(model="jev-latest", count=1):
@@ -732,19 +732,19 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_each_profile_uses_its_own_key(self):
         """Verification queries name their profile; the production key is never used for them."""
-        verify = jev.JevSession(profile="verify")
-        self.addAsyncCleanup(verify.close)
-        await verify.evaluate(**REQUEST)
+        testing = jev.JevSession(profile="test")
+        self.addAsyncCleanup(testing.close)
+        await testing.evaluate(**REQUEST)
         await self.session.evaluate(**REQUEST)
         self.assertEqual(
-            [c.args for c in self.key_loader.call_args_list], [("verify",), ("default",)]
+            [c.args for c in self.key_loader.call_args_list], [("test",), ("default",)]
         )
 
     async def test_mcp_request_picks_the_profile_and_defaults_like_the_cli(self):
         """Each request names its profile; without one it is "default", exactly as in the CLI."""
         for argument, expected in (
             ({}, "default"),
-            ({"profile": "verify"}, "verify"),
+            ({"profile": "test"}, "test"),
             ({"profile": "default"}, "default"),
         ):
             with self.subTest(argument=argument):
