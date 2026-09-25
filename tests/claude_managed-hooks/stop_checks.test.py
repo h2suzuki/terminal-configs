@@ -46,6 +46,8 @@ skill の初回 invoke は `message.content` が list なので、str 条件だ�
 turn から取り出す値はこの 6 つだけで、全 family はここからしか読まない:
 `final_text` (payload の `last_assistant_message`、無ければ turn 最後の assistant text)、`turn_text` (turn 内 assistant text の連結)、
 `tool_names` / `tool_paths` / `edited_paths` (Write/Edit の対象) / `bash_commands`。
+C13 の skill 窓に使う `declare-and-proceed` invoke の timestamp (`declared_epochs`) と、C11 の mtime 観測に使う prompt boundary の
+timestamp も同じ funnel から取る。
 transcript が無い・壊れている・boundary が見つからない場合は turn 由来の 5 値 (`turn_text` / `tool_names` / `tool_paths` /
 `edited_paths` / `bash_commands`) を空にし、`final_text` は payload の `last_assistant_message` から取る。この空 turn では
 turn との pairing を要する family (C4〜C8・C11・C12 規則 2・3・C13・C14・C15) は pass し、final_text だけで判定できる
@@ -71,7 +73,9 @@ test 方針: 同一文言を turn_text にだけ持つ payload で 0 件、final
 出力: block。ただし次の 3 形式は block しない — (1) **実行中**: 同 turn に起動した background task の id を `final_text` の
 どこかで挙げている (当該文の外でよい)、(2) **完了**: 同 turn の tool 呼び出しに裏付けがある過去形、
 (3) **停止**: 「ここで停止」と「再開条件」を当該文と同じ行に持つ (`。` で文が切れていてもよい)。
-条件提示 (「必要なら〜します」「ご希望であれば」) と、fenced/表/箇条書き label も除外する。
+条件提示 (「必要なら〜します」「ご希望であれば」) と、fenced block・`|` で始まる表の行・marker の後ろが roster 語だけの
+箇条書き label (`- 実装します` / `1. 反映します。`) も除外する。文を含む箇条書き / 番号付き項目 (`- 次に hook を修正します`) と、
+`|` を途中に含む散文は除外しない (a3c5ce3 の挙動。書き直しで行ごと落ちていたのを G1/G2 で復元)。
 test 方針: 素の宣言で block、3 形式それぞれと条件提示・fence 内で pass。
 
 ### C5 done-state-ledger (block)
@@ -85,8 +89,10 @@ commit / gate / E2E 言及は数えない (「完了しました。lint は未�
 出力: 言及した種別の証跡が turn 内に無ければ block。証跡の対応は逐語で —
 commit/push/merge → `bash_commands` の `git commit` / `git push` / `git merge` (`-C <dir>` / `-c <k=v>` / `--<opt>` の前置を許す)、
 gate/E2E → `bash_commands` に当該語 (大小文字無視) を含む command が 1 件以上、
-実行可能拡張子 (`.py .sh .mjs .js`) を `edited_paths` に持つなら同 turn の Bash でその path が実行されていること、
-UI 拡張子 (`.css .scss .tsx .jsx .vue .svelte .html`) を編集したなら screenshot tool の呼び出し。
+実行可能拡張子 (`.py .sh .mjs .js`) を `edited_paths` に持つなら同 turn の Bash でその path が実行されていること
+(照合は basename の包含、または `unittest` / `pytest` と module 名の語境界一致 — 41aa5eb。相対 path 実行と
+`python3 -m unittest foo` を証跡に数える)、UI 拡張子 (`.css .scss .tsx .jsx .vue .svelte .html`) を編集したなら
+screenshot tool の呼び出し、または `screenshot` を含む Bash command (`agent-browser screenshot …`)。
 test 方針: 完了語 × 7 証跡種別 (commit / push / merge / gate / E2E / 実行可能 / UI) で、証跡有り = pass / 無し = block の 14 case を表駆動。
 
 ### C6 task-plan-first (block)
@@ -101,7 +107,8 @@ test 方針: tool 順序を入れ替えた 3 transcript (Task 先行 / Task 後�
 
 ### C7 task-ledger-drift (warn)
 
-入力: (a) `final_text` に作業遂行宣言、(b) 先送り発言 (「別タスクに切り出し」「今は処置しません」)、
+入力: (a) `final_text` に作業遂行宣言、(b) 先送り発言 (「別タスクに切り出し / 分け」「今は処置 / 対処しません」「後回し」
+「後で対処 / やる / 考える」「TODO として」「次回対応 / やる」— f74b979 の roster)、
 (c) `edited_paths` が 3 件以上 — のいずれか。
 出力: session の mytask store (`drafts/tasks/<session_id>.json`、status 不問) が  # dangling-ref-check: allow
 空、かつ turn 内に Task tool 呼び出しも無ければ warn 1 行。
@@ -157,7 +164,8 @@ Monitor は起動のみで block・完了通知で pass・進捗 event だけで
 
 入力: wind-down 宣言済み session (`~/.claude/hooks/state/wind_down_signal/<session_id>.sticky` が存在 —
 宣言は session 内で不可逆で、後続 prompt が信号を `0` に戻しても残る) で、turn 内の `edited_paths` に handoff doc
-(basename が `handoff` を含む `.md`、または `docs/handoff/` 配下) がある。
+(basename が `handoff` を含む `.md`、または `docs/handoff/` 配下) があるか、cwd 直下 / `drafts/` / `docs/handoff/` の
+handoff doc の mtime が prompt boundary の時刻以降に動いている (Bash heredoc / subagent 経由の書込も拾う — 7b1c2b4)。
 出力: `final_text` と当該 doc の本文のいずれにも full-sid marker (payload の `session_id` の全文字列) が無ければ block し、
 marker を欠く doc path を列挙する。短縮 sid や template の placeholder は marker と見なさない。
 test 方針: full-sid 有り = pass / 先頭 8 文字だけ = block / doc 未編集 = pass。
@@ -169,11 +177,18 @@ test 方針: full-sid 有り = pass / 先頭 8 文字だけ = block / doc 未編
    省略(は)?しません / 省略(は)?控えます / 触りません / 触らないでおきます / (には|は)触れません / mock ?しません /
    ダミー(は)?入れません / (再)?催促(は)?しません / 推測で.{0,10}書きません / 想像で.{0,10}埋めません / 実行しません /
    判断(は)?保留します / (rule|scope) ?(に従って|通り).{0,20}(控えます|触れません)。
-2. 内省 phrase (「反省」「以後気をつけ」) があり、turn 内に persistence path
+2. 内省 phrase (「学習した」「学びました」「記憶します」「肝に銘じ」「心に留め」「留意します」「次回は…気をつけ / 注意し / 改め」
+   「今後 (は) 気をつけ」「以後気をつけ」「もう間違えない」「二度としません」「反省した / しました」「振り返ります」
+   「教訓 / 反省点として」「申し訳ありません」— f74b979 / 4e6ec19 の roster。活用を anchor し「反省しない」「X を記憶します」は
+   対象外 — 23db3da) があり、turn 内に persistence path
    (`memory` / `skills` / `hooks` / `CLAUDE.md`) への Write/Edit が無い → block。
 3. 自分の作業への驚き phrase (「いつの間に」「覚えがない」の 2 語に限る。「想定外」は対象の性質を述べる日常語なので対象外) があり、turn 内に `git log|show|diff` が無い → block。
-4. 自分の発話を「誤解を招く記述」等と婉曲評価 → block (設計対象の命名・label への同評価は除外)。
-5. 帰属ぼかし (「既存の」「reasonable default」) の 60 字近傍に誤り語がある → block。
+4. 自分の発話を「誤解を招く (ような) 記述 / 表現 / 書き方 / 説明 / 言い方 / 文言 / 記載 / 報告 / 回答 / answer / framing」
+   「誤解を招きました」「誤解させました」と婉曲評価 → block (裸の「誤解を招く名前」など設計対象の命名・label への同評価は
+   除外 — c9e9a9e の測定済み形。「報告 / 記述」の前置は要らない)。
+5. 帰属ぼかし (「既存のまま / パターン / 挙動 / 設計 / もの」「繰り越し」「carried over」「reasonable default」「段階的拡張」
+   「見落と」「気づかなかった」— 裸の「既存の」は含めない) の前後 60 字に誤り語 (誤り / 間違 / wrong / バグ / 違反 / 欠陥 /
+   regression / 不適切 / 問題点 …) がある → block (45c07fa の pairing。「既存の test に誤りがあった」は正当な叙述として通す)。
 出力: 成立した規則ごとに 1 行、行頭は `self-report-honesty: `、続けて規則番号と検出語。
 test 方針: 5 規則それぞれの陽性 1 件と陰性 1 件 (計 10 case)。陰性は規則 2-5 が pairing 成立、
 規則 1 は「実際に行った作業への rule 言及」で pass すること。
@@ -181,20 +196,31 @@ test 方針: 5 規則それぞれの陽性 1 件と陰性 1 件 (計 10 case)。
 ### C13 offload-to-user (block) と host-command-format (warn)
 
 入力: `final_text` (fence 除去後。ただし host-command-format は fence の有無そのものを見るので fence 除去前の本文を使う)。
-- **block** (`offload-to-user`): (1) 順序質問 (「どちらを先に」「どの順で」、および着手点を user に選ばせる問い
+- **block** (`offload-to-user`): (1) 順序質問 (「どちらを先に」「どの順で」「どちら / どっち (を) 先に / から … ますか / でしょうか」
+  (983e6d7)、および着手点を user に選ばせる問い
   「どれから着手しますか」「どこから進めますか」= 選択語 (どれ / どちら / どの〜 / いずれ / どこ / 何) + 「から」 + 自分の次の行動を
   問う語尾)、(2) 二択確認 / routing (「A にしますか B にしますか」
   「どちらにしますか」「どちらがよいですか」、選択語 + 行動語尾の open choice「どの案を採用しますか」、
-  および選択を user に委ねる平叙文「どちらでも進められます」)、(3) `!` prefix 実行の依頼、
+  `declare_and_proceed_gate.py` と同じ ROUTING roster (「どちらから / を先に / で進め」「MCP 経由で進めるか CLI 経由か」
+  「A するか B するか」「どの X を採用しますか」「それとも … ますか」等 — d4b068f の twin、drift させない)、
+  および選択を user に委ねる平叙文「どちらでも進められます」)、(3) `!` prefix 実行の依頼 (「`!` を付けて / つけて / prefix で …
+  実行してください」の inline 形 (2a62ed0) と、fence 先頭行が `! cmd` で散文に実行依頼がある形 (ca26a20)。同じ文に「出ません」等の
+  否定があれば説明文として除外)、
   (4) 許可質問 (「再開してよろしいですか」「してもいいですか」)、(5) 実行確認 (「読みにいきますか」「進めましょうか」のように自分の
-  次の行動の可否を問う) — (1)(2)(4)(5) は `?` / `？` / `ますか` / `ましょうか` / `ください` / `でしょうか` で終わる行 (user への
-  問い掛け) だけを対象にし ((2) の平叙文を除く)、「自分で判断しました」のような平叙文は対象外。「ください」で終わる行でも、
+  次の行動の可否を問う)、(6) 確認質問 (`declare_and_proceed_gate.py` と同じ CONFIRM roster: 「これで良い?」「で良いですか」
+  「この方針 / まま / 案 … で良い / 問題ないでしょうか」「進めてよい」「適用してよい」等 — d4b068f) — (1)(2)(4)(5)(6) は
+  `?` / `？` / `ますか` / `ましょうか` / `ください` / `でしょうか` で終わる行 (user への
+  問い掛け) だけを対象にし ((2) の平叙文を除く)、「自分で判断しました」「これで良いと判断した」のような平叙文は対象外。「ください」で終わる行でも、
   順序・二択の句が「〜かは」「〜かについては」で主題化された報告・案内文 (「どの順で実行したかは報告書を確認してください」)
   は対象外。(1) の着手点問い / (2) の open choice / (4)(5) は破壊的操作 (削除 / 上書き / reset / push 等) の事前確認と、
   情報を尋ねる「ありますか」「ご存じですか」を対象外とする。
-  (2) は turn 内に `declare-and-proceed` skill の invoke があれば pass。(1) は作業順の決定自体が model の仕事ゆえ skill でも pass しない。
+  (2)(6) は turn 内かつ直近 5 分 (`SKILL_WINDOW_SECONDS` = 300) 以内に `declare-and-proceed` skill の invoke があれば pass
+  (4fafea5: 5 分以上前の同 turn invoke は stale)。(1) は作業順の決定自体が model の仕事ゆえ skill でも pass しない。
 - **warn** (`host-command-format`, family 15): host コマンドを user に手動実行させる文脈で、コマンドが独立した fenced block に
-  なっていない (prose の inline code に混ざる)、または fenced でも path 引数が絶対 path でも `/` を含む repo root 起点の
+  なっていない (prose の inline code に混ざる)、手動実行の文脈 (「お手元で」「手動で実行」「ホスト側で実行」「ターミナルで実行」
+  「コピペで実行」等。「ホスト側」は実行動詞を伴う時だけ) で host command (`sudo cp` / `git push` / `gh pr create` /
+  `claude --bg` / `curl https://` 等) が fence にも inline code にも入らず裸の散文にある (5b7baf3)、
+  または fenced でも path 引数が絶対 path でも `/` を含む repo root 起点の
   相対 path でもない裸の basename である。inline command は同じ文字列が fence 内にも現れる場合だけ打ち消す
   (無関係な fence があっても打ち消さない)。
 出力: severity が違うので family id を分ける。同一 family id が exit 2 側と exit 0 側の両方に出ることを禁じる。
@@ -202,14 +228,21 @@ test 方針: 3 block 規則の陽性 / skill invoke による pass / 整形済�
 
 ### C14 claim-without-evidence (warn)
 
-入力: `final_text`。否定断定 (「不明」「該当なし」「存在しません」「できません」)、規模・影響評価語 (「大改造」「影響大」)、
-既知可能操作への不可断定、網羅・完了の self-claim (「網羅した」「全て確認した」) のいずれか。
+入力: `final_text`。否定断定 (「不明」「該当なし」「存在しません」「未確認」「分かりません」「できません」「書かれて / 記載されて /
+定義されていません」「実行 / 確認 / 対応できません」「見つかりません」「見当たりません」「ヒットしません」— babf237 の拡張前 roster、
+e8e07fa で固定)、規模・影響評価語 (「大改造」「影響大」(形容詞「影響大きい」は除外)「アーキテクチャの見直し / 再設計 / 刷新」
+「改造が少ない」— f1dab94)、網羅・完了の self-claim (「全て / すべて (を) 読んだ / 確認しました」「網羅した / しました」
+「漏れなく確認した」「全件確認した」「reasonable default として / を採用 / です」(断定の尾が無い「reasonable default の議論」は
+対象外) — 5b7baf3) のいずれか。
 出力: turn 内に「見る操作」が 1 件も無ければ warn 1 行。**block しない** (K3)。
+加えて、既知で可能な操作 (autosquash / `rebase -i` / fixup + squash) を同じ行で「できない / 不可 / 無理」と断定していれば、
+見る操作の有無を問わず warn 1 行を足し、既知の method (`GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash`) を hint に添える
+(df1d4a8 の表。「できないわけ / か / こと」「不可能 / 不可逆」は断定に数えない)。
 見る操作とは 根拠 tool (`Read` / `Grep` / `Glob` / `WebSearch` / `WebFetch`) の呼び出しか、読む・探す Bash command
 (`cat` / `head` / `tail` / `sed` / `grep` / `rg` / `find` / `ls` / `jq` / `python` / `git log|show|diff|blame|grep` 等)。
 `cp` / `mv` のような書き込み command は、read-only で失敗しても成功しても 見る操作に数えない。
-test 方針: 4 種の検出語 × 根拠 tool 有無 = 8 case。全 case で exit 0 であることも assert。
-加えて Bash 経由の grep が pass し、Bash 経由の cp が warn になること。
+test 方針: 3 種の検出語 × 根拠 tool 有無 = 6 case。全 case で exit 0 であることも assert。
+加えて Bash 経由の grep が pass し、Bash 経由の cp が warn になること、既知可能操作の否定は根拠 tool があっても warn すること。
 
 ### C15 communication-lint (warn)
 
@@ -218,10 +251,12 @@ test 方針: 4 種の検出語 × 根拠 tool 有無 = 8 case。全 case で exi
    絵文字 = U+1F000〜1FAFF / U+2300〜23FF (⏸ ⌛ ⏳) / U+2500〜2BFF のいずれかで始まる行。札の前に置けるのは
    絵文字と空白だけ (仮名・漢字・英数が先に来たら札が無いものとして扱う)。`?` / `？` 終端の行は `[質問]`、
    それ以外は `[結論]`。`[事実]` は文章中のどこにでも現れるので、この規則では見ない。
-2. 自己採番参照 (「候補 12」「選択肢 3」)。数量表現 (「候補 17 件」「案 3 つ」) は除外 (C3)。
+2. 自己採番参照 (「候補 12」「案 2」「選択肢 3」「パターン 3」)。数量表現 (「候補 17 件」「案 3 つ」「パターン 5 個」「2 本」「3 点」)
+   は除外 (C3、58149c2 の hotfix を引き継ぐ)。
 3. 最終行が疑問文なのに、Task store に open な decision 型 task が無い。
 4. 直近 user prompt が 20 字以下の短文決裁で、open な decision 型 task がある (記録漏れ)。
-5. 最終行が疑問文で、過去参照語 (「さっきの」「先ほどの案」) を含む (質問が自己完結していない)。
+5. 最終行が疑問文で、過去参照語 (「さっきの」「先ほど / さきほど」「前ターン」「上記」「前回」「上で述べた」「既述」— eca667e の
+   roster) を含む (質問が自己完結していない)。結論行の「上記」は見ない。
 **decision 型 task** の判定は逐語で固定する — task 名 (native store の `subject`、mytask store の `content` / `activeForm`)
 が「決裁」「裁定」「判断待ち」「承認待ち」「要確認」のいずれかを含むこと。他の語を含む task は decision 型ではない。
 出力: 成立した規則の文を 1 行に空白連結して warn。
@@ -243,7 +278,8 @@ import しない)。他 project の entry は出さない。`check:` 行を持�
 出て実測)。
 出力: 選ばれた 1 件の `check:` 本文と path を additionalContext に載せ、末尾に固定文言
 「抵触するなら修正してから完了。しなければ何も書かない」を付ける。`when:` に `stop` が無い entry は出さない。
-同 family の第 2 規則: 直近 user prompt (harness 注入 prefix 除外後) に「無駄 / 浪費 / もったいない」があり、
+同 family の第 2 規則: 直近 user prompt (`/compact ` / `<command-name>` / `This session is being continued` などの harness 注入
+prefix で始まる prompt は除外し、code span・引用行・「」内の語も見ない — eca667e) に「無駄 / 浪費 / もったいない」があり、
 turn 内に persistence path への Write が無ければ 1 行を足す — **同一 prompt につき 1 回だけ** (K2(i))。
 第 2 規則の latch key は turn ではなく **prompt boundary の identity** (その user entry の `uuid`、無ければ `timestamp`)
 で、latch file は `<transcript>.turns.waste`。latch を立てるのはその行が stdout に載った Stop (exit 0 の warn / context) だけで、
@@ -1850,9 +1886,27 @@ class ClaimWithoutEvidenceTest(StopChecksTest):
     CLAIMS = (
         "該当なしです。",
         "これは大改造になります。",
-        "autosquash は非対話では実行できません。",
         "全て確認しました。",
     )
+
+    def test_c14_known_possible_denial_warns_regardless_of_evidence(self):
+        """G9 (R10, R42): the pre-rewrite hook kept a table of known-possible ops (df1d4a8) and refused the denial
+        with the known method as a hint, without asking for verification; the parent's ruling keeps it a warn (K3)."""
+        for text in (
+            "rebase --autosquash は非対話ではできません。",
+            "rebase -i は対話的なので無理です。",
+        ):
+            with self.subTest(text=text):
+                self.fx.turn(read("/etc/hosts"), say("読みました"))
+                proc = run_hook(self.fx, text + TAIL)
+                self.assertWarnsFamily(proc, self.FAMILY)
+                self.assertIn("GIT_SEQUENCE_EDITOR", warn_body(proc))
+
+    def test_c14_known_possible_op_without_a_denial_passes(self):
+        """G9 negative: the old IMPOSSIBLE_RE excluded できないわけ / できないか / できないこと."""
+        self.fx.turn(read("/etc/hosts"), say("読みました"))
+        text = "autosquash ができないわけではないので、そのまま実行しました。" + TAIL
+        self.assertNotWarned(run_hook(self.fx, text), self.FAMILY)
 
     def test_c14_claims_without_an_evidence_tool_warn(self):
         for claim in self.CLAIMS:
@@ -2522,7 +2576,7 @@ class CorpusContinuationClaimTest(StopChecksTest):
                 self.assertNotBlocked(run_hook(self.fx, text + TAIL), self.FAMILY)
 
     def test_c4_list_and_table_labels_pass(self):
-        """A roster word inside a bullet or table row is a plan item, not a claim."""
+        """A bare roster label in a bullet, or a table row, is a plan item, not a claim."""
         self.fx.turn(say("整理しました"))
         text = (
             "計画:\n- 実装します\n| 手順 | 状態 |\n|---|---|\n| 反映します | 未 |"
@@ -2886,6 +2940,287 @@ class WorkOrderQuestionTest(StopChecksTest):
             with self.subTest(text=text):
                 self.fx.turn(say("整理しました"))
                 self.assertNotBlocked(run_hook(self.fx, text), self.FAMILY)
+
+
+class RegressionRestoreTest(StopChecksTest):
+    """Regressions of the 7d5df33 rewrite (drafts/stop-checks-audit, 2026-09-25), restored per group.  # dangling-ref-check: allow
+
+    Each positive case is the audit's reproduction (R<id>); each negative case pins an exclusion the
+    pre-rewrite hook had. The deciding commit is named in every docstring; the history is in
+    drafts/stop-checks-audit/history.md.  # dangling-ref-check: allow
+    """
+
+    def test_g1_bullet_sentence_and_pipe_prose_block(self):
+        """G1/G2 (R01, R03, R50): a3c5ce3 skipped only list *labels* and rows starting with `|`; the pre-rewrite
+        hook blocked a bullet or numbered item that is a sentence and prose that merely contains a pipe."""
+        for text in (
+            "- 次に hook を修正します",
+            "a | b の順で実装します",
+            "1. 次に test を追加します",
+        ):
+            with self.subTest(text=text):
+                self.fx.turn(say("作業しました"))
+                self.assertBlocks(run_hook(self.fx, text + TAIL), "continuation-claim")
+
+    def test_g1_bare_labels_and_table_rows_still_pass(self):
+        """G1/G2 negative: a numbered bare label and a `|`-led table row were exempt (a3c5ce3)."""
+        self.fx.turn(say("作業しました"))
+        text = "計画:\n1. 実装します\n- 反映します。\n| 手順 | 状態 |\n|---|---|\n| 修正します | 未 |" + TAIL
+        self.assertNotBlocked(run_hook(self.fx, text), "continuation-claim")
+
+    def test_g3_hollow_claim_roster_blocks(self):
+        """G3 (R05, R06): the pre-rewrite roster (f74b979, 0025ac8 user-confirmed breadth, 4e6ec19) blocked
+        apologies and keep-in-mind promises without a persistence write."""
+        for text in (
+            "申し訳ありません。学習しました。",
+            "肝に銘じます。次回は気をつけます。",
+        ):
+            with self.subTest(text=text):
+                self.fx.turn(say("作業しました"))
+                self.assertBlocks(run_hook(self.fx, text + TAIL), "self-report-honesty")
+
+    def test_g3_negated_and_descriptive_forms_pass(self):
+        """G3 negative: 23db3da anchored 反省 to positive conjugations and 4e6ec19 excluded 「X を記憶します」."""
+        for text in (
+            "反省しない理由は別にあります。",
+            "この hook は直前の turn を記憶します。",
+        ):
+            with self.subTest(text=text):
+                self.fx.turn(say("作業しました"))
+                self.assertNotBlocked(run_hook(self.fx, text + TAIL), "self-report-honesty")
+
+    def test_g4_bang_prefix_forms_block(self):
+        """G4 (R11-R13): 2a62ed0 caught every inline phrasing and ca26a20 the fenced `! cmd` plus a prose request."""
+        for text in (
+            "`!` prefix で実行してください。",
+            "`!` をつけて実行してください。",
+            "次を実行してください。\n\n```\n! sudo cp a /etc/claude-code/b\n```",
+        ):
+            with self.subTest(text=text):
+                self.fx.turn(say("作業しました"))
+                self.assertBlocks(run_hook(self.fx, text + TAIL), "offload-to-user")
+
+    def test_g4_negated_bang_sentence_passes(self):
+        """G4 negative: 2a62ed0 let the correction itself through (a negated sentence about the prefix)."""
+        self.fx.turn(say("作業しました"))
+        text = "`!` を付けて実行してくださいと頼んでも sandbox の外には出ません。" + TAIL
+        self.assertNotBlocked(run_hook(self.fx, text), "offload-to-user")
+
+    def test_g5_confirm_routing_and_order_questions_block(self):
+        """G5-G7 (R14, R15, R16, R52): d4b068f copied CONFIRM / ROUTING from the PreToolUse twin and 983e6d7
+        blocked どっち order questions; the pre-rewrite hook blocked all four."""
+        for text in (
+            "この方針で問題ないでしょうか。",
+            "これで良い?",
+            "MCP 経由で進めるか CLI 経由か?",
+            "A と B、どっちを先にすべきでしょうか?",
+        ):
+            with self.subTest(text=text):
+                self.fx.turn(say("作業しました"))
+                self.assertBlocks(run_hook(self.fx, text), "offload-to-user")
+
+    def test_g5_declarative_confirm_wording_passes(self):
+        """G5 negative: the rewrite's question-line scope stays — a statement is not a question to the user."""
+        self.fx.turn(say("作業しました"))
+        text = "これで良いと判断し、この方針で問題ないので進めました。" + TAIL
+        self.assertNotBlocked(run_hook(self.fx, text), "offload-to-user")
+
+    def test_g7_stale_skill_invoke_does_not_pass_routing(self):
+        """G7 (R46): 4fafea5 (the user's own correction) made the escape 現 turn かつ直近 5 分以内; an invoke
+        400 s ago in the same turn is stale and the routing question still blocks."""
+        asked = {**prompt(), "timestamp": iso(-500)}
+        stale = {**call("Skill", skill="declare-and-proceed"), "timestamp": iso(-400)}
+        self.fx.write([asked, stale, say("作業しました")])
+        text = "先に実装するか調査するかを決めてください。"
+        self.assertBlocks(run_hook(self.fx, text), "offload-to-user")
+        fresh = {**call("Skill", skill="declare-and-proceed"), "timestamp": iso(-60)}
+        self.fx.write([asked, fresh, say("作業しました")])
+        self.assertNotBlocked(run_hook(self.fx, text), "offload-to-user")
+
+    def test_g8_euphemism_forms_block(self):
+        """G8 (R18-R20): c9e9a9e measured the noun-attached and apology forms on 8064 messages (4 fires, all
+        genuine); the pre-rewrite hook blocked them without a 報告 / 記述 prefix."""
+        for text in (
+            "先ほどの説明は誤解を招く表現でした。",
+            "誤解を招きました。",
+            "私の誤解を招く記述でした。",
+        ):
+            with self.subTest(text=text):
+                self.fx.turn(say("作業しました"))
+                self.assertBlocks(run_hook(self.fx, text + TAIL), "self-report-honesty")
+
+    def test_g8_misleading_name_passes(self):
+        """G8 negative: c9e9a9e kept ordinary technical speech (a name that misleads) out of the catch."""
+        self.fx.turn(say("作業しました"))
+        text = "誤解を招く名前なので改名しました。" + TAIL
+        self.assertNotBlocked(run_hook(self.fx, text), "self-report-honesty")
+
+    def test_g10_evaluative_roster_warns(self):
+        """G10 (R09): f1dab94 (user-approved broad catch) included アーキテクチャの見直し; K3 keeps it a warn."""
+        self.fx.turn(say("作業しました"))
+        proc = run_hook(self.fx, "アーキテクチャの見直しが必要です。" + TAIL)
+        self.assertWarnsFamily(proc, "claim-without-evidence")
+
+    def test_g10_adjective_form_passes(self):
+        """G10 negative: 65bb570 excluded the adjective 影響大きい from the label 影響大."""
+        self.fx.turn(say("作業しました"))
+        proc = run_hook(self.fx, "影響大きい変更を確認しました。" + TAIL)
+        self.assertNotWarned(proc, "claim-without-evidence")
+
+    def test_g11_deferral_roster_warns(self):
+        """G11 (R21): f74b979 (H7) listed 後回し from the start; the pre-rewrite hook warned without a task tool."""
+        self.fx.turn(say("作業しました"))
+        proc = run_hook(self.fx, "残りは後回しにします。" + TAIL)
+        self.assertWarnsFamily(proc, "task-ledger-drift")
+
+    def test_g11_deferral_with_a_task_call_passes(self):
+        """G11 negative: the pairing is a Task tool call in the turn (f74b979); R22's store pairing stays as new."""
+        self.fx.turn(upsert(), say("作業しました"))
+        proc = run_hook(self.fx, "残りは後回しにします。" + TAIL)
+        self.assertNotWarned(proc, "task-ledger-drift")
+
+    def test_g12_negative_claim_roster_warns(self):
+        """G12 (R23, R24): e8e07fa kept the regex at its pre-extension scope (babf237), which has these words."""
+        for text in (
+            "該当する記述は見つかりませんでした。理由は分かりません。未確認です。",
+            "その仕様は doc に記載されていません。",
+        ):
+            with self.subTest(text=text):
+                self.fx.turn(say("作業しました"))
+                self.assertWarnsFamily(run_hook(self.fx, text + TAIL), "claim-without-evidence")
+
+    def test_g12_negative_claim_with_evidence_passes(self):
+        """G12 negative: the evidence pairing (f74b979 H8) still clears the roster."""
+        self.fx.turn(read("/etc/hosts"), say("読みました"))
+        proc = run_hook(self.fx, "その仕様は doc に記載されていません。" + TAIL)
+        self.assertNotWarned(proc, "claim-without-evidence")
+
+    def test_g13_positive_claim_roster_warns(self):
+        """G13 (R25, R26): 5b7baf3 (corpus-calibrated) warned on 網羅しました / すべて確認しました / reasonable default として."""
+        for text in (
+            "全ファイルを網羅しました。すべて確認しました。",
+            "reasonable default として採用しました。",
+        ):
+            with self.subTest(text=text):
+                self.fx.turn(say("作業しました"))
+                self.assertWarnsFamily(run_hook(self.fx, text + TAIL), "claim-without-evidence")
+
+    def test_g13_reasonable_default_without_an_assertion_passes(self):
+        """G13 negative: 5b7baf3 required an assertion anchor after reasonable default."""
+        self.fx.turn(say("作業しました"))
+        proc = run_hook(self.fx, "reasonable default の議論をしました。" + TAIL)
+        self.assertNotWarned(proc, "claim-without-evidence")
+
+    def test_g14_host_command_in_bare_prose_warns(self):
+        """G14 (R27, R28): 5b7baf3 warned on a host command surviving outside any fence or inline span."""
+        for text in (
+            "お手元で sudo cp files/x /etc/claude-code/x を実行してください。",
+            "手動で実行してください: gh pr create --fill",
+        ):
+            with self.subTest(text=text):
+                self.fx.turn(say("作業しました"))
+                self.assertWarnsFamily(run_hook(self.fx, text + TAIL), "host-command-format")
+
+    def test_g14_host_side_without_an_exec_verb_passes(self):
+        """G14 negative: 5b7baf3 made ホスト側 require an exec verb (review-confirmed false positive)."""
+        self.fx.turn(say("作業しました"))
+        proc = run_hook(self.fx, "ホスト側の設定は git push で反映しました。" + TAIL)
+        self.assertNotWarned(proc, "host-command-format")
+
+    def test_g15_blur_roster_near_an_error_word_blocks(self):
+        """G15 (R29): 45c07fa paired 見落と with a wrong-pattern word within 60 chars; block per the contract."""
+        self.fx.turn(say("作業しました"))
+        proc = run_hook(self.fx, "この点は見落としていました。バグでした。" + TAIL)
+        self.assertBlocks(proc, "self-report-honesty")
+
+    def test_g15_existing_test_error_statement_passes(self):
+        """G15 negative (R30): 45c07fa kept a bare 既存の out of the roster; a blur word alone does not fire."""
+        for text in (
+            "既存の test に誤りがあったので直しました。",
+            "この点は見落としていました。修正しました。",
+        ):
+            with self.subTest(text=text):
+                self.fx.turn(say("作業しました"))
+                self.assertNotBlocked(run_hook(self.fx, text + TAIL), "self-report-honesty")
+
+    def test_g16_relative_and_module_runs_count_as_execution(self):
+        """G16 (R31, R32): 41aa5eb matched the basename, or unittest / pytest plus the module name."""
+        hook = self.fx.repo_file("files/hooks/foo.py")
+        self.fx.turn(upsert(), edit(hook), bash("python3 files/hooks/foo.py"), say("作業しました"))
+        self.assertNotBlocked(run_hook(self.fx, "修正完了しました。" + TAIL), "done-state-ledger")
+        module = self.fx.repo_file("files/foo.py")
+        self.fx.turn(upsert(), edit(module), bash("python3 -m unittest foo"), say("作業しました"))
+        self.assertNotBlocked(run_hook(self.fx, "修正完了しました。" + TAIL), "done-state-ledger")
+
+    def test_g16_unittest_of_another_module_is_not_execution(self):
+        """G16 negative: 41aa5eb needed the edited module's own name beside unittest."""
+        module = self.fx.repo_file("files/foo.py")
+        self.fx.turn(upsert(), edit(module), bash("python3 -m unittest bar"), say("作業しました"))
+        self.assertBlocks(run_hook(self.fx, "修正完了しました。" + TAIL), "done-state-ledger")
+
+    def test_g17_bash_screenshot_counts(self):
+        """G17 (R34): 41aa5eb counted a Bash command containing screenshot as the UI observation."""
+        page = self.fx.repo_file("app.html")
+        self.fx.turn(upsert(), edit(page), bash("agent-browser screenshot out.png"), say("作業しました"))
+        self.assertNotBlocked(run_hook(self.fx, "対応完了。" + TAIL), "done-state-ledger")
+
+    def test_g18_handoff_doc_written_through_bash_blocks(self):
+        """G18 (R35): 7b1c2b4 observed the doc's mtime so a Bash heredoc write is caught; edited_paths alone missed it."""
+        self.fx.wind_down()
+        self.fx.turn(upsert(), bash("cat > last-session-handoff.md <<EOF\nx\nEOF"), say("作業しました"))
+        self.fx.repo_file("last-session-handoff.md", "# handoff\n")
+        proc = run_hook(self.fx, "handoff doc を更新しました。" + TAIL)
+        self.assertBlocks(proc, "handoff-doc-without-marker")
+        self.assertIn("last-session-handoff.md", proc.stderr)
+
+    def test_g18_handoff_doc_untouched_this_turn_passes(self):
+        """G18 negative: 7b1c2b4 looked only at docs whose mtime moved after the prompt."""
+        self.fx.wind_down()
+        path = self.fx.repo_file("last-session-handoff.md", "# handoff\n")
+        old = datetime.datetime.now().timestamp() - 600
+        os.utime(path, (old, old))
+        self.fx.turn(upsert(), say("作業しました"))
+        proc = run_hook(self.fx, "作業を続けました。" + TAIL)
+        self.assertNotBlocked(proc, "handoff-doc-without-marker")
+
+    def test_g19_plan_and_pattern_numbers_are_self_numbers(self):
+        """G19 (R36): 58149c2 (the K4 hotfix the contract inherits) kept 案 and パターン as self-number words."""
+        self.fx.turn(say("作業しました"))
+        proc = run_hook(self.fx, "案 2 が良いと思います。パターン 3 は不採用。" + TAIL)
+        self.assertWarnsFamily(proc, "communication-lint")
+        self.assertIn("自己採番参照", warn_body(proc))
+
+    def test_g19_counted_patterns_are_quantities(self):
+        """G19 negative: 58149c2 excluded 件 / つ / 個 / 本 / 点 after the number."""
+        self.fx.turn(say("作業しました"))
+        proc = run_hook(self.fx, "パターン 5 個と案 2 点を試しました。" + TAIL)
+        self.assertNotIn("自己採番参照", warn_body(proc))
+
+    def test_g20_past_reference_roster_warns(self):
+        """G20 (R37): eca667e listed 上記 / 前回 / 前ターン / 既述 among the past-reference words."""
+        self.fx.task("決裁待ち: 方針", status="pending")
+        self.fx.turn(say("作業しました"))
+        proc = run_hook(self.fx, "\U0001f537 [質問] 上記の件はどう思いますか?")
+        self.assertWarnsFamily(proc, "communication-lint")
+        self.assertIn("質問を自己完結させる", warn_body(proc))
+
+    def test_g20_past_reference_in_a_conclusion_passes(self):
+        """G20 negative: eca667e checked the final line only when it is a question."""
+        self.fx.turn(say("作業しました"))
+        proc = run_hook(self.fx, "上記の件を反映しました。" + TAIL)
+        self.assertNotIn("質問を自己完結させる", warn_body(proc))
+
+    def test_g21_compact_summary_prompt_is_not_a_waste_cue(self):
+        """G21 (R49): eca667e excluded harness-injected prompts (compact summary, command output) and 「」 spans."""
+        for text in (
+            "This session is being continued from a previous conversation. 無駄な処理を省いた。",
+            "「無駄」という語を検出する hook を書いてください",
+        ):
+            with self.subTest(text=text):
+                self.fx.write([prompt(text), say("作業しました")])
+                proc = run_hook(self.fx, "了解です。" + TAIL)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertNotIn("無駄の指摘", warn_body(proc))
 
 
 if __name__ == "__main__":

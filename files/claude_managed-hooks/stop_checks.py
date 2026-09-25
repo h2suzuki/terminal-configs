@@ -110,6 +110,116 @@ INFO_ASK_RE = re.compile(r"(?:あり|ござい|ご存じ|ご存知|お持ち|い
 CHOICE_RE = re.compile(r"どちら|どれ|どの|いずれ")  # a choice question belongs to the routing rule
 ORDER_FROM_RE = re.compile(r"(?:どれ|どちら|どの[^。\n]{0,8}|いずれ|どこ|何)から")  # the starting point is routing too
 DESTRUCTIVE_RE = re.compile(r"削除|消し|消去|破棄|上書き|reset|force|push|revert|drop|rm\b|clean", re.IGNORECASE)
+SKILL_WINDOW_SECONDS = 300  # declare-and-proceed の escape は現 turn かつ直近 5 分以内 (4fafea5)
+LABEL_RE = re.compile(  # marker の後ろが roster 語だけの箇条書きは計画の label で、宣言ではない
+    r"^\s*(?:[-*+・]|\d+[.)])\s*(?:"
+    + "|".join(re.escape(ending) for ending in CONTINUATION_ENDINGS)
+    + r")\s*[。.!！]?\s*$"
+)
+HOLLOW_CLAIM_RE = re.compile(  # 活用を anchor し、否定形と「X を記憶します」の叙述を外す (23db3da, 4e6ec19)
+    r"学習し(?:た|ました)|勉強になっ(?:た|ました)|学びが(?:あった|あり(?:ました|ます))|学びで(?:す|した)"
+    r"|学びを得(?:た|ました)|学びました|脳に刻ん(?:だ|でます|でいます)"
+    r"|(?<!を)記憶し(?:ます|ました|ておきます|ておく)|肝に銘じ(?:ます|ました|ておきます|ています)"
+    r"|心に留め(?:ます|ました|ておきます)|留意し(?:ます|ました)"
+    r"|次回(?:から)?(?:は)?[^。\n]{0,15}(?:気をつけ|注意し(?:ます|ました)|改め(?:ます|ました))"
+    r"|今後(?:は)?気をつけ|以後気をつけ|もう間違え(?:ない|ません)|もう繰り返しません"
+    r"|もう(?:し|いた|致し)ません|二度と(?:し|やり|繰り返し)ません"
+    r"|反省し(?:た|ました|て(?:い|ます)|ています)|振り返(?:り|って)(?:ます|ました|みます|みました)"
+    r"|(?:教訓|反省点)として|申し訳(?:ありません|ございません)"
+)
+EUPHEMISM_RE = re.compile(  # 自分の記述・報告に付いた時と謝罪形だけ (c9e9a9e: 8064 件で 4 発火、全て本物)
+    r"誤解を(?:招く|招き(?:やすい|うる|かねない)|生む)(?:ような)?"
+    r"(?:記述|表現|書き方|説明|言い方|文言|記載|報告|回答|answer|framing)"
+    r"|誤解を招きました|誤解させ(?:まし|てしまい)"
+)
+BLUR_RE = re.compile(  # 裸の「既存の」は入れない: 実在する既存 bug の叙述まで拾う (45c07fa)
+    r"既存(?:の)?(?:まま|パターン|挙動|設計|もの)|繰り越し|carried[ -]?over|reasonable default"
+    r"|段階的(?:な)?拡張|incremental extension|見落と|didn'?t notice|気づか(?:なかった|ず)",
+    re.IGNORECASE,
+)
+WRONG_RE = re.compile(
+    r"誤(?:り|った|字|用|認識)|間違|wrong|バグ|\bbug\b|違反|欠陥|regression|壊し|不正|不適切"
+    r"|問題(?:だ|の|が|点)|に過ぎ|だっただけ",
+    re.IGNORECASE,
+)
+BANG_REQUEST_RE = re.compile(
+    r"`?!`?\s*(?:prefix|プレフィックス)?\s*(?:を\s*(?:付けて|つけて)|付きで|で)"
+    r"[^。\n]{0,30}?(?:実行|起動|流)[^。\n]{0,15}?(?:ください|下さい|いただけ|もらえ|ましょう|します)"
+)
+BANG_NEGATION_RE = re.compile(r"出ません|出られません|なりません|ありません|ではない|効きません|限りません")
+BANG_EXEC_REQUEST_RE = re.compile(  # fence 先頭の `!` と対にする散文側の実行依頼 (ca26a20)
+    r"(?:実行|起動|流|deploy|デプロイ)[^。\n]{0,20}?(?:ください|下さい|いただけ|もらえ|ましょう|お願い)"
+)
+CONFIRM_RE = re.compile(  # declare_and_proceed_gate.py の prose 版と同じ roster (drift させない)
+    r"これで(?:良|よ)い|で(?:良|よ)いです(?:か|ね)|で(?:良|よ)い\s*[?？]"
+    r"|で問題(?:ありません|ない)\s*(?:か|ですか|でしょうか)|進めて(?:も)?(?:良|よ)い"
+    r"|この(?:まま|style|スタイル|形式|方針|案|内容|draft|wording)で(?:良|よ|問題な)"
+    r"|適用して(?:も)?(?:良|よ)い|してもよいですか",
+    re.IGNORECASE,
+)
+ROUTING_RE = re.compile(
+    r"どちら(?:から|を先に|で進め|を調査)|どっち(?:から|を先に)|経由\s*(?:で|か)[^。\n]{0,20}(?:経由|か[?？])"
+    r"|(?:から|を)\s*(?:調査|着手)しますか|どこから\s*(?:調査|着手|始め|見)|先に\s*(?:調査|確認|読み?)\s*ますか"
+    r"|[ぁ-んァ-ヶ一-鿿\w]+するか\s*[ぁ-んァ-ヶ一-鿿\w]+するか"
+    r"|(?:どう|どの|どれ)を?\s*[ぁ-んァ-ヶ一-鿿\w]+\s*しますか"
+    r"|それとも[^。\n]{0,40}(?:ますか|ましょうか|でしょうか|します[?？])",
+    re.IGNORECASE,
+)
+ORDER_QUESTION_RE = re.compile(
+    r"(?:どちら|どっち)\s*(?:を)?\s*(?:先に|から)\s*[^。\n]{0,20}(?:ますか|しょうか|でしょう)"
+)
+DEFERRAL_RE = re.compile(
+    r"後で(?:対処|やる|考える)|別タスクに(?:切り出|分け)|今は(?:処置|対処)しません|後回し|TODO として"
+    r"|次回(?:に)?(?:対応|やる)"
+)
+CLAIM_RE = re.compile(  # 否定断定は拡張前の範囲 (babf237、e8e07fa で固定)、評価語は f1dab94 の roster
+    r"不明|該当なし|存在しません|未確認|わかりません|分かりません|できません"
+    r"|(?:書かれて|記載されて|定義されて)(?:いません|いない)"
+    r"|(?:実施|実行|編集|取得|参照|アクセス|変更|確認|対応)(?:でき|出来)(?:ません|ない)"
+    r"|見つかりません|見当たりません|ヒットしません"
+    r"|大改造|影響大(?!き)|アーキテクチャ(?:の)?(?:見直し|再設計|刷新)|改造が(?:少な|すくな)"
+)
+POS_CLAIM_RE = re.compile(  # 網羅・完了の self-claim。 reasonable default は断定の尾を要求 (5b7baf3)
+    r"(?:全部|全て|すべて)(?:の(?:ファイル|file|entry|箇所))?を?(?:読(?:んだ|みました|了|み終え)|確認しました)"
+    r"|網羅(?:し(?:た|ました)|的に(?:確認|読了|チェック|調査)し(?:た|ました))"
+    r"|漏れなく(?:確認|チェック|読)(?:した|しました)"
+    r"|(?:全件|全箇所|全entry)(?:を)?(?:確認|チェック|読)(?:した|しました|済)"
+    r"|reasonable\s+default\s*(?:として|を採用|で(?:良|い)|だと|です)",
+    re.IGNORECASE,
+)
+DENIAL_RE = re.compile(
+    r"でき(?:ない|ません|ず)(?!か|わけ|こと)|不可(?!能|逆|避|分|欠|侵)|無理|no-?op", re.IGNORECASE
+)
+KNOWN_POSSIBLE = (  # 既知で可能な操作: 不可断定を却下し、既知の method を hint に添える (df1d4a8)
+    (
+        re.compile(r"autosquash|rebase\s+-i|fixup.*squash|squash.*fixup", re.IGNORECASE),
+        "`GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash` で非対話に可能",
+    ),
+)
+MANUAL_EXEC_RE = re.compile(  # ホスト側 は実行動詞を伴う時だけ (裸だと中立語が毎 turn 発火する)
+    r"お手元で|ホスト側(?:の)?(?:ターミナル|端末|シェル|プロンプト)?(?:で|から)(?:実行|叩いて|打って)"
+    r"|ユーザー(?:さん)?(?:の)?手動で|手動で(?:実行|叩いて|打って)|手動実行(?:して|を行|が必要|してください)"
+    r"|以下(?:の)?(?:コマンド)?を(?:手動で)?(?:実行|叩いて|打って)|以下を(?:手動で)?実行"
+    r"|次のコマンドを(?:手動で)?実行|(?:端末|ターミナル)(?:で|から)(?:実行|叩いて|打って)"
+    r"|コピペ(?:で|して)(?:実行|叩いて|流して)?|貼り付けて(?:実行|流して)",
+    re.IGNORECASE,
+)
+HOST_CMD_RE = re.compile(
+    r"sudo\s+(?:cp|install|tee|mv|rm|ln)\b|\bgit\s+(?:push|pull|checkout|clone|fetch|reset|rebase|cherry-pick)\b"
+    r"|\bgit\s+commit\s+-F\b|\bgh\s+pr\s+(?:create|merge|checkout)\b|\bclaude\s+--(?:bg|print|resume)\b"
+    r"|\b(?:curl|wget)\s+(?:-[A-Za-z]+\s+)?https?://|\bcp\s+\S+\s+(?:/etc/claude-code|~/\.claude|/usr/local/bin)\S*",
+    re.IGNORECASE,
+)
+HARNESS_USER_PREFIXES = (  # harness が user 名義で注入する本文は「無駄」の指摘ではない
+    "/compact ",
+    "<command-name>",
+    "<task-notification>",
+    "<system-reminder>",
+    "Stop hook feedback:",
+    "This session is being continued",
+)
+SELF_NUMBER_RE = re.compile(r"(?:候補|案|選択肢|パターン)\s*[0-9]+(?![0-9]|\s*(?:件|つ|個|本|点))")
+PAST_REFERENCE_RE = re.compile(r"さっきの|前ターン|前のターン|先ほど|さきほど|上記|前回|上で述べた|既述")
 
 
 def _read_tail(path, limit):
@@ -191,6 +301,7 @@ def _empty_turn(path=""):
         "tool_paths": [],
         "edited_paths": [],
         "bash_commands": [],
+        "declared_epochs": [],
         "prompt_text": "",
         "prompt_identity": "",
         "prompt_epoch": None,
@@ -269,6 +380,8 @@ def _turn_funnel(payload):
                 skill = data.get("skill")
                 if isinstance(skill, str):
                     result["tool_paths"].append(skill)
+                if skill == "declare-and-proceed":
+                    result["declared_epochs"].append(_epoch(entry.get("timestamp")))
             if path_value and name in {"Read", "Grep", "Glob", "Write", "Edit"}:
                 result["tool_paths"].append(path_value)
             if path_value and name in {"Write", "Edit"}:
@@ -414,7 +527,7 @@ def _continuation_sentences(scan):
             candidate = re.sub(r"[^\w]+$", "", sentence)  # a fully bracketed sentence
         if not candidate.endswith(CONTINUATION_ENDINGS):
             continue
-        if re.match(r"^\s*(?:[-*+]\s|\d+[.)]\s)", line) or "|" in line:
+        if LABEL_RE.match(line) or line.lstrip().startswith("|"):
             continue
         result.append((sentence, line))
     return result
@@ -442,6 +555,27 @@ def _continuation(turn, scan):
             )
         ]
     return []
+
+
+def _artifact_was_run(path, commands):
+    """basename が command に現れるか、unittest / pytest が module 名を伴うか (41aa5eb)。"""
+    basename = os.path.basename(path).lower()
+    module = os.path.splitext(basename)[0]
+    for command in commands:
+        lowered = command.lower()
+        if basename in lowered:
+            return True
+        if module and re.search(r"\b(?:unittest|pytest)\b", lowered) and re.search(
+            rf"(?<!\w){re.escape(module)}(?!\w)", lowered
+        ):
+            return True
+    return False
+
+
+def _screenshot_taken(turn):
+    return any("screenshot" in name.lower() for name in turn["tool_names"]) or any(
+        "screenshot" in command.lower() for command in turn["bash_commands"]
+    )
 
 
 def _done_state(turn, scan):
@@ -478,13 +612,11 @@ def _done_state(turn, scan):
             failures.append("E2E")
     for path in turn["edited_paths"]:
         lower = path.lower()
-        if lower.endswith(EXECUTABLE_SUFFIXES) and not any(
-            path in command for command in turn["bash_commands"]
+        if lower.endswith(EXECUTABLE_SUFFIXES) and not _artifact_was_run(
+            path, turn["bash_commands"]
         ):
             failures.append(path)
-        if lower.endswith(UI_SUFFIXES) and not any(
-            "screenshot" in name.lower() for name in turn["tool_names"]
-        ):
+        if lower.endswith(UI_SUFFIXES) and not _screenshot_taken(turn):
             failures.append(path)
     if not failures:
         return []
@@ -530,7 +662,7 @@ def _task_drift(turn, scan, tasks):
     edited_paths = turn["edited_paths"]
     heavy_edit = len(edited_paths) >= LEDGER_MIN_EDITS
     work_claim = bool(_continuation_sentences(scan))
-    deferral = bool(re.search(r"別タスクに切り出し|今は処置しません", scan))
+    deferral = bool(DEFERRAL_RE.search(scan))
     if (
         (heavy_edit or work_claim or deferral)
         and not tasks
@@ -740,17 +872,45 @@ def _background(payload, turn):
     return [], []
 
 
+def _handoff_doc(path):
+    normalized_path = path.replace("\\", "/")
+    base = os.path.basename(path).lower()
+    return (base.endswith(".md") and "handoff" in base) or "/docs/handoff/" in (
+        "/" + normalized_path.lstrip("/")
+    )
+
+
+def _touched_handoff_docs(cwd, since):
+    """prompt 以降に mtime が動いた handoff doc: Bash / subagent 経由の書込も拾う (7b1c2b4)。"""
+    if since is None or not isinstance(cwd, str) or not os.path.isdir(cwd):
+        return []
+    found = []
+    for relative in ("", "drafts", os.path.join("docs", "handoff")):
+        directory = os.path.join(cwd, relative)
+        try:
+            names = sorted(os.listdir(directory))
+        except OSError:
+            continue
+        for name in names:
+            path = os.path.join(directory, name)
+            try:
+                touched = os.path.isfile(path) and os.path.getmtime(path) >= since
+            except OSError:
+                continue
+            if touched and _handoff_doc(path):
+                found.append(path)
+    return found
+
+
 def _handoff(payload, turn, final_text):
     session = payload.get("session_id")
     if not isinstance(session, str) or not session:
         return []
-    candidates = []
-    for path in turn["edited_paths"]:
-        normalized_path = path.replace("\\", "/")
-        base = os.path.basename(path).lower()
-        if (base.endswith(".md") and "handoff" in base) or "/docs/handoff/" in (
-            "/" + normalized_path.lstrip("/")
-        ):
+    cwd = str(payload.get("cwd", ""))
+    candidates = [path for path in turn["edited_paths"] if _handoff_doc(path)]
+    edited = {os.path.abspath(os.path.join(cwd, path)) for path in candidates}
+    for path in _touched_handoff_docs(cwd, turn["prompt_epoch"]):
+        if os.path.abspath(path) not in edited:
             candidates.append(path)
     missing = []
     for path in candidates:
@@ -801,7 +961,7 @@ def _self_report(turn, scan, paired=True):
                 "実施結果だけを書く",
             )
         )
-    if paired and re.search(r"反省|以後気をつけ", scan) and not _persistence_edit(turn):
+    if paired and HOLLOW_CLAIM_RE.search(scan) and not _persistence_edit(turn):
         lines.append(
             _line("self-report-honesty", "規則2 内省 phrase", "永続化した対策を示す")
         )
@@ -820,21 +980,39 @@ def _self_report(turn, scan, paired=True):
                 "履歴を確認した結果を書く",
             )
         )
-    if re.search(r"(?:報告|記述|発話)[^\n。]{0,30}誤解を招く", scan) and not re.search(
+    if EUPHEMISM_RE.search(scan) and not re.search(
         r"(?:label|命名)[^\n。]{0,20}誤解を招く", scan, re.IGNORECASE
     ):
         lines.append(
             _line("self-report-honesty", "規則4 婉曲な自己評価", "誤りを直接記す")
         )
-    if re.search(
-        r"(?:既存の|reasonable default).{0,60}(?:誤り|ミス|間違)",
-        scan,
-        re.DOTALL | re.IGNORECASE,
+    if any(
+        WRONG_RE.search(scan[max(0, found.start() - 60) : found.end() + 60])
+        for found in BLUR_RE.finditer(scan)
     ):
         lines.append(
             _line("self-report-honesty", "規則5 帰属ぼかし", "自分の判断として記す")
         )
     return lines
+
+
+def _declared_recently(turn):
+    cutoff = datetime.datetime.now(datetime.timezone.utc).timestamp() - SKILL_WINDOW_SECONDS
+    return any(epoch is None or epoch >= cutoff for epoch in turn["declared_epochs"])
+
+
+def _bang_request(normalized):
+    prose = _strip_fences_and_quotes(normalized)  # inline code は残す: `!` 自体が消える
+    for line in re.split(r"[。\n]", prose):
+        if BANG_REQUEST_RE.search(line) and not BANG_NEGATION_RE.search(line):
+            return True
+    if not BANG_EXEC_REQUEST_RE.search(prose):
+        return False
+    for body in re.findall(r"```[^\n]*\n(.*?)```", normalized, re.DOTALL):
+        head = next((item for item in body.splitlines() if item.strip()), "")
+        if re.match(r"^[ \t]*!\s+\S", head):
+            return True
+    return False
 
 
 def _offload(turn, normalized, scan):
@@ -851,29 +1029,30 @@ def _offload(turn, normalized, scan):
     next_action = [
         q for q in asks if ACTION_ASK_RE.search(q) and not INFO_ASK_RE.search(q)
     ]
-    if re.search(r"どちらを先に|どの順で", questions) or any(
-        ORDER_FROM_RE.search(q) for q in next_action
+    if (
+        re.search(r"どちらを先に|どの順で", questions)
+        or ORDER_QUESTION_RE.search(questions)
+        or any(ORDER_FROM_RE.search(q) for q in next_action)
     ):
         reasons.append("順序質問")
     routing = bool(
         re.search(r"(?:するか|しますか).{0,25}(?:するか|しますか)", questions)
         or re.search(r"A\s*にしますか.{0,20}B\s*にしますか", questions, re.IGNORECASE)
         or re.search(r"どちら(?:にしますか|がよいですか)", questions)
+        or ROUTING_RE.search(questions)
         or any(CHOICE_RE.search(q) for q in next_action)
         or EITHER_WAY_RE.search(scan)
     )
-    declared = (
-        any(name == "Skill" for name in turn["tool_names"])
-        and "declare-and-proceed" in turn["tool_paths"]
-    )
+    declared = _declared_recently(turn)
     if routing and not declared:
         reasons.append("二択 routing")
+    if CONFIRM_RE.search(questions) and not declared:
+        reasons.append("確認質問")
     if any(PERMISSION_RE.search(q) for q in asks):
         reasons.append("許可質問")
     if any(not CHOICE_RE.search(q) for q in next_action):
         reasons.append("実行確認")
-    outside_fences = _strip_fences_and_quotes(normalized)
-    if re.search(r"`?!`?\s*を付けて実行してください", outside_fences):
+    if _bang_request(normalized):
         reasons.append("! prefix 実行依頼")
     if reasons:
         return [
@@ -886,8 +1065,9 @@ def _offload(turn, normalized, scan):
     return []
 
 
-def _host_command(normalized):
-    if not re.search(r"お手元|ターミナル|実行してください", normalized):
+def _host_command(normalized, scan):
+    manual = MANUAL_EXEC_RE.search(normalized)
+    if not manual and not re.search(r"お手元|ターミナル|実行してください", normalized):
         return []
     fences = re.findall(r"```[^\n]*\n(.*?)```", normalized, re.DOTALL)
     inline_commands = re.findall(
@@ -897,6 +1077,8 @@ def _host_command(normalized):
     bad = any(
         not any(command in body for body in fences) for command in inline_commands
     )
+    if manual and HOST_CMD_RE.search(scan):  # fence も inline code も無い裸の散文 (5b7baf3)
+        bad = True
     for body in fences:
         for match in re.finditer(r"(?m)^\s*(?:python3?|bash|sh)\s+([^\s;&|]+)", body):
             argument = match.group(1).strip("'\"")
@@ -921,21 +1103,30 @@ def _inspected(turn):
 
 
 def _claim_without_evidence(turn, scan):
-    patterns = (
-        r"不明|該当なし|存在しません|できません",
-        r"大改造|影響大",
-        r"非対話では実行できません",
-        r"網羅した|全て確認し",
-    )
-    if any(re.search(pattern, scan) for pattern in patterns) and not _inspected(turn):
-        return [
+    lines = []
+    if (CLAIM_RE.search(scan) or POS_CLAIM_RE.search(scan)) and not _inspected(turn):
+        lines.append(
             _line(
                 "claim-without-evidence",
                 "根拠 tool のない断定を検出",
                 "根拠を確認して本文へ反映する",
             )
-        ]
-    return []
+        )
+    for line in scan.splitlines():  # 既知で可能な操作の否定は根拠の有無を問わず却下する
+        if not DENIAL_RE.search(line):
+            continue
+        for pattern, hint in KNOWN_POSSIBLE:
+            found = pattern.search(line)
+            if found:
+                lines.append(
+                    _line(
+                        "claim-without-evidence",
+                        f"既知で可能な操作 ({found.group(0)}) の不可断定",
+                        f"否定を却下して実行する ({hint})",
+                    )
+                )
+                return lines
+    return lines
 
 
 def _impossibility(turn, normalized, scan):
@@ -988,7 +1179,7 @@ def _communication(scan, prompt_text, tasks):
         reasons.append("最終行を絵文字で始める")
     elif _final_tag(final_line) != expected:
         reasons.append(f"最終行の絵文字の直後に [{expected}] を書く")
-    if re.search(r"(?:候補|選択肢)\s*[0-9]+(?![0-9]|\s*(?:件|つ))", scan):
+    if SELF_NUMBER_RE.search(scan):
         reasons.append("自己採番参照を解消する")
     decisions = _decision_tasks(tasks)
     if question and not decisions:
@@ -996,7 +1187,7 @@ def _communication(scan, prompt_text, tasks):
     prompt = re.sub(r"^<[^>]+>\s*", "", prompt_text).strip()
     if 0 < len(prompt) <= 20 and decisions:
         reasons.append("短文決裁を decision Task に反映する")
-    if question and re.search(r"さっきの|先ほどの案", final_line):
+    if question and PAST_REFERENCE_RE.search(final_line):
         reasons.append("質問を自己完結させる")
     if reasons:
         return ["communication-lint: " + " ".join(reasons)]
@@ -1134,7 +1325,11 @@ def _record_memo(turn, entry_path):
 
 
 def _waste_line(turn):
-    if not re.search(r"無駄|浪費|もったいない", turn["prompt_text"]):
+    prompt = turn["prompt_text"]
+    if prompt.lstrip().startswith(HARNESS_USER_PREFIXES):
+        return ""
+    prose = re.sub(r"「[^」]*」", " ", _strip_code_and_quotes(prompt))
+    if not re.search(r"無駄|浪費|もったいない", prose):
         return ""
     if _persistence_edit(turn):
         return ""
@@ -1385,7 +1580,7 @@ def _evaluate(payload, turn):
     if _wind_down_declared(payload):
         blocks.extend(_safe_family(_handoff, payload, turn, final_text))
     warn_calls = (
-        (_host_command, (normalized,)),
+        (_host_command, (normalized, scan)),
         (_claim_without_evidence, (turn, scan)),
         (_communication, (scan, turn["prompt_text"], tasks)),
         (_task_close, (payload, scan, tasks)),
