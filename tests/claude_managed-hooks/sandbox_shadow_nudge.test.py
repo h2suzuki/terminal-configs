@@ -49,7 +49,8 @@ Contract (each claim maps to one test):
       stop_hook_active and correct readings are silent
   T1  Stop with a config.lock lock-holder final message -> exit 2, stderr carries the rule and the
       restate instruction; the same message on the next Stop ends the turn (exit 0)
-  T2  Stop with only a shadow hit -> exit 0 (the shadow rule nudges at PreToolUse only)
+  T2  Stop with a shadow hit in the final answer -> exit 2 once, so the answer drops the shadow
+      talk instead of waiting for a next tool call; a real HOME path (~/.bashrc) is not a hit
   T3  Stop reads last_assistant_message when the transcript lacks the final text
   T4  Stop is silent when CLAUDE_HOOK_CHILD is set (a hook-spawned one-off session)
   C2  one text hitting two rules -> a single JSON line naming both
@@ -525,9 +526,18 @@ class SandboxShadowNudgeTest(unittest.TestCase):
         proc = run_hook(payload, {**self._env(), "CLAUDE_HOOK_CHILD": "1"})
         self.assertEqual((proc.returncode, proc.stderr), (0, ""))
 
-    def test_t2_stop_ignores_shadow_only_text(self):
-        proc = self._stop([_user_prompt(), _assistant_text(".bashrc が未追跡です")])
-        self.assertEqual(proc.returncode, 0, proc.stderr)
+    def test_t2_stop_restates_a_final_answer_about_shadows_once(self):
+        entries = [
+            _user_prompt(),
+            _assistant_text("唯一の未追跡の .zprofile は覆いです"),
+        ]
+        first = self._stop(entries, session_id="t2")
+        self.assertEqual(first.returncode, 2, first.stderr)
+        self.assertIn("sandbox-shadow", first.stderr)
+        self.assertIn("書き直して", first.stderr)
+        self.assertEqual(self._stop(entries, session_id="t2").returncode, 0)
+        home = [_user_prompt(), _assistant_text("~/.bashrc が untracked と出ている")]
+        self.assertEqual(self._stop(home, session_id="t2-home").returncode, 0)
 
     def test_t3_stop_reads_last_assistant_message(self):
         proc = self._stop(

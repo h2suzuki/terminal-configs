@@ -281,7 +281,7 @@ class Rule:
 
 
 RULES = (
-    Rule("shadow", _shadow_text, _shadow_command, MSG, on_stop=False),
+    Rule("shadow", _shadow_text, _shadow_command, MSG, on_stop=True),
     Rule("config-lock", _lock_text, _never, CONFIG_LOCK_MSG, on_stop=True),
 )
 
