@@ -36,8 +36,8 @@ Contract (each claim maps to one test):
       and still runs
   P2  a second such look in the same turn, by another method, is denied
   P3  a new real prompt starts a new turn: the next look is nudged again, not denied
-  P4  a Bash call taken out of the sandbox by an excluded command, or one that names no covered
-      file, is silent
+  P4  a Bash call taken out of the sandbox by an excluded command, one that names no covered file,
+      or one that only mentions it as text (a grep pattern, a heredoc body) is silent
   T1  Stop with a config.lock lock-holder final message -> exit 2, stderr carries the rule and the
       restate instruction; the same message on the next Stop ends the turn (exit 0)
   T2  Stop with only a shadow hit -> exit 0 (the shadow rule nudges at PreToolUse only)
@@ -364,6 +364,18 @@ class SandboxShadowNudgeTest(unittest.TestCase):
                 ".git/config.lock",
             ),
             ("Bash", {"command": "cat /proc/self/mountinfo"}, "/proc/self/mountinfo"),
+            (
+                "Bash",
+                {"command": "findmnt -T /root/repo/.git/config.lock"},
+                ".git/config.lock",
+            ),
+            (
+                "Bash",
+                {
+                    "command": "grep -n 'excluded\\|git \\*' notes.md; ls .git/config.lock"
+                },
+                ".git/config.lock",
+            ),
             ("Read", {"file_path": self.home + "/.ssh/id_ed25519"}, "~/.ssh"),
         )
         for i, (tool, tool_input, what) in enumerate(looks):
@@ -392,7 +404,13 @@ class SandboxShadowNudgeTest(unittest.TestCase):
 
     def test_p4_host_bound_or_unrelated_calls_are_silent(self):
         for i, command in enumerate(
-            ("git status && ls .git/config.lock", "grep -rn TODO src/")
+            (
+                "git status && ls .git/config.lock",
+                "grep -rn TODO src/",
+                'grep -n "config.lock\\|stale lock" docs/workflow.md',
+                "cat >> /var/tmp/note.md <<'EOF'\nthe .git/config.lock is a mask\nEOF",
+                "ps aux | grep -v bwrap",
+            )
         ):
             with self.subTest(command=command):
                 out = self._look(

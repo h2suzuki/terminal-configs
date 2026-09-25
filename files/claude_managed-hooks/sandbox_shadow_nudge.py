@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -86,10 +87,19 @@ LOCK_CORRECT_RE = re.compile(
 )
 # examining the sandbox itself: its mounts, namespaces or launcher
 INTROSPECT_RE = re.compile(
-    r"/proc/(?:self|\d+|\$\$|\$PPID)/(?:mountinfo|mounts|ns\b|status|comm)|\bbwrap\b"
+    r"/proc/mounts|/proc/(?:self|\d+|\$\$|\$PPID)/(?:mountinfo|mounts|ns\b|status|comm|cmdline)"
+    r"|\bbwrap\b"
 )
-SEGMENT_RE = re.compile(r"&&|\|\||[;|&\n]")
-ASSIGNMENT_RE = re.compile(r"^\w+=\S*\s+")
+# a shell argument that is a path to the lock, or a path literal inside inline code
+CONFIG_LOCK_WORD_RE = re.compile(r"(?:.*/)?config\.lock")
+CONFIG_LOCK_LITERAL_RE = re.compile(r"""['"](?:[^'"\s]*/)?config\.lock['"]""")
+# their first operand is a pattern or script, not a file being looked at
+PATTERN_FIRST = frozenset(
+    {"grep", "egrep", "fgrep", "rg", "ag", "sed", "awk", "gawk", "perl"}
+)
+HEREDOC_RE = re.compile(
+    r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n[\s\S]*?^[ \t]*\1\b", re.MULTILINE
+)
 # path-bearing inputs of the non-Bash tools that can look at a file
 PATH_KEYS = {"Read": ("file_path",), "Grep": ("path",), "Glob": ("path", "pattern")}
 
@@ -155,23 +165,55 @@ def _never(_: str) -> bool:
     return False
 
 
+def _segments(command: str) -> list[list[str]]:
+    """Quote-aware simple commands, without heredoc bodies or leading assignments."""
+    body = HEREDOC_RE.sub("", command)
+    try:
+        lexer = shlex.shlex(body, posix=True, punctuation_chars=";&|<>\n")
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        tokens = body.split()
+    segments: list[list[str]] = []
+    segment: list[str] = []
+    for token in [*tokens, ";"]:
+        if token and all(c in ";&|<>\n" for c in token):
+            while segment and re.match(r"^\w+=", segment[0]):
+                segment.pop(0)
+            if segment:
+                segments.append(segment)
+            segment = []
+        else:
+            segment.append(token)
+    return segments
+
+
 def _runs_on_host(command: str) -> bool:
     """One segment led by an excluded command takes the whole Bash call out of the sandbox."""
     patterns = sandbox_exclusions.load_patterns()
-    for segment in SEGMENT_RE.split(command):
-        segment = segment.strip()
-        while ASSIGNMENT_RE.match(segment):
-            segment = ASSIGNMENT_RE.sub("", segment, count=1)
-        if any(sandbox_exclusions.glob_match(segment, p) for p in patterns):
-            return True
-    return False
+    return any(
+        sandbox_exclusions.glob_match(" ".join(segment), p)
+        for segment in _segments(command)
+        for p in patterns
+    )
 
 
-def _masked_target(text: str) -> str | None:
-    """The first covered file or sandbox internal the text names, in any spelling of HOME."""
-    if CONFIG_LOCK_RE.search(text):
+def _operands(command: str) -> list[str]:
+    """Words a command runs on; the pattern operand of grep-like tools is text, not a file."""
+    words: list[str] = []
+    for segment in _segments(command):
+        if os.path.basename(segment[0]) in PATTERN_FIRST:
+            pattern = next((w for w in segment[1:] if not w.startswith("-")), None)
+            segment = [w for w in segment if w is not pattern]
+        words.extend(segment)
+    return words
+
+
+def _looked_at(word: str) -> str | None:
+    """The covered file or sandbox internal one operand names, in any spelling of HOME."""
+    if CONFIG_LOCK_WORD_RE.fullmatch(word) or CONFIG_LOCK_LITERAL_RE.search(word):
         return ".git/config.lock"
-    if m := INTROSPECT_RE.search(text):
+    if m := INTROSPECT_RE.search(word):
         return m.group(0)
     home = os.path.expanduser("~")
     for path in sandbox_exclusions.credential_paths():
@@ -180,7 +222,7 @@ def _masked_target(text: str) -> str | None:
             rest = path[len(home) :]
             spellings += ["~" + rest, "$HOME" + rest, "${HOME}" + rest]
         for s in spellings:
-            if re.search(re.escape(s) + r"(?![\w.-])", text):
+            if re.search(re.escape(s) + r"(?![\w.-])", word):
                 return path.replace(home, "~", 1)
     return None
 
@@ -195,9 +237,12 @@ def _probe_target(payload: dict) -> str | None:
         command = tool_input.get("command")
         if not isinstance(command, str) or _runs_on_host(command):
             return None
-        return _masked_target(command)
-    values = [tool_input.get(k) for k in PATH_KEYS.get(str(tool), ())]
-    return _masked_target(" ".join(v for v in values if isinstance(v, str)))
+        words = _operands(command)
+    else:
+        words = [tool_input.get(k) for k in PATH_KEYS.get(str(tool), ())]
+    return next(
+        (hit for w in words if isinstance(w, str) and (hit := _looked_at(w))), None
+    )
 
 
 def _turn_key(payload: dict) -> str:
