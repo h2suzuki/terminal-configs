@@ -17,8 +17,10 @@ An approved host command invoked inside the sandbox can fail with these messages
   any branch/worktree/artifact already created; (3) check the current policy and canonical procedure;
   (4) correct the authorized invocation, retry only if needed, verify the result and continue.
   Do not blindly repeat creation or an unchanged failing command.
-- **Use the approved bare executable** (`git`, `gh`, `session_coord`, `stackctl`, etc.) and the tool's
-  working-directory option. Prefix/wrapper matching differs by runtime; keep required wrappers
+- **Use the approved bare executable** (`git`, `gh`, `session_coord`, `stackctl`, etc.) and the harness
+  tool's working-directory argument (Codex `workdir`). Claude Code's Bash tool has none: there a call
+  reaches the host only when every command in it is excluded, and `cd`, `pushd`, `git -C` or an
+  assignment prefix keeps it sandboxed. Prefix/wrapper matching differs by runtime; keep required wrappers
   such as `session_coord worktree sync`. Historical lessons identify patterns, not current authority.
 - **Before asking the operator**, report the original failure, preserved partial state, applicable
   rule, corrected command actually tried and its result. An untried correct, authorized invocation

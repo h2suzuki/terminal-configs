@@ -11,10 +11,15 @@ or move the operation elsewhere to evade it.
 Record the exact command, tool working directory, failed path, exit status, and
 error text. Inspect any branch, worktree, staged change, or artifact already
 created before retrying. Read the current runtime policy and canonical command
-procedure. Use the approved executable and the tool's working-directory option
-where the tool provides one. Keep required command wrappers; avoid unnecessary
-shell prefixes, `cd` chains, pipelines, and command separators because they can
-change policy matching. Retry a corrected authorized invocation only when the
+procedure. Use the approved executable and the harness tool's working-directory
+argument where the harness provides one (Codex `workdir`). Keep required command
+wrappers; avoid unnecessary shell prefixes, `cd` chains, pipelines, and command
+separators because they can change policy matching. Claude Code's Bash tool has
+no such argument: it runs a call on the host only when every command in the call
+matches `sandbox.excludedCommands`, and keeps a call sandboxed when it contains
+`cd`, `pushd` or `popd`, an assignment prefix other than a few known-safe
+variables, or `git -C` / `git -c`
+([anthropics/claude-code#95455](https://github.com/anthropics/claude-code/issues/95455)). Retry a corrected authorized invocation only when the
 preceding inspection justifies it, then verify the target state.
 
 ## Runtime-specific checks
