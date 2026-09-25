@@ -28,12 +28,13 @@ when_to_use: TRIGGER when creating research notes, intermediate outputs, command
   when the command exits. Do not use it for a background process that outlives the
   command, or for reports that you need to keep.
 - Place temp by size and lifetime. `/tmp` is small and often RAM-backed: put only small,
-  short-lived temp there, in the per-session scratch dir
-  `/tmp/claude-scratch-$CLAUDE_CODE_SESSION_ID/`, which the Claude Code SessionEnd hook
-  removes (Codex: name it with your own session ID and remove it yourself). No other
-  `/tmp` path is cleaned, and nothing whose size is uncertain or can grow large (copied
-  trees, logs, downloads, builds) goes in `/tmp` at all. What fits neither `/tmp` nor
-  `drafts/` goes in `/var/tmp`; remove it when done.
+  short-lived temp there, in the session's own scratch. In Claude Code that is the
+  scratchpad directory the harness names
+  (`/tmp/claude-<uid>/<project>/<session ID>/scratchpad/`), which the SessionEnd hook
+  removes; in Codex it is `/tmp/claude-scratch-<your session ID>/`, which you remove
+  yourself. No other `/tmp` path is cleaned, and nothing whose size is uncertain or can
+  grow large (copied trees, logs, downloads, builds) goes in `/tmp` at all. What fits
+  neither `/tmp` nor `drafts/` goes in `/var/tmp`; remove it when done.
 - For manual temp handling, set a nonempty absolute `TMPDIR` in the same shell call,
   create it first, quote it, and use `${TMPDIR:?}` when writing or cleaning. Never
   assume variables persist between tool calls.

@@ -70,13 +70,15 @@ The hook normalizes Claude `Bash.command`, `Write/Edit.file_path`, Codex canonic
   under ignored drafts, sets `TMPDIR` for that child and removes only that directory.
   It propagates the command's status. It does not support background children that
   outlive the command, automatic cleanup after crashes, or broad garbage collection.
-- Explicit `mktemp` needs a destination under ignored drafts, the per-session scratch
-  `/tmp/claude-scratch-$CLAUDE_CODE_SESSION_ID/` that the SessionEnd hook removes, or
-  permitted `/var/tmp`. Empty/root TMPDIR and unresolved TMPDIR writes are rejected. A
-  comment mentioning `/var/tmp` cannot exempt an unrouted command.
-- `/tmp`: writes are allowed only under that per-session scratch dir, and a recursive
-  copy (`cp -r`/`-a`, `rsync`) into `/tmp` is rejected even there, since a tree's size is
-  uncertain. At Stop, a final answer whose fenced commands use `/tmp` is sent back once.
+- Explicit `mktemp` needs a destination under ignored drafts, the session's own `/tmp`
+  scratch, or permitted `/var/tmp`. Empty/root TMPDIR and unresolved TMPDIR writes are
+  rejected. A comment mentioning `/var/tmp` cannot exempt an unrouted command.
+- `/tmp`: writes are allowed only under the calling session's own scratch: the harness
+  scratchpad `/tmp/claude-<uid>/<project>/<session ID>/scratchpad/`, which
+  `session_cleanup.py` removes at SessionEnd, or Codex's `/tmp/claude-scratch-<id>/`. A
+  recursive copy (`cp -r`/`-a`, `rsync`) into `/tmp` is rejected even there, since a
+  tree's size is uncertain. At Stop, a final answer whose fenced commands use `/tmp` is
+  sent back once.
 
 This is a bounded command checker, not a generic shell interpreter or an isolation
 boundary. Scripts, shell functions, aliases, command substitution, complex control

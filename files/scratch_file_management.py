@@ -27,21 +27,24 @@ class Violation(Exception):
 
 
 TMP = Path("/tmp")
-# the per-session dir that session_cleanup.py removes; no other /tmp path is cleaned
+# Codex's per-session dir; Claude Code's is the harness scratchpad, both removed at session end
 SESSION_SCRATCH_RE = re.compile(r"/tmp/claude-scratch-[^/]+(?:/.*)?")
+# set from each payload: only the calling session's own scratchpad counts as its scratch
+SESSION_ID = ""
 SESSION_SCRATCH_VAR_RE = re.compile(
     r"/tmp/claude-scratch-\$(?:CLAUDE_CODE_SESSION_ID|\{CLAUDE_CODE_SESSION_ID\})(?:/.*)?"
 )
 RECURSIVE_COPY_FLAGS = {"-r", "-R", "-a", "--recursive", "--archive"}
 # states the whole rule so the fix is not /var/tmp for everything; kept long on purpose
 TMP_MESSAGE = (
-    "/tmp is small and often RAM-backed, and only the per-session scratch dir "
-    "/tmp/claude-scratch-$CLAUDE_CODE_SESSION_ID/ is removed at session end; other /tmp "
-    "paths, including a harness scratchpad, stay. Put small, short-lived temp in that "
-    "scratch dir, and nothing in /tmp whose size is uncertain or can grow large (copied "
-    "trees, logs, downloads, builds). Research notes, intermediate output and reports go "
-    "in the repository's ignored drafts/ (confirm with git check-ignore first); what fits "
-    "neither /tmp nor drafts/ goes in /var/tmp."
+    "/tmp is small and often RAM-backed, and only a session's own scratch is removed at "
+    "session end: in Claude Code the scratchpad directory the harness names "
+    "(/tmp/claude-<uid>/<project>/<session ID>/scratchpad/), in Codex "
+    "/tmp/claude-scratch-<its session ID>/, which it removes itself. Other /tmp paths "
+    "stay. Put small, short-lived temp there, and nothing in /tmp whose size is uncertain "
+    "or can grow large (copied trees, logs, downloads, builds). Research notes, "
+    "intermediate output and reports go in the repository's ignored drafts/ (confirm "
+    "with git check-ignore first); what fits neither /tmp nor drafts/ goes in /var/tmp."
 )
 
 
@@ -50,7 +53,11 @@ def _in_tmp(path):
 
 
 def _session_scratch(path):
-    return bool(SESSION_SCRATCH_RE.fullmatch(str(path)))
+    text = str(path)
+    if SESSION_SCRATCH_RE.fullmatch(text):
+        return True
+    own = r"/tmp/claude-\d+/[^/]+/" + re.escape(SESSION_ID) + r"/scratchpad(?:/.*)?"
+    return bool(SESSION_ID) and re.fullmatch(own, text) is not None
 
 
 # a /tmp path inside a fenced block of the final answer: a command handed to the user
@@ -368,8 +375,11 @@ def check_shell(command, cwd):
 
 
 def check(payload):
+    global SESSION_ID
     if not isinstance(payload, dict):
         return
+    session_id = payload.get("session_id")
+    SESSION_ID = session_id if isinstance(session_id, str) else ""
     if payload.get("hook_event_name") == "Stop":
         check_stop(payload)
         return

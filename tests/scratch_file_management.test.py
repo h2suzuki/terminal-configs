@@ -18,6 +18,7 @@ FILES = Path(__file__).resolve().parents[1] / "files"
 HOOK = FILES / "scratch_file_management.py"
 # The hook rejects scratch under /tmp, so fixture repos must live outside it.
 SCRATCH = FILES.parent / "drafts"
+SESSION = "72fc7613-1ab7-4e51-a069-73f92245326a"
 ENV = {
     **os.environ,
     "GIT_CONFIG_NOSYSTEM": "1",
@@ -67,6 +68,7 @@ class HygieneTest(unittest.TestCase):
             input=json.dumps(
                 {
                     "hook_event_name": "PreToolUse",
+                    "session_id": SESSION,
                     "cwd": str(cwd or self.top),
                     "tool_name": tool,
                     "tool_input": inp,
@@ -246,16 +248,20 @@ class HygieneTest(unittest.TestCase):
         )  # dangling-ref-check: allow
 
     def test_tmp_writes_outside_the_repository(self):
-        # only the per-session scratch dir, removed at session end, takes small temp in /tmp
-        scratch = "/tmp/claude-scratch-0123abcd"
-        self.hook("Write", {"file_path": scratch + "/probe.py"})
-        self.shells(f"echo small > {scratch}/out.txt")
-        self.shells(f"cp report.json {scratch}/report.json")
-        denied = self.hook(
-            "Write", {"file_path": "/tmp/claude-1000/session/scratchpad/scan.py"}, 2
-        ).stderr
+        # only a session's own scratch, removed at session end, takes small temp in /tmp:
+        # the harness scratchpad of this session (Claude Code), or claude-scratch (Codex)
+        own = f"/tmp/claude-1000/-home-u-repo/{SESSION}/scratchpad"
+        for scratch in (own, "/tmp/claude-scratch-0123abcd"):
+            with self.subTest(scratch=scratch):
+                self.hook("Write", {"file_path": scratch + "/probe.py"})
+                self.shells(f"echo small > {scratch}/out.txt")
+                self.shells(f"cp report.json {scratch}/report.json")
+        other = own.replace(SESSION, "0f0ccaee-4c2c-4c5d-a16f-7e75b1cb4a40")
+        denied = self.hook("Write", {"file_path": other + "/scan.py"}, 2).stderr
+        self.hook("Write", {"file_path": own.replace("/scratchpad", "/tasks/x")}, 2)
         # the reason states the rule: session scratch, size limits, drafts/, /var/tmp
         for part in (
+            "scratchpad",
             "claude-scratch-",
             "removed at session end",
             "size is uncertain",

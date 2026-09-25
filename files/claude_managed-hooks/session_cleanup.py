@@ -6,8 +6,9 @@
 # statusline.sh), the turn counter (<transcript>.turns plus session-keyed fallback
 # <cache>/claude-turn-counter/<session_id>.turns, written by stop_checks.py's turn marker),
 # and the wind-down signal/sticky state (written per session by the UserPromptSubmit hook).
-# It also drops this session's /tmp scratch dir (/tmp/claude-scratch-<session_id>/),
-# the temp-file-discipline skill's convention area for ephemeral files.
+# It also drops this session's /tmp scratch: the harness scratchpad
+# (/tmp/claude-<uid>/<project>/<session_id>/scratchpad/) and the legacy
+# /tmp/claude-scratch-<session_id>/, the scratch-file-management skill's area for small temp.
 #
 # SessionEnd does NOT fire on crash/kill, so abnormally-ended sessions would
 # leak their files forever. To bound these areas we ALSO sweep entries
@@ -18,11 +19,16 @@
 import glob
 import json
 import os
+import re
 import shutil
 import sys
 import time
 
 CRUFT_TTL = 7 * 86400  # reap orphans untouched for a week
+# a UUID-shaped id only, so a crafted session_id cannot widen the removal
+SESSION_ID_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+)
 
 
 def _rm(path):
@@ -63,6 +69,16 @@ def _clean_tmp_scratch(session_id):
             pass
 
 
+def _clean_session_scratchpad(session_id):
+    if not SESSION_ID_RE.fullmatch(session_id):
+        return
+    root = os.environ.get("SESSION_CLEANUP_TMP_ROOT") or f"/tmp/claude-{os.getuid()}"
+    for path in glob.glob(
+        os.path.join(glob.escape(root), "*", session_id, "scratchpad")
+    ):
+        _rmtree(path)
+
+
 def main():
     if os.environ.get("CLAUDE_HOOK_CHILD"):
         return  # a one-off session spawned by another hook runs no session hooks
@@ -92,6 +108,7 @@ def main():
     _sweep(wd_dir, ("*",))
 
     _clean_tmp_scratch(session_id)
+    _clean_session_scratchpad(session_id)
 
 
 if __name__ == "__main__":
