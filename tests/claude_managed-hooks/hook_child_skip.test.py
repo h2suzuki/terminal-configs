@@ -48,6 +48,7 @@ SESSION_HOOKS = (
     ("Stop", os.path.join(HOOKS, "stop_checks.py"), False),
     ("Stop", os.path.join(HOOKS, "question_research_gate.py"), True),
     ("Stop", os.path.join(HOOKS, "sandbox_shadow_nudge.py"), True),
+    ("Stop", os.path.join(ROOT, "scratch_file_management.py"), True),
     ("Stop", COURT, False),
     ("SessionEnd", os.path.join(HOOKS, "session_cleanup.py"), False),
     ("SessionEnd", os.path.join(HOOKS, "reap_orphan_helpers.py"), False),

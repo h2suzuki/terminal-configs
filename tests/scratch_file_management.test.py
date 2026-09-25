@@ -245,6 +245,38 @@ class HygieneTest(unittest.TestCase):
             "Write", {"file_path": "drafts/own.md"}, 2
         )  # dangling-ref-check: allow
 
+    def test_tmp_writes_outside_the_repository(self):
+        self.hook(
+            "Write", {"file_path": "/tmp/claude-1000/session/scratchpad/scan.py"}, 2
+        )
+        self.shells("cat > /tmp/notes.md <<'EOF'\nx\nEOF", 2)
+        self.shells("cp report.json /tmp/report.json", 2)
+        self.hook("Write", {"file_path": "/var/tmp/owned/big.bin"})
+        self.hook("Write", {"file_path": str(Path.home() / "outside-repo.txt")})
+
+    def stop(self, message, expected, **extra):
+        env = {**ENV, **extra.pop("env", {})}
+        result = subprocess.run(
+            [sys.executable, str(HOOK)],
+            env=env,
+            text=True,
+            input=json.dumps(
+                {"hook_event_name": "Stop", "last_assistant_message": message, **extra}
+            ),
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, expected, result.stderr)
+        return result
+
+    def test_stop_rejects_commands_for_the_user_that_write_tmp(self):
+        tmp = "Run:\n\n```\nsudo cp -r /root/.claude/projects /tmp/root-projects\n```\n"
+        self.assertIn("drafts/", self.stop(tmp, 2).stderr)
+        self.stop(tmp.replace("/tmp/", "/var/tmp/"), 0)
+        self.stop("The sandbox sets TMPDIR under /tmp/claude-1000.", 0)
+        self.stop(tmp, 0, stop_hook_active=True)
+        self.stop(tmp, 0, env={"CLAUDE_HOOK_CHILD": "1"})
+
     def test_tmpdir(self):
         for command in (
             "mktemp",

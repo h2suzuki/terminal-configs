@@ -154,6 +154,7 @@
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/stop_checks.py" } ] },
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/question_research_gate.py" } ] },
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/sandbox_shadow_nudge.py" } ] },
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/scratch_file_management hook", "timeout": 30 } ] },
       { "hooks": [ { "type": "command", "command": "/usr/local/bin/claude_court_guard --hook" } ] }
     ],
     "SessionEnd": [

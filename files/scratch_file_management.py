@@ -26,6 +26,31 @@ class Violation(Exception):
     pass
 
 
+TMP = Path("/tmp")
+TMP_MESSAGE = (
+    "Scarce /tmp is not for agent files: put research notes and intermediate output in the "
+    "repository's ignored drafts/, and large command-internal temp in /var/tmp."
+)
+# a /tmp path inside a fenced block of the final answer: a command handed to the user
+FENCE_RE = re.compile(r"^```[^\n]*\n(.*?)^```", re.MULTILINE | re.DOTALL)
+TMP_PATH_RE = re.compile(r"(?<![\w.-])/tmp(?:/|\b)")
+
+
+def check_stop(payload):
+    """Reject a final answer whose commands for the user write or read under /tmp."""
+    if payload.get("stop_hook_active") or os.environ.get("CLAUDE_HOOK_CHILD"):
+        return  # one rewrite per answer; a hook-spawned session has no user to hand commands to
+    message = payload.get("last_assistant_message")
+    if not isinstance(message, str):
+        return
+    if any(TMP_PATH_RE.search(block) for block in FENCE_RE.findall(message)):
+        raise Violation(
+            "A command handed to the user uses /tmp. "
+            + TMP_MESSAGE
+            + " Rewrite the answer."
+        )
+
+
 def git(cwd, *args):
     result = subprocess.run(
         ["git", "-C", str(cwd), *args],
@@ -82,10 +107,12 @@ def check_path(cwd, name, *, directory=False):
         )
     if not name or any(char in name for char in "$`*"):
         return  # Dynamic shell paths are outside this check's bounded grammar.
+    path = Path(cwd, name).resolve()
+    if path == TMP or TMP in path.parents:
+        raise Violation(TMP_MESSAGE)
     top = root(cwd)
     if top is None:
         return
-    path = Path(cwd, name).resolve()
     try:
         relative = path.relative_to(top)
     except ValueError:
@@ -306,10 +333,12 @@ def check_shell(command, cwd):
 
 
 def check(payload):
-    if (
-        not isinstance(payload, dict)
-        or payload.get("hook_event_name", "PreToolUse") != "PreToolUse"
-    ):
+    if not isinstance(payload, dict):
+        return
+    if payload.get("hook_event_name") == "Stop":
+        check_stop(payload)
+        return
+    if payload.get("hook_event_name", "PreToolUse") != "PreToolUse":
         return
     tool = payload.get("tool_name", "").rsplit(".", 1)[-1]
     inp = payload.get("tool_input", {})
