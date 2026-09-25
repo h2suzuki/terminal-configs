@@ -27,10 +27,16 @@ when_to_use: TRIGGER when creating research notes, intermediate outputs, command
   scratch directory through `TMPDIR`; the helper removes only its own directory
   when the command exits. Do not use it for a background process that outlives the
   command, or for reports that you need to keep.
+- Place temp by size and lifetime. `/tmp` is small and often RAM-backed: put only small,
+  short-lived temp there, in the per-session scratch dir
+  `/tmp/claude-scratch-$CLAUDE_CODE_SESSION_ID/`, which the Claude Code SessionEnd hook
+  removes (Codex: name it with your own session ID and remove it yourself). No other
+  `/tmp` path is cleaned, and nothing whose size is uncertain or can grow large (copied
+  trees, logs, downloads, builds) goes in `/tmp` at all. What fits neither `/tmp` nor
+  `drafts/` goes in `/var/tmp`; remove it when done.
 - For manual temp handling, set a nonempty absolute `TMPDIR` in the same shell call,
   create it first, quote it, and use `${TMPDIR:?}` when writing or cleaning. Never
-  assume variables persist between tool calls. Use owned scratch under the worktree,
-  or permitted `/var/tmp` for large command-internal temp. Avoid scarce `/tmp`.
+  assume variables persist between tool calls.
 - Delete only temporary files you created and no longer need. Do not delete all of
   `drafts/`, sweep peers' files by age, or move/delete pre-existing artifacts. Neither
   client promises cleanup after a crash; the helper has no cross-session garbage collector.
