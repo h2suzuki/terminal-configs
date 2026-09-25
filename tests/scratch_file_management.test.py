@@ -246,9 +246,19 @@ class HygieneTest(unittest.TestCase):
         )  # dangling-ref-check: allow
 
     def test_tmp_writes_outside_the_repository(self):
-        self.hook(
+        denied = self.hook(
             "Write", {"file_path": "/tmp/claude-1000/session/scratchpad/scan.py"}, 2
-        )
+        ).stderr
+        # the reason routes by kind of file, as the rule does, and names the scratchpad
+        for part in (
+            "scratchpad",
+            "drafts/",
+            "git check-ignore",
+            "scratch_file_management run --",
+            "/var/tmp only",
+            "never for notes or reports",
+        ):
+            self.assertIn(part, denied)
         self.shells("cat > /tmp/notes.md <<'EOF'\nx\nEOF", 2)
         self.shells("cp report.json /tmp/report.json", 2)
         self.hook("Write", {"file_path": "/var/tmp/owned/big.bin"})

@@ -27,9 +27,15 @@ class Violation(Exception):
 
 
 TMP = Path("/tmp")
+# routes by kind of file as the scratch-file-management rule does; kept long on purpose
 TMP_MESSAGE = (
-    "Scarce /tmp is not for agent files: put research notes and intermediate output in the "
-    "repository's ignored drafts/, and large command-internal temp in /var/tmp."
+    "Scarce /tmp is not for agent files, including a session scratchpad under /tmp. "
+    "Choose the place by what the file is: research notes, intermediate output, reports, "
+    "copied inputs and anything you may read again go in the repository's ignored drafts/ "
+    "(confirm with git check-ignore first); temp used only inside one command runs as "
+    "`scratch_file_management run -- COMMAND`, which gives it its own TMPDIR under drafts/ "
+    "and removes it afterwards; /var/tmp only for command-internal temp too large for the "
+    "worktree, never for notes or reports."
 )
 # a /tmp path inside a fenced block of the final answer: a command handed to the user
 FENCE_RE = re.compile(r"^```[^\n]*\n(.*?)^```", re.MULTILINE | re.DOTALL)
