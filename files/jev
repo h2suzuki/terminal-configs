@@ -615,16 +615,17 @@ def create_server():
     return server
 
 
-def build_parser():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    help_text = "Saved key to use, before or after the command as in the AWS CLI (default: default)"
+    parser.add_argument("--profile", help=help_text)
+    # SUPPRESS keeps a leading --profile when the command does not repeat it.
     profile = argparse.ArgumentParser(add_help=False)
-    profile.add_argument(
-        "--profile",
-        default=DEFAULT_PROFILE,
-        help="Saved key to use, as in the AWS CLI (default: %(default)s)",
-    )
+    profile.add_argument("--profile", default=argparse.SUPPRESS, help=help_text)
     commands = parser.add_subparsers(dest="command", required=True)
-    key_parser = commands.add_parser("api-key", help="Manage the locally saved API key")
+    key_parser = commands.add_parser(
+        "api-key", parents=[profile], help="Manage the locally saved API key"
+    )
     key_commands = key_parser.add_subparsers(dest="key_command")
     key_commands.add_parser(
         "set",
@@ -646,12 +647,17 @@ def build_parser():
         "serve",
         help="Run the persistent stdio MCP server; each request picks its profile",
     )
-    return parser, key_parser
+    args = parser.parse_args(argv)
+    if args.command == "serve":
+        if args.profile is not None:
+            parser.error("serve takes no --profile; each MCP request picks its own")
+    elif args.profile is None:
+        args.profile = DEFAULT_PROFILE
+    return args, key_parser
 
 
 def main():
-    parser, key_parser = build_parser()
-    args = parser.parse_args()
+    args, key_parser = parse_args()
     if args.command == "api-key" and args.key_command is None:
         key_parser.print_help()
         return 0

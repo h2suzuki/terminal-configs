@@ -379,8 +379,8 @@ class JevTests(unittest.TestCase):
             ):
                 jev.load_key(name)
 
-    def test_every_command_accepts_an_optional_profile(self):
-        parser, _ = jev.build_parser()
+    def test_every_command_accepts_an_optional_profile_before_or_after_it(self):
+        """As in the AWS CLI, `jev --profile test hello` and `jev hello --profile test` agree."""
         for argv in (
             ["hello"],
             ["api-key", "set"],
@@ -388,17 +388,22 @@ class JevTests(unittest.TestCase):
             ["api-key", "status"],
         ):
             with self.subTest(argv=argv):
-                self.assertEqual(parser.parse_args(argv).profile, "default")
-                self.assertEqual(
-                    parser.parse_args([*argv, "--profile", "test"]).profile, "test"
-                )
+                self.assertEqual(jev.parse_args(argv)[0].profile, "default")
+                for ordered in (
+                    [*argv, "--profile", "test"],
+                    ["--profile", "test", *argv],
+                    [*argv[:1], "--profile", "test", *argv[1:]],
+                ):
+                    self.assertEqual(jev.parse_args(ordered)[0].profile, "test")
         # The server has no default of its own: each request picks its profile, as the CLI does.
-        self.assertFalse(hasattr(parser.parse_args(["serve"]), "profile"))
-        with (
-            contextlib.redirect_stderr(io.StringIO()),
-            self.assertRaises(SystemExit),
-        ):
-            parser.parse_args(["serve", "--profile", "test"])
+        self.assertIsNone(jev.parse_args(["serve"])[0].profile)
+        for ordered in (["serve", "--profile", "test"], ["--profile", "test", "serve"]):
+            with (
+                self.subTest(argv=ordered),
+                contextlib.redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit),
+            ):
+                jev.parse_args(ordered)
 
 
 def response_body(model="jev-latest", count=1):
