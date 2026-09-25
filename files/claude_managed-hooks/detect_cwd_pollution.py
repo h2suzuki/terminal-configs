@@ -113,7 +113,8 @@ def _run(payload: dict) -> None:
         "cwd-pollution パターンの error が Bash 出力に出ました。 "
         f"payload.cwd: {cwd}\n"
         "想定 cwd と一致するか確認してから、 推測 retry の前に "
-        "`cd` でなく絶対パス / `git -C <repo>` 等で書き直すのを優先。",
+        "`cd` でなく絶対パスで書き直すのを優先 (`git -C <repo>` は sandbox 内で走り、 "
+        "`.git/config` の書き込みや network が失敗する)。",
     )
 
 
