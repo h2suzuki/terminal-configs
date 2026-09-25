@@ -73,12 +73,13 @@ MSG = (
 )
 
 CONFIG_LOCK_RE = re.compile(r"config\.lock")
-# lock-holder framing: someone holds, left or must release a lock
+# lock-holder framing: someone holds, left or must release a lock; English cues are whole words
 LOCK_CUE_RE = re.compile(
-    r"(?:ロック|lock)\s*(?:され|中|を\s*(?:保持|握|持|取得|解除|解放)|が\s*(?:残|掛|かか|取れ)|解除|解放)"
-    r"|locked|lock\s+(?:is\s+)?held|hold(?:s|ing)?\s+the\s+lock|stale\s+lock"
+    r"(?:ロック|(?<![a-z])lock)\s*(?:され|中|を\s*(?:保持|握|持|取得|解除|解放)|が\s*(?:残|掛|かか|取れ)|解除|解放)"
+    r"|(?<![a-z])(?:locked|lock\s+(?:is\s+)?held|hold(?:s|ing)?\s+the\s+lock|stale\s+lock"
     r"|lock\s+(?:holder|owner)|lockfile|unlock|release\s+the\s+lock"
-    r"|別の\s*git|他の\s*git|git\s*プロセス|another\s+git|git\s+process|crash|クラッシュ|異常終了",
+    r"|another\s+git|git\s+process|crash)(?![a-z])"
+    r"|別の\s*git|他の\s*git|git\s*プロセス|クラッシュ|異常終了",
     re.IGNORECASE,
 )
 # the text already names the sandbox mask, so it is the correct reading

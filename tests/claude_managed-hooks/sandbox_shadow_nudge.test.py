@@ -30,7 +30,8 @@ Contract (each claim maps to one test):
   L1  `config.lock` with lock-holder framing ("ロックされている", "stale lock") -> config-lock fires
       with the lessons-learned path
   L2  `config.lock` text that already names the sandbox mask -> silent
-  L3  lock-holder framing without `config.lock` -> silent
+  L3  lock-holder framing without `config.lock`, or an English cue only inside another word
+      ("blocked") -> silent
   P1  a sandboxed tool call that looks at a covered file or the sandbox itself (Bash naming
       config.lock in any form, /proc/self/mountinfo; Read of a credential path) gets masked-probe
       and still runs
@@ -359,10 +360,15 @@ class SandboxShadowNudgeTest(unittest.TestCase):
         self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
 
     def test_l3_lock_framing_without_config_lock_is_silent(self):
-        proc = self._call(
-            [_user_prompt(), _assistant_text("index.lock がロックされている")]
-        )
-        self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
+        for i, text in enumerate(
+            (
+                "index.lock がロックされている",
+                "label the PR draft/blocked; deletion of .git/config.lock is listed",
+            )
+        ):
+            with self.subTest(text=text):
+                proc = self._call([_user_prompt(), _assistant_text(text)], f"l3-{i}")
+                self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
 
     def test_p1_looking_at_a_covered_file_is_nudged_and_still_runs(self):
         looks = (
