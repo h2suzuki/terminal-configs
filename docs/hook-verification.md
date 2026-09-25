@@ -19,7 +19,9 @@ claude --bg '<1 行の依頼>' --model <モデル> --permission-mode dontAsk \
 
 - `claude --bg` はサンドボックスの除外コマンドなので、サンドボックスの外で利用者の認証のまま起動します。除外は単独のコマンドが先頭で一致したときだけ効きます。パイプ・リダイレクト・環境変数の前置きを付けると、サンドボックスの中で動き、`~/.claude/jobs` を作れずに失敗します。
 - 作業ディレクトリの移動は `cd` だけの呼び出しにし、起動した後で元へ戻します。
-- プロジェクトの許可ルールが使われるかは確かめていないので、道具の許可は `--allowedTools` で渡します。
+- 実験用リポジトリは未信頼のフォルダなので、`probe/.claude/settings.json` の許可ルールは捨てられます (hook は使われます)。道具の許可は `--allowedTools` で渡します。
+- 起動したセッションの Bash はサンドボックスの中で動き、作業ディレクトリ (`probe/`) の外の `drafts/` には書けません。hook から呼ぶスクリプトが記録を残すときは、`probe/` の中に書きます。外に書こうとするとスクリプトごと失敗します。
+- hook の中で何が起きたかを追うときは、`--debug-file <path>` も付けます。
 
 ## 3. 続けて操作する
 
@@ -35,7 +37,7 @@ claude --bg '<1 行の依頼>' --model <モデル> --permission-mode dontAsk \
 | MCP サーバーの道具の呼び出しと所要時間 | `~/.cache/claude-cli-nodejs/<作業ディレクトリの / を - にした名前>/mcp-logs-<サーバー名>/*.jsonl` |
 | Jev 文脈ゲートの判定 | `~/.claude/hooks/state/jev_context_gate/log.jsonl` |
 
-- agent 型 hook のサブエージェントの会話は保存されません。中の段を記録したいときは、hook の指示で記録用のコマンドを呼ばせます。
+- agent 型 hook のサブエージェントの道具の呼び出し・許可・エラーは、`--debug-file` の記録に出ます (`source=hook_agent` の API 要求の間の `tool_dispatch_start` / `tool_dispatch_end`、`permission denied` の行)。サブエージェントの会話そのものは、セッションの記録に入りません。
 - hook が通したときは、理由がどこにも出ません。止めたときだけ、道具の結果に理由が出ます。
 
 ## 5. 本番のキーを使わない
