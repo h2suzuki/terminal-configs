@@ -473,7 +473,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_diagnostics_hide_error_bodies(self):
         for code, message in [
             (401, "jev api-key set"),
-            (403, "permissions"),
+            (403, "refused before it reached the API"),
             (429, "quota"),
             (503, "Retry later"),
             (307, "redirect refused"),
@@ -545,14 +545,14 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(jev.shutil, "disk_usage", return_value=low):
             message = await self.refused()
         self.assertFalse(folder.exists() and any(folder.iterdir()))
-        self.assertIn("permissions", message)
+        self.assertIn("refused before it reached the API", message)
 
     async def test_unwritable_403_log_keeps_the_error_message(self):
         self.error_log()
         self.code = 403
         with patch.object(jev.Path, "write_text", side_effect=OSError("read-only")):
             message = await self.refused()
-        self.assertIn("permissions", message)
+        self.assertIn("refused before it reached the API", message)
 
     async def test_other_errors_are_not_saved(self):
         folder = self.error_log()
@@ -791,6 +791,24 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         await self.session.evaluate(**REQUEST)
         self.assertEqual(self.key_loader.call_count, 2)
         self.assertEqual(self.factory.call_count, 2)
+
+    async def test_403_backs_off_instead_of_blocking_until_the_key_changes(self):
+        """A 403 is not an API status in the TypeSafe docs; blocking until the key changed turned 2 refusals into 35."""
+        now = patch.object(jev.time, "monotonic", return_value=1000.0)
+        now.start()
+        self.addCleanup(now.stop)
+        self.error_log()
+        self.code = 403
+        with self.assertRaisesRegex(jev.JevError, "HTTP 403") as error:
+            await self.session.evaluate(**REQUEST)
+        self.assertNotIn("permissions", str(error.exception))
+        with self.assertRaisesRegex(jev.JevError, "HTTP 403.*after"):
+            await self.session.evaluate(**REQUEST)
+        self.assertEqual(len(self.requests), 1)
+        jev.time.monotonic.return_value = 1000.0 + jev.BACKOFF_S + 1
+        self.code = 200
+        await self.session.evaluate(**REQUEST)  # the same key works again without jev api-key set
+        self.assertEqual(len(self.requests), 2)
 
     async def test_rate_limit_backs_off_before_asking_again(self):
         now = patch.object(jev.time, "monotonic", return_value=1000.0)

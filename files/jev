@@ -211,7 +211,7 @@ def api_error_message(status_code):
     if status_code == 401:
         return "HTTP 401: API key invalid. Run jev api-key set with a current key."
     if status_code == 403:
-        return "HTTP 403: Access denied. Check the key's permissions and account access; update it with jev api-key set if needed."
+        return "HTTP 403: The request was refused before it reached the API (403 is not a TypeSafe API status). Retry later."
     if status_code == 429:
         return "HTTP 429: Rate limit or quota reached. Check account usage and retry later."
     if 300 <= status_code < 400:
@@ -391,9 +391,10 @@ class JevSession:
                     self.key,
                 )
                 message += f" Request and response saved to {saved}." if saved else ""
-            if error.status in (401, 403):
+            if error.status == 401:
                 self.rejected = (self.stamp, message)
-            elif error.status == 429 or error.status >= 500:
+            # 403 is not a documented API status, so it is not taken as a verdict on the key.
+            elif error.status in (403, 429) or error.status >= 500:
                 self.back_off(message)
             raise JevError(message) from None
         except TypeSafeError:
