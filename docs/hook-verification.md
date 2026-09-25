@@ -38,6 +38,7 @@ claude --bg '<1 行の依頼>' --model <モデル> --permission-mode dontAsk \
 | Jev 文脈ゲートの判定 | `~/.claude/hooks/state/jev_context_gate/log.jsonl` |
 
 - agent 型 hook のサブエージェントの道具の呼び出し・許可・エラーは、`--debug-file` の記録に出ます (`source=hook_agent` の API 要求の間の `tool_dispatch_start` / `tool_dispatch_end`、`permission denied` の行)。サブエージェントの会話そのものは、セッションの記録に入りません。
+- `--debug-file` の記録では、次の行も確かめます。`Hooks: Got structured output` は agent 型 hook の答え、`Agent hook did not return structured output` は期限切れ、`mcp_tool hook skipped — MCP server '<名前>' not connected` は MCP サーバーが見えずに省略したことを示します。最初の `Dynamic tool loading` の行 (最初のターンの始まり) が `MCP server "<名前>": Successfully connected` より前だと、そのターンの hook から MCP サーバーが見えないことがあります。
 - hook が通したときは、理由がどこにも出ません。止めたときだけ、道具の結果に理由が出ます。
 
 ## 5. 本番のキーを使わない
@@ -48,4 +49,5 @@ claude --bg '<1 行の依頼>' --model <モデル> --permission-mode dontAsk \
 ## 6. 配備の条件
 
 - 想定する場面 (通す・止める・境界・対象外のコマンド・依存先が使えないとき) をすべて実行し、結果と所要時間を記録してから、配備対象に移す案を利用者に示します。
+- 場面には、同じ操作の別の書き方 (`git -C <dir> commit` など)、hook の期限切れ、セッションの最初のターン (起動直後に依頼を渡す `claude --bg '<依頼>'`) も入れます。期限切れと、MCP サーバーが見えないときの省略は、どちらもコマンドを通します。
 - 配備対象 (`files/`) に移すのは、利用者が了承してからです。
