@@ -86,14 +86,14 @@ LOCK_CMD_RE = re.compile(r"\b(?:rm|unlink|lsof|fuser)\b")
 
 # 文面は意図的に冗長: 誤読の訂正と次の行動を両方書き下すため trim しない
 CONFIG_LOCK_MSG = (
-    "config-lock: `.git/config.lock` はロックではない。保持している git プロセスも、"
-    "crash の残した stale lock も存在しない。sandbox が `.git/config` を書かせないために "
-    "`/dev/null` を読み取り専用で被せた mask である (anthropics/claude-code#78818)。"
-    "保持者を探す・待つ・「ロックされている」と報告するのは誤りなので、直前の発言を訂正せよ。\n"
-    "`could not lock config file ... File exists` で git が失敗したら、sandbox の仕組みを調べ直さず、"
-    "まず自分の呼び出し方を直す (除外コマンドを裸名で Bash 呼び出しの先頭に置く。"
-    "`sandbox-host-recovery` の順序)。host に 0-byte・mode 444 の残骸が実在し、"
-    "使用中でないなら自分で消して作業を続ける。\n"
+    "config-lock: sandbox 内から見える `.git/config.lock` はロックの証拠にならない。sandbox が "
+    "`.git/config` を書かせないために `/dev/null` を読み取り専用で被せた mask で "
+    "(anthropics/claude-code#78818)、本物のロックがあっても sandbox 内からは見分けられない。"
+    "確かめずに「ロックされている」「stale lock」と書いたのなら、直前の発言を訂正せよ。\n"
+    "確かめ方: git を正しく実行する (除外コマンドの git を裸名で Bash 呼び出しの先頭に置き、"
+    "sandbox の外で走らせる。`sandbox-host-recovery` の順序)。それでもエラーなら host に実在する。"
+    "その場合も、隣の session が居ないか、その repo で作業していないなら残骸なので、自分で消して"
+    "作業を続ける。作業中の session が居るなら、その session に確かめる。\n"
     "教訓: /var/lib/claude-rag-memory/claude-lessons-learned/project/"
     "github.com-h2suzuki-scorer/feedback_sandbox_mask_leaks_git_config_lock.md"
 )

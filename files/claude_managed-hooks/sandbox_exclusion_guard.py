@@ -177,14 +177,14 @@ def _handle_failure(payload: dict, patterns: list[str], cmd: str) -> int:
             return 0
         # 文面は意図的に冗長: 「ロックされている」という誤読を、事実と次の行動で置き換えるため trim しない
         message = (
-            "`could not lock config file` は、誰かが `.git/config` をロックしているという意味ではありません。"
-            " 保持している git プロセスも、crash の残した stale lock もありません。"
-            " sandbox が `.git/config` を書かせないために `.git/config.lock` へ `/dev/null` を"
-            "読み取り専用で被せていて、その上で git が config を書こうとして失敗しています。"
-            " 「ロックされている」と報告したり、保持者を探したり待ったりしないでください。"
-            " まず自分の呼び出し方を直します (除外コマンドの git を Bash 呼び出しの先頭に裸名で置く)。"
-            " それでも host で同じ失敗が出るなら、host に 0 byte・mode 444 の残骸が残っているので、"
-            "使用中でないことを確かめて自分で消してから続けます。"
+            "`could not lock config file` だけでは、誰かが `.git/config` をロックしている証拠になりません。"
+            " sandbox は `.git/config` を書かせないために `.git/config.lock` へ `/dev/null` を"
+            "読み取り専用で被せており、sandbox 内の git はほぼ必ずこのエラーになります。"
+            " 本物のロックがあっても、sandbox 内からは見分けられません。"
+            " まず git を正しく実行します (除外コマンドの git を Bash 呼び出しの先頭に裸名で置き、"
+            "sandbox の外で走らせる)。 それでも同じエラーが出たら、host に `.git/config.lock` が実在します。"
+            " その場合も、隣の session が居ないか、その repo で作業していないなら残骸なので、"
+            "自分で消して続けます。 作業中の session が居るなら、その session に確かめてから扱います。"
         )
     elif touched:
         if not claim_once(payload, "failure-credential"):
@@ -568,8 +568,9 @@ class GateTest(unittest.TestCase):
                 payload = {**payload, "tool_name": "Bash", "session_id": f"lock{i}"}
                 _, stdout, _ = self._emit_for(payload)
                 context = json.loads(stdout)["hookSpecificOutput"]["additionalContext"]
-                self.assertIn("ロックしているという意味ではありません", context)
-                self.assertIn("呼び出し方", context)
+                self.assertIn("ロックしている証拠になりません", context)
+                self.assertIn("sandbox の外で走らせる", context)
+                self.assertIn("隣の session", context)
                 self.assertEqual(self._emit_for(payload), (0, "", ""))
 
     def test_clean_zero_exit_result_is_silent(self):
