@@ -27,6 +27,7 @@ claude --bg '<1 行の依頼>' --model <モデル> --permission-mode dontAsk \
 
 - 起動したセッションは、1 回の依頼を終えると待機します。次の依頼を SendMessage (宛先は ListAgents に出る名前) で送ると、そのセッションが起きて実行します。起動したセッションは agent-coord にも参加します。
 - セッションの一覧は `claude agents --json`、止めるのは `claude stop <id>` です。
+- コミットのような操作の場面は、SendMessage で続けて送らず、場面ごと (または場面の並びごと) に新しいセッションを起動して、最初の依頼で渡します。SendMessage で送った依頼でコミットしたセッションは、利用者の承認の無い依頼だったとして止まった状態 (blocked) になりました。
 
 ## 4. 観察する場所
 
