@@ -1,6 +1,7 @@
 ---
 name: temp-file-discipline
 description: Route temporary research artifacts and command-internal temp using the shared scratch-file-management skill. Use when selecting scratch or intermediate output locations.
+when_to_use: TRIGGER when choosing where to put a temporary, scratch or intermediate file ("一時ファイル" / "/tmp に" / "scratch"). SKIP for edits to tracked source files.
 ---
 
 # Temp file discipline
