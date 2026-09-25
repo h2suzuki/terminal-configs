@@ -27,16 +27,32 @@ class Violation(Exception):
 
 
 TMP = Path("/tmp")
-# routes by kind of file as the scratch-file-management rule does; kept long on purpose
-TMP_MESSAGE = (
-    "Scarce /tmp is not for agent files, including a session scratchpad under /tmp. "
-    "Choose the place by what the file is: research notes, intermediate output, reports, "
-    "copied inputs and anything you may read again go in the repository's ignored drafts/ "
-    "(confirm with git check-ignore first); temp used only inside one command runs as "
-    "`scratch_file_management run -- COMMAND`, which gives it its own TMPDIR under drafts/ "
-    "and removes it afterwards; /var/tmp only for command-internal temp too large for the "
-    "worktree, never for notes or reports."
+# the per-session dir that session_cleanup.py removes; no other /tmp path is cleaned
+SESSION_SCRATCH_RE = re.compile(r"/tmp/claude-scratch-[^/]+(?:/.*)?")
+SESSION_SCRATCH_VAR_RE = re.compile(
+    r"/tmp/claude-scratch-\$(?:CLAUDE_CODE_SESSION_ID|\{CLAUDE_CODE_SESSION_ID\})(?:/.*)?"
 )
+RECURSIVE_COPY_FLAGS = {"-r", "-R", "-a", "--recursive", "--archive"}
+# states the whole rule so the fix is not /var/tmp for everything; kept long on purpose
+TMP_MESSAGE = (
+    "/tmp is small and often RAM-backed, and only the per-session scratch dir "
+    "/tmp/claude-scratch-$CLAUDE_CODE_SESSION_ID/ is removed at session end; other /tmp "
+    "paths, including a harness scratchpad, stay. Put small, short-lived temp in that "
+    "scratch dir, and nothing in /tmp whose size is uncertain or can grow large (copied "
+    "trees, logs, downloads, builds). Research notes, intermediate output and reports go "
+    "in the repository's ignored drafts/ (confirm with git check-ignore first); what fits "
+    "neither /tmp nor drafts/ goes in /var/tmp."
+)
+
+
+def _in_tmp(path):
+    return path == TMP or TMP in path.parents
+
+
+def _session_scratch(path):
+    return bool(SESSION_SCRATCH_RE.fullmatch(str(path)))
+
+
 # a /tmp path inside a fenced block of the final answer: a command handed to the user
 FENCE_RE = re.compile(r"^```[^\n]*\n(.*?)^```", re.MULTILINE | re.DOTALL)
 TMP_PATH_RE = re.compile(r"(?<![\w.-])/tmp(?:/|\b)")
@@ -114,7 +130,9 @@ def check_path(cwd, name, *, directory=False):
     if not name or any(char in name for char in "$`*"):
         return  # Dynamic shell paths are outside this check's bounded grammar.
     path = Path(cwd, name).resolve()
-    if path == TMP or TMP in path.parents:
+    if _in_tmp(path):
+        if _session_scratch(path):
+            return
         raise Violation(TMP_MESSAGE)
     top = root(cwd)
     if top is None:
@@ -193,15 +211,17 @@ def check_temp(words, variables, cwd):
         elif "/" in arg and not arg.startswith("-"):
             dest = str(Path(arg).parent)
     dest = expand(dest, variables)
+    if SESSION_SCRATCH_VAR_RE.fullmatch(dest):
+        return
     if not dest or "$" in dest or "`" in dest:
         raise Violation(
             "mktemp needs an explicit, nonempty scratch directory. Use scratch_file_management run -- COMMAND."
         )
     path = Path(cwd, dest).resolve()
-    if path in {Path("/"), Path("/tmp")} or Path("/tmp") in path.parents:
-        raise Violation(
-            "Route command-internal temp to ignored drafts/ or permitted /var/tmp, not / or scarce /tmp."
-        )
+    if _session_scratch(path):
+        return
+    if path == Path("/") or _in_tmp(path):
+        raise Violation(TMP_MESSAGE)
     top = root(cwd)
     if path != Path("/var/tmp") and Path("/var/tmp") not in path.parents:
         if top is None or (
@@ -334,7 +354,16 @@ def check_shell(command, cwd):
             for word in words[1:]:
                 if not word.startswith("-") and word not in {">", ">>", "<"}:
                     check_path(cwd, word, directory=program == "mkdir")
-        elif program in {"cp", "mv", "install"} and len(words) > 2:
+        elif program in {"cp", "mv", "install", "rsync"} and len(words) > 2:
+            recursive = program == "rsync" or any(
+                w in RECURSIVE_COPY_FLAGS for w in words[1:-1]
+            )
+            if (
+                recursive
+                and "$" not in words[-1]
+                and _in_tmp(Path(cwd, words[-1]).resolve())
+            ):
+                raise Violation("A tree's size is uncertain. " + TMP_MESSAGE)
             check_path(cwd, words[-1])
 
 

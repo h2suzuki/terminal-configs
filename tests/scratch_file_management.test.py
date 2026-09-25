@@ -246,21 +246,29 @@ class HygieneTest(unittest.TestCase):
         )  # dangling-ref-check: allow
 
     def test_tmp_writes_outside_the_repository(self):
+        # only the per-session scratch dir, removed at session end, takes small temp in /tmp
+        scratch = "/tmp/claude-scratch-0123abcd"
+        self.hook("Write", {"file_path": scratch + "/probe.py"})
+        self.shells(f"echo small > {scratch}/out.txt")
+        self.shells(f"cp report.json {scratch}/report.json")
         denied = self.hook(
             "Write", {"file_path": "/tmp/claude-1000/session/scratchpad/scan.py"}, 2
         ).stderr
-        # the reason routes by kind of file, as the rule does, and names the scratchpad
+        # the reason states the rule: session scratch, size limits, drafts/, /var/tmp
         for part in (
-            "scratchpad",
+            "claude-scratch-",
+            "removed at session end",
+            "size is uncertain",
             "drafts/",
-            "git check-ignore",
-            "scratch_file_management run --",
-            "/var/tmp only",
-            "never for notes or reports",
+            "/var/tmp",
+            "neither",
         ):
             self.assertIn(part, denied)
         self.shells("cat > /tmp/notes.md <<'EOF'\nx\nEOF", 2)
         self.shells("cp report.json /tmp/report.json", 2)
+        # a tree of uncertain size never goes to /tmp, not even to the session scratch
+        self.shells(f"cp -r /root/.claude/projects {scratch}/projects", 2)
+        self.shells(f"rsync -a logs/ {scratch}/logs/", 2)
         self.hook("Write", {"file_path": "/var/tmp/owned/big.bin"})
         self.hook("Write", {"file_path": str(Path.home() / "outside-repo.txt")})
 
@@ -293,12 +301,16 @@ class HygieneTest(unittest.TestCase):
             "TMPDIR= mktemp",
             "TMPDIR=/ mktemp",
             "mktemp -p /tmp",
+            "mktemp -p /tmp/claude-1000/session/scratchpad",
             'echo x > "$TMPDIR/x"',
             "mktemp # /var/tmp is not routing",
         ):
             self.shells(command, 2)
         self.shells(f'TMPDIR="{self.top}/drafts" mktemp')
         self.shells("mktemp -p /var/tmp")
+        self.shells("mktemp -p /tmp/claude-scratch-0123abcd")
+        self.shells('TMPDIR="/tmp/claude-scratch-$CLAUDE_CODE_SESSION_ID" mktemp')
+        self.shells('mktemp -p "/tmp/claude-scratch-${CLAUDE_CODE_SESSION_ID}"')
         self.shells("mktemp -d drafts/temp.XXXXXX")  # dangling-ref-check: allow
         self.shells('mkdir -p "$TMPDIR/output"', 2)
         self.shells("mktemp -p /var/tmp/owned")
