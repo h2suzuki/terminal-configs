@@ -200,9 +200,13 @@ def _runs_on_host(command: str) -> bool:
 
 
 def _operands(command: str) -> list[str]:
-    """Words a command runs on; the pattern operand of grep-like tools is text, not a file."""
+    """Words a command runs on; grep-like patterns are text, and excluded commands act elsewhere."""
+    patterns = sandbox_exclusions.load_patterns()
     words: list[str] = []
     for segment in _segments(command):
+        # docker exec, gh api and the like touch another container or a remote, not this sandbox
+        if any(sandbox_exclusions.glob_match(" ".join(segment), p) for p in patterns):
+            continue
         if os.path.basename(segment[0]) in PATTERN_FIRST:
             pattern = next((w for w in segment[1:] if not w.startswith("-")), None)
             segment = [w for w in segment if w is not pattern]

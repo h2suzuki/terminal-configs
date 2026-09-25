@@ -38,7 +38,8 @@ Contract (each claim maps to one test):
   P2  a second such look in the same turn, by another method, is denied
   P3  a new real prompt starts a new turn: the next look is nudged again, not denied
   P4  a Bash call taken out of the sandbox by an excluded command, one that names no covered file,
-      or one that only mentions it as text (a grep pattern, a heredoc body) is silent
+      one that only mentions it as text (a grep pattern, a heredoc body), or one whose look is an
+      operand of an excluded command (docker exec into another container) is silent
   X1  --codex PreToolUse: a sandboxed look at a covered file (Codex `cmd` or `command`) gets
       masked-probe as context and is never denied; a combined call is sandboxed even when it
       starts with an excluded command, and only a standalone excluded call is host-bound
@@ -137,7 +138,7 @@ class SandboxShadowNudgeTest(unittest.TestCase):
         self.home = os.path.join(self.tmp.name, "home")
         os.makedirs(os.path.join(self.home, ".claude"))
         sandbox = {
-            "excludedCommands": ["git *"],
+            "excludedCommands": ["git *", "docker *"],
             "credentials": {"files": [{"path": "~/.ssh", "mode": "deny"}]},
         }
         with open(
@@ -425,6 +426,7 @@ class SandboxShadowNudgeTest(unittest.TestCase):
                 'grep -n "config.lock\\|stale lock" docs/workflow.md',
                 "cat >> /var/tmp/note.md <<'EOF'\nthe .git/config.lock is a mask\nEOF",
                 "ps aux | grep -v bwrap",
+                "ls; docker exec web cat /proc/1/cmdline",
             )
         ):
             with self.subTest(command=command):
@@ -457,14 +459,19 @@ class SandboxShadowNudgeTest(unittest.TestCase):
                 self.assertNotIn("permissionDecision", out)
                 self.assertIn("masked-probe", out["additionalContext"])
                 self.assertIn("workdir", out["additionalContext"])
-        host = self._codex(
-            {
-                "hook_event_name": "PreToolUse",
-                "tool_name": "Bash",
-                "tool_input": {"command": "git config --get core.bare"},
-            }
-        )
-        self.assertEqual(host.stdout, "")
+        for command in (
+            "git config --get core.bare",
+            "ls; docker exec web cat /proc/1/cmdline",
+        ):
+            with self.subTest(command=command):
+                silent = self._codex(
+                    {
+                        "hook_event_name": "PreToolUse",
+                        "tool_name": "Bash",
+                        "tool_input": {"command": command},
+                    }
+                )
+                self.assertEqual(silent.stdout, "")
 
     def test_x2_codex_config_lock_error_is_explained_once(self):
         def after(output: str) -> str:
