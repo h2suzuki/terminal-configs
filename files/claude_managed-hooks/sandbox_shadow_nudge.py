@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse / Stop nudge: sandbox misreadings (dotfile shadows, config.lock, blaming the sandbox).
+"""PreToolUse / Stop nudge: sandbox misreadings (dotfile shadows, config.lock read as a held lock).
 
 Transcript assistant text often lags the tool call, so this scans prior text blocks (past
 tool_result-only entries) and, for Bash, the command itself. Rules marked for Stop also block
@@ -15,8 +15,6 @@ import re
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-
-import sandbox_exclusions
 
 STATE_DIR = os.environ.get("SANDBOX_SHADOW_NUDGE_STATE_DIR") or os.path.join(
     os.path.expanduser("~"), ".claude", "hooks", "state", "sandbox_shadow_nudge"
@@ -100,35 +98,6 @@ CONFIG_LOCK_MSG = (
     "github.com-h2suzuki-scorer/feedback_sandbox_mask_leaks_git_config_lock.md"
 )
 
-SANDBOX_WORD_RE = re.compile(r"sandbox|サンドボックス", re.IGNORECASE)
-# giving up because of the sandbox, or claiming the command ran inside it
-BLAME_CUE_RE = re.compile(
-    r"できな|できませ|できず|られませ|られず|られな|られていませ|読めず|読めな|書けず|書けな"
-    r"|消せず|消せな|使えず|使えな|制約|制限|のせい|権限では|はずなのに|行き詰|外で(?:の)?実行"
-    r"|(?:sandbox|サンドボックス)\s*の?\s*(?:内|中|側|内部)\s*(?:で|の|から)?\s*(?:動|走|実行)"
-    r"|Permission denied|Read-only|cannot|can't|unable|blocked|not allowed"
-    r"|runs?\s+(?:inside|in)\s+the\s+sandbox",
-    re.IGNORECASE,
-)
-# the sentence names a calling form, or a target no excluded command can write (root-owned deploy)
-BLAME_EXEMPT_RE = re.compile(
-    r"呼び出し方|呼び方|invocation|裸名|先頭|パイプ|pipe|リダイレクト|標準入力|stdin|ループ"
-    r"|--jq|segment|代入|wrapper|前置|root\s*所有|/etc/|/usr/local|deploy|デプロイ|配備|sudo",
-    re.IGNORECASE,
-)
-# prose names an excluded command by what it serves
-NAME_ALIASES = {"gh": ("GitHub",), "jev": ("judge",)}
-
-# 文面は意図的に冗長: 同じ誤りが繰り返されているため、訂正と次の行動を両方書き下す
-ENV_BLAME_MSG = (
-    "invocation-first: 除外コマンド (git / gh 等) は sandbox の外で走る。"
-    "「sandbox 内で動いた」「sandbox が塞いだ」と環境のせいにしたのは誤りなので、直前の発言を訂正せよ。"
-    "sandbox 内に入ったなら原因は自分の呼び出し方である: 除外コマンドを裸名で Bash 呼び出しの"
-    "先頭に置いたか (変数代入の segment・path 前置・wrapper で始めていないか) を確かめ、"
-    "`sandbox-host-recovery` の順で呼び出しを直してから結論を書く。"
-    "sandbox の仕組みを調べ直したりユーザーに確かめ直したりするのは、"
-    "自分の発言を相手に尋ね返すのと同じ無駄であり、ユーザーの負担になる。"
-)
 STOP_SUFFIX = "\n最終発言に上の誤りが含まれている。該当箇所を訂正した回答を書き直してから終了せよ。"
 
 
@@ -149,19 +118,7 @@ def _shadow_command(command: str) -> bool:
     return _shadow_hit(command) is not None
 
 
-# a quote followed by "と誤解する" / "と書いても" is a claim under discussion, not one being made
-DISCUSSED_QUOTE_RE = re.compile(
-    r"(?:「[^」]*」|“[^”]*”)(?=\s*(?:と|という|って)[^。\n「]{0,6}?"
-    r"(?:誤解|勘違い|思い込|書|言|発言|断定|主張|報告))"
-)
-
-
-def _unquoted(text: str) -> str:
-    return DISCUSSED_QUOTE_RE.sub("", text)
-
-
 def _lock_text(text: str) -> bool:
-    text = _unquoted(text)
     return (
         bool(CONFIG_LOCK_RE.search(text))
         and bool(LOCK_CUE_RE.search(text))
@@ -171,43 +128,6 @@ def _lock_text(text: str) -> bool:
 
 def _lock_command(command: str) -> bool:
     return bool(CONFIG_LOCK_RE.search(command)) and bool(LOCK_CMD_RE.search(command))
-
-
-def _excluded_names() -> tuple[str, ...]:
-    """Single-word excluded command names; patterns with arguments (`systemctl --no-pager ...`) read as prose too often."""
-    try:
-        patterns = sandbox_exclusions.load_patterns()
-    except Exception:
-        return ()
-    names = {p.rstrip("*").strip() for p in patterns}
-    return tuple(sorted(n for n in names if n and not re.search(r"[\s*]", n)))
-
-
-def _names_excluded_command(text: str, names: tuple[str, ...]) -> bool:
-    words = [a for n in names for a in (n, *NAME_ALIASES.get(n, ()))]
-    # ASCII-only boundaries: Japanese right after a name (`gitの`) still counts as a mention
-    return any(
-        re.search(r"(?<![A-Za-z0-9_/.-])" + re.escape(w) + r"(?![A-Za-z0-9_-])", text)
-        for w in words
-    )
-
-
-def _blame_text(text: str) -> bool:
-    text = _unquoted(text)
-    if not SANDBOX_WORD_RE.search(text):
-        return False
-    names = _excluded_names()
-    return any(  # the sandbox, the give-up cue and the command must share a sentence
-        SANDBOX_WORD_RE.search(s)
-        and BLAME_CUE_RE.search(s)
-        and not BLAME_EXEMPT_RE.search(s)
-        and _names_excluded_command(s, names)
-        for s in re.split(r"[。\n]|(?<=[.!?])\s", text)
-    )
-
-
-def _never(_: str) -> bool:
-    return False
 
 
 @dataclass(frozen=True)
@@ -222,7 +142,6 @@ class Rule:
 RULES = (
     Rule("shadow", _shadow_text, _shadow_command, MSG, on_stop=False),
     Rule("config-lock", _lock_text, _lock_command, CONFIG_LOCK_MSG, on_stop=True),
-    Rule("env-blame", _blame_text, _never, ENV_BLAME_MSG, on_stop=True),
 )
 
 

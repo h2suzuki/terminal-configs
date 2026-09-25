@@ -114,6 +114,7 @@
         "matcher": "Bash",
         "hooks": [
           { "type": "command", "command": "/etc/claude-code/hooks/codex_broker_sweep.py", "timeout": 120 },
+          { "type": "command", "command": "/etc/claude-code/hooks/sandbox_exclusion_guard.py" },
           { "type": "command", "command": "/etc/claude-code/hooks/root_dir_guard.py" }
         ]
       }

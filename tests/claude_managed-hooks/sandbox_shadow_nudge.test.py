@@ -30,18 +30,11 @@ Contract (each claim maps to one test):
   L1  `config.lock` with lock-holder framing ("ロックされている", "stale lock") -> config-lock fires
       with the lessons-learned path
   L2  `config.lock` text that already names the sandbox mask -> silent
-  L3  lock-holder framing without `config.lock`, or only in a quote under discussion
-      (「…」と誤解する) -> silent
+  L3  lock-holder framing without `config.lock` -> silent
   L4  a Bash command removing or probing `config.lock` (rm / lsof) fires once per session; one that
       only reads `.git/config` is silent
-  E1  a sandbox word, a give-up or ran-inside cue and an excluded command (or its alias: GitHub for
-      gh, judge for jev; katakana サンドボックス; a name glued to Japanese) in one sentence -> fires
-  E2  the same blame in a sentence that already names the invocation as the cause -> silent
-  E3  the cue and the excluded command in different sentences, a command not in excludedCommands
-      (`ls`), a calling-form fix (pipe), a root-owned deploy target or a quote under discussion
-      (「…」と書いても) -> silent; a quote written as a claim (「…」旨を追記) still fires (E1)
-  T1  Stop with a config.lock or env-blame final message -> exit 2, stderr carries the rule and
-      the restate instruction; the same message on the next Stop ends the turn (exit 0)
+  T1  Stop with a config.lock lock-holder final message -> exit 2, stderr carries the rule and the
+      restate instruction; the same message on the next Stop ends the turn (exit 0)
   T2  Stop with only a shadow hit -> exit 0 (the shadow rule nudges at PreToolUse only)
   T3  Stop reads last_assistant_message when the transcript lacks the final text
   T4  Stop is silent when CLAUDE_HOOK_CHILD is set (a hook-spawned one-off session)
@@ -126,19 +119,9 @@ class SandboxShadowNudgeTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.state_dir = os.path.join(self.tmp.name, "state")
-        self.home = os.path.join(self.tmp.name, "home")
-        os.makedirs(os.path.join(self.home, ".claude"))
-        with open(
-            os.path.join(self.home, ".claude", "settings.json"), "w", encoding="utf-8"
-        ) as f:
-            json.dump({"sandbox": {"excludedCommands": ["git *", "gh *"]}}, f)
 
     def _env(self) -> dict:
-        return {
-            "SANDBOX_SHADOW_NUDGE_STATE_DIR": self.state_dir,
-            "HOME": self.home,
-            "CLAUDE_PROJECT_DIR": "",
-        }
+        return {"SANDBOX_SHADOW_NUDGE_STATE_DIR": self.state_dir}
 
     def _stop(
         self, entries: list[dict], session_id: str = "stop", final: str | None = None
@@ -341,15 +324,10 @@ class SandboxShadowNudgeTest(unittest.TestCase):
         self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
 
     def test_l3_lock_framing_without_config_lock_is_silent(self):
-        for i, text in enumerate(
-            (
-                "index.lock がロックされている",
-                "`.git/config.lock` を「ロックされている」と誤解する発言を直します",
-            )
-        ):
-            with self.subTest(text=text):
-                proc = self._call([_user_prompt(), _assistant_text(text)], f"l3-{i}")
-                self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
+        proc = self._call(
+            [_user_prompt(), _assistant_text("index.lock がロックされている")]
+        )
+        self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
 
     def test_l4_command_touching_config_lock_fires_once_per_session(self):
         def bash(command: str) -> subprocess.CompletedProcess:
@@ -365,57 +343,17 @@ class SandboxShadowNudgeTest(unittest.TestCase):
         again = bash("lsof .git/config.lock")
         self.assertEqual((again.returncode, again.stdout), (0, ""), again.stderr)
 
-    def test_e1_excluded_command_blamed_on_sandbox_fires(self):
-        for i, text in enumerate(
-            (
-                "この session では git も sandbox の中で動いており、config を書けません",
-                "gh is blocked by the sandbox here",
-                "GitHub に反映されたかは、sandbox の中からは確かめられませんでした",
-                "サンドボックスの制約で gitの管理情報が一部残りました",
-                "`judge`はキーを読むためClaude Codeのsandboxでは使えない",
-                "説明に「`judge`はClaude Codeのsandboxでは使えない」旨を追記します",
-            )
-        ):
-            with self.subTest(text=text):
-                context = self._context(
-                    self._call([_user_prompt(), _assistant_text(text)], f"e1-{i}")
-                )
-                self.assertIn("invocation-first", context)
-
-    def test_e2_blame_already_put_on_the_invocation_is_silent(self):
-        text = "git が sandbox 内で動いたのは、私の呼び出し方の誤りでした"
-        proc = self._call([_user_prompt(), _assistant_text(text)])
-        self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
-
-    def test_e3_blame_needs_an_excluded_command_in_the_same_sentence(self):
-        for i, text in enumerate(
-            (
-                "ls は sandbox 内で動く。git の結果は別に確認した",
-                "ls が sandbox の中で失敗した",
-                "パイプを付けたことで gh が sandbox の中で実行されたので、単独で実行し直します",
-                "配備先は root 所有で sandbox から書けないため、agent_coord の配備をお願いします",
-                "「git は sandbox 内で動いている」と書いても、止めるものがありませんでした",
-                "「git は sandbox 内で動いている」という私の発言は誤りで、撤回します",
-            )
-        ):
-            with self.subTest(text=text):
-                proc = self._call([_user_prompt(), _assistant_text(text)], f"e3-{i}")
-                self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
-
     def test_t1_stop_blocks_once_then_lets_the_restated_turn_end(self):
-        cases = (
-            ("config-lock", ".git/config.lock がロック中のため待ちます"),
-            ("invocation-first", "git は sandbox 内で実行されるので push できません"),
-        )
-        for rule, text in cases:
-            with self.subTest(rule=rule):
-                entries = [_user_prompt(), _assistant_text(text)]
-                first = self._stop(entries, session_id=f"t1-{rule}")
-                self.assertEqual(first.returncode, 2, first.stderr)
-                self.assertIn(rule, first.stderr)
-                self.assertIn("書き直して", first.stderr)
-                second = self._stop(entries, session_id=f"t1-{rule}")
-                self.assertEqual(second.returncode, 0, second.stderr)
+        entries = [
+            _user_prompt(),
+            _assistant_text(".git/config.lock がロック中のため待ちます"),
+        ]
+        first = self._stop(entries, session_id="t1")
+        self.assertEqual(first.returncode, 2, first.stderr)
+        self.assertIn("config-lock", first.stderr)
+        self.assertIn("書き直して", first.stderr)
+        second = self._stop(entries, session_id="t1")
+        self.assertEqual(second.returncode, 0, second.stderr)
 
     def test_t4_stop_is_silent_in_a_hook_child(self):
         payload = {
@@ -438,13 +376,13 @@ class SandboxShadowNudgeTest(unittest.TestCase):
         self.assertIn("config-lock", proc.stderr)
 
     def test_c2_one_text_hitting_two_rules_emits_one_line(self):
-        text = "git は sandbox の中で動くので .git/config.lock がロックされている"
+        text = ".bashrc が未追跡で、.git/config.lock もロックされている"
         proc = self._call([_user_prompt(), _assistant_text(text)], session_id="c2")
         lines = [line for line in proc.stdout.splitlines() if line.strip()]
         self.assertEqual(len(lines), 1, proc.stdout)
         context = json.loads(lines[0])["hookSpecificOutput"]["additionalContext"]
         self.assertIn("config-lock", context)
-        self.assertIn("invocation-first", context)
+        self.assertIn("sandbox-shadow", context)
 
 
 if __name__ == "__main__":

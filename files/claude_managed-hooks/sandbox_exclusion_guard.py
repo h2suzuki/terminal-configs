@@ -4,9 +4,10 @@ Sandbox excluded-command hook for Bash.
 
 SessionStart proactively injects the live excludedCommands roster once per session.
 PreToolUse denies path-prefixed and sudo forms and warns on other wrappers, all
-of which miss the match and fall back into the sandbox. PostToolUseFailure
-answers sandbox-looking failures with the live excludedCommands roster, so a
-wrong calling form is not misread as a sandbox limit. A failure on a
+of which miss the match and fall back into the sandbox. PostToolUseFailure and
+PostToolUse (a failure hidden by `; echo` or a pipe) answer sandbox-looking
+output with the live excludedCommands roster, so a wrong calling form is not
+misread as a sandbox limit, nor git's config-lock error as a held lock. A failure on a
 credential-protected path gets a stronger answer: being unable to read one back
 is not evidence of running inside the sandbox.
 
@@ -48,6 +49,8 @@ SANDBOX_SYMPTOM = re.compile(
     r"Temporary failure in name resolution|\bEACCES\b|\bEPERM\b",
     re.IGNORECASE,
 )
+# git の config 書込失敗 — sandbox が .git/config.lock に被せた mask で起き、誰もロックを持っていない。
+CONFIG_LOCK_SYMPTOM = re.compile(r"could not lock config file", re.IGNORECASE)
 ASSIGNMENT = re.compile(r"^\w+=\S*$")
 # 照合前に剥がされない wrapper — 内側が除外コマンドでも sandbox に落ちる。
 # timeout / time / nice / nohup / stdbuf / command / builtin / noglob / xargs は
@@ -152,8 +155,10 @@ def _indirect_mentions(cmd: str, patterns: list[str]) -> list[str]:
 
 
 def _handle_failure(payload: dict, patterns: list[str], cmd: str) -> int:
-    """Answer a sandbox-looking Bash failure with the roster before misattribution."""
+    """Answer a sandbox-looking Bash result, failed or masked by `; echo` / a pipe, before misattribution."""
     response = payload.get("tool_response") or {}
+    if isinstance(response, str):
+        response = {"output": response}
     if not isinstance(response, dict):
         return 0
     output = "\n".join(
@@ -161,10 +166,27 @@ def _handle_failure(payload: dict, patterns: list[str], cmd: str) -> int:
         for key in ("output", "stdout", "stderr", "error", "message", "tool_result")
         if isinstance(value := response.get(key), str)
     )
-    if not output or not SANDBOX_SYMPTOM.search(output):
+    if isinstance(payload.get("error"), str):
+        output += "\n" + payload["error"]
+    lock = bool(CONFIG_LOCK_SYMPTOM.search(output))
+    if not lock and not SANDBOX_SYMPTOM.search(output):
         return 0
     touched = [p for p in credential_paths() if p in cmd or p in output]
-    if touched:
+    if lock:
+        if not claim_once(payload, "failure-config-lock"):
+            return 0
+        # 文面は意図的に冗長: 「ロックされている」という誤読を、事実と次の行動で置き換えるため trim しない
+        message = (
+            "`could not lock config file` は、誰かが `.git/config` をロックしているという意味ではありません。"
+            " 保持している git プロセスも、crash の残した stale lock もありません。"
+            " sandbox が `.git/config` を書かせないために `.git/config.lock` へ `/dev/null` を"
+            "読み取り専用で被せていて、その上で git が config を書こうとして失敗しています。"
+            " 「ロックされている」と報告したり、保持者を探したり待ったりしないでください。"
+            " まず自分の呼び出し方を直します (除外コマンドの git を Bash 呼び出しの先頭に裸名で置く)。"
+            " それでも host で同じ失敗が出るなら、host に 0 byte・mode 444 の残骸が残っているので、"
+            "使用中でないことを確かめて自分で消してから続けます。"
+        )
+    elif touched:
         if not claim_once(payload, "failure-credential"):
             return 0
         message = (
@@ -217,7 +239,7 @@ def _run(payload: object, patterns: list[str] | None = None) -> int:
     cmd = tool_input.get("command") or ""
     if not isinstance(cmd, str):
         return 0
-    if event == "PostToolUseFailure":
+    if event in ("PostToolUseFailure", "PostToolUse"):
         return _handle_failure(payload, patterns, cmd)
     decision, normalized, reason = _classify(cmd, patterns)
     if decision == "pass":
@@ -510,6 +532,53 @@ class GateTest(unittest.TestCase):
             "tool_input": {"command": "grep missing file"},
             "tool_response": {"stderr": "grep: file: No such file or directory"},
             "session_id": "unrelated",
+        }
+        self.assertEqual(self._emit_for(payload), (0, "", ""))
+
+    def test_symptom_masked_by_a_zero_exit_is_answered(self):
+        payload = {
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "cp x /etc/y; echo rc=$?"},
+            "tool_response": {"stdout": "cp: Read-only file system\nrc=1"},
+            "session_id": "masked",
+        }
+        result, stdout, stderr = self._emit_for(payload)
+        self.assertEqual((result, stderr), (0, ""))
+        output = json.loads(stdout)["hookSpecificOutput"]
+        self.assertEqual(output["hookEventName"], "PostToolUse")
+        self.assertIn("sandbox のせいと", output["additionalContext"])
+
+    def test_config_lock_error_is_explained_as_a_mask_not_a_lock(self):
+        error = "error: could not lock config file .git/config: File exists"
+        payloads = (
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_input": {"command": "git config x.y 1; echo rc=$?"},
+                "tool_response": {"stdout": error + "\nrc=255"},
+            },
+            {
+                "hook_event_name": "PostToolUseFailure",
+                "tool_input": {"command": "git worktree add ../w b"},
+                "error": error,
+            },
+        )
+        for i, payload in enumerate(payloads):
+            with self.subTest(event=payload["hook_event_name"]):
+                payload = {**payload, "tool_name": "Bash", "session_id": f"lock{i}"}
+                _, stdout, _ = self._emit_for(payload)
+                context = json.loads(stdout)["hookSpecificOutput"]["additionalContext"]
+                self.assertIn("ロックしているという意味ではありません", context)
+                self.assertIn("呼び出し方", context)
+                self.assertEqual(self._emit_for(payload), (0, "", ""))
+
+    def test_clean_zero_exit_result_is_silent(self):
+        payload = {
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "git status"},
+            "tool_response": {"stdout": "On branch main"},
+            "session_id": "clean",
         }
         self.assertEqual(self._emit_for(payload), (0, "", ""))
 
