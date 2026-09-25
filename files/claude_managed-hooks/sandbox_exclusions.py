@@ -171,6 +171,136 @@ def glob_match(value: str, pattern: str) -> bool:
     return re.fullmatch(translated, value, re.DOTALL) is not None
 
 
+SEGMENT_CAP = 10000  # Claude Code matches a longer command as one segment
+# Claude Code 2.1.280 の known-safe 変数 (binary 内の Set)。 他の変数の先頭代入は呼び出しを sandbox に残す。
+SAFE_ENV = frozenset(
+    {
+        "GOEXPERIMENT", "GOOS", "GOARCH", "CGO_ENABLED", "GO111MODULE",
+        "RUST_BACKTRACE", "RUST_LOG", "NODE_ENV", "PYTHONUNBUFFERED",
+        "PYTHONDONTWRITEBYTECODE", "PYTEST_DISABLE_PLUGIN_AUTOLOAD", "PYTEST_DEBUG",
+        "ANTHROPIC_API_KEY", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_TIME",
+        "CHARSET", "TERM", "COLORTERM", "NO_COLOR", "FORCE_COLOR", "TZ", "LS_COLORS",
+        "LSCOLORS", "GREP_COLOR", "GREP_COLORS", "GCC_COLORS", "TIME_STYLE",
+        "BLOCK_SIZE", "BLOCKSIZE", "COLUMNS", "LINES", "CLICOLOR", "CLICOLOR_FORCE",
+        "CI", "DEBIAN_FRONTEND", "GIT_TERMINAL_PROMPT",
+    }
+)  # fmt: skip
+# 除外に一致しても sandbox に残る先頭語 (公式 settings reference の sandbox.excludedCommands)。
+SANDBOXED_HEADS = frozenset({"cd", "pushd", "popd", "sudo", "eval", "xargs"})
+# `git -C` / `-c` / `--git-dir` は `git *` に一致しても sandbox に残る (anthropics/claude-code#95455)。
+GIT_SANDBOXED_OPTION = re.compile(r"^(?:-C|-c|--git-dir(?:=|$))")
+CONTROL_WORDS = frozenset(
+    {"if", "then", "elif", "else", "fi", "while", "until", "for", "select", "do"}
+    | {"done", "case", "esac", "function", "[[", "]]"}
+)
+_HEREDOC = re.compile(r"<<")
+_QUOTED = re.compile(r'"(?:\\[\s\S]|[^"\\])*"|\'[^\']*\'')
+_QUOTED_BREAKERS = re.compile(r"[\s;|&(){}#<>$`\\]")
+# a quoted command name stays sandboxed, so it must not match a pattern
+_QUOTE_MARK = "\x01"
+_SUBSTITUTION = re.compile(r"\$\(|`")
+_BRACED_VAR = re.compile(r"\$\{[^}]*\}")
+_FD_DUP = re.compile(r"\d*[<>]&(?:\d+|-)(?![^\s;|&])")
+_COMMENT = re.compile(r"(?:^|(?<=\s))#[^\n]*")
+_SANDBOXED_SHAPE = re.compile(r"[<>(){}]")
+_TOKEN = re.compile(r"\|&|&&|\|\||[;|&\n]|[^\s;|&]+")
+_SEPARATORS = frozenset({"&&", "||", "|", "|&", ";", "&", "\n"})
+_ASSIGNMENT = re.compile(r"^([A-Za-z_]\w*)(?:\[[^\]]*\])?\+?=")
+_TIMEOUT_FLAG = re.compile(
+    r"^(?:--(?:foreground|preserve-status|verbose)|-v|--(?:kill-after|signal)=\S+|-[ks]\S+)$"
+)
+_TIMEOUT_VALUED = frozenset({"--kill-after", "--signal", "-k", "-s"})
+_DURATION = re.compile(r"^\d+(?:\.\d+)?[smhd]?$")
+
+
+def _wrapper_span(tokens: list[str]) -> int:
+    """Return how many leading tokens a wrapper Claude Code strips occupies, 0 if none."""
+    head, n = tokens[0], 1
+    if head == "timeout":
+        while n < len(tokens) and _TIMEOUT_FLAG.match(tokens[n]):
+            n += 1
+        while n + 1 < len(tokens) and tokens[n] in _TIMEOUT_VALUED:
+            n += 2
+        n += n < len(tokens) and tokens[n] == "--"
+        return n + 1 if n < len(tokens) and _DURATION.match(tokens[n]) else 0
+    if head == "nice":
+        if (
+            n + 1 < len(tokens)
+            and tokens[n] == "-n"
+            and re.match(r"^-?\d+$", tokens[n + 1])
+        ):
+            n += 2
+        elif n < len(tokens) and re.match(r"^-\d+$", tokens[n]):
+            n += 1
+    elif head == "stdbuf":
+        while n < len(tokens) and re.match(r"^-[ioe][LN0-9]+$", tokens[n]):
+            n += 1
+    elif head == "env":
+        # 実測は裸の `env <cmd>` だけ。 option や代入付きの env は剥がさない側に倒す。
+        return n if n < len(tokens) and not re.match(r"^-|\w+=", tokens[n]) else 0
+    elif head not in ("time", "nohup"):
+        return 0
+    n += n < len(tokens) and tokens[n] == "--"
+    return n
+
+
+def _statement_command(tokens: list[str]) -> str:
+    """Return the command Claude Code matches for one statement, empty when it stays sandboxed."""
+    if tokens and tokens[0] == "!":
+        tokens = tokens[1:]
+    while tokens and (assignment := _ASSIGNMENT.match(tokens[0])):
+        if assignment.group(1) not in SAFE_ENV:
+            return ""
+        tokens = tokens[1:]
+    while tokens and (span := _wrapper_span(tokens)):
+        tokens = tokens[span:]
+    if not tokens or tokens[0] in CONTROL_WORDS or tokens[0] in SANDBOXED_HEADS:
+        return ""
+    if tokens[0].startswith((_QUOTE_MARK, "$")) or _ASSIGNMENT.match(tokens[0]):
+        return ""
+    if tokens[0] == "git" and len(tokens) > 1 and GIT_SANDBOXED_OPTION.match(tokens[1]):
+        return ""
+    return " ".join(tokens)
+
+
+def host_run(cmd: str, patterns: list[str]) -> str:
+    """Return the first excluded command if every command in the call is excluded and no shape keeps it sandboxed."""
+    if not patterns or _HEREDOC.search(_QUOTED.sub("_", cmd)):
+        return ""
+    substituted = False
+
+    def mask(m: re.Match) -> str:
+        nonlocal substituted
+        text = m.group(0)
+        substituted = substituted or (
+            text[0] == '"' and bool(_SUBSTITUTION.search(text))
+        )
+        return _QUOTE_MARK + _QUOTED_BREAKERS.sub("_", text[1:-1])
+
+    scanned = _QUOTED.sub(mask, cmd.replace("\\\n", " "))
+    scanned = _COMMENT.sub("", _FD_DUP.sub(" ", _BRACED_VAR.sub("_", scanned)))
+    if substituted or _SUBSTITUTION.search(scanned) or _SANDBOXED_SHAPE.search(scanned):
+        return ""
+    if len(cmd) > SEGMENT_CAP:
+        statements = [scanned.split()]
+    else:
+        statements, current = [], []
+        for token in [*_TOKEN.findall(scanned), ";"]:
+            if token in _SEPARATORS:
+                if current:
+                    statements.append(current)
+                current = []
+            else:
+                current.append(token)
+    first = ""
+    for tokens in statements:
+        command = _statement_command(tokens)
+        if not any(glob_match(command, p) for p in patterns if command):
+            return ""
+        first = first or command.replace(_QUOTE_MARK, "")
+    return first
+
+
 def roster_text(patterns: list[str]) -> str:
     """Render the live host-escape roster plus the direct-invocation rule."""
     if not patterns:
@@ -180,17 +310,26 @@ def roster_text(patterns: list[str]) -> str:
         )
     listed = " / ".join(f"`{p}`" for p in patterns)
     sample = bare_form(patterns[0])
+    git_note = (
+        " / `git -C <path> ...` `git -c k=v ...` (anthropics/claude-code#95455)"
+        if any(bare_form(p) == "git" for p in patterns)
+        else ""
+    )
     return (
         f"この環境の sandbox.excludedCommands (設定から生成): {listed}\n"
         "これらは sandbox の外 (host 権限) で走り、 sandbox の filesystem / network "
-        "制限を受けません。 照合は Bash の実行 segment 単位で、 1 segment でも一致すれば "
-        "その Bash 呼び出し全体が host 実行になります。\n"
-        f"一致する形 (直指定): `{sample} ...` / `cd x && {sample} ...` / "
-        f"`FOO=1 {sample} ...` / `timeout 5 {sample} ...`。 直接代入と一部 wrapper は "
-        "照合前に剥がされます。\n"
-        f"一致しない形: `/usr/bin/{sample} ...` (path 前置) / `sudo {sample} ...` / "
-        f"`env {sample} ...` `npx {sample} ...` (wrapper 経由) / quote 内の言及。 "
-        "これらは sandbox に落ちるので、失敗しても sandbox の制限が原因ではありません。\n"
+        "制限を受けません。 ただし Bash 呼び出しが host で走るのは、 呼び出し内の全 command が"
+        "一覧に一致し、 かつ sandbox に残る形を含まない時だけです。\n"
+        f"host で走る形 (裸名で直指定): `{sample} ...` / `{sample} ... && {sample} ...` / "
+        f"`timeout 5 {sample} ...` / `{sample} ... 2>&1`。\n"
+        f"sandbox に残る形: `cd x && {sample} ...` (`cd` `pushd` `popd` は位置を問わない) / "
+        f"`FOO=1 {sample} ...` (LANG・NODE_ENV など一部の既知変数を除く先頭代入) / "
+        f"`{sample} ... | head` `{sample} ...; echo` (一覧外の command を含む) / "
+        "`$(...)`・subshell・`if` `for` / `> file`・heredoc (fd 複製以外の redirect) / "
+        f"`/usr/bin/{sample} ...` (path 前置) / `sudo {sample} ...` `command {sample} ...` "
+        f"`npx {sample} ...` / quote した command 名{git_note}。 "
+        "これらは sandbox の制限を受けます。 host が要る操作は、 一覧の command だけを"
+        "裸名で並べた別の Bash 呼び出しに分けてください。\n"
         "plugin 由来の CLI も、 一覧にあれば host で走ります。 "
         "「plugin だから sandbox を出られない」 は誤りです。\n" + BANG_CAVEAT
     )
@@ -232,25 +371,45 @@ class RosterTest(unittest.TestCase):
         for pattern in self.PATTERNS:
             self.assertIn(f"`{pattern}`", text)
 
-    def test_roster_states_the_direct_invocation_rule(self):
+    def test_roster_states_the_every_command_rule(self):
         text = roster_text(self.PATTERNS)
-        for phrase in ("直指定", "segment 単位", "path 前置", "sudo", "wrapper 経由"):
+        for phrase in (
+            "直指定",
+            "全 command",
+            "path 前置",
+            "sudo",
+            "別の Bash 呼び出し",
+        ):
             self.assertIn(phrase, text)
+        self.assertNotIn("1 segment でも一致すれば", text)
 
-    def test_roster_marks_compound_and_assignment_forms_as_matching(self):
+    def test_roster_marks_cd_and_assignment_forms_as_sandboxed(self):
         text = roster_text(self.PATTERNS)
-        matching, missing = text.split("一致しない形", 1)
-        for form in ("cd x &&", "FOO=1", "timeout 5"):
-            self.assertIn(form, matching)
-        for form in ("/usr/bin/", "sudo ", "env ", "npx "):
-            self.assertIn(form, missing)
+        host, sandboxed = text.split("sandbox に残る形:", 1)
+        for form in ("timeout 5", "2>&1", "&& agent-browser"):
+            self.assertIn(form, host)
+        for form in (
+            "cd x &&",
+            "pushd",
+            "FOO=1",
+            "| head",
+            "/usr/bin/",
+            "sudo ",
+            "npx ",
+        ):
+            self.assertIn(form, sandboxed)
+            self.assertNotIn(form, host)
+        self.assertNotIn("git -C", text)
+        self.assertIn("git -C", roster_text(["git *"]))
 
     def test_roster_corrects_the_plugin_misconception(self):
         self.assertIn("plugin", roster_text(self.PATTERNS))
 
     def test_roster_denies_that_bang_prefix_escapes_the_sandbox(self):
         for text in (roster_text(self.PATTERNS), roster_text([])):
-            self.assertIn("`!` prefix での実行を依頼しても sandbox の外には出ません", text)
+            self.assertIn(
+                "`!` prefix での実行を依頼しても sandbox の外には出ません", text
+            )
             self.assertIn("auto mode の実行許可だけ", text)
             self.assertIn("Claude Code の外の terminal", text)
 
@@ -307,6 +466,114 @@ class RosterTest(unittest.TestCase):
 
     def test_file_is_executable(self):
         self.assertTrue(os.access(os.path.abspath(__file__), os.X_OK))
+
+
+class HostRunTest(unittest.TestCase):
+    """Where Claude Code runs a Bash call. Run: python3 -m unittest sandbox_exclusions"""
+
+    PATTERNS = ["git *", "gh *", "cargo test *", "node *codex-companion.mjs*"]
+    # 2.1.280 で 1 形ずつ別の Bash 呼び出しにして、 git ls-remote が sandbox proxy を通るかで実測した形。
+    MEASURED_HOST = (
+        "git ls-remote https://example.com/p.git",
+        "time git ls-remote u",
+        "nice -n 10 git ls-remote u",
+        "nohup git ls-remote u",
+        "stdbuf -oL git ls-remote u",
+        "timeout 5 git ls-remote u",
+        "env git ls-remote u",
+        "NODE_ENV=test git ls-remote u",
+        "LANG=C git ls-remote u",
+        "git ls-remote u 2>&1",
+        "git --version && git ls-remote u",
+        "git ls-remote u || git --version",
+        "git --version; git ls-remote u",
+        "git ls-remote u | git hash-object --stdin",
+        "! git ls-remote u",
+    )
+    MEASURED_SANDBOX = (
+        "FOO=1 git ls-remote u",
+        "GIT_PAGER=cat git diff --no-index a b",
+        "x=1; git ls-remote u",
+        "pushd /repo && git ls-remote u",
+        "git -C /repo ls-remote u",
+        "git -c core.quotepath=off ls-remote u",
+        "command git ls-remote u",
+        "git ls-remote u >/dev/null",
+        "git ls-remote u <<'EOF'\nx\nEOF",
+        '"git" ls-remote u',
+        "(git ls-remote u)",
+        "{ git ls-remote u; }",
+        "if git --version; then git ls-remote u; fi",
+        'git ls-remote "$(git config --get remote.origin.url)x"',
+        "git ls-remote u | head -1",
+        "git ls-remote u; echo rc=$?",
+    )
+    # 公式 settings reference の列挙と、 一覧外 command を含む呼び出しからの帰結 (未実測)。
+    DOCUMENTED_SANDBOX = (
+        "",
+        "cd x && git push",
+        "git push && cd x",
+        "popd && git push",
+        "VAR=val git push",
+        "FOO=1 timeout 5 git push",
+        "PATH=/x git push",
+        "sudo git push",
+        "eval git push",
+        "xargs git push",
+        "$GIT push",
+        "git --git-dir=/r/.git status",
+        "git log > out.txt",
+        "git log &> out.txt",
+        "cat msg | git commit -F -",
+        "echo `git status`",
+        "VERSION=$(git describe)",
+        "for f in a b; do git add $f; done",
+        "case x in a) git push;; esac",
+        "echo 'git push'",
+        "# git push",
+        "env -i git push",
+        "/usr/bin/git push",
+        "gitk",
+        "cargo build",
+        "node app.js",
+    )
+    DERIVED_HOST = (
+        "git",
+        "git commit -F $TMPDIR/msg",
+        "git commit -F ${TMPDIR:-/tmp}/msg",
+        'git commit -m "a; b > c"',
+        "git log 2>&1 | git hash-object --stdin",
+        "git commit \\\n  -m x",
+        "cargo test foo",
+        "node ./codex-companion.mjs run",
+        "gh pr view; gh pr checks",
+    )
+
+    def test_measured_forms(self):
+        for cmd in self.MEASURED_HOST:
+            self.assertTrue(host_run(cmd, self.PATTERNS), cmd)
+        for cmd in self.MEASURED_SANDBOX:
+            self.assertEqual(host_run(cmd, self.PATTERNS), "", cmd)
+
+    def test_documented_and_derived_forms(self):
+        for cmd in self.DERIVED_HOST:
+            self.assertTrue(host_run(cmd, self.PATTERNS), cmd)
+        for cmd in self.DOCUMENTED_SANDBOX:
+            self.assertEqual(host_run(cmd, self.PATTERNS), "", cmd)
+
+    def test_returns_the_first_excluded_command_unquoted(self):
+        self.assertEqual(
+            host_run('git commit -m "x" && gh pr view', self.PATTERNS),
+            "git commit -m x",
+        )
+
+    def test_no_patterns_means_nothing_runs_on_the_host(self):
+        self.assertEqual(host_run("git push", []), "")
+
+    def test_over_the_cap_only_the_leading_form_counts(self):
+        filler = "echo x; " * 1300
+        self.assertEqual(host_run(filler + "git push", self.PATTERNS), "")
+        self.assertTrue(host_run("git push; " + filler, self.PATTERNS))
 
 
 if __name__ == "__main__":

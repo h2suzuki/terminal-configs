@@ -11,8 +11,8 @@ misread as a sandbox limit, nor git's config-lock error as a held lock. A failur
 credential-protected path gets a stronger answer: being unable to read one back
 is not evidence of running inside the sandbox.
 
-Claude Code matches each Bash execution segment, so a compound command or a
-direct assignment prefix still reaches the host and is deliberately not flagged.
+A Bash call reaches the host only when every command in it is excluded, so an
+excluded command behind cd, an assignment, `command` or `git -C` gets a warning.
 
 Exit:
   0: pass, or advise with hookSpecificOutput.additionalContext
@@ -33,7 +33,10 @@ from unittest import mock
 
 import sandbox_exclusions
 from sandbox_exclusions import (
+    GIT_SANDBOXED_OPTION,
+    SAFE_ENV,
     bare_form,
+    host_run,
     claim_once,
     credential_paths,
     glob_match,
@@ -53,9 +56,16 @@ SANDBOX_SYMPTOM = re.compile(
 CONFIG_LOCK_SYMPTOM = re.compile(r"could not lock config file", re.IGNORECASE)
 ASSIGNMENT = re.compile(r"^\w+=\S*$")
 # 照合前に剥がされない wrapper — 内側が除外コマンドでも sandbox に落ちる。
-# timeout / time / nice / nohup / stdbuf / command / builtin / noglob / xargs は
-# 剥がされる側なので、ここに入れると誤検知になる。
+# timeout / time / nice / nohup / stdbuf は剥がされる側 (実測) なので入れない。 env は option や代入付きの時だけ扱う。
 WRAPPERS = frozenset({"sudo", "env", "npx", "bunx", "uvx"})
+BARE_ENV_STOP = re.compile(r"^-|\w+=")
+DIR_CHANGERS = frozenset({"cd", "pushd", "popd"})
+SANDBOXED_WHY = {
+    "assignment": "先頭に変数代入 (LANG・NODE_ENV など一部の既知変数を除く) がある",
+    "cd": "`cd` / `pushd` / `popd` を含む",
+    "command": "`command` を前置している",
+    "git -C": "`git -C` / `-c` / `--git-dir` を使っている (anthropics/claude-code#95455)",
+}
 SEPARATOR = re.compile(r"&&|\|\||[;|&\n]")  # top-level 制御演算子のみ
 COMMENT = re.compile(r"#.*$", re.MULTILINE)
 # $(...)/`...` は host 化不能ゆえマスクして segment 対象外にする (F1)。
@@ -84,19 +94,33 @@ def _wrapped_command(tokens: list[str], patterns: list[str]) -> str:
 
 
 def _classify(cmd: str, patterns: list[str]) -> tuple[str, str, str]:
-    """Return block/warn/pass, the excluded invocation, and its reason."""
+    """Return block/warn/sandboxed/pass, the excluded invocation, and its reason."""
     scanned = HEREDOC.sub(_strip_heredoc, cmd)
     scanned = QUOTED.sub("_", scanned)
     scanned = SUBST.sub("_", scanned)
     scanned = COMMENT.sub("", scanned)
     warning: tuple[str, str, str] | None = None
+    excluded, changed_dir = "", False
     for segment in SEPARATOR.split(scanned):
         tokens = segment.strip().split()
-        # 先頭の直接代入は照合前に剥がされる — `FOO=1 gh ...` は一致し host で走る。
+        assigned = False
         while tokens and ASSIGNMENT.match(tokens[0]):
-            tokens.pop(0)
+            assigned = tokens.pop(0).split("=", 1)[0] not in SAFE_ENV or assigned
         if not tokens:
             continue
+        if tokens[0] in DIR_CHANGERS:
+            changed_dir = True
+            continue
+        # 裸の `env` は照合前に剥がされる (実測)。 option や代入付きの env は wrapper のまま扱う。
+        if (
+            tokens[0] == "env"
+            and len(tokens) > 1
+            and not BARE_ENV_STOP.match(tokens[1])
+        ):
+            tokens.pop(0)
+        via_command = tokens[0] == "command" and len(tokens) > 1
+        if via_command:
+            tokens.pop(0)
         program = tokens[0]
         basename = os.path.basename(program)
         if basename in WRAPPERS:
@@ -112,6 +136,21 @@ def _classify(cmd: str, patterns: list[str]) -> tuple[str, str, str]:
             continue
         if "/" in program:
             return "block", normalized, "path prefix"
+        git_option = len(tokens) > 1 and GIT_SANDBOXED_OPTION.match(tokens[1])
+        reason = (
+            "command"
+            if via_command
+            else "assignment"
+            if assigned
+            else "git -C"
+            if basename == "git" and git_option
+            else ""
+        )
+        if reason and warning is None:
+            warning = "sandboxed", normalized, reason
+        excluded = excluded or normalized
+    if warning is None and changed_dir and excluded:
+        warning = "sandboxed", excluded, "cd"
     return warning or ("pass", "", "")
 
 
@@ -146,6 +185,8 @@ def _indirect_mentions(cmd: str, patterns: list[str]) -> list[str]:
         # 剥がされる wrapper と裸名の先頭呼びは一致する — 誤検知させない。
         if "/" in tokens[0]:
             candidates = [leader]
+        elif leader == "env" and len(tokens) > 1 and not BARE_ENV_STOP.match(tokens[1]):
+            continue
         elif leader in WRAPPERS:
             candidates = [os.path.basename(t) for t in tokens[1:]]
         else:
@@ -244,6 +285,18 @@ def _run(payload: object, patterns: list[str] | None = None) -> int:
     decision, normalized, reason = _classify(cmd, patterns)
     if decision == "pass":
         return 0
+    if decision == "sandboxed":
+        if not claim_once(payload, f"sandboxed-{reason}"):
+            return 0
+        message = (
+            f"除外コマンド `{normalized}` を呼んでいますが、 この Bash 呼び出しは"
+            f"{SANDBOXED_WHY[reason]}ため sandbox 内で走ります。 host で走らせるには、 "
+            "除外コマンドだけを裸名で並べた別の Bash 呼び出しに分けてください "
+            "(`cd` の代わりに絶対 path を使う)。"
+            "この警告は同一セッション中、その種別につき 1 回だけ表示されます。"
+        )
+        _emit("PreToolUse", message + _roster_suffix(payload, patterns))
+        return 0
     if decision == "warn":
         if not claim_once(payload, reason):
             return 0
@@ -263,7 +316,8 @@ def _run(payload: object, patterns: list[str] | None = None) -> int:
         f"sandbox-exclusion-guard: excluded command `{normalized}` を block しました。"
         f"{detail}。\n\n"
         f"Retry: `{normalized}` を segment 先頭に裸名で置いてください。 "
-        "`cd x && <裸名> ...` や `FOO=1 <裸名> ...` は一致するので、そのまま使えます。\n"
+        "host で走るのは呼び出し内の全 command が除外コマンドの時だけで、 "
+        "`cd x && <裸名> ...` や `FOO=1 <裸名> ...` は sandbox に残ります。\n"
     )
     return 2
 
@@ -299,19 +353,28 @@ class GateTest(unittest.TestCase):
         "VAR=x git push && /usr/bin/git push",
     )
     WARN = (
-        "env git push",
         "env FOO=1 dsa foo",
         "npx dsa foo",
         "env -i git push",
     )
-    # 実装は segment 単位照合で、直接代入と一部 wrapper を剥がしてから照合する。
+    # 除外に一致するが sandbox に残る形 — 1 セッションにつき種別ごと 1 回警告する。
+    SANDBOXED = (
+        ("VAR=val git push", "assignment"),
+        ("FOO=1 BAR=2 dsa foo", "assignment"),
+        ("FOO=1 git push", "assignment"),
+        ("cd app && git push", "cd"),
+        ("pushd app && git push", "cd"),
+        ("git push && popd", "cd"),
+        ("command git push", "command"),
+        ("git -C /repo push", "git -C"),
+        ("git -c k=v push", "git -C"),
+    )
     PASS = (
         "git push",
         "dsa_launcher restart db",
         "cargo test foo",
-        "VAR=val git push",
-        "FOO=1 BAR=2 dsa foo",
-        "cd app && git push",
+        "LANG=C git push",
+        "env git push",
         "echo hi ; cargo test x",
         "git",
         "timeout 5 git push",
@@ -319,8 +382,6 @@ class GateTest(unittest.TestCase):
         "nice -n 10 cargo test x",
         "git push && echo done",
         "git log | head",
-        "timeout 5 git push",
-        "nice -n 10 cargo test x",
         "VERSION=$(git describe)",
         "x=$(dsa foo)",
         "cargo build",
@@ -332,6 +393,7 @@ class GateTest(unittest.TestCase):
         "result=$(cd /repo; tools/dsa_launcher status)",
         "echo `git status`",
         "# deploy\ngit push",
+        "cd app && make",
     )
 
     def setUp(self):
@@ -393,11 +455,9 @@ class GateTest(unittest.TestCase):
             self.assertEqual(output["hookEventName"], "PreToolUse", cmd)
             self.assertEqual(output["permissionDecision"], "allow", cmd)
             self.assertIn("sandbox 内で走ります", output["additionalContext"], cmd)
-            if cmd.startswith("sudo"):
-                self.assertIn("権限昇格できず失敗", output["additionalContext"], cmd)
 
-        first = self._result("env git push", self.PATTERNS, session_id="same")
-        second = self._result("env dsa foo", self.PATTERNS, session_id="same")
+        first = self._result("npx git push", self.PATTERNS, session_id="same")
+        second = self._result("npx dsa foo", self.PATTERNS, session_id="same")
         self.assertNotEqual(first[1], "")
         self.assertEqual(second, (0, "", ""))
 
@@ -405,17 +465,37 @@ class GateTest(unittest.TestCase):
             "npx dsa foo", self.PATTERNS, session_id="different-reason"
         )
         second = self._result(
-            "env git push",
+            "env -i git push",
             self.PATTERNS,
             session_id="different-reason",
         )
         self.assertNotEqual(first[1], "")
         self.assertNotEqual(second[1], "")
 
-        first = self._result("env git push", self.PATTERNS, session_id="one")
-        second = self._result("env git push", self.PATTERNS, session_id="two")
+        first = self._result("npx git push", self.PATTERNS, session_id="one")
+        second = self._result("npx git push", self.PATTERNS, session_id="two")
         self.assertNotEqual(first[1], "")
         self.assertNotEqual(second[1], "")
+
+    def test_warns_that_sandboxed_forms_stay_in_the_sandbox(self):
+        for i, (cmd, reason) in enumerate(self.SANDBOXED):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(host_run(cmd, self.PATTERNS), "")
+                result, stdout, stderr = self._result(cmd, self.PATTERNS, f"s{i}")
+                self.assertEqual((result, stderr), (0, ""))
+                context = json.loads(stdout)["hookSpecificOutput"]["additionalContext"]
+                self.assertIn("sandbox 内で走ります", context)
+                self.assertIn(SANDBOXED_WHY[reason], context)
+                self.assertNotIn("呼び出し全体が host 実行", context)
+        first = self._result("FOO=1 git push", self.PATTERNS, session_id="latch")
+        second = self._result("BAR=1 dsa foo", self.PATTERNS, session_id="latch")
+        self.assertNotEqual(first[1], "")
+        self.assertEqual(second, (0, "", ""))
+
+    def test_retry_advice_says_cd_and_assignment_stay_sandboxed(self):
+        _, _, stderr = self._result("/usr/bin/git push", self.PATTERNS)
+        self.assertIn("sandbox に残ります", stderr)
+        self.assertNotIn("そのまま使えます", stderr)
 
     def test_passes_host_and_nonmatching_invocations_silently(self):
         for cmd in self.PASS:
@@ -425,20 +505,20 @@ class GateTest(unittest.TestCase):
             self.assertEqual(stderr, "", cmd)
 
     def test_empty_patterns_allow_everything(self):
-        self.assertEqual(self._result("env git push", []), (0, "", ""))
+        self.assertEqual(self._result("npx git push", []), (0, "", ""))
 
     def test_warns_every_time_without_a_latch_key(self):
-        first = self._result("env git push", self.PATTERNS)
-        second = self._result("env git push", self.PATTERNS)
+        first = self._result("npx git push", self.PATTERNS)
+        second = self._result("npx git push", self.PATTERNS)
         self.assertNotEqual(first[1], "")
         self.assertNotEqual(second[1], "")
 
     def test_transcript_path_is_a_latch_key_fallback(self):
         first = self._result(
-            "env git push", self.PATTERNS, transcript_path="/tmp/transcript"
+            "npx git push", self.PATTERNS, transcript_path="/tmp/transcript"
         )
         second = self._result(
-            "env git push", self.PATTERNS, transcript_path="/tmp/transcript"
+            "npx git push", self.PATTERNS, transcript_path="/tmp/transcript"
         )
         self.assertNotEqual(first[1], "")
         self.assertEqual(second, (0, "", ""))
@@ -446,7 +526,7 @@ class GateTest(unittest.TestCase):
     def test_warns_when_latch_state_cannot_be_written(self):
         with mock.patch.object(os, "replace", side_effect=OSError):
             result, stdout, stderr = self._result(
-                "env git push", self.PATTERNS, session_id="unwritable"
+                "npx git push", self.PATTERNS, session_id="unwritable"
             )
         self.assertEqual(result, 0)
         self.assertNotEqual(stdout, "")
@@ -516,7 +596,7 @@ class GateTest(unittest.TestCase):
         payload = {
             "hook_event_name": "PostToolUseFailure",
             "tool_name": "Bash",
-            "tool_input": {"command": "env git push"},
+            "tool_input": {"command": "npx git push"},
             "tool_response": {"stderr": "fatal: Permission denied"},
             "session_id": "indirect",
         }
@@ -584,7 +664,7 @@ class GateTest(unittest.TestCase):
         self.assertEqual(self._emit_for(payload), (0, "", ""))
 
     def test_roster_is_appended_only_once_per_session(self):
-        first = self._result("env git push", self.PATTERNS, session_id="once")
+        first = self._result("npx git push", self.PATTERNS, session_id="once")
         second = self._result("npx dsa foo", self.PATTERNS, session_id="once")
         self.assertIn("`git *`", first[1])
         self.assertNotIn("`git *`", second[1])

@@ -2,20 +2,18 @@
 """Acceptance tests for root_dir_guard.py, written before the implementation.
 
 Contract (each claim maps to one test):
-  C1  host-run detection mirrors Claude Code's excludedCommands match: a top-level statement (split on
-      `&&` / `||` / `;` / `|` / `&` / newline, redirections ignored) matches a pattern once its leading
-      assignments and wrappers (timeout N / time / nice / stdbuf / nohup / command / builtin / noglob)
-      are stripped and a quoted head is unquoted; compound statements (if / while / for / case /
-      subshell / brace group / `!`), command substitution, quoted text, comment lines, path-prefixed and
-      `sudo` / `env` forms, and a `PATH=` / `LD_*` / `DYLD_*` assignment prefix do not match; over 10000
-      chars only the leading form counts
+  C1  host-run detection is sandbox_exclusions.host_run: the call runs on the host only when every
+      statement matches a pattern once timeout / time / nice / nohup / stdbuf / bare env and known-safe
+      assignments (LANG, NODE_ENV, ...) are stripped; cd / pushd / popd, any other assignment, `command`,
+      substitution, subshell, control flow, a non-fd-duplicate redirect, a heredoc, a quoted command name,
+      `git -C` and a non-excluded command anywhere keep it sandboxed
   C2  PreToolUse(Bash): a host-run command that expands $TMPDIR / ${TMPDIR} / $TMP / $TEMP / $TEMPDIR in
-      any form (default-valued expansion and a preceding assignment included) is denied — exit 2, stderr
+      any form (default-valued expansion included) is denied — exit 2, stderr
       names the excluded command, the variable and `$CLAUDE_TMPDIR`
   C3  a single-quoted mention, a quoted-delimiter heredoc body, $CLAUDE_TMPDIR while it is set, and a
       command without any reference are allowed; while CLAUDE_TMPDIR is unset in the hook's environment a
       $CLAUDE_TMPDIR reference is denied and an absolute path is recommended instead
-  C4  a sandbox-run command referencing $TMPDIR is allowed
+  C4  a sandbox-run command referencing $TMPDIR is allowed, including a mixed or assignment-prefixed call
   C5  `dangerouslyDisableSandbox: true` counts as host-run; when the sandbox does not restrict commands
       every command is host-run, but the deny applies only while TMPDIR is empty in the hook's environment
   C6  PreToolUse(Bash) snapshots the root directory listing per tool_use_id (session_id fallback) for every
@@ -65,17 +63,34 @@ PATTERNS = [
 HOST = (
     "git push",
     "git",
-    "cd x && git push",
-    "FOO=1 git push",
-    "FOO=1 BAR=2 gh pr view",
     "timeout 5 git push",
     "timeout -k 3 5s git push",
     "time git push",
     "nice -n 10 git push",
     "nohup git push",
     "stdbuf -oL git log",
-    "command git push",
+    "env git push",
+    "LANG=C git push",
+    "git push 2>&1",
+    "git push && git log",
+    "git log | git hash-object --stdin",
+    "! git diff --quiet",
+    "cargo test foo",
+    "node ./codex-companion.mjs run",
+    "codex_broker_reap --all",
+    "claude --bg -p x",
+    "gh pr view; gh pr checks",
+    "git commit -F $TMPDIR/msg",
+)
+SANDBOX = (
+    "",
+    "cd x && git push",
+    "pushd /x && git push",
+    "FOO=1 git push",
+    "FOO=1 BAR=2 gh pr view",
     "FOO=1 timeout 5 git push",
+    "command git push",
+    "git -C /repo push",
     "git log | head",
     "x=1; git push",
     "echo a\ngit push",
@@ -83,31 +98,21 @@ HOST = (
     "cat msg | git commit -F -",
     "if true; then :; fi && git push",
     "case x in a) echo a;; esac; git push",
-    "cargo test foo",
-    "node ./codex-companion.mjs run",
-    "codex_broker_reap --all",
-    "claude --bg -p x",
     "echo hi; gh pr view; echo done",
-    "git push &",
     "git push || echo fail",
-    "git commit -F $TMPDIR/msg",
     '"git" push',
-)
-SANDBOX = (
-    "",
     "if git diff --quiet; then echo clean; fi",
     "while git fetch; do sleep 1; done",
     "for f in a b; do git add $f; done",
     "case x in a) git push;; esac",
     "(git push)",
     "{ git push; }",
-    "! git diff --quiet",
     "VERSION=$(git describe)",
     "echo $(git rev-parse HEAD)",
     "echo `git status`",
     "/usr/bin/git push",
     "sudo git push",
-    "env git push",
+    "env -i git push",
     "npx gh pr view",
     'echo "git push"',
     "echo 'git push'",
@@ -124,8 +129,8 @@ SANDBOX = (
     "cat <<EOF\ngit push\nEOF",
 )
 DENY = (
-    "cat > $TMPDIR/body.md <<'EOF'\nhi\nEOF\ngh issue create --body-file $TMPDIR/body.md",
-    'cp x "$TMPDIR/x.bak" && git commit -F "${TMPDIR}/msg"',
+    "gh issue create --body-file $TMPDIR/body.md",
+    'git add "$TMPDIR/x" && git commit -F "${TMPDIR}/msg"',
     "git commit -F $TMP/msg",
     "git commit -F $TEMP/msg",
     "git commit -F $TEMPDIR/msg",
@@ -134,9 +139,17 @@ DENY = (
     "git commit -F ${TMPDIR-/tmp}/msg",
     "git commit -F ${TMPDIR:=/tmp}/msg",
     "git commit -F ${TMPDIR:?}/msg",
+    "LANG=C git commit -F $TMPDIR/msg",
+)
+SANDBOX_REFERENCES = (
+    "cp x $TMPDIR/x.bak",
+    "for f in a; do git add $f; done; cp x $TMPDIR/y",
+    "cat > $TMPDIR/body.md <<'EOF'\nhi\nEOF\ngh issue create --body-file $TMPDIR/body.md",
+    'cp x "$TMPDIR/x.bak" && git commit -F "${TMPDIR}/msg"',
     "TMPDIR=$CLAUDE_TMPDIR git commit -F $TMPDIR/msg",
     "export TMPDIR=/var/tmp; git commit -F $TMPDIR/msg",
     "git commit -F - <<EOF\nuse $TMPDIR\nEOF",
+    "git -C /repo commit -F $TMPDIR/msg",
 )
 ALLOW = (
     "git commit -m 'use $TMPDIR'",
@@ -199,7 +212,7 @@ class GuardTest(unittest.TestCase):
     def snapshot(self, key="toolu_1"):
         return os.path.join(self.state, f"snap-{key}.json")
 
-    def test_c1_host_run_mirrors_claude_code_matching(self):
+    def test_c1_host_run_mirrors_claude_code_decision(self):
         for cmd in HOST:
             self.assertTrue(guard.host_run(cmd, PATTERNS), cmd)
         for cmd in SANDBOX:
@@ -231,11 +244,9 @@ class GuardTest(unittest.TestCase):
         self.assertNotIn("`$CLAUDE_TMPDIR` (host", err)
 
     def test_c4_allows_sandbox_run_reference(self):
-        self.assertEqual(self.run_hook(pre("cp x $TMPDIR/x.bak")), (0, "", ""))
-        self.assertEqual(
-            self.run_hook(pre("for f in a; do git add $f; done; cp x $TMPDIR/y")),
-            (0, "", ""),
-        )
+        for cmd in SANDBOX_REFERENCES:
+            self.assertEqual(guard.host_run(cmd, PATTERNS), "", cmd)
+            self.assertEqual(self.run_hook(pre(cmd)), (0, "", ""), cmd)
 
     def test_c5_disabled_sandbox_paths(self):
         payload = pre("cp x $TMPDIR/x.bak")
