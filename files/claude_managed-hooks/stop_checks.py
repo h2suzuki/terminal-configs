@@ -193,6 +193,7 @@ def _empty_turn(path=""):
         "bash_commands": [],
         "prompt_text": "",
         "prompt_identity": "",
+        "prompt_epoch": None,
         "has_workflow": False,
     }
 
@@ -227,6 +228,7 @@ def _turn_funnel(payload):
     result["prompt_text"] = _user_text(prompt_entry)
     identity = prompt_entry.get("uuid") or prompt_entry.get("timestamp")
     result["prompt_identity"] = identity if isinstance(identity, str) else ""
+    result["prompt_epoch"] = _epoch(prompt_entry.get("timestamp"))
     texts = []
     for entry in chosen:
         user_text = _user_text(entry)
@@ -1292,12 +1294,25 @@ def _record_turn_end(payload, turn):
     return count, previous_epoch, now
 
 
-def _turn_marker(payload, record):
+def _epoch(stamp):
+    """Transcript timestamp (ISO 8601, trailing 'Z') to epoch seconds, else None."""
+    if not isinstance(stamp, str) or not stamp:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _turn_marker(payload, record, turn):
     if not record:
         return ""
     count, previous_epoch, now = record
-    context, started_epoch = _statusline(payload, previous_epoch)
-    elapsed = _gap(max(0, now - started_epoch))
+    context, _ = _statusline(payload, previous_epoch)
+    # The length of this turn: from its prompt, or from the previous Stop when the prompt time is unreadable.
+    asked = turn["prompt_epoch"]
+    began = asked if asked is not None and 0 < asked <= now else previous_epoch
+    elapsed = _gap(max(0, int(now - began)))
     stamp = datetime.datetime.fromtimestamp(now).astimezone().isoformat()
     return f"{stamp} / Turn #{count} / Context {context} / 経過 {elapsed}"
 
@@ -1392,7 +1407,7 @@ def _emit(payload, turn, blocks, warnings):
             prefix = "advise-once (block demoted to pass): "
             sys.stderr.write("\n".join(prefix + line for line in blocks) + "\n")
         return 0  # additionalContext を返すと harness が model を再起動する
-    marker = _turn_marker(payload, record)
+    marker = _turn_marker(payload, record, turn)
     if warnings:
         sys.stdout.write(json.dumps(_warn_json(warnings, marker), ensure_ascii=False) + "\n")
         waste_prefix = "memory-reminder: prompt に無駄の指摘がある"
