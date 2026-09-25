@@ -16,6 +16,8 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 
+import sandbox_exclusions
+
 STATE_DIR = os.environ.get("SANDBOX_SHADOW_NUDGE_STATE_DIR") or os.path.join(
     os.path.expanduser("~"), ".claude", "hooks", "state", "sandbox_shadow_nudge"
 )
@@ -82,7 +84,30 @@ LOCK_CUE_RE = re.compile(
 LOCK_CORRECT_RE = re.compile(
     r"mask|マスク|/dev/null|bind|78818|ロックではな|not\s+a\s+lock", re.IGNORECASE
 )
-LOCK_CMD_RE = re.compile(r"\b(?:rm|unlink|lsof|fuser)\b")
+# examining the sandbox itself: its mounts, namespaces or launcher
+INTROSPECT_RE = re.compile(
+    r"/proc/(?:self|\d+|\$\$|\$PPID)/(?:mountinfo|mounts|ns\b|status|comm)|\bbwrap\b"
+)
+SEGMENT_RE = re.compile(r"&&|\|\||[;|&\n]")
+ASSIGNMENT_RE = re.compile(r"^\w+=\S*\s+")
+# path-bearing inputs of the non-Bash tools that can look at a file
+PATH_KEYS = {"Read": ("file_path",), "Grep": ("path",), "Glob": ("path", "pattern")}
+
+# 文面は意図的に冗長: 行動の誤りと正しい確かめ方を両方書き下すため trim しない
+PROBE_MSG = (
+    "masked-probe: sandbox が覆ったファイルか sandbox の仕組み ({what}) を調べようとしている。"
+    "中から見えるのは覆いだけで、実物の有無も中身も分からず、仕組みの説明は session 開始時の"
+    "除外コマンド一覧と教訓に既にある。この行動は誤った方向へ進んでいる兆候なので、ここで止めて"
+    "元の作業に戻れ。実物に関わる操作が必要なら、それを扱う除外コマンド (git / gh など) を"
+    "Bash 呼び出しの先頭に裸名で置いて sandbox の外で実行し、その結果で判断する。"
+    "同じターンで別の方法で確かめ直すと、その呼び出しは拒否される。"
+)
+PROBE_DENY = (
+    "masked-probe: このターンで既に、覆われたファイルか sandbox の仕組みを調べて注意を受けている。"
+    "今の呼び出しは、その注意を誤りと見なして別の方法で確かめ直す行動なので拒否した。"
+    "確かめ直さずに元の作業に戻れ。実物に関わる操作は、除外コマンドを Bash 呼び出しの先頭に"
+    "裸名で置いて sandbox の外で実行する。hook 自身はファイルを変更していない。"
+)
 
 # 文面は意図的に冗長: 誤読の訂正と次の行動を両方書き下すため trim しない
 CONFIG_LOCK_MSG = (
@@ -126,8 +151,74 @@ def _lock_text(text: str) -> bool:
     )
 
 
-def _lock_command(command: str) -> bool:
-    return bool(CONFIG_LOCK_RE.search(command)) and bool(LOCK_CMD_RE.search(command))
+def _never(_: str) -> bool:
+    return False
+
+
+def _runs_on_host(command: str) -> bool:
+    """One segment led by an excluded command takes the whole Bash call out of the sandbox."""
+    patterns = sandbox_exclusions.load_patterns()
+    for segment in SEGMENT_RE.split(command):
+        segment = segment.strip()
+        while ASSIGNMENT_RE.match(segment):
+            segment = ASSIGNMENT_RE.sub("", segment, count=1)
+        if any(sandbox_exclusions.glob_match(segment, p) for p in patterns):
+            return True
+    return False
+
+
+def _masked_target(text: str) -> str | None:
+    """The first covered file or sandbox internal the text names, in any spelling of HOME."""
+    if CONFIG_LOCK_RE.search(text):
+        return ".git/config.lock"
+    if m := INTROSPECT_RE.search(text):
+        return m.group(0)
+    home = os.path.expanduser("~")
+    for path in sandbox_exclusions.credential_paths():
+        spellings = [path]
+        if path.startswith(home + "/"):
+            rest = path[len(home) :]
+            spellings += ["~" + rest, "$HOME" + rest, "${HOME}" + rest]
+        for s in spellings:
+            if re.search(re.escape(s) + r"(?![\w.-])", text):
+                return path.replace(home, "~", 1)
+    return None
+
+
+def _probe_target(payload: dict) -> str | None:
+    """What a tool call looks at inside the sandbox's covers, from any tool that can look."""
+    tool = payload.get("tool_name")
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return None
+    if tool == "Bash":
+        command = tool_input.get("command")
+        if not isinstance(command, str) or _runs_on_host(command):
+            return None
+        return _masked_target(command)
+    values = [tool_input.get(k) for k in PATH_KEYS.get(str(tool), ())]
+    return _masked_target(" ".join(v for v in values if isinstance(v, str)))
+
+
+def _turn_key(payload: dict) -> str:
+    """Identity of the current turn: the last real prompt line of the transcript."""
+    path = payload.get("transcript_path")
+    try:
+        lines = _tail_bytes(path).splitlines() if isinstance(path, str) else []
+    except OSError:
+        lines = []
+    for line in reversed(lines):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if (
+            isinstance(entry, dict)
+            and entry.get("type") == "user"
+            and _is_real_prompt(entry)
+        ):
+            return hashlib.sha256(line).hexdigest()
+    return "no-transcript"
 
 
 @dataclass(frozen=True)
@@ -141,7 +232,7 @@ class Rule:
 
 RULES = (
     Rule("shadow", _shadow_text, _shadow_command, MSG, on_stop=False),
-    Rule("config-lock", _lock_text, _lock_command, CONFIG_LOCK_MSG, on_stop=True),
+    Rule("config-lock", _lock_text, _never, CONFIG_LOCK_MSG, on_stop=True),
 )
 
 
@@ -256,6 +347,7 @@ def _pre_tool_use(payload: dict) -> int:
     session_id = payload.get("session_id")
     fired, keys = _text_hits(RULES, _transcript_blocks(payload), session_id)
 
+    messages = [rule.message for rule in fired]
     tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if payload.get("tool_name") == "Bash" and isinstance(command, str):
@@ -265,12 +357,28 @@ def _pre_tool_use(payload: dict) -> int:
                 keys.append(marker)
                 if rule not in fired:
                     fired.append(rule)
+                    messages.append(rule.message)
 
-    if fired:
+    if target := _probe_target(payload):
+        turn = "masked-probe-turn:" + _turn_key(payload)
+        if _already_nudged(session_id, turn):
+            out = {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": PROBE_DENY,
+                }
+            }
+            sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
+            return 0
+        keys.append(turn)
+        messages.append(PROBE_MSG.format(what=target))
+
+    if messages:
         out = {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "additionalContext": "\n\n".join(rule.message for rule in fired),
+                "additionalContext": "\n\n".join(messages),
             }
         }
         sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")

@@ -31,8 +31,13 @@ Contract (each claim maps to one test):
       with the lessons-learned path
   L2  `config.lock` text that already names the sandbox mask -> silent
   L3  lock-holder framing without `config.lock` -> silent
-  L4  a Bash command removing or probing `config.lock` (rm / lsof) fires once per session; one that
-      only reads `.git/config` is silent
+  P1  a sandboxed tool call that looks at a covered file or the sandbox itself (Bash naming
+      config.lock in any form, /proc/self/mountinfo; Read of a credential path) gets masked-probe
+      and still runs
+  P2  a second such look in the same turn, by another method, is denied
+  P3  a new real prompt starts a new turn: the next look is nudged again, not denied
+  P4  a Bash call taken out of the sandbox by an excluded command, or one that names no covered
+      file, is silent
   T1  Stop with a config.lock lock-holder final message -> exit 2, stderr carries the rule and the
       restate instruction; the same message on the next Stop ends the turn (exit 0)
   T2  Stop with only a shadow hit -> exit 0 (the shadow rule nudges at PreToolUse only)
@@ -119,9 +124,30 @@ class SandboxShadowNudgeTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.state_dir = os.path.join(self.tmp.name, "state")
+        self.home = os.path.join(self.tmp.name, "home")
+        os.makedirs(os.path.join(self.home, ".claude"))
+        sandbox = {
+            "excludedCommands": ["git *"],
+            "credentials": {"files": [{"path": "~/.ssh", "mode": "deny"}]},
+        }
+        with open(
+            os.path.join(self.home, ".claude", "settings.json"), "w", encoding="utf-8"
+        ) as f:
+            json.dump({"sandbox": sandbox}, f)
 
     def _env(self) -> dict:
-        return {"SANDBOX_SHADOW_NUDGE_STATE_DIR": self.state_dir}
+        return {
+            "SANDBOX_SHADOW_NUDGE_STATE_DIR": self.state_dir,
+            "HOME": self.home,
+            "CLAUDE_PROJECT_DIR": "",
+        }
+
+    def _look(
+        self, entries: list[dict], tool: str, tool_input: dict, session_id: str = "p"
+    ) -> dict:
+        proc = self._call(entries, session_id, tool, tool_input)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout)["hookSpecificOutput"] if proc.stdout else {}
 
     def _stop(
         self, entries: list[dict], session_id: str = "stop", final: str | None = None
@@ -329,19 +355,50 @@ class SandboxShadowNudgeTest(unittest.TestCase):
         )
         self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
 
-    def test_l4_command_touching_config_lock_fires_once_per_session(self):
-        def bash(command: str) -> subprocess.CompletedProcess:
-            payload = {
-                "session_id": "l4",
-                "tool_name": "Bash",
-                "tool_input": {"command": command},
-            }
-            return run_hook(payload, self._env())
+    def test_p1_looking_at_a_covered_file_is_nudged_and_still_runs(self):
+        looks = (
+            ("Bash", {"command": "ls -la .git/config.lock"}, ".git/config.lock"),
+            (
+                "Bash",
+                {"command": "cd .git && stat -c %F config.lock"},
+                ".git/config.lock",
+            ),
+            ("Bash", {"command": "cat /proc/self/mountinfo"}, "/proc/self/mountinfo"),
+            ("Read", {"file_path": self.home + "/.ssh/id_ed25519"}, "~/.ssh"),
+        )
+        for i, (tool, tool_input, what) in enumerate(looks):
+            with self.subTest(tool=tool, tool_input=tool_input):
+                out = self._look([_user_prompt()], tool, tool_input, f"p1-{i}")
+                self.assertNotIn("permissionDecision", out)
+                self.assertIn("masked-probe", out["additionalContext"])
+                self.assertIn(what, out["additionalContext"])
 
-        self.assertEqual(bash("git config --get user.name .git/config").stdout, "")
-        self.assertIn("config-lock", self._context(bash("rm -f .git/config.lock")))
-        again = bash("lsof .git/config.lock")
-        self.assertEqual((again.returncode, again.stdout), (0, ""), again.stderr)
+    def test_p2_another_method_in_the_same_turn_is_denied(self):
+        entries = [_user_prompt(), _assistant_text("確かめます")]
+        self._look(entries, "Bash", {"command": "ls .git/config.lock"})
+        code = "import os; os.stat(os.path.join('.git', 'config.lock'))"
+        out = self._look(entries, "Bash", {"command": f'python3 -c "{code}"'})
+        self.assertEqual(out["permissionDecision"], "deny")
+        self.assertIn("確かめ直さず", out["permissionDecisionReason"])
+
+    def test_p3_a_new_prompt_starts_a_new_turn(self):
+        first = [_user_prompt("調べて")]
+        self._look(first, "Bash", {"command": "ls .git/config.lock"})
+        out = self._look(
+            [*first, _user_prompt("次へ")], "Bash", {"command": "stat .git/config.lock"}
+        )
+        self.assertNotIn("permissionDecision", out)
+        self.assertIn("masked-probe", out["additionalContext"])
+
+    def test_p4_host_bound_or_unrelated_calls_are_silent(self):
+        for i, command in enumerate(
+            ("git status && ls .git/config.lock", "grep -rn TODO src/")
+        ):
+            with self.subTest(command=command):
+                out = self._look(
+                    [_user_prompt()], "Bash", {"command": command}, f"p4-{i}"
+                )
+                self.assertEqual(out, {})
 
     def test_t1_stop_blocks_once_then_lets_the_restated_turn_end(self):
         entries = [
