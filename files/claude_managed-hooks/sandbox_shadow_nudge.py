@@ -190,12 +190,9 @@ def _segments(command: str) -> list[list[str]]:
 
 
 def _runs_on_host(command: str) -> bool:
-    """One segment led by an excluded command takes the whole Bash call out of the sandbox."""
-    patterns = sandbox_exclusions.load_patterns()
-    return any(
-        sandbox_exclusions.glob_match(" ".join(segment), p)
-        for segment in _segments(command)
-        for p in patterns
+    """A Bash call leaves the sandbox only when every command in it is excluded."""
+    return bool(
+        sandbox_exclusions.host_run(command, sandbox_exclusions.load_patterns())
     )
 
 
