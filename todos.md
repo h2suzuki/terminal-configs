@@ -52,7 +52,7 @@ Claude Code 2.1.148 以降 "court" とうい文字列が混入し Tool Call が�
 
 session を跨いで引き継ぐ未完了作業の概要。詳細は last-session-handoff.md の同名節、経緯は git 履歴。
 
-- Jev 文脈判定の誤判定改善とバックテスト — 再開点: jev に profile を足して検証用のキーを分け、試験版の gate で問いを作り直す (試験版は配備対象の外に置く)
+- Jev 文脈判定の誤判定改善とバックテスト — 再開点: 提案中の 4 点 (本番キー・流れの順番・失敗時と期限・悪い変更の範囲) を利用者が決める。配線の検証は docs/jev-context-gate.md の 0.1 節
 - claude_md_lint の -p 化の実機確認 — 再開点: キャッシュが外れるプロジェクトで新しいセッションを起動して結果を見る
 - codex_delegation_gate の SAFE_CLI に remote-control を足す件 — 再開点: 提案中、足すかをユーザーが決める
 - close nudge の Codex 台帳対応 — 再開点: 実機で mytask の thread id と Codex hook の session_id が同じか測ってから、plan_first_nudge.py に codex 台帳を読ませる (小)
