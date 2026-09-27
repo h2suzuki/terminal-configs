@@ -10,17 +10,20 @@ hook・settings・MCP の配線のように、配備してから壊れると全�
 
 ## 2. Claude のセッションを起動する
 
-`probe/` を作業ディレクトリにして、次を 1 回の Bash 呼び出しで単独に実行します。
+信頼済みのリポジトリ (このリポジトリ) を作業ディレクトリにして、次を 1 回の Bash 呼び出しで単独に実行します。
 
 ```bash
 claude --bg '<1 行の依頼>' --model <モデル> --permission-mode dontAsk \
+  --setting-sources user --settings <probe>/.claude/settings.json \
   --allowedTools '<許可する道具>' --mcp-config '<JSON>' --strict-mcp-config
 ```
 
 - `claude --bg` はサンドボックスの除外コマンドなので、サンドボックスの外で利用者の認証のまま起動します。除外は単独のコマンドが先頭で一致したときだけ効きます。パイプ・リダイレクト・環境変数の前置きを付けると、サンドボックスの中で動き、`~/.claude/jobs` を作れずに失敗します。
-- 作業ディレクトリの移動は `cd` だけの呼び出しにし、起動した後で元へ戻します。
-- 実験用リポジトリは未信頼のフォルダなので、`probe/.claude/settings.json` の許可ルールは捨てられます (hook は使われます)。道具の許可は `--allowedTools` で渡します。
-- 起動したセッションの Bash はサンドボックスの中で動き、作業ディレクトリ (`probe/`) の外の `drafts/` には書けません。hook から呼ぶスクリプトが記録を残すときは、`probe/` の中に書きます。外に書こうとするとスクリプトごと失敗します。
+- Claude Code 2.1.283 (2026-09-27 確認) の `claude --bg` は、未信頼のフォルダでは「Workspace not trusted」で起動しません (2.1.280 では起動できました)。親フォルダの信頼も引き継ぎません。そこで、実験用リポジトリの hook は `--settings` で渡し、`--setting-sources user` でこのリポジトリの project と local の設定を外します。信頼の設定は変えません。
+- 依頼の中のコミットは `git -C <probe> commit ...` と書き、`--allowedTools` も `Bash(git -C <probe> commit *)` に限ります。このリポジトリへのコミットを許さないためです。
+- 同じ実験用リポジトリで何度もコミットさせるときは `--allow-empty` を付けます (`-- <file>` と一緒に使えます)。
+- `claude -p` はサンドボックスの中で動き、認証情報を読めずに「Not logged in」で止まるので、使いません。
+- 起動したセッションの Bash はサンドボックスの中で動きます。hook から呼ぶスクリプトが記録を残すときは、コマンドの `-C` の先 (実験用リポジトリ) の中に書き、このリポジトリの直下には書きません。
 - hook の中で何が起きたかを追うときは、`--debug-file <path>` も付けます。
 
 ## 3. 続けて操作する
@@ -40,7 +43,9 @@ claude --bg '<1 行の依頼>' --model <モデル> --permission-mode dontAsk \
 
 - agent 型 hook のサブエージェントの道具の呼び出し・許可・エラーは、`--debug-file` の記録に出ます (`source=hook_agent` の API 要求の間の `tool_dispatch_start` / `tool_dispatch_end`、`permission denied` の行)。サブエージェントの会話そのものは、セッションの記録に入りません。
 - `--debug-file` の記録では、次の行も確かめます。`Hooks: Got structured output` は agent 型 hook の答え、`Agent hook did not return structured output` は期限切れ、`mcp_tool hook skipped — MCP server '<名前>' not connected` は MCP サーバーが見えずに省略したことを示します。最初の `Dynamic tool loading` の行 (最初のターンの始まり) が `MCP server "<名前>": Successfully connected` より前だと、そのターンの hook から MCP サーバーが見えないことがあります。
-- hook が通したときは、理由がどこにも出ません。止めたときだけ、道具の結果に理由が出ます。
+- agent 型 hook が通したときは、理由がどこにも出ません。止めたときだけ、道具の結果に理由が出ます。通したことを利用者に見せるには、PostToolUse の command 型 hook が `systemMessage` を出します。
+- サブエージェントが道具を呼んだかは、サブエージェントの答えの文ではなく、`--debug-file` の記録 (`Calling MCP tool: <道具>` など) で数えます。答えの文には、呼んでいない道具の結果が書かれることがあります。
+- 手順を守る割合を見るときは、同じ場面を 5 セッション以上で繰り返します。
 
 ## 5. 本番のキーを使わない
 
