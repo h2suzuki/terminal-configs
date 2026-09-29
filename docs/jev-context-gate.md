@@ -2,6 +2,8 @@
 
 エージェントが既存ファイルの途中に書き足した内容が置いた場所の文脈に合っているか、新しく加えたファイルがその場所に置く完成した内容かを、コミットの直前に Jev で判定する hook です。合わないと判定した変更はコミットを止めます。判定するのはセッションに接続済みの Jev MCP サーバー (`jev serve`) で、hook はその受付口のツール `context_gate` を呼びます。判定の本体は `files/jev_context_gate.py`、受付口は `files/jev`、テストは `tests/jev_context_gate.test.py` と `tests/jev.test.py` です。
 
+この hook はまだ研究段階で実用に達していないため、2026-09-29 に Claude Code と Codex の配備設定から外しました。判定の本体と受付口のツールは Jev の実行環境に残し、実験用リポジトリでの試験 ([hook の検証手順](hook-verification.md)) に使います。以下の §3.1 と §6 は、配備していたときの登録内容です。
+
 ## 0. 方式の要件
 
 判定はサブエージェント型 (agent 型) の hook で行います。流れは「hook のサブエージェント → 情報収集スクリプト → サブエージェントが結果を確かめる → Jev に問う → ok / ng を返す」で、2026-09-23 に利用者が指示しました。§3 以降に書いた `mcp_tool` 型は、この要件に移る前の実装です。方式を変える案や、判定の遅さ・期限への対策を並べるときは、この要件を本線に置きます。
@@ -72,7 +74,7 @@
 
 ### 3.1 発火点
 
-Claude Code と Codex の PreToolUse hook (`mcp_tool` 型) が、Bash (Codex では `exec_command` も `Bash` として一致) の呼び出しを、接続済みの `jev` サーバーの `context_gate` に渡します。サーバーは `git commit` のときだけ判定し、それ以外は API を呼ばずに空の結果を返します。Edit・Write・`apply_patch`・`sed` など、どの経路で書いた変更も最後はコミットを通るため、ここを判定の関門にしています。
+配備していたときは、Claude Code と Codex の PreToolUse hook (`mcp_tool` 型) が、Bash (Codex では `exec_command` も `Bash` として一致) の呼び出しを、接続済みの `jev` サーバーの `context_gate` に渡します。サーバーは `git commit` のときだけ判定し、それ以外は API を呼ばずに空の結果を返します。Edit・Write・`apply_patch`・`sed` など、どの経路で書いた変更も最後はコミットを通るため、ここを判定の関門にしています。
 
 判定の対象は、コミットに入る差分です。`git commit -- <path>` と `git commit -a` は作業ツリーと `HEAD` の差分、パスなしのコミットはステージした差分、`--amend` は `HEAD^` からの差分を見ます。
 
@@ -142,6 +144,8 @@ hook は判定ごとに 1 行の JSON を `~/.claude/hooks/state/jev_context_gat
 - **常駐サーバーでの判定**: 同じセッションのコミットで `server_pid` が変わらないこと。変わるなら、判定のたびにサーバーが起動し直されています。
 
 ## 6. 登録と設定
+
+現在はどちらのクライアントにも登録していません。`tests/jev_context_gate.test.py` の `RegistrationTest` が、配備設定に Jev の hook が無いことを確かめます。配備していたときの登録は次のとおりです。
 
 | クライアント | 登録先 | 設定 |
 |---|---|---|

@@ -992,28 +992,20 @@ class ScopeDetectionTest(unittest.TestCase):
 
 
 class RegistrationTest(unittest.TestCase):
-    """Both clients hand the commit to the connected jev server; no hook starts a process to judge it."""
+    """The gate stays out of both clients' deployed hooks while it is still a research tool."""
 
-    # Claude Code documents substitution into string values only, so it passes the command string.
-    CLAUDE_INPUT = {"command": "${tool_input.command}", "cwd": "${cwd}", "session_id": "${session_id}"}
-    CODEX_INPUT = {"tool_input": "${tool_input}", "cwd": "${cwd}", "session_id": "${session_id}"}
+    @staticmethod
+    def jev_hooks(events):
+        hooks = [h for groups in events.values() for g in groups for h in g["hooks"]]
+        return [h for h in hooks if h.get("server") == "jev" or "jev" in h.get("command", "")]
 
-    def test_claude_code_calls_the_connected_jev_server(self):
+    def test_claude_code_registers_no_jev_hook(self):
         settings = json.loads((ROOT / "files" / "claude_managed-extensions.json").read_text())
-        hooks = [h for g in settings["hooks"]["PreToolUse"] for h in g["hooks"]]
-        self.assertFalse([h for h in hooks if "jev_context_gate" in h.get("command", "")])
-        (hook,) = [h for h in hooks if h.get("type") == "mcp_tool" and h.get("server") == "jev"]
-        self.assertEqual(hook["tool"], "context_gate")
-        self.assertEqual(hook["if"], "Bash(git *)")
-        self.assertEqual(hook["input"], self.CLAUDE_INPUT)
+        self.assertEqual(self.jev_hooks(settings["hooks"]), [])
 
-    def test_codex_calls_the_connected_jev_server(self):
+    def test_codex_registers_no_jev_hook(self):
         config = tomllib.loads((ROOT / "files" / "codex_config.toml").read_text())
-        hooks = [h for g in config["hooks"]["PreToolUse"] for h in g["hooks"]]
-        self.assertFalse([h for h in hooks if "jev_context_gate" in h.get("command", "")])
-        (hook,) = [h for h in hooks if h.get("type") == "mcp_tool" and h.get("server") == "jev"]
-        self.assertEqual(hook["tool"], "context_gate")
-        self.assertEqual(hook["input"], self.CODEX_INPUT)
+        self.assertEqual(self.jev_hooks(config["hooks"]), [])
 
     def test_the_module_ships_with_the_jev_runtime_not_as_a_hook(self):
         self.assertFalse((ROOT / "files" / "shared_hooks" / "jev_context_gate.py").exists())
