@@ -140,20 +140,13 @@
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/memory_sync_pull.py" } ] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/check_uncommitted_at_handoff.py" } ] },
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/codex_delegation_surface.py" } ] },
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/plan_first_nudge.py" } ] },
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/primary_source_nudge.py" } ] }
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/claude_hook_bundle --timeout 25 --file /etc/claude-code/hooks/user_prompt_submit.hooks", "timeout": 30 } ] }
     ],
     "MessageDisplay": [
       { "hooks": [ { "type": "command", "command": "/usr/local/bin/claude_court_guard --hook" } ] }
     ],
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/stop_checks.py" } ] },
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/question_research_gate.py" } ] },
-      { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/sandbox_shadow_nudge.py" } ] },
-      { "hooks": [ { "type": "command", "command": "/usr/local/bin/scratch_file_management hook", "timeout": 30 } ] },
-      { "hooks": [ { "type": "command", "command": "/usr/local/bin/claude_court_guard --hook" } ] }
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/claude_hook_bundle --timeout 60 --file /etc/claude-code/hooks/stop.hooks", "timeout": 90 } ] }
     ],
     "SessionEnd": [
       { "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/session_cleanup.py" } ] },

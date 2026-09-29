@@ -1,0 +1,6 @@
+# Stop hooks run together by claude_hook_bundle (one child command per line).
+/etc/claude-code/hooks/stop_checks.py
+/etc/claude-code/hooks/question_research_gate.py
+/etc/claude-code/hooks/sandbox_shadow_nudge.py
+/usr/local/bin/scratch_file_management hook
+/usr/local/bin/claude_court_guard --hook

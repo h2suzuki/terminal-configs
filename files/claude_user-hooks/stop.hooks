@@ -1,0 +1,3 @@
+# Stop hooks run together by claude_hook_bundle (one child command per line).
+~/.claude/hooks/check_push_prompting.py
+~/.claude/hooks/title_icon.py

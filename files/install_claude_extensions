@@ -61,6 +61,10 @@ run install check_push_prompting.py   ~/.claude/hooks/check_push_prompting.py
 run install memory_surface.py         ~/.claude/hooks/memory_surface.py
 run install subagent_gate_suggest.py  ~/.claude/hooks/subagent_gate_suggest.py
 run install title_icon.py             ~/.claude/hooks/title_icon.py
+run install -m 0644 user_prompt_submit.hooks ~/.claude/hooks/user_prompt_submit.hooks
+run install -m 0644 stop.hooks        ~/.claude/hooks/stop.hooks
+# Entries now run through claude_hook_bundle; install only appends, so drop the old ones first
+run "claude_user_hooks uninstall --fragment - < ../extensions-legacy.json"
 run "claude_user_hooks install --fragment - < ../extensions.json"
 
 popd >/dev/null

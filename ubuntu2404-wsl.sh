@@ -341,6 +341,7 @@ merge_dir claude_user-skills                     /etc/claude-code/skel/skills/
 copy shared_skills/mytask/SKILL.md             /etc/claude-code/skel/skills/mytask/SKILL.md
 merge_dir claude_user-hooks                      /etc/claude-code/skel/hooks/
 copy claude_user-extensions.json                /etc/claude-code/skel/extensions.json   # To be installed by claude_user_hooks
+copy claude_user-extensions.legacy.json         /etc/claude-code/skel/extensions-legacy.json
 
 
 #  Codex configs; setup_user_environment installs CLI
@@ -412,6 +413,7 @@ copy claude_memory_surface_analyzer /usr/local/bin/claude_memory_surface_analyze
 copy claude_unverified_claims       /usr/local/bin/claude_unverified_claims
 copy toolbox_bigquery_mcp           /usr/local/bin/toolbox_bigquery_mcp
 copy claude_court_guard             /usr/local/bin/claude_court_guard
+copy claude_hook_bundle             /usr/local/bin/claude_hook_bundle
 copy shared_cli/mytask             /usr/local/bin/mytask
 run rm -f /usr/local/bin/claude_mytask_mcp
 copy agent_coord                    /usr/local/bin/agent_coord

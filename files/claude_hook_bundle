@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+"""Run several Claude Code hook commands as one hook and merge their results.
+
+One registration replaces many, e.g. a single UserPromptSubmit and a single Stop hook:
+  claude_hook_bundle --timeout 25 /path/a.py ::: /usr/local/bin/tool hook ::: /path/b.py
+  claude_hook_bundle --timeout 110 --file /path/stop.hooks   (a short registered command)
+
+Contract:
+  1  argv: options `--timeout SECONDS` (per child, float > 0, default 60) and `--file PATH`,
+     each at most once, in either order, before any command. Children are either inline
+     commands separated by the token `:::`, or the lines of PATH (not both); each child
+     is an argv list run without a shell. Manifest lines are split with shlex (`#`
+     comments, blank lines skipped) and tokens starting with `~` are expanduser'd; inline
+     tokens are not (the registering shell already expands them). The manifest is read
+     before stdin. A missing, empty or malformed child list, an unreadable manifest or a
+     bad option prints a message and usage to stderr and exits 0 (a hook must never break
+     Claude Code); `--help` prints usage to stdout, exit 0
+  2  stdin is read once as raw bytes and every child receives exactly those bytes;
+     children inherit env and cwd, the bundle adds no env vars
+  3  children run concurrently: wall time is the slowest child, not the sum
+  4  a child over its timeout has its whole process group SIGKILLed and counts as failed;
+     SIGTERM / SIGINT to the bundle kills every child's process group and exits 0
+  5  exit code 2 if any child exited 2, else 0; on exit 2 stderr is the stripped stderr of
+     each exit-2 child in child order joined by "\\n" (keeps Claude Code's blocking semantics)
+  6  stdout is at most one JSON line (none when there is nothing to emit); children are
+     merged in argv order, not completion order. A child's stdout is JSON when its stripped
+     text starts with "{". Merge rules:
+       systemMessage          non-empty strings joined by "\\n"
+       terminalSequence       strings concatenated
+       decision / reason      "block" if any child blocks; the blocking children's reasons
+       continue / stopReason  false if any child says false; those children's stopReasons
+       hookSpecificOutput     hookEventName = the payload's hook_event_name (else the first
+                              child's); additionalContext joined by "\\n\\n"; any other key:
+                              first child wins
+       any other key          first child wins
+     Plain (non-JSON) stdout of an exit-0 child is one additionalContext part when the
+     payload event is UserPromptSubmit or SessionStart, and ignored for other events
+  7  a failed child is a spawn error, a timeout, stdout starting with "{" that is not a
+     JSON object, or an exit code outside {0, 2} with no JSON object on stdout. Each adds
+     `hook-bundle: <basename of argv[0]> failed (<exit N|timeout Ns|spawn error|invalid
+     JSON>)` to systemMessage after the merged messages, and its stderr goes to the
+     bundle's stderr only when the bundle exits 0. The exit code still follows claim 5
+  8  any internal exception prints a message on stderr and exits 0
+  9  same inputs give the same stdout bytes
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+import shlex
+import signal
+import subprocess
+import sys
+import threading
+from contextlib import suppress
+from typing import NamedTuple
+
+SEPARATOR = ":::"
+DEFAULT_TIMEOUT = 60.0
+CONTEXT_EVENTS = ("UserPromptSubmit", "SessionStart")
+MERGED_KEYS = set(
+    "systemMessage terminalSequence decision reason continue stopReason "
+    "hookSpecificOutput".split()
+)
+USAGE = (
+    "usage: claude_hook_bundle [--timeout SECONDS] (CMD [ARG...] [::: CMD [ARG...]]... | --file PATH)\n"
+    "Runs the commands concurrently with the same stdin and merges their hook results.\n"
+)
+
+PROCS: list[subprocess.Popen] = []
+LOCK = threading.RLock()  # reentrant: a second signal may interrupt the handler
+STOPPING = threading.Event()
+
+
+class Child(NamedTuple):
+    name: str
+    rc: int | None
+    err: str
+    fail: str | None
+    obj: dict | None  # the parsed JSON object, if stdout had one
+    plain: str  # stdout usable as context (exit 0, not JSON)
+
+
+def read_manifest(path: str) -> list[list[str]]:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = [shlex.split(line, comments=True) for line in fh]
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"cannot read --file {path}: {exc}") from None
+    return [
+        [os.path.expanduser(t) if t[0] == "~" else t for t in row]
+        for row in lines
+        if row
+    ]
+
+
+def parse(argv: list[str]) -> tuple[float, list[list[str]]]:
+    options: dict[str, str] = {}
+    while argv[:1] and argv[0] in ("--timeout", "--file"):
+        if argv[0] in options or len(argv) < 2:
+            raise ValueError(f"{argv[0]} is missing its value or given twice")
+        options[argv[0]], argv = argv[1], argv[2:]
+    try:
+        timeout = float(options.get("--timeout", DEFAULT_TIMEOUT))
+    except ValueError:
+        raise ValueError("--timeout needs a number") from None
+    if not (math.isfinite(timeout) and timeout > 0):
+        raise ValueError("--timeout must be a positive number")
+    if argv[:1] and argv[0].startswith("-"):
+        raise ValueError(f"unknown option {argv[0]}")
+    if "--file" in options:
+        if argv:
+            raise ValueError("--file cannot be combined with inline commands")
+        commands = read_manifest(options["--file"])
+        if not commands:
+            raise ValueError(f"--file {options['--file']} lists no commands")
+        return timeout, commands
+    commands = [[]]
+    for token in argv:
+        if token == SEPARATOR:
+            commands.append([])
+        else:
+            commands[-1].append(token)
+    if not all(commands):
+        raise ValueError("every child command needs a program")
+    return timeout, commands
+
+
+def kill_group(proc: subprocess.Popen) -> None:
+    with suppress(OSError):
+        os.killpg(proc.pid, signal.SIGKILL)
+
+
+def stop_all(signum: int, frame: object) -> None:
+    with LOCK:
+        STOPPING.set()
+        for proc in PROCS:
+            kill_group(proc)
+    sys.exit(0)
+
+
+def launch(argv: list[str], data: bytes, timeout: float) -> tuple:
+    """Run one child; return (returncode, stdout, stderr, failure reason)."""
+    try:
+        with LOCK:
+            if STOPPING.is_set():
+                return None, b"", b"", "spawn error"
+            proc = subprocess.Popen(
+                argv,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+            PROCS.append(proc)
+    except OSError as exc:
+        return None, b"", str(exc).encode(), "spawn error"
+    try:
+        out, err = proc.communicate(data, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        kill_group(proc)
+        proc.wait()
+        return None, b"", exc.stderr or b"", f"timeout {timeout:g}s"
+    return proc.returncode, out, err, None
+
+
+def interpret(argv: list[str], raw: tuple) -> Child:
+    rc, out, err, fail = raw
+    text = out.decode("utf-8", "replace").strip()
+    obj = None
+    if fail is None and text.startswith("{"):
+        try:
+            obj = json.loads(text)
+        except ValueError:
+            fail = "invalid JSON"
+    if fail is None and obj is None and rc not in (0, 2):
+        fail = f"exit {rc}"
+    plain = text if fail is None and obj is None and rc == 0 else ""
+    name = os.path.basename(argv[0])
+    return Child(name, rc, err.decode("utf-8", "replace"), fail, obj, plain)
+
+
+def text_of(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def join(sep: str, parts: list[str]) -> str:
+    return sep.join(filter(None, parts))
+
+
+def merge(children: list[Child], event: str | None) -> dict:
+    messages, sequences, contexts, reasons, stops = [], [], [], [], []
+    blocked = halted = False
+    sub: dict = {}
+    rest: dict = {}
+    for child in children:
+        obj = child.obj or {}
+        if event in CONTEXT_EVENTS:
+            contexts.append(child.plain)
+        messages.append(text_of(obj.get("systemMessage")))
+        sequences.append(text_of(obj.get("terminalSequence")))
+        if obj.get("decision") == "block":
+            blocked = True
+            reasons.append(text_of(obj.get("reason")))
+        if obj.get("continue") is False:
+            halted = True
+            stops.append(text_of(obj.get("stopReason")))
+        if isinstance(specific := obj.get("hookSpecificOutput"), dict):
+            contexts.append(text_of(specific.get("additionalContext")))
+            for key, value in specific.items():
+                if key != "additionalContext":
+                    sub.setdefault(key, value)
+        for key, value in obj.items():
+            if key not in MERGED_KEYS:
+                rest.setdefault(key, value)
+    messages += [f"hook-bundle: {c.name} failed ({c.fail})" for c in children if c.fail]
+    if context := join("\n\n", contexts):
+        sub["additionalContext"] = context
+    if sub and event:
+        sub["hookEventName"] = event
+    merged = {
+        "systemMessage": join("\n", messages),
+        "terminalSequence": "".join(sequences),
+        "decision": "block" if blocked else "",
+        "reason": join("\n", reasons),
+        "continue": False if halted else "",
+        "stopReason": join("\n", stops),
+        "hookSpecificOutput": sub or "",
+    }
+    return {k: v for k, v in merged.items() if v != ""} | rest
+
+
+def emit(stream, text: str) -> None:
+    stream.buffer.write(text.encode("utf-8", "replace"))
+    stream.buffer.flush()
+
+
+def run(argv: list[str]) -> int:
+    if argv and argv[0] in ("-h", "--help"):
+        sys.stdout.write(USAGE)
+        return 0
+    try:
+        timeout, commands = parse(argv)
+    except ValueError as exc:
+        sys.stderr.write(f"hook-bundle: {exc}\n{USAGE}")
+        return 0
+    signal.signal(signal.SIGTERM, stop_all)
+    signal.signal(signal.SIGINT, stop_all)
+    data = sys.stdin.buffer.read()
+
+    results: dict[int, Child] = {}
+
+    def work(index: int) -> None:
+        results[index] = interpret(
+            commands[index], launch(commands[index], data, timeout)
+        )
+
+    threads = [
+        threading.Thread(target=work, args=(i,), daemon=True)
+        for i in range(len(commands))
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    children = [results[i] for i in range(len(commands))]
+
+    try:
+        event = json.loads(data).get("hook_event_name")
+    except (ValueError, AttributeError):
+        event = None
+    if merged := merge(children, event if isinstance(event, str) else None):
+        emit(sys.stdout, json.dumps(merged, ensure_ascii=False) + "\n")
+    blocking = [c for c in children if c.rc == 2]
+    if blocking:
+        emit(sys.stderr, join("\n", [c.err.strip() for c in blocking]))
+        return 2
+    for child in children:
+        if child.fail and child.err.strip():
+            emit(sys.stderr, child.err.strip() + "\n")
+    return 0
+
+
+def main() -> int:
+    try:
+        return run(sys.argv[1:])
+    except Exception as exc:
+        sys.stderr.write(f"hook-bundle: internal error: {exc!r}\n")
+        os._exit(0)  # a normal exit would re-flush a broken stdout and turn 0 into 120
+
+
+if __name__ == "__main__":
+    sys.exit(main())

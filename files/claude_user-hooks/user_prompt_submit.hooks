@@ -1,0 +1,4 @@
+# UserPromptSubmit hooks run together by claude_hook_bundle (one child command per line).
+~/.claude/hooks/memory_surface.py
+~/.claude/hooks/subagent_gate_suggest.py
+~/.claude/hooks/title_icon.py

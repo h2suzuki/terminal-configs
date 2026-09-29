@@ -15,13 +15,10 @@
       { "hooks": [ { "type": "command", "command": "~/.claude/hooks/title_icon.py" } ] }
     ],
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/check_push_prompting.py" } ] },
-      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/title_icon.py" } ] }
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/claude_hook_bundle --timeout 60 --file ~/.claude/hooks/stop.hooks", "timeout": 90 } ] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/memory_surface.py" } ] },
-      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/subagent_gate_suggest.py" } ] },
-      { "hooks": [ { "type": "command", "command": "~/.claude/hooks/title_icon.py" } ] }
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/claude_hook_bundle --timeout 25 --file ~/.claude/hooks/user_prompt_submit.hooks", "timeout": 30 } ] }
     ],
     "SubagentStop": [
       { "hooks": [ { "type": "command", "command": "~/.claude/hooks/memory_surface.py", "asyncRewake": true } ] }
