@@ -1,12 +1,14 @@
 ---
 name: codex-delegation
-description: Lifecycle discipline for delegating implementation work to the Codex CLI plugin — ordering, isolated worktrees, launch registration, heartbeat-based stall detection, completion detection, review, and fix rounds.
-when_to_use: TRIGGER when about to delegate implementation to codex ("codex に発注" / "codex に委譲" / invoking a codex rescue command), when waiting for a running codex task, or when about to review / commit codex-generated changes. SKIP when codex plugin is unavailable or the change stays inside the no-delegation boundary (2 files or fewer and 50 lines or fewer, single approach, one verification, within 15 minutes) that Claude or a subagent handles directly.
+description: Lifecycle discipline for running a Codex CLI plugin task — ordering, isolated worktrees, launch registration, heartbeat-based stall detection, completion detection, review, and fix rounds. Codex runs only when the user asks for it, typically a cross-model review.
+when_to_use: TRIGGER when the user asks for a cross-model review ("クロスモデルレビュー" / "codex でレビュー") or explicitly asks to hand work to codex ("codex に発注" / "codex に委譲"), when waiting for a running codex task, or when about to review / commit codex-generated changes. SKIP when the user has not asked for Codex; implementation and tests go to the implementer subagent instead.
 ---
 
 # Codex Delegation
 
-codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 → 受け入れレビュー → fix round → セッション棚卸し」の lifecycle として規律化する。wrapper の報告と codex 本体の実行状態は一致しないため、判定と並行作業の規則を誤ると moving-target レビュー・ビルドロック競合・「未実装」誤判定が起きる。
+Codex は既定では使わない。ユーザーがクロスモデルレビューを求めたとき、または Codex への発注を明示したときだけ起動する。使う model と effort は `--model gpt-6-astra --effort high`（Astra high）とする。クロスモデルレビューは Antigravity (`agy`) でもよく、その手順は `tool-role-delegation` にある。
+
+codex への委譲を「発注 → 走行監視 → 完了 / stall 判定 → 受け入れレビュー → fix round → セッション棚卸し」の lifecycle として規律化する。wrapper の報告と codex 本体の実行状態は一致しないため、判定と並行作業の規則を誤ると moving-target レビュー・ビルドロック競合・「未実装」誤判定が起きる。
 
 ## Process
 
@@ -33,7 +35,7 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
    - stall 判定（heartbeat 凍結 7 分超、詳細は Rules）:
      - 監視は background script 内で 170 秒 × 3 回等で poll し、exit 時に re-arm して約 5-8.5 分 cadence を保つ。単発待機は bash tool の timeout 上限 600 秒以内にする
 5. **走行中の並行作業規則**: 同一ツリーへの inline 編集をしない（moving-target）。同一 build dir を共有する build / test / lint を並行実行しない（ロック競合で双方が停滞）。別 path（例: backend 委譲中の frontend/、doc、発注書の次 round 準備）は並行してよい
-6. **受け入れレビュー**: 完了判定後に開始。gates 結果は codex の自己申告でなくログ file / 再実行で確認する。仕様の根拠行（契約・実データの key 文字列等）はコードと突き合わせ、判断が乗る主張は spot-check する。高リスク変更（auth / data-loss / race / rollback）は独立 cross-model レビューを追加する。経路は review 雛形（`codex_order_lint --new review`）の発注書を `/codex:rescue` に渡す task（報告書を書くため `--write`、code 変更は発注書で禁止、`--model gpt-5.6-sol --effort xhigh`）— `/codex:adversarial-review` command はユーザー起動専用で、rescue subagent は review 系 subcommand を呼ばず task に変換する（2026-08-27 実測）。雛形の「姿勢・攻撃面・所見の基準」節が plugin 同梱 template と同等の framing を担保する
+6. **受け入れレビュー**: 完了判定後に開始。gates 結果は codex の自己申告でなくログ file / 再実行で確認する。仕様の根拠行（契約・実データの key 文字列等）はコードと突き合わせ、判断が乗る主張は spot-check する。ユーザーが求めたクロスモデルレビューの経路は review 雛形（`codex_order_lint --new review`）の発注書を `/codex:rescue` に渡す task（報告書を書くため `--write`、code 変更は発注書で禁止、`--model gpt-6-astra --effort high`）— `/codex:adversarial-review` command はユーザー起動専用で、rescue subagent は review 系 subcommand を呼ばず task に変換する（2026-08-27 実測）。雛形の「姿勢・攻撃面・所見の基準」節が plugin 同梱 template と同等の framing を担保する
    - **表層品質 pass を別回で行う**: 内容の正誤と別に、読者体験で diff を見る — 英語文書内の日本語文 / CLI 出力・log 文字列の言語 / comment 言語と file 規約の一致 / tone・命名の一貫性。抽象的な「自然に見えるか」だけでは素通しするため、観点を列挙してレビューする。cross-model レビューを発注する場合も本観点を発注書に含める
    - **`claude_lang_lint` を worktree diff に必須実行する**: `claude_lang_lint --repo <workspaceRoot>` が ASCII baseline file への CJK 追加を機械検出する（日本語が正の file は baseline 判定で自動除外、新規の意図的日本語 file は `--allow` で指定）。fail は fix round 行き。LLM レビューの注意力に依存しない決定的 gate
    - server を抱えた run では、codex 側の残存検査 (Rules の hang-proof 節) と別に、司令塔側でも workspaceRoot で scope した `pgrep -af <workspaceRoot>` を打ち、残存 process ゼロを確認する（二重の網）
@@ -45,7 +47,7 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
 
 - **model が使ってよい経路は 2 つだけ（2026-08-21 ユーザー決裁）**: 発注 = codex:rescue skill、監視 = job record / job log の file 直読 + `codex_task_sentinel`。companion の Bash 直接起動は全 subcommand（status / cancel / task-resume-candidate / task-worker 含む）が gate で deny される。cancel / status / result / review はユーザー起動の /codex 系 command。直接起動 habit の実害台帳: 監視の誤判定・空待ち事故 7 件、自作圏の品質保証に 76 巡・145 commits、launcher 試作の全損廃棄、版固定による古い companion の誤用
 - **effort は難易度推定で選び、過剰にしない**: 発注前に仕事の難易度を 1 拍推定して rescue request の `--effort` を決める。目安 = 機械的作業（定数 bump・rename・既存パターンの写経）は minimal/low、通常実装は未指定（config 既定に委ねる）、正しさクリティカル（golden 突合・並行性・migration）や設計判断を含む実装のみ high。xhigh は例外用途に留める
-- **model は俗称でなく正式 id で渡す。`--effort` に `max` は無い**: 俗称（`luna` / `sol` 等）をそのまま `--model` に渡すと API が 400 (`The 'luna' model is not supported...`) で弾く。GPT-5.6 family の id は `gpt-5.6-sol`（品質優先・難コーディング）/ `gpt-5.6-terra`（バランス）/ `gpt-5.6-luna`（高スループット・低レイテンシ）で、alias `gpt-5.6` は Sol へ routing する。plugin が自動正規化するのは `spark` → `gpt-5.3-codex-spark` のみゆえ、他の俗称は発注側が id へ直す。`spark` は対話しながらその場で直す高速反復（リアルタイムコーディング）に特化した低遅延モデルで、text 専用・context 128K・ChatGPT Pro 限定という制約を持つ。長い context を要する発注や画像を伴う発注には選ばない。`--effort` の有効値は companion の `VALID_REASONING_EFFORTS` が定める `none` / `minimal` / `low` / `medium` / `high` / `xhigh` の 6 つ。**`max` は plugin の wrapper が起動前に弾く**（`Unsupported reasoning effort "max". Use one of: ...`、exit 1、task は起動しない）。codex CLI 単体や `~/.codex/config.toml` 経由の可否は別レイヤーで本 skill の管轄外ゆえ、**この経路で発注する限り上限は `xhigh`** と扱う。2026-08-08 実測: `--model gpt-5.6-luna --effort xhigh` は疎通確認 task が正常応答
+- **model は俗称でなく正式 id で渡す。`--effort` に `max` は無い**: 俗称（`luna` / `sol` 等）をそのまま `--model` に渡すと API が 400 (`The 'luna' model is not supported...`) で弾く。既定の Astra は `gpt-6-astra`（GPT-6 family はほかに `gpt-6-sol` / `gpt-6-luna`）。GPT-5.6 family の id は `gpt-5.6-sol`（品質優先・難コーディング）/ `gpt-5.6-terra`（バランス）/ `gpt-5.6-luna`（高スループット・低レイテンシ）で、alias `gpt-5.6` は Sol へ routing する。plugin が自動正規化するのは `spark` → `gpt-5.3-codex-spark` のみゆえ、他の俗称は発注側が id へ直す。`spark` は対話しながらその場で直す高速反復（リアルタイムコーディング）に特化した低遅延モデルで、text 専用・context 128K・ChatGPT Pro 限定という制約を持つ。長い context を要する発注や画像を伴う発注には選ばない。`--effort` の有効値は companion の `VALID_REASONING_EFFORTS` が定める `none` / `minimal` / `low` / `medium` / `high` / `xhigh` の 6 つ。**`max` は plugin の wrapper が起動前に弾く**（`Unsupported reasoning effort "max". Use one of: ...`、exit 1、task は起動しない）。codex CLI 単体や `~/.codex/config.toml` 経由の可否は別レイヤーで本 skill の管轄外ゆえ、**この経路で発注する限り上限は `xhigh`** と扱う。2026-08-08 実測: `--model gpt-5.6-luna --effort xhigh` は疎通確認 task が正常応答
 - **resume は元 thread の sandbox を引き継ぐ**: read-only で始まった thread は `--write --resume-last` でも書けない。job record の `write: True` は起動意図であって実効権限ではない（表示でなく probe file で検証する）。write 化は fresh thread でやり直す（read-only 34 分空走 + resume 不達の実例 2026-07-11）
 - **`--resume-last` は「自分の thread」でなく workspace 内で最後に走った thread に解決される**: write 実装 thread の fix round であっても、間に read-only のレビュー task を挟むと resume 先がそちらへすり替わり、read-only sandbox のまま起動して 1 file も書けずに完了する（fix round 1・2 は write を維持できたのに、read-only レビューを挟んだ fix round 3 で発生・2026-07-22）。resume で write 発注する前に、job state の直近 entry の `write` を確認する。read-only task を挟んだ後は `--fresh` を使う
 - **`backgrounded pid N` は task の起動登録を証明しない**: shell が背景化しただけでも表示され、redirect が `/readme-launch.out: Permission denied` で失敗して task が未起動のまま `backgrounded pid 3905669` と表示された（2026-07-15）
@@ -91,7 +93,7 @@ codex への実装委譲を「発注 → 走行監視 → 完了 / stall 判定 
 
 ## Related
 
-- `tool-role-delegation` — 作業を codex へ「routing する」判断はこちら。本 skill は routing 後の lifecycle 規律
+- `tool-role-delegation` — 作業の担い手を決める判断はこちら。本 skill は Codex を使うと決まった後の lifecycle 規律
 - `verify-before-claim` — gates 自己申告を鵜呑みにしない受け入れ姿勢の一般則
 - `writing-code` — exit status 確認・convention 準拠などの実装汎用則
 - `codex_task_sentinel` (`/usr/local/bin/codex_task_sentinel`) — 本 skill の完了 / stall / 完了後 hang 判定を決定的に実装した CLI。監視は手書きせずこれを使う

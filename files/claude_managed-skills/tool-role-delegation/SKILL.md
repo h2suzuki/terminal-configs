@@ -1,38 +1,39 @@
 ---
 name: tool-role-delegation
-description: Route work to the right executor when codegraph/codex are available — search/exploration via codegraph, implementation above the delegation boundary via codex (/codex:rescue), bounded work via Claude or a subagent — while Claude owns spec, implementation direction, bug-finding, and review of the result.
-when_to_use: TRIGGER when about to search / explore code, write or edit source, start a feature, or say "実装する" / "コードを書く" / "検索" / "探す". SKIP for trivial Q&A, doc-only edits, or when codex / codegraph are unavailable / unauthenticated.
+description: Route work to the right executor — search/exploration via codegraph, implementation and tests via the implementer subagent (Sonnet 5.5, xhigh), Codex or Antigravity only when the user asks for a cross-model review — while Claude owns spec, implementation direction, bug-finding, and review of the result.
+when_to_use: TRIGGER when about to search / explore code, write or edit source, start a feature, write or run tests, when the user asks for a cross-model review ("クロスモデルレビュー" / "codex でレビュー" / "agy でレビュー"), or say "実装する" / "コードを書く" / "検索" / "探す". SKIP for trivial Q&A or doc-only edits.
 ---
 
 # Tool Role Delegation
 
-codegraph / codex が使える環境での役割分担 (managed CLAUDE.md「ツールに役割委譲」の運用)。 codex の駆動法詳細は plugin 同梱 skill (codex-cli-runtime など) と `codex-delegation` skill (発注書・worktree 隔離・監視・受け入れ) が持つので、 本 skill は役割の振り分けと往復手順に絞る。
+codegraph・implementer subagent・Codex・Antigravity の役割分担。Codex の発注書・worktree 隔離・監視・受け入れは `codex-delegation` skill が持つので、本 skill は担い手の振り分けと往復手順に絞る。
 
 ## Process
 
 1. **検索は codegraph を優先**: コード探索は codegraph を Grep / Read より先に使う。
-2. **Claude が仕様・指示を書く**: 何を作るか・どう直すか・受入基準を Claude が明文化する。
-3. **委譲判定は境界で決める (既定は委譲しない)**: 2 file 以下かつ 50 行以下かつ 方針一意・検証 1 回・15 分以内 なら委譲しない。 3 file 以上、 100 行以上、 または edit-test-inspect 3 周以上で委譲を開始する。 その間は 6 軸 (能動工数・境界の明確さ・検証可能性・並列化価値・隔離性・文脈可搬性、 各 0–2 点) の合計 10 点以上で委譲する。 10 分未満・単純検索・単一コマンド・小修正は委譲しない。
-4. **委譲する時は `/codex:rescue <spec>`**: 定型で境界が狭い仕事は `--model gpt-5.6-luna` (Luna)、 曖昧・横断・高リスクは `--model gpt-5.6-sol` (Sol、 effort の上限は `xhigh`)。 長時間は `--background`、 進捗 `/codex:status`、 結果 `/codex:result`、 中断 `/codex:cancel`。 前回 run の継続は `--resume`、 仕切り直しは `--fresh`。 spec は Goal / Scope / Constraints / Done when / Return の 5 項目で書く。 5 項目に圧縮できず会話文脈の再掲が要る、 60 分超で 20–45 分の独立単位に分割できない、 `--fresh` の後も進展がない — のいずれかで `/codex:transfer` をユーザーに提案する (Claude は起動できない)。
-5. **委譲しない時の担い手**: Claude が直接処理する。 subagent-gate の 4 条件のいずれかを満たす時だけ subagent を使い、 機械的で境界が明確な作業は sonnet、 設計判断・レビュー・裁定を含む作業は opus。 effort は既定を継承し、 review / judgment 層だけ上げ、 機械的作業は下げる。
-6. **Claude がレビュー**: codex が返したコードを敵対的 / 受け入れレビューし、 バグ・仕様逸脱・副作用を検査する。 patch 反映も Claude が行う (実装でなくレビューの一部)。 回帰レビューは opus subagent (発注書のみ渡す・effort 高・実装と同族でよいが別 agent) を milestone (機能完成 / test 成功 / commit・PR 形成 / merge 前) で回し、 毎 edit 後には回さない。 実装・受け入れ・検証設計・認定を同一 agent が兼務しない (兼務は多巡 loop の再発条件)。
-7. **高リスク変更は cross-model 第二レビュー**: auth・認可・data-loss・migration・retry・idempotency・race・rollback・cache 整合性に触れる変更は規模不問で codex の第二レビューを追加する。 経路は review 雛形 (`codex_order_lint --new review`) の発注書を `/codex:rescue` に渡す task (`--model gpt-5.6-sol --effort xhigh`、 報告書のため `--write`、 code 変更は発注書で禁止) — `/codex:adversarial-review` command はユーザー起動専用で、 rescue subagent は review 系 subcommand を呼ばず task に変換する (2026-08-27 実測)。 雛形の「姿勢・攻撃面・所見の基準」節が plugin 同梱 template と同等の framing を担保する。 ユーザー指示時も同様。 それ以外で codex の敵対レビューを既定にしない。
+2. **Claude が仕様・指示を書く**: 何を作るか・どう直すか・受入基準を Claude が明文化する。依頼文は目的・触ってよい範囲・完了条件・禁止事項 (commit しない等) を含める。
+3. **実装とテストは implementer に任せる (既定)**: 仕様が決まったコード変更、テストの作成と実行、lint・型検査の指摘の修正は `subagent_type: "implementer"` で起動する。定義で Sonnet 5.5・effort xhigh に固定しているので `model` は渡さない (渡すと定義の model を上書きする)。数行の自明な修正や文書だけの編集は Claude が直接行ってよい。独立した部分は複数の implementer を並列に起動し、同じファイルに触れるなら worktree で隔離する。
+4. **Claude がレビュー**: implementer が返した差分を敵対的 / 受け入れレビューし、バグ・仕様逸脱・副作用を検査する。テスト結果は報告を鵜呑みにせず、ログか再実行で確かめる。修正は依頼文に所見を書いて implementer に戻すのが既定。回帰レビューは opus subagent (依頼文のみ渡す・effort 高・実装と別 agent) を milestone (機能完成 / test 成功 / commit・PR 形成 / merge 前) で回し、毎 edit 後には回さない。実装・受け入れ・検証設計・認定を同一 agent が兼務しない (兼務は多巡 loop の再発条件)。
+5. **高リスク変更は独立レビューを足す**: auth・認可・data-loss・migration・retry・idempotency・race・rollback・cache 整合性に触れる変更は、規模を問わず opus subagent の独立レビューを追加する。クロスモデルレビューが有益だと考えたら、ユーザーに提案してよい (実行はユーザーが求めた時だけ)。
+6. **クロスモデルレビューはユーザーが求めた時だけ**: Codex と Antigravity は既定では使わない。求められたら次のどちらかで行う。
+   - Codex: review 雛形 (`codex_order_lint --new review`) の発注書を `/codex:rescue` に渡す task。`--model gpt-6-astra --effort high` (Astra high)、報告書を書くため `--write`、code 変更は発注書で禁止する。発注から受け入れまでは `codex-delegation` skill に従う。`/codex:review` と `/codex:adversarial-review` はユーザー起動専用で、rescue subagent は review 系 subcommand を呼ばず task に変換する。
+   - Antigravity: `agy -p "<発注書の絶対 path を読み、書かれたとおりにレビューして所見を返せ>" --mode plan` を裸名の単独 Bash で実行する (`agy` は sandbox 除外 command)。`--mode plan` で編集させず、所見は標準出力で受け取る。
+   どちらを使うかユーザーの指定が無ければ Codex を使う。
 
 ## Rules
 
-- **codegraph のツール選択**: `codegraph_explore` (自然言語 / symbol 群から関連 source)、 `codegraph_search` (symbol の位置)、 `codegraph_callers` / `codegraph_callees` / `codegraph_impact` (呼出元 / 呼出先 / 変更の波及)、 `codegraph_node` / `codegraph_files` (個別 symbol / file)。 intent に合うものを選ぶ。
-- **codex 未認証 / 利用不可時は Claude が直接**: 委譲できないので degrade して Claude が進める。 担い手は Process 5。
-- **役割境界を守る**: 委譲した実装は codex、 仕様・指示・バグ出し・レビューは Claude。 patch 反映や review 指摘の修正は「レビューの反映」であって Claude の実装ではない。
-- **委譲境界の数値 (2026-08-27 ユーザー決裁)**: 委譲しない = 2 file 以下かつ 50 行以下、 委譲開始 = 3 file 以上または 100 行以上。 gate に載せる決定値は file 数と行数で、 分・周回数は判断指針。 境界を主観で広げる (「これぐらい trivial」) のが自作癖の入口であり、 境界内の作業を委譲して固定費 (発注書・監視・レビュー) を払うのも損。
-- **統治原則 (2026-08-21 ユーザー明示)**: 実装 token は本当に価値ある部分に使う。 既に部品があるならそれを使い、 部品の再構築はよほどの理由がある時にユーザー承認を得てから行う (承認なしの再構築は理由の良し悪しに関わらず禁止)。
+- **担い手の決裁 (2026-09-29 ユーザー決裁)**: 実装とテストは Sonnet 5.5 xhigh の subagent が既定。Codex は基本的に使わず、ユーザーがクロスモデルレビューを求めた時だけ使い、その時は Antigravity (`agy`) でもよい。Codex は Astra high (`gpt-6-astra`、effort `high`) を使う。
+- **codegraph のツール選択**: `codegraph_explore` (自然言語 / symbol 群から関連 source)、`codegraph_search` (symbol の位置)、`codegraph_callers` / `codegraph_callees` / `codegraph_impact` (呼出元 / 呼出先 / 変更の波及)、`codegraph_node` / `codegraph_files` (個別 symbol / file)。intent に合うものを選ぶ。
+- **役割境界を守る**: 実装は implementer、仕様・指示・バグ出し・レビュー・完了の認定は Claude。implementer の結果を Claude が書き直して取り込むのは「レビューの反映」の範囲に留め、実装のやり直しは implementer に戻す。
+- **統治原則 (2026-08-21 ユーザー明示)**: 実装 token は本当に価値ある部分に使う。既に部品があるならそれを使い、部品の再構築はよほどの理由がある時にユーザー承認を得てから行う (承認なしの再構築は理由の良し悪しに関わらず禁止)。
 
 ## Output
 
-検索は codegraph の適切なツール、 境界超えの実装は `/codex:rescue` 委譲 → Claude レビュー、 境界内は Claude 直接か subagent、 高リスクは review 雛形の発注書で `/codex:rescue` の task を追加、 milestone で opus subagent の回帰レビュー。
+検索は codegraph の適切なツール、実装とテストは implementer → Claude レビュー、数行の自明な修正と文書編集は Claude 直接、高リスクは opus subagent の独立レビュー、クロスモデルレビューはユーザーが求めた時だけ Codex (Astra high) か Antigravity。
 
 ## Related
 
-- `codex-delegation` — 委譲後の lifecycle (発注書・worktree 隔離・監視・受け入れ)。
-- `subagent-gate` — Claude 内 subagent への分岐判定。 本 skill は外部 executor (codegraph / codex) への分岐で同根。
-- `make-plan-before-coding` — 委譲前の spec 明文化はこの skill の設計合意に依拠。
+- `subagent-gate` — subagent を起動する条件と model の選び方。implementer はその条件 (e)。
+- `codex-delegation` — Codex を使うと決まった後の lifecycle (発注書・worktree 隔離・監視・受け入れ)。
+- `make-plan-before-coding` — implementer に渡す仕様の明文化はこの skill の設計合意に依拠。
 - `writing-code` — 永続ファイル汎用 rule (「No dangling-prone references in persistent files」 等)。

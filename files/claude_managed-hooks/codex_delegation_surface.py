@@ -4,14 +4,14 @@ codex delegation surface for org-managed Claude Code.
 
 Purpose
 =======
-tool-role-delegation (routing: 実装は codex へ委譲) と codex-delegation (委譲後の
-lifecycle 規律) は self-judgment 依存で発火率が低い。 本 hook は委譲判断の自然な 2 つの
+tool-role-delegation (routing: 実装とテストは implementer subagent、 Codex はユーザーが
+求めた時だけ) と codex-delegation (Codex 起動後の lifecycle 規律) は self-judgment 依存で発火率が低い。 本 hook は委譲判断の自然な 2 つの
 境界で両 skill を surface する nudge を inject する。 deny せず additionalContext のみ
 (実装を止めない・誘導のみ)。
 
 発火点 (payload の hook_event_name / tool_name / agent_type で判定):
 
-  PreToolUse ExitPlanMode : plan -> 実装の境界。 委譲境界を超える実装は /codex:rescue へ委譲せよと案内
+  PreToolUse ExitPlanMode : plan -> 実装の境界。 実装とテストは implementer subagent へ任せよと案内
   SubagentStop codex-rescue : Claude Code >= 2.1.179 は asyncRewake で REVIEW_MSG + exit 2
   SubagentStop codex-rescue : それ以外は session-keyed review flag を arm
   PreToolUse / UserPromptSubmit : review flag が fresh なら敵対的/受入レビュー nudge を deliver-and-clear
@@ -21,7 +21,7 @@ re-wake する。fallback では SubagentStop の additionalContext が main age
 ため、次の surface-capable event (PreToolUse / UserPromptSubmit) で 1 回だけ配送する。
 clearing rule: deferred deliver path だけが flag を clear し、asyncRewake path は arm/clear しない。
 
-委譲は plugin 経路 `/codex:rescue` 一本 (raw mcp-server は非登録)。
+Codex を使う時の経路は plugin の `/codex:rescue` 一本 (raw mcp-server は非登録)。
 
 emit / fail-open
 ================
@@ -50,28 +50,23 @@ PRUNE_SECONDS = 24 * 3600
 
 # nudge 文面は意図的に冗長 (委譲先 + 役割境界 + degrade 条件を内面化させる)。 trim 禁止。
 DELEGATE_MSG = (
-    "[codex-delegation] plan を終え実装に入ります。 tool-role-delegation: 既定は委譲しない — "
-    "2 file 以下かつ 50 行以下かつ方針一意・検証 1 回・15 分以内は Claude が直接 (subagent-gate "
-    "の 4 条件を満たす時だけ subagent: 機械的 = sonnet で effort を下げ / 判断・レビュー = "
-    "opus で effort を上げる)。 3 file 以上"
-    "または 100 行以上または edit-test-inspect 3 周以上は `/codex:rescue <spec>` へ委譲 — "
-    "spec は Goal / Scope / Constraints / Done when / Return の 5 項目 (定型は --model "
-    "gpt-5.6-luna、 曖昧・横断・高リスクは --model gpt-5.6-sol、 長時間は --background、 "
-    "進捗 /codex:status、 結果 /codex:result、 中断 /codex:cancel、 前回 run の継続は "
-    "--resume、 仕切り直しは --fresh)。 Claude は仕様明文化・レビュー・バグ出しを担い、 codex "
-    "が返したコードを受入レビューします (auth / data-loss / race / migration 等の高リスクは"
-    "規模不問で review 雛形の発注書を /codex:rescue に渡す独立 cross-model 第二レビュー)。 発注書・worktree "
-    "隔離・走行監視・完了判定・fix round の lifecycle 規律は `codex-delegation` skill を "
-    "invoke。 doc 編集・codex 利用不可時は self-implement で構いません。"
+    "[codex-delegation] plan を終え実装に入ります。 tool-role-delegation: 実装とテストは既定で "
+    '`subagent_type: "implementer"` (定義で Sonnet 5.5・effort xhigh に固定、 `model` は渡さない) '
+    "に任せ、 数行の自明な修正と文書だけの編集は Claude が直接行います。 依頼文には目的・触ってよい"
+    "範囲・完了条件・禁止事項 (commit しない等) を書きます。 Claude は仕様明文化・レビュー・バグ出し・"
+    "完了の認定を担い、 返った差分を受入レビューします (テスト結果はログか再実行で確かめる)。 "
+    "auth / data-loss / race / migration 等の高リスク変更は規模不問で opus subagent の独立レビューを"
+    "追加します。 Codex と Antigravity は既定では使いません。 ユーザーが求めた時だけクロスモデル"
+    "レビューに使い、 Codex は review 雛形の発注書を `/codex:rescue` に `--model gpt-6-astra "
+    "--effort high --write` で渡し (lifecycle 規律は `codex-delegation` skill)、 Antigravity は "
+    '`agy -p "<発注書を読んでレビュー>" --mode plan` を裸名の単独 Bash で実行します。'
 )
 REVIEW_MSG = (
     "[codex-review] codex-rescue が停止しました (SubagentStop は codex 本体の完了を"
     "保証しません — ツリー静穏 + companion status running[] 空を先に確認し moving-target "
-    "レビューを回避)。 tool-role-delegation Process 6: コードを"
+    "レビューを回避)。 tool-role-delegation Process 4: 返った結果を"
     "受入レビューし、 バグ・仕様逸脱・副作用を検査してください (patch 反映も"
-    "レビューの一部)。 auth / data-loss / race / rollback 等の高リスク変更は "
-    "review 雛形 (`codex_order_lint --new review`) の発注書を `/codex:rescue` に渡して "
-    "codex の独立 cross-model 第二レビューを追加してください。 完了判定〜受入レビュー〜"
+    "レビューの一部)。 完了判定〜受入レビュー〜"
     "fix round の規律は `codex-delegation` skill を invoke。"
 )
 
@@ -364,10 +359,11 @@ class SurfaceTest(unittest.TestCase):
             {"hook_event_name": "PreToolUse", "tool_name": "ExitPlanMode"}
         )
         self.assertEqual(out["hookEventName"], "PreToolUse")
-        self.assertIn("/codex:rescue", out["additionalContext"])
-        self.assertIn("--resume", out["additionalContext"])
         self.assertIn("[codex-delegation]", out["additionalContext"])
-        self.assertIn("`codex-delegation` skill", out["additionalContext"])
+        self.assertIn('subagent_type: "implementer"', out["additionalContext"])
+        self.assertIn("gpt-6-astra --effort high", out["additionalContext"])
+        self.assertIn("ユーザーが求めた時だけ", out["additionalContext"])
+        self.assertNotIn("gpt-5.6", out["additionalContext"])
         self.assertFalse(os.path.exists(self._marker_path("_")))
 
     def test_exitplanmode_with_fresh_marker_delivers_both_and_removes(self):
