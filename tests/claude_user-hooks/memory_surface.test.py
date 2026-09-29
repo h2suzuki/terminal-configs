@@ -299,6 +299,44 @@ class CodexHookTest(unittest.TestCase):
         surface.assert_not_called()
 
 
+class SystemMessageTest(unittest.TestCase):
+    """The user-facing systemMessage drops the model-facing tag lines; additionalContext keeps them."""
+
+    SURFACED = (
+        "<memory-surface>\nreminder A 詳細: /m/a.md\n</memory-surface>\n"
+        "<memory-surface>\nreminder B 詳細: /m/b.md\n</memory-surface>"
+    )
+
+    def run_hook(self, marker, surfaced):
+        out = io.StringIO()
+        with (
+            mock.patch.object(sys, "stdin", io.StringIO(json.dumps({"prompt": "q"}))),
+            mock.patch.object(ms, "_turn_marker", return_value=marker),
+            mock.patch.object(ms, "_resolve_model", return_value=None),
+            mock.patch.object(ms, "_memory_surface", return_value=surfaced),
+            mock.patch.object(ms, "_concern_inject", return_value=None),
+            contextlib.redirect_stdout(out),
+        ):
+            self.assertEqual(ms._main_query(), 0)
+        return json.loads(out.getvalue())
+
+    def test_system_message_has_no_tag_or_blank_lines(self):
+        result = self.run_hook("10:00:00 Turn #2 starting", self.SURFACED)
+        self.assertEqual(
+            result["systemMessage"].split("\n"),
+            [
+                "10:00:00 Turn #2 starting",
+                "reminder A 詳細: /m/a.md",
+                "reminder B 詳細: /m/b.md",
+            ],
+        )
+        self.assertIn(self.SURFACED, result["hookSpecificOutput"]["additionalContext"])
+
+    def test_marker_alone_when_nothing_surfaced(self):
+        result = self.run_hook("10:00:00 Turn #2 starting", None)
+        self.assertEqual(result["systemMessage"], "10:00:00 Turn #2 starting")
+
+
 class ModelTagTest(unittest.TestCase):
     """models: tags and the running model compare on the major version only."""
 

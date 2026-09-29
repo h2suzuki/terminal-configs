@@ -1199,6 +1199,16 @@ def _concern_inject(payload: dict, model: str | None = None) -> str | None:
         con.close()
 
 
+def _display_text(text: str | None) -> str | None:
+    # The TUI prints each systemMessage line as "<hook> says: <line>" and a tag-only line comes out blank.
+    lines = [
+        line
+        for line in (text or "").splitlines()
+        if line.strip() not in ("<memory-surface>", "</memory-surface>")
+    ]
+    return "\n".join(lines) or None
+
+
 def _main_query() -> int:
     """UserPromptSubmit handler — always exit 0 (fail-open). Turn marker + memory entry ride BOTH channels (TUI may drop UPS systemMessage, an undocumented CC gap, so additionalContext is the reliable copy); L4 concern/correction/pixel rides additionalContext only — a private model nudge."""
     try:
@@ -1231,7 +1241,7 @@ def _main_query() -> int:
             "additionalContext": "\n".join(ctx_parts),
         }
     # memory-surface も systemMessage に出して user に見せる (concern/L4 は model 限定の nudge ゆえ additionalContext のみ)。
-    sys_parts = [p for p in (marker, additional) if p]
+    sys_parts = [p for p in (marker, _display_text(additional)) if p]
     if sys_parts:
         out["systemMessage"] = "\n".join(sys_parts)
     if out:
