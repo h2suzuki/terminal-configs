@@ -141,24 +141,33 @@ test 方針: state file の有無 × open task の有無の 4 象限と、20 件
 ### C10 wind-down-background-unreaped (block)
 
 入力: C9 と同じ wind-down 信号 (中身 `1`)。transcript の**末尾 2 MB** (`BACKGROUND_WINDOW_BYTES = 2 * 1024 * 1024`。
-C2 の funnel は 128 KB のままで、この窓を使うのは C10 だけ) から次を数える —
-起動 = tool_result 本文の**先頭**が `Command running in background with ID: <id>` /
-`Workflow launched in background. Task ID: <id>` / `Monitor started (task <id>,` に一致した `<id>`、および本文の先頭が
-`Async agent launched successfully` の時の `agentId: <id>`。subagent の tool_result は文字列でなく block の配列で
-返るので text block を連結してから見る。`<id>` に `.` は含めない (実際の本文は `ID: <id>. Output is being written to:`
-と続く)。本文の途中に現れた同形の行は起動と数えない (過去 transcript を走査した出力が起動として数えられた実例がある)。
-完了通知 = user entry の文字列、または queue-operation entry の `content` に `<task-notification>` があり、
-その中の `<task-id><id></task-id>` の `<id>` 集合 (現行 CLI は後者の形で書く)。ただし `<event>` を含む通知は
-Monitor の進捗であって完了ではないので数えない (同じ task-id を運ぶため、数えると走行中の Monitor が回収済に見える)。
-出力: 起動 − 完了通知 が空でなければ block し、未回収の id を列挙する。差が空なら pass。
-ただし窓が session 先頭に届いていないとき — transcript が窓より大きい、または起動を持たない完了通知 id がある (= 起動 id が窓の外)
-— は観測が不完全なので **block せず warn** とし、行に「窓外」を含める (差が空でなければ、transcript が窓より大きいだけの
-場合も warn する)。窓外かつ差が空なら何も出さない。
+C2 の funnel は 128 KB のままで、この窓を使うのは C10 だけ) を**先頭から順に**歩き、id ごとに**最後の状態**を持つ。
+- 走行中にする (起動・再開): tool_result 本文の**先頭**が `Command running in background with ID: <id>` /
+  `Workflow launched in background. Task ID: <id>` / `Monitor started (task <id>,` に一致した `<id>`、本文の先頭が
+  `Async agent launched successfully` の時の `agentId: <id>`、および本文が JSON object で文字列の `resumedAgentId` を持つ時の
+  その値 (SendMessage で再開した subagent は再び走っているが起動行は出ない)。subagent の tool_result は文字列でなく block の
+  配列で返るので text block を連結してから見る。`<id>` に `.` は含めない (実際の本文は `ID: <id>. Output is being written to:`
+  と続く)。本文の途中に現れた同形の行は起動と数えない (過去 transcript を走査した出力が起動として数えられた実例がある)。
+- 回収済にする (完了通知): user entry の文字列、または queue-operation entry の `content` に `<task-notification>` があり、
+  その中の `<task-id><id></task-id>` の `<id>` 集合 (現行 CLI は後者の形で書く)。ただし `<event>` を含む通知は
+  Monitor の進捗であって完了ではないので数えない (同じ task-id を運ぶため、数えると走行中の Monitor が回収済に見える)。
+  また通知が `background work of its own still running` (subagent が自分の background 作業を残して止まった時の注記) を
+  含むなら、`completed` を名乗っていても走行中のままにする (同じ task-id が再度通知される)。
+- 回収済にする (停止): tool_result 本文が JSON object で、`message` が `Successfully stopped task:` で始まり、文字列の
+  `task_id` を持つ時のその値 (TaskStop の結果。停止した task は通知を出さないことがある)。
+出力: 最後の状態が走行中の id が空でなければ block し、その id を列挙する。空なら pass。
+ただし窓が session 先頭に届いていないとき — transcript が窓より大きい、または起動 (再開を含む) を持たない通知・停止 id がある
+(= 起動 id が窓の外) — は観測が不完全なので **block せず warn** とし、行に「窓外」を含める (走行中 id が空でなければ、
+transcript が窓より大きいだけの場合も warn する)。窓外かつ走行中 id が空なら何も出さない。
 test 方針: 起動 2 / 通知 1 の合成 transcript で 1 件を列挙、起動 2 / 通知 2 で pass、wind-down 未宣言で常に pass、
 起動を持たない通知で warn (「窓外」を含み exit 0)、窓内 1.5 MB の起動は block・窓外 3 MB の起動は非 block で上限値を挟む。
 subagent は起動のみで block・通知付きで pass、通知済 subagent が同席しても未回収 bash は block のまま (warn へ落ちない)、
 本文の途中に起動行を引用した tool_result は非 block、実際の形 (`ID: <id>. Output is…` と queue-operation の通知) で pass。
 Monitor は起動のみで block・完了通知で pass・進捗 event だけでは block のまま。
+最後の状態の規則: interim 注記付きの completed 通知は block・その後に TaskStop 成功 / 注記なしの通知が続けば pass、
+起動 + 通知の後に SendMessage 再開 (`resumedAgentId`) が来て後続通知が無ければ block・再開後に通知が来れば pass、
+TaskStop 成功の後の再開は block、停止に失敗した TaskStop (`message` が別文) は回収せず block、通知を出さない bash task は
+TaskStop 成功で pass、起動を持たない TaskStop 成功 id / interim 通知 id は warn (「窓外」を含む)。
 
 ### C11 handoff-doc-without-marker (block)
 
@@ -515,6 +524,53 @@ def queued_event(task_id: str) -> dict:
         "content": f"<task-notification>\n<task-id>{task_id}</task-id>\n"
         "<summary>Monitor event</summary>\n<event>probe event 1</event>\n</task-notification>",
     }
+
+
+INTERIM_NOTE = (
+    "This agent stopped with background work of its own still running. It may resume "
+    "on its own when that work completes or reports, and the same task-id notifies "
+    "again if it does; the result below may be interim."
+)
+
+
+def queued_interim(task_id: str) -> dict:
+    """A subagent notice that says `completed` but carries the still-running note."""
+    return {
+        "type": "queue-operation",
+        "operation": "enqueue",
+        "timestamp": iso(-5),
+        "content": f"<task-notification>\n<task-id>{task_id}</task-id>\n"
+        '<status>completed</status>\n<summary>Agent "x" finished</summary>\n'
+        f"<note>{INTERIM_NOTE}</note>\n<result>interim</result>\n</task-notification>",
+    }
+
+
+def resume_result(agent_id: str) -> dict:
+    """A SendMessage resume: the tool_result body is a JSON string naming `resumedAgentId`."""
+    return tool_result(
+        json.dumps(
+            {
+                "success": True,
+                "message": f"Resuming agent {agent_id[:7]}",
+                "resumedAgentId": agent_id,
+                "pin": {"kind": "agent"},
+            }
+        )
+    )
+
+
+def stop_result(task_id: str, message: str = "Successfully stopped task") -> dict:
+    """A TaskStop result: a JSON string whose `message` reports the stop."""
+    return tool_result(
+        json.dumps(
+            {
+                "message": f"{message}: {task_id} (Implement a CLI)",
+                "task_id": task_id,
+                "task_type": "local_agent",
+                "command": "implement",
+            }
+        )
+    )
 
 
 def assistant(blocks: list[dict], model: str = MODEL) -> dict:
@@ -1603,6 +1659,129 @@ class WindDownTest(StopChecksTest):
         proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
         self.assertNotBlocked(proc, "wind-down-background-unreaped")
         self.assertNotIn("wind-down-background-unreaped", warn_body(proc))
+
+    AGENT = "ad2a25a48e8c0bb45"
+
+    def agent_flow(self, *tail: dict) -> None:
+        """One subagent launch, then `tail` in transcript order."""
+        self.fx.write(
+            [
+                prompt(),
+                call("Agent"),
+                agent_result(self.AGENT),
+                *tail,
+                say("片付けました"),
+            ]
+        )
+
+    def test_c10_completed_notice_with_the_still_running_note_does_not_reap(self):
+        """C10 last state: `completed` plus the still-running note leaves the agent running."""
+        self.fx.wind_down()
+        self.agent_flow(queued_interim(self.AGENT))
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertBlocks(proc, "wind-down-background-unreaped")
+        self.assertIn(self.AGENT, proc.stderr)
+
+    def test_c10_task_stop_reaps_an_interim_agent(self):
+        """C10 last state: a successful TaskStop after the interim notice reaps the agent."""
+        self.fx.wind_down()
+        self.agent_flow(
+            queued_interim(self.AGENT), call("TaskStop"), stop_result(self.AGENT)
+        )
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertNotBlocked(proc, "wind-down-background-unreaped")
+        self.assertNotIn("wind-down-background-unreaped", warn_body(proc))
+
+    def test_c10_task_stop_reaps_a_task_that_never_notified(self):
+        """C10: a stopped task may never send a notice, so the TaskStop result is its reap."""
+        self.fx.wind_down()
+        self.fx.write(
+            [
+                prompt(),
+                bash("python3 long.py"),
+                tool_result("Command running in background with ID: bg-1"),
+                call("TaskStop"),
+                stop_result("bg-1"),
+                say("片付けました"),
+            ]
+        )
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertNotBlocked(proc, "wind-down-background-unreaped")
+        self.assertNotIn("wind-down-background-unreaped", warn_body(proc))
+
+    def test_c10_later_plain_notice_reaps_an_interim_agent(self):
+        """C10 last state: the same task-id notifies again on true completion, which reaps it."""
+        self.fx.wind_down()
+        self.agent_flow(queued_interim(self.AGENT), queued_notice(self.AGENT))
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertNotBlocked(proc, "wind-down-background-unreaped")
+        self.assertNotIn("wind-down-background-unreaped", warn_body(proc))
+
+    def test_c10_resumed_agent_without_a_later_notice_blocks(self):
+        """C10 last state: a SendMessage resume is a launch, so an earlier notice no longer reaps."""
+        self.fx.wind_down()
+        self.agent_flow(
+            queued_notice(self.AGENT), call("SendMessage"), resume_result(self.AGENT)
+        )
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertBlocks(proc, "wind-down-background-unreaped")
+        self.assertIn(self.AGENT, proc.stderr)
+
+    def test_c10_resumed_agent_with_a_later_notice_passes(self):
+        self.fx.wind_down()
+        self.agent_flow(
+            queued_notice(self.AGENT),
+            call("SendMessage"),
+            resume_result(self.AGENT),
+            queued_notice(self.AGENT),
+        )
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertNotBlocked(proc, "wind-down-background-unreaped")
+        self.assertNotIn("wind-down-background-unreaped", warn_body(proc))
+
+    def test_c10_agent_resumed_after_a_task_stop_blocks(self):
+        """C10 last state: order decides, so a resume after a stop leaves the agent running."""
+        self.fx.wind_down()
+        self.agent_flow(
+            call("TaskStop"), stop_result(self.AGENT), resume_result(self.AGENT)
+        )
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertBlocks(proc, "wind-down-background-unreaped")
+
+    def test_c10_task_stop_that_did_not_stop_anything_does_not_reap(self):
+        """C10: only a `Successfully stopped task:` message reaps; a refusal leaves it running."""
+        self.fx.wind_down()
+        self.agent_flow(
+            call("TaskStop"),
+            stop_result(self.AGENT, message="No running task found"),
+        )
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertBlocks(proc, "wind-down-background-unreaped")
+
+    def test_c10_stop_of_an_id_without_a_launch_warns_instead_of_blocking(self):
+        """C10 decree 3: a stopped id with no launch proves the window missed the launch."""
+        self.fx.wind_down()
+        self.fx.write(
+            [
+                prompt(),
+                bash("python3 long.py"),
+                tool_result("Command running in background with ID: bg-1"),
+                call("TaskStop"),
+                stop_result("bg-9"),
+                say("片付けました"),
+            ]
+        )
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertWarnsFamily(proc, "wind-down-background-unreaped")
+        self.assertIn("窓外", warn_body(proc))
+
+    def test_c10_interim_notice_without_a_launch_warns_instead_of_blocking(self):
+        """C10 decree 3: an interim notice for an id whose launch fell outside the window warns."""
+        self.fx.wind_down()
+        self.fx.write([prompt(), queued_interim("bg-9"), say("片付けました")])
+        proc = run_hook(self.fx, "本日の作業をまとめました。" + TAIL)
+        self.assertWarnsFamily(proc, "wind-down-background-unreaped")
+        self.assertIn("窓外", warn_body(proc))
 
     def test_c10_launch_beyond_the_window_does_not_block(self):
         """Decree 3: the 2 MB cap is an upper bound, and an unobserved launch never blocks."""

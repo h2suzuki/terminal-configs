@@ -13,6 +13,7 @@ import unicodedata
 
 TURN_WINDOW_BYTES = 512 * 1024
 BACKGROUND_WINDOW_BYTES = 2 * 1024 * 1024
+STILL_RUNNING_NOTE = "background work of its own still running"
 LEDGER_MIN_EDITS = 3
 OPEN_TASK_REF_CAP = 16
 OPEN_TASK_REF_CHARS = 24
@@ -789,10 +790,66 @@ def _task_close(payload, scan, tasks):
     ]
 
 
+def _result_bodies(entry):
+    """entry の tool_result 本文 (文字列) を順に返す。"""
+    message = entry.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    for block in content if isinstance(content, list) else []:
+        if not isinstance(block, dict) or block.get("type") != "tool_result":
+            continue
+        body = block.get("content")
+        if isinstance(body, list):  # subagent 起動は block 構造で返る
+            body = "".join(
+                part.get("text", "")
+                for part in body
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+        if isinstance(body, str):
+            yield body
+
+
+def _json_object(body):
+    try:
+        data = json.loads(body) if body.startswith("{") else None
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _launch_id(body):
+    # 起動行は本文の先頭に立つ。 途中に現れた同形の行は走査結果の写しで、起動ではない
+    launch = re.match(
+        r"(?:Command running in background with ID:"
+        r"|Workflow launched in background\. Task ID:"
+        r"|Monitor started \(task)\s*([\w-]+)",
+        body,
+    )
+    if launch:
+        return launch.group(1)
+    if body.startswith("Async agent launched successfully"):
+        agent = re.search(r"agentId:\s*([\w-]+)", body)
+        return agent.group(1) if agent else None
+    return None
+
+
+def _stopped_id(data):
+    message = data.get("message")
+    stopped = data.get("task_id")
+    if (
+        isinstance(message, str)
+        and message.startswith("Successfully stopped task:")
+        and isinstance(stopped, str)
+    ):
+        return stopped
+    return None
+
+
 def _background_sets(path):
+    """(最後の状態が走行中の id, 起動なしで通知/停止に現れた id, 窓が切れたか)。"""
     entries, truncated = _entries(path, BACKGROUND_WINDOW_BYTES)
-    launches = set()
-    notices = set()
+    launched = set()
+    named = set()
+    running = set()
     for entry in entries:
         text = _user_text(entry)
         # 現行 CLI は完了通知を queue-operation entry の content に置く
@@ -803,41 +860,28 @@ def _background_sets(path):
             r"<task-notification>(.*?)</task-notification>", text, flags=re.DOTALL
         ):
             # Monitor の進捗 event は同じ task-id を運ぶが stream は続いている
-            if "<event>" not in note:
-                # 停止通知は覆う id を全部並べる (1 通知 = 1 id とは限らない)
-                notices.update(re.findall(r"<task-id>([^<]+)</task-id>", note))
-        message = entry.get("message")
-        if not isinstance(message, dict):
-            continue
-        content = message.get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if not isinstance(block, dict) or block.get("type") != "tool_result":
+            if "<event>" in note:
                 continue
-            body = block.get("content")
-            if isinstance(body, list):  # subagent 起動は block 構造で返る
-                body = "".join(
-                    part.get("text", "")
-                    for part in body
-                    if isinstance(part, dict) and part.get("type") == "text"
-                )
-            if not isinstance(body, str):
-                continue
-            # 起動行は本文の先頭に立つ。 途中に現れた同形の行は走査結果の写しで、起動ではない
-            launch = re.match(
-                r"(?:Command running in background with ID:"
-                r"|Workflow launched in background\. Task ID:"
-                r"|Monitor started \(task)\s*([\w-]+)",
-                body,
-            )
-            if launch:
-                launches.add(launch.group(1))
-            elif body.startswith("Async agent launched successfully"):
-                agent = re.search(r"agentId:\s*([\w-]+)", body)
-                if agent:
-                    launches.add(agent.group(1))
-    return launches, notices, truncated
+            # 停止通知は覆う id を全部並べる (1 通知 = 1 id とは限らない)
+            ids = set(re.findall(r"<task-id>([^<]+)</task-id>", note))
+            named |= ids
+            # subagent の interim 通知は completed を名乗るが、裏の作業で再開しうる
+            if STILL_RUNNING_NOTE in note:
+                running |= ids
+            else:
+                running -= ids
+        for body in _result_bodies(entry):
+            data = _json_object(body)
+            resumed = data.get("resumedAgentId")  # SendMessage での再開は起動と同じ扱い
+            started = _launch_id(body) or (resumed if isinstance(resumed, str) else "")
+            stopped = _stopped_id(data)
+            if started:
+                launched.add(started)
+                running.add(started)
+            elif stopped:
+                named.add(stopped)
+                running.discard(stopped)
+    return running, named - launched, truncated
 
 
 def _background(payload, turn):
@@ -845,11 +889,10 @@ def _background(payload, turn):
     if not path:
         return [], []
     try:
-        launches, notices, truncated = _background_sets(path)
+        running, missing_launch, truncated = _background_sets(path)
     except OSError:
         return [], []
-    unreaped = sorted(launches - notices)
-    missing_launch = notices - launches
+    unreaped = sorted(running)
     if truncated or missing_launch:
         if unreaped:
             return [], [
