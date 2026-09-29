@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 
 HOOK = os.path.join(
@@ -66,6 +67,45 @@ class ModelGateTest(unittest.TestCase):
         """Claim 5: unreadable payloads never block."""
         self.assertSilent(run_hook("not json"))
         self.assertSilent(run_hook([1, 2]))
+
+    def test_definition_model_counts_as_a_choice(self):
+        """Claim 6: an agent whose definition names a model (not inherit) already chose one."""
+        with tempfile.TemporaryDirectory() as cwd:
+            agents = os.path.join(cwd, ".claude", "agents")
+            os.makedirs(agents)
+            for name, model_line in (
+                ("worker", "model: sonnet\n"),
+                ("heir", "model: inherit\n"),
+                ("bare", ""),
+            ):
+                with open(
+                    os.path.join(agents, f"{name}.md"), "w", encoding="utf-8"
+                ) as f:
+                    f.write(
+                        f"---\nname: {name}\ndescription: d\n{model_line}---\nbody\n"
+                    )
+            with self.subTest(agent="worker"):
+                self.assertSilent(
+                    run_hook({**spawn(prompt="x", subagent_type="worker"), "cwd": cwd})
+                )
+            for agent in ("heir", "bare", "unknown"):
+                with self.subTest(agent=agent):
+                    self.assertDenied(
+                        run_hook({**spawn(prompt="x", subagent_type=agent), "cwd": cwd})
+                    )
+
+
+class ImplementerDefinitionTest(unittest.TestCase):
+    def test_implementer_runs_sonnet_5_5_at_xhigh(self):
+        """The managed implementer agent pins Sonnet 5.5 and xhigh effort in its frontmatter."""
+        path = os.path.join(
+            os.path.dirname(HOOK), "..", "claude_managed-agents", "implementer.md"
+        )
+        with open(path, encoding="utf-8") as f:
+            front = f.read().split("---\n")[1].splitlines()
+        self.assertIn("name: implementer", front)
+        self.assertIn("model: claude-sonnet-5-5", front)
+        self.assertIn("effort: xhigh", front)
 
 
 if __name__ == "__main__":

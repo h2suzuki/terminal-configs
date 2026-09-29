@@ -13,7 +13,7 @@ Heuristic for "overuse candidate" (3 条件 AND, false-positive 抑制目的):
   - description が短い動詞句 (≤ DESC_WORD_THRESHOLD words) または
     DESC_PATTERN_RE (Read X / Check Y 等の lookup 動詞開始)
 
-subagent-gate skill (4 条件 a-d) を mechanical proxy で補助。 judgment は
+subagent-gate skill (5 条件 a-e) を mechanical proxy で補助。 judgment は
 LLM 側に残す。
 
 Exit:
@@ -114,9 +114,9 @@ def _run(payload: dict) -> int:
     sys.stderr.write(
         f"subagent-gate (warn): prompt 短い ({prompt_len}ch) + "
         f"subagent_type={st_display} で context overhead が payoff しない "
-        f"可能性があります。 subagent-gate skill の 4 条件 "
+        f"可能性があります。 subagent-gate skill の 5 条件 "
         f"(a) parallelizable / (b) large output / (c) 3+ query 探索 / "
-        f"(d) specialized agent のいずれが該当するか verbalize してから "
+        f"(d) specialized agent / (e) implementer での実装・テスト のいずれが該当するか verbalize してから "
         f"proceed してください。 該当しなければ直接実行 (CodeGraph / Read / Grep / Bash) "
         f"の方が cheap です。\n"
     )

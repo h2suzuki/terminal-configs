@@ -307,6 +307,7 @@ copy shared_skills/memory-routing/SKILL.md      /etc/claude-code/skills/memory-r
 copy shared_skills/sandbox-host-recovery/SKILL.md /etc/claude-code/skills/sandbox-host-recovery/SKILL.md
 merge_dir claude_managed-hooks/                  /etc/claude-code/hooks/
 merge_dir shared_hooks/                          /etc/claude-code/hooks/
+merge_dir claude_managed-agents/                 /etc/claude-code/.claude/agents/
 copy claude_managed-extensions.json             /etc/claude-code/managed-settings.d/extensions.json
 
 # Per-user template
