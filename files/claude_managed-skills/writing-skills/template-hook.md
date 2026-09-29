@@ -35,6 +35,8 @@ Claude Code hook の典型 patterns。 hook は **settings.json への entry 登
 
 matcher は tool 名 (e.g. `Bash`, `Edit`) / regex / 空 (全 tool match)。
 
+`UserPromptSubmit` と `Stop` の hook は settings に entry を足さず、 同じ scope の manifest (managed は `/etc/claude-code/hooks/<event>.hooks`、 user は `~/.claude/hooks/<event>.hooks`、 `<event>` は `user_prompt_submit` か `stop`) に 1 行 1 command で足す。 `claude_hook_bundle` がそれらを並列に走らせ、 additionalContext・systemMessage・exit 2 を 1 つにまとめて返すので、 1 turn に出る hook の記録が増えない。
+
 ## 2. Python hook script skeleton
 
 ```python
