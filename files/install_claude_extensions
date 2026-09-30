@@ -184,6 +184,9 @@ fi
 . $HOME/.nvm/nvm.sh
 
 
+# Registrations below are user-scope; the caller's repo may hold a sandbox's 0-byte .mcp.json mount point
+cd "$HOME" || exit 1
+
 # Fail fast: every claude call below parses $PWD/.mcp.json (claude requires a mcpServers record)
 if [ -f .mcp.json ] && ! python3 -c 'import json; assert isinstance(json.load(open(".mcp.json"))["mcpServers"], dict)'; then
     run "ls -l .mcp.json >&2"
