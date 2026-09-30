@@ -30,7 +30,7 @@ when_to_use: TRIGGER when an edit is logically complete, about to execute a dest
 
 permission のフォーマット: 「次に X するつもりです、 よろしいですか?」 など明示的に意思確認。
 
-例外: `tool-role-delegation` の「並列 subagent の編集の統合」で、 project の決まりに沿って行う push と merge は、 ユーザー指示 (2026-09-30「サブエージェント間で編集が衝突しそうなら、worktree + commit push merge pull で修正を統合すること」) で許可済みなので確認しない。 project が PR 経由の merge や保護ブランチを定めていれば、 直接の push で迂回しない。 force push とブランチの強制削除は例外に含めない。
+例外: `tool-role-delegation` の「並列 subagent の編集の統合」で、 project の決まりに沿って行う統合の git 操作は、 ユーザー指示 (2026-09-30) で許可済みなので確認しない。 project が merge 前の確認や保護ブランチを定めていれば、 それを通し、 迂回しない。 force push とブランチの強制削除は例外に含めない。
 
 ### Push silence
 

@@ -27,7 +27,7 @@ codegraph・investigator subagent・implementer subagent・Codex・Antigravity �
 - **調査の担い手 (2026-09-30 ユーザー依頼)**: 調査も Sonnet 5.5 xhigh の subagent (investigator) が既定。
 - **codegraph のツール選択**: `codegraph_explore` (自然言語 / symbol 群から関連 source)、`codegraph_search` (symbol の位置)、`codegraph_callers` / `codegraph_callees` / `codegraph_impact` (呼出元 / 呼出先 / 変更の波及)、`codegraph_node` / `codegraph_files` (個別 symbol / file)。intent に合うものを選ぶ。
 - **役割境界を守る**: 調査は investigator、実装は implementer、問い・仕様・指示・バグ出し・レビュー・結論と完了の認定は Claude。implementer の結果を Claude が書き直して取り込むのは「レビューの反映」の範囲に留め、実装のやり直しは implementer に戻す。
-- **並列 subagent の編集の統合 (2026-09-30 ユーザー指示「サブエージェント間で編集が衝突しそうなら、worktree + commit push merge pull で修正を統合すること」)**: 編集が衝突しそうな subagent には同じ checkout を共有させず、それぞれ `isolation: "worktree"` で隔離する。統合は commit を単位に行う。subagent が自分の worktree のブランチに commit し、親がレビューして統合先へ merge し、まだ動いている worktree には統合結果を取り込ませる。統合先のブランチ・push の要否と宛先・merge の方法 (直接か PR か)・ブランチ名は project の決まりに従い、決まりが読み取れなければユーザーに確認する。この環境の WorktreeCreate hook は worktree を `origin/HEAD` から切るので、基点に入れたい commit は先に共有しておく。
+- **並列 subagent の編集の統合 (2026-09-30 ユーザー指示)**: 編集が衝突しそうな subagent には同じ checkout を共有させず、それぞれ `isolation: "worktree"` で隔離する。統合は commit を単位に行う。subagent が自分の worktree のブランチに commit し、親がレビューして統合先へ merge し、まだ動いている worktree には統合結果を取り込ませる。統合の運用 (統合先のブランチ、共有と merge のやり方、ブランチ名) は project の決まりに従い、決まりが読み取れなければユーザーに確認する。この環境の WorktreeCreate hook は worktree を `origin/HEAD` から切るので、基点に入れたい commit は先に共有しておく。
 - **統治原則 (2026-08-21 ユーザー明示)**: 実装 token は本当に価値ある部分に使う。既に部品があるならそれを使い、部品の再構築はよほどの理由がある時にユーザー承認を得てから行う (承認なしの再構築は理由の良し悪しに関わらず禁止)。
 
 ## Output
