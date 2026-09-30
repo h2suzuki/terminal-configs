@@ -109,7 +109,7 @@ INTROSPECT_RE = re.compile(
 )
 # a shell argument that is a path to the lock, or a path literal inside inline code
 CONFIG_LOCK_WORD_RE = re.compile(r"(?:.*/)?config\.lock")
-CONFIG_LOCK_LITERAL_RE = re.compile(r"""['"](?:[^'"\s]*/)?config\.lock['"]""")
+CONFIG_LOCK_LITERAL_RE = re.compile(r"""['"]((?:[^'"\s]*/)?config\.lock)['"]""")
 # their first operand is a pattern or script, not a file being looked at
 PATTERN_FIRST = frozenset(
     {"grep", "egrep", "fgrep", "rg", "ag", "sed", "awk", "gawk", "perl"}
@@ -250,10 +250,29 @@ def _operands(command: str) -> list[str]:
     return words
 
 
-def _looked_at(word: str) -> str | None:
+def _under_cwd(path: str, cwd: object) -> bool:
+    """Whether a path lies in the tree the sandbox scans for .git dirs to mask: the session's cwd."""
+    if not isinstance(cwd, str) or not cwd:
+        return True
+    home = os.path.expanduser("~")
+    for prefix, base in (("~", home), ("$HOME", home), ("${HOME}", home)):
+        if path.startswith(prefix + "/"):
+            path = base + path[len(prefix) :]
+    for prefix in ("$PWD", "${PWD}"):
+        if path.startswith(prefix + "/"):
+            path = cwd + path[len(prefix) :]
+    if path.startswith("$"):
+        return False
+    full = os.path.normpath(os.path.join(cwd, path))
+    return full == cwd or full.startswith(cwd.rstrip("/") + "/")
+
+
+def _looked_at(word: str, cwd: object = None) -> str | None:
     """The covered file or sandbox internal one operand names, in any spelling of HOME."""
-    if CONFIG_LOCK_WORD_RE.fullmatch(word) or CONFIG_LOCK_LITERAL_RE.search(word):
-        return ".git/config.lock"
+    literal = CONFIG_LOCK_LITERAL_RE.search(word)
+    if CONFIG_LOCK_WORD_RE.fullmatch(word) or literal:
+        lock = literal.group(1) if literal else word
+        return ".git/config.lock" if _under_cwd(lock, cwd) else None
     if m := INTROSPECT_RE.search(word):
         return m.group(0)
     home = os.path.expanduser("~")
@@ -281,8 +300,10 @@ def _probe_target(payload: dict) -> str | None:
         words = _operands(command)
     else:
         words = [tool_input.get(k) for k in PATH_KEYS.get(str(tool), ())]
+    cwd = payload.get("cwd")
     return next(
-        (hit for w in words if isinstance(w, str) and (hit := _looked_at(w))), None
+        (hit for w in words if isinstance(w, str) and (hit := _looked_at(w, cwd))),
+        None,
     )
 
 
@@ -558,7 +579,10 @@ def _codex(payload: dict) -> int:
             _codex_output("PostToolUse", CODEX_LOCK_MSG)
         return 0
     if event == "PreToolUse" and not _codex_runs_on_host(command):
-        target = next((hit for w in _operands(command) if (hit := _looked_at(w))), None)
+        cwd = tool_input.get("workdir") or payload.get("cwd")
+        target = next(
+            (hit for w in _operands(command) if (hit := _looked_at(w, cwd))), None
+        )
         key = "codex-probe:" + hashlib.sha256(command.encode("utf-8")).hexdigest()
         if target and not _already_nudged(session_id, key):
             _mark_nudged(session_id, key)

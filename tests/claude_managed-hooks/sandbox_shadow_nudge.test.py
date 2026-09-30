@@ -47,6 +47,8 @@ Contract (each claim maps to one test):
   P4  a Bash call whose every command is excluded (so it leaves the sandbox), one that names no covered file,
       one that only mentions it as text (a grep pattern, a heredoc body), or one whose look is an
       operand of an excluded command (docker exec into another container) is silent
+  P5  with a cwd in the payload, a config.lock outside it (a scratch repo, a non-HOME variable
+      prefix) is silent, since the sandbox masks only repos under cwd; one under cwd still fires
   X1  --codex PreToolUse: a sandboxed look at a covered file (Codex `cmd` or `command`) gets
       masked-probe as context and is never denied; a combined call is sandboxed even when it
       starts with an excluded command, and only a standalone excluded call is host-bound
@@ -536,6 +538,43 @@ class SandboxShadowNudgeTest(unittest.TestCase):
                     [_user_prompt()], "Bash", {"command": command}, f"p4-{i}"
                 )
                 self.assertEqual(out, {})
+
+    def test_p5_config_lock_outside_cwd_is_silent(self):
+        def look(tool: str, tool_input: dict, session_id: str) -> dict:
+            payload = {
+                "session_id": session_id,
+                "transcript_path": _write_transcript(self.tmp.name, [_user_prompt()]),
+                "tool_name": tool,
+                "tool_input": tool_input,
+                "cwd": "/root/repo",
+            }
+            proc = run_hook(payload, self._env())
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            return json.loads(proc.stdout)["hookSpecificOutput"] if proc.stdout else {}
+
+        outside = (
+            ("Bash", {"command": "ls -l /tmp/scratch/r/.git/config.lock"}),
+            ("Bash", {"command": ': > "$d/r/.git/config.lock"'}),
+            (
+                "Bash",
+                {
+                    "command": "python3 -c \"import os; os.stat('/tmp/x/.git/config.lock')\""
+                },
+            ),
+            ("Read", {"file_path": "/tmp/x/.git/config.lock"}),
+        )
+        for i, (tool, tool_input) in enumerate(outside):
+            with self.subTest(tool_input=tool_input):
+                self.assertEqual(look(tool, tool_input, f"p5-out-{i}"), {})
+        inside = (
+            {"command": "ls .git/config.lock"},
+            {"command": "findmnt -T /root/repo/sub/.git/config.lock"},
+            {"command": "stat $PWD/.git/config.lock"},
+        )
+        for i, tool_input in enumerate(inside):
+            with self.subTest(tool_input=tool_input):
+                out = look("Bash", tool_input, f"p5-in-{i}")
+                self.assertIn("masked-probe", out["additionalContext"])
 
     def _codex(self, payload: dict) -> subprocess.CompletedProcess:
         proc = run_hook({"session_id": "codex", **payload}, self._env(), ("--codex",))
