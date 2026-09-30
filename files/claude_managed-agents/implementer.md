@@ -18,6 +18,7 @@ effort: xhigh
 ## 禁止事項
 
 - commit・push・ブランチ操作をしない (取り込みは親がレビュー後に行う)。
+- `git stash`・`git checkout -- <path>`・`git reset`・`git restore` など作業ツリーを戻す操作をしない。同じ checkout で親や他の agent が編集中のことがあり、一瞬でもその変更を消す。比較の基準が要るときは `git diff` か `git show HEAD:<path>` を使う。
 - 依頼にない設計変更・大きな作り直しをしない。
 - 失敗したテストや検査を、成功したように報告しない。
 
