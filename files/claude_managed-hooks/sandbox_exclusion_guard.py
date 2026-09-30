@@ -26,8 +26,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -52,8 +54,15 @@ SANDBOX_SYMPTOM = re.compile(
     r"Temporary failure in name resolution|\bEACCES\b|\bEPERM\b",
     re.IGNORECASE,
 )
-# git の config 書込失敗 — sandbox が .git/config.lock に被せた mask で起き、誰もロックを持っていない。
-CONFIG_LOCK_SYMPTOM = re.compile(r"could not lock config file", re.IGNORECASE)
+# git の config 書込失敗行 — 行頭で照合し、ソースや教訓の本文を読んだだけの出力には反応しない。
+CONFIG_LOCK_SYMPTOM = re.compile(
+    r"^(?:error|fatal): could not lock config file (.+): [^:\n]+$",
+    re.IGNORECASE | re.MULTILINE,
+)
+CONFIG_LOCK_LESSON = (
+    "/var/lib/claude-rag-memory/claude-lessons-learned/project/"
+    "github.com-h2suzuki-scorer/feedback_sandbox_mask_leaks_git_config_lock.md"
+)
 ASSIGNMENT = re.compile(r"^\w+=\S*$")
 # 照合前に剥がされない wrapper — 内側が除外コマンドでも sandbox に落ちる。
 # timeout / time / nice / nohup / stdbuf は剥がされる側 (実測) なので入れない。 env は option や代入付きの時だけ扱う。
@@ -195,6 +204,35 @@ def _indirect_mentions(cmd: str, patterns: list[str]) -> list[str]:
     return found
 
 
+def _lock_path(config: str, cwd: object) -> str:
+    """The lock file git names in its error, resolved against the command's directory."""
+    base = cwd if isinstance(cwd, str) else ""
+    return os.path.normpath(os.path.join(base, config)) + ".lock"
+
+
+def _host_lock_message(lock: str) -> str:
+    """Answer a config-lock failure outside the sandbox with what the host really holds."""
+    try:
+        st = os.lstat(lock)
+    except OSError:
+        return (
+            f"sandbox の外で git が `{lock}` のロックに失敗したが、今は host に無い。"
+            "そのまま再実行する。"
+        )
+    mtime = time.strftime("%H:%M:%S", time.localtime(st.st_mtime))
+    # 文面は意図的に冗長: 確認済みの事実と、ユーザーに尋ねず片付ける手順を両方書き下すため trim しない
+    return (
+        f"sandbox の外で走ったコマンドが `{lock}` のロックに失敗した。これは sandbox の覆いではなく、"
+        f"host に実在するファイルである (この hook が host で確認: {st.st_size} byte、"
+        f"mode {stat.S_IMODE(st.st_mode):o}、mtime {mtime})。"
+        " `fuser` / `lsof` と、同じ repo で作業中の隣 session の有無で保持者を確かめる。"
+        "保持者が居なければ残骸なので、削除してよいかをユーザーに尋ねずに自分で削除し、"
+        "sandbox 内の Bash を挟まずに失敗したコマンドをすぐ再実行する。"
+        "作業中の session が居るなら、その session に確かめる。"
+        f"\n教訓: {CONFIG_LOCK_LESSON}"
+    )
+
+
 def _handle_failure(payload: dict, patterns: list[str], cmd: str) -> int:
     """Answer a sandbox-looking Bash result, failed or masked by `; echo` / a pipe, before misattribution."""
     response = payload.get("tool_response") or {}
@@ -209,11 +247,14 @@ def _handle_failure(payload: dict, patterns: list[str], cmd: str) -> int:
     )
     if isinstance(payload.get("error"), str):
         output += "\n" + payload["error"]
-    lock = bool(CONFIG_LOCK_SYMPTOM.search(output))
+    lock = CONFIG_LOCK_SYMPTOM.search(output)
     if not lock and not SANDBOX_SYMPTOM.search(output):
         return 0
     touched = [p for p in credential_paths() if p in cmd or p in output]
-    if lock:
+    if lock and host_run(cmd, patterns):
+        # a real failure on the host recurs across turns, so it is answered every time
+        message = _host_lock_message(_lock_path(lock.group(1), payload.get("cwd")))
+    elif lock:
         if not claim_once(payload, "failure-config-lock"):
             return 0
         # 文面は意図的に冗長: 「ロックされている」という誤読を、事実と次の行動で置き換えるため trim しない
@@ -226,6 +267,7 @@ def _handle_failure(payload: dict, patterns: list[str], cmd: str) -> int:
             "sandbox の外で走らせる)。 それでも同じエラーが出たら、host に `.git/config.lock` が実在します。"
             " その場合も、隣の session が居ないか、その repo で作業していないなら残骸なので、"
             "自分で消して続けます。 作業中の session が居るなら、その session に確かめてから扱います。"
+            f"\n教訓: {CONFIG_LOCK_LESSON}"
         )
     elif touched:
         if not claim_once(payload, "failure-credential"):
@@ -639,7 +681,7 @@ class GateTest(unittest.TestCase):
             },
             {
                 "hook_event_name": "PostToolUseFailure",
-                "tool_input": {"command": "git worktree add ../w b"},
+                "tool_input": {"command": "cd w && git worktree add ../w b"},
                 "error": error,
             },
         )
@@ -651,7 +693,62 @@ class GateTest(unittest.TestCase):
                 self.assertIn("ロックしている証拠になりません", context)
                 self.assertIn("sandbox の外で走らせる", context)
                 self.assertIn("隣の session", context)
+                self.assertIn(CONFIG_LOCK_LESSON, context)
                 self.assertEqual(self._emit_for(payload), (0, "", ""))
+
+    def test_reading_the_error_text_does_not_spend_the_lock_answer(self):
+        quoted = {
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "cat hook.py"},
+            "tool_response": {
+                "stdout": '    error = "error: could not lock config file .git/config: File exists"\n'
+                "- `could not lock config file` だけでは証拠にならない"
+            },
+            "session_id": "quoted",
+        }
+        self.assertEqual(self._emit_for(quoted), (0, "", ""))
+        real = {
+            **quoted,
+            "tool_input": {"command": "git config x.y 1; echo rc=$?"},
+            "tool_response": {
+                "stdout": "error: could not lock config file .git/config: File exists"
+            },
+        }
+        self.assertIn("ロックしている証拠になりません", self._emit_for(real)[1])
+
+    def _repo_with_lock(self, mode: int, content: bytes = b"") -> tuple[str, str]:
+        root = tempfile.mkdtemp(dir=self.state_dir.name)
+        os.makedirs(os.path.join(root, ".git"))
+        os.makedirs(os.path.join(root, "sub"))
+        lock = os.path.join(root, ".git", "config.lock")
+        with open(lock, "wb") as f:
+            f.write(content)
+        os.chmod(lock, mode)
+        return root, lock
+
+    def _host_lock_failure(self, root: str, session_id: str) -> str:
+        payload = {
+            "hook_event_name": "PostToolUseFailure",
+            "tool_name": "Bash",
+            "tool_input": {"command": "git worktree add ../w b"},
+            "error": "error: could not lock config file .git/config: File exists",
+            "cwd": root,
+            "session_id": session_id,
+        }
+        result, stdout, stderr = self._emit_for(payload)
+        self.assertEqual((result, stderr), (0, ""))
+        return json.loads(stdout)["hookSpecificOutput"]["additionalContext"]
+
+    def test_host_run_lock_failure_reports_the_real_file_every_time(self):
+        root, lock = self._repo_with_lock(0o644, b"[core]\n")
+        for _ in range(2):
+            context = self._host_lock_failure(root, "host-real")
+            self.assertIn("host に実在する", context)
+            self.assertIn("mode 644", context)
+            self.assertIn("ユーザーに尋ねずに自分で削除", context)
+            self.assertIn(CONFIG_LOCK_LESSON, context)
+        self.assertTrue(os.path.exists(lock))
 
     def test_clean_zero_exit_result_is_silent(self):
         payload = {
