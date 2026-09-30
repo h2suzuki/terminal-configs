@@ -36,6 +36,7 @@ Contract (each claim maps to one test):
   D1  `config.lock` with a question to the user about removing it -> config-lock-defer fires with
       the lessons-learned path, and Stop blocks once
   D2  a past-tense account of having asked, or removal done without asking -> config-lock-defer silent
+  D3  a question about something else, outside the sentence naming config.lock -> silent
   P1  a sandboxed tool call that looks at a covered file or the sandbox itself (Bash naming
       config.lock in any form, /proc/self/mountinfo; Read of a credential path) gets masked-probe
       and still runs
@@ -417,6 +418,20 @@ class SandboxShadowNudgeTest(unittest.TestCase):
             with self.subTest(text=text):
                 proc = self._stop(
                     [_user_prompt(), _assistant_text(text)], session_id=f"d2-{i}"
+                )
+                self.assertEqual((proc.returncode, proc.stderr), (0, ""))
+
+    def test_d3_an_unrelated_question_is_silent(self):
+        for i, text in enumerate(
+            (
+                "config.lock 対策を 3 commit した。deploy の方法をご判断ください。\n"
+                "🙋 [質問] 外の端末で deploy しますか?",
+                "config.lock の件は片付いた。\n\n残りは 1 件です。\nこの branch を削除しますか?",
+            )
+        ):
+            with self.subTest(text=text):
+                proc = self._stop(
+                    [_user_prompt(), _assistant_text(text)], session_id=f"d3-{i}"
                 )
                 self.assertEqual((proc.returncode, proc.stderr), (0, ""))
 
