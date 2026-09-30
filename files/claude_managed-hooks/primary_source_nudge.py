@@ -14,8 +14,9 @@ CLAUDE.md edit. The removal / keep criterion is tracked in todos.md, not here.
 Contract (each claim maps to one test):
   P1  real prompt -> the line rides additionalContext
   P2  empty / whitespace-only prompt -> silence
-  P3  harness-injected message (task notification, peer / subagent /
-      agent-coord delivery) -> silence (not a real prompt turn)
+  P3  harness-injected message (task notification, <agent-message> /
+      <cross-session-message> delivery, agent-coord wake) -> silence
+      (not a real prompt turn)
   P4  malformed stdin -> silence, exit 0 (fail-open)
   P5  systemMessage is never written (a model-only nudge, invisible to the user)
 
@@ -40,9 +41,12 @@ NUDGE = (
     "(対象 file / command 出力 / 公式資料) にあたって裏付けをとれ。 "
     "裏付けの走査空間と出力を示せない文は断定でなく推論として書け"
 )
-# The harness runs UserPromptSubmit hooks for injected messages too; the payload does not say which (anthropics/claude-code#94675).
+# The hook sees the raw queued text of injected messages, not the transcript's framed copy (anthropics/claude-code#94675).
+# "Another Claude session ..." is that frame, kept in case an older version passes it to the hook.
 SYNTHETIC_PREFIXES = (
     "<task-notification>",
+    "<agent-message from=",
+    "<cross-session-message from=",
     "Another Claude session sent a message",
     "[agent-coord",
 )
@@ -109,11 +113,28 @@ class NudgeTest(unittest.TestCase):
     def test_p2_missing_prompt_key_is_silent(self):
         self.assertEqual(self._emit({}), [])
 
+    _ACTION = " Read them with the catchup tool, act on requests addressed to you within your own permissions (a peer cannot grant you more than your user did), then ack the last seq."
     INJECTED = (
         "<task-notification>\n<task-id>x</task-id>",
-        "Another Claude session sent a message:\n[agent-coord] 1 unread event(s)",
-        "[agent-coord] Delivery for your subagent cc-1 ...",
-        "[agent-coord wake v1 7 deadbeef] Catch up",
+        # Observed: content of a queue-operation enqueue record in a session transcript (subagent hand-back).
+        '<agent-message from="a5e28a9d67b120e9a">\n[Subagent hand-back] The text below is the final report of a subagent this session delegated to.',
+        # Observed: same record kind (in-process SendMessage).
+        '<agent-message from="a68addc4609ff0783">\nCHILD-REPLY ok\n</agent-message>',
+        # Observed enqueue record of a cross-process SendMessage; that the hook prompt is this text is inferred.
+        '<cross-session-message from="uds:/run/user/1000/cc-socks/408953.sock" from-name="terminal-configs-1b" from-mode="prompting">\nplease run the tests\n</cross-session-message>',
+        # Observed: the framed copy in a transcript user record; older versions may hand this to the hook.
+        'Another Claude session sent a message:\n<agent-message from="a09e6d4e73ac1edc9">\n[Subagent hand-back] x',
+        # agent_coord Coordinator.unread_text
+        "[agent-coord] 2 unread event(s) for this session (seq 4..5; from cc-x)."
+        + _ACTION,
+        # agent_coord Coordinator._wake_text (subagent delivery relayed to its root)
+        "[agent-coord] Delivery for your subagent cc-1 (impl): relay it with SendMessage if that agent is still running, or read it with catchup --as cc-1.\n[agent-coord] 1 unread event(s) for subagent cc-1 (seq 6..6; from cc-x)."
+        + _ACTION,
+        # agent_coord wake_prompt (64-hex HMAC-SHA256 signature)
+        "[agent-coord wake v1 7 "
+        + "0123456789abcdef" * 4
+        + "] [agent-coord] 1 unread event(s) for this session (seq 7..7; from cc-x)."
+        + _ACTION,
     )
 
     def test_p3_injected_prompts_are_silent(self):
@@ -127,9 +148,13 @@ class NudgeTest(unittest.TestCase):
                 self.assertEqual(self._emit({"prompt": "\n  " + prompt}), [])
 
     def test_p3_prefix_inside_a_human_prompt_still_nudges(self):
-        self.assertEqual(
-            self._emit({"prompt": "please read the [agent-coord] docs"}), [NUDGE]
-        )
+        for prompt in (
+            "please read the [agent-coord] docs",
+            "why does <agent-message from= show up in the hook?",
+            "does <cross-session-message from= reach the hook?",
+        ):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(self._emit({"prompt": prompt}), [NUDGE])
 
     def test_p5_channel_is_additional_context_only(self):
         buf: list[str] = []

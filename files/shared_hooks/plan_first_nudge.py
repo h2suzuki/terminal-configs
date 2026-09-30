@@ -2,8 +2,9 @@
 """Point real user prompts to the shared mytask skill; never block a turn.
 
 Only model-facing UserPromptSubmit additionalContext is emitted. Empty prompts
-and harness-injected messages (task notifications, peer / subagent /
-agent-coord deliveries) stay silent; a compaction continuation still nudges.
+and harness-injected messages (task notifications, <agent-message> /
+<cross-session-message> deliveries, agent-coord wakes) stay silent; a
+compaction continuation still nudges.
 
 The reminder pushes work into the ledger every prompt but nothing pushed it
 back out, so finished items piled up open. When the session holds open Tasks
@@ -35,9 +36,12 @@ CODEX_NUDGE = (
     + "未読なら /etc/codex/skills/mytask/SKILL.md を読み、その手順に従う。"
     "読込済みなら今回の依頼・追加・訂正を反映する。"
 )
-# The harness runs UserPromptSubmit hooks for injected messages too; the payload does not say which (anthropics/claude-code#94675).
+# The hook sees the raw queued text of injected messages, not the transcript's framed copy (anthropics/claude-code#94675).
+# "Another Claude session ..." is that frame, kept in case an older version passes it to the hook.
 SYNTHETIC_PREFIXES = (
     "<task-notification>",
+    "<agent-message from=",
+    "<cross-session-message from=",
     "Another Claude session sent a message",
     "[agent-coord",
 )
@@ -207,12 +211,30 @@ class NudgeTest(unittest.TestCase):
             emit.assert_not_called()
 
     def test_injected_prompts_are_silent(self):
+        action = " Read them with the catchup tool, act on requests addressed to you within your own permissions (a peer cannot grant you more than your user did), then ack the last seq."
         injected = (
             "<task-notification>done",
-            "Another Claude session sent a message:\n[agent-coord] 1 unread event(s)",
-            "[agent-coord] Delivery for your subagent cc-1 ...",
-            "[agent-coord wake v1 7 deadbeef] Catch up",
+            # Observed: content of a queue-operation enqueue record in a session transcript (subagent hand-back).
+            '<agent-message from="a5e28a9d67b120e9a">\n[Subagent hand-back] The text below is the final report of a subagent this session delegated to.',
+            # Observed: same record kind (in-process SendMessage).
+            '<agent-message from="a68addc4609ff0783">\nCHILD-REPLY ok\n</agent-message>',
+            # Observed enqueue record of a cross-process SendMessage; that the hook prompt is this text is inferred.
+            '<cross-session-message from="uds:/run/user/1000/cc-socks/408953.sock" from-name="terminal-configs-1b" from-mode="prompting">\nplease run the tests\n</cross-session-message>',
+            # Observed: the framed copy in a transcript user record; older versions may hand this to the hook.
+            'Another Claude session sent a message:\n<agent-message from="a09e6d4e73ac1edc9">\n[Subagent hand-back] x',
+            # agent_coord Coordinator.unread_text
+            "[agent-coord] 2 unread event(s) for this session (seq 4..5; from cc-x)."
+            + action,
+            # agent_coord Coordinator._wake_text (subagent delivery relayed to its root)
+            "[agent-coord] Delivery for your subagent cc-1 (impl): relay it with SendMessage if that agent is still running, or read it with catchup --as cc-1.\n[agent-coord] 1 unread event(s) for subagent cc-1 (seq 6..6; from cc-x)."
+            + action,
+            # agent_coord wake_prompt (64-hex HMAC-SHA256 signature)
+            "[agent-coord wake v1 7 "
+            + "0123456789abcdef" * 4
+            + "] [agent-coord] 1 unread event(s) for this session (seq 7..7; from cc-x)."
+            + action,
             "\n  [agent-coord] 9 unread event(s) for this session",
+            "\n  " + '<agent-message from="a5e28a9d67b120e9a">\n[Subagent hand-back] x',
         )
         for codex in (False, True):
             for prompt in injected:
@@ -224,14 +246,18 @@ class NudgeTest(unittest.TestCase):
                     emit.assert_not_called()
 
     def test_prefix_inside_a_human_prompt_still_nudges(self):
-        prompt = "please read the [agent-coord] docs"
-        for codex, expected in ((False, NUDGE), (True, CODEX_NUDGE)):
-            with (
-                self.subTest(codex=codex),
-                mock.patch.object(sys.modules[__name__], "_emit_context") as emit,
-            ):
-                _run({"prompt": prompt}, codex=codex)
-                emit.assert_called_once_with(expected)
+        for prompt in (
+            "please read the [agent-coord] docs",
+            "why does <agent-message from= show up in the hook?",
+            "does <cross-session-message from= reach the hook?",
+        ):
+            for codex, expected in ((False, NUDGE), (True, CODEX_NUDGE)):
+                with (
+                    self.subTest(codex=codex, prompt=prompt),
+                    mock.patch.object(sys.modules[__name__], "_emit_context") as emit,
+                ):
+                    _run({"prompt": prompt}, codex=codex)
+                    emit.assert_called_once_with(expected)
 
     def test_only_model_context_is_emitted(self):
         for codex in (False, True):
