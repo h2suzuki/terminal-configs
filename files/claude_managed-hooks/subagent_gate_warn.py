@@ -9,7 +9,8 @@ result-integration + token overhead. Always exits 0
 Heuristic for "overuse candidate" (3 条件 AND, false-positive 抑制目的):
   - prompt < OVERUSE_PROMPT_THRESHOLD (200 chars) AND
   - subagent_type が general-purpose / 未指定 / empty (specialized domain
-    agent は skill 条件 (d) を自動的に満たすので除外) AND
+    agent と managed agent の investigator / implementer は条件 (d) / (c) / (e)
+    を自動的に満たすので除外) AND
   - description が短い動詞句 (≤ DESC_WORD_THRESHOLD words) または
     DESC_PATTERN_RE (Read X / Check Y 等の lookup 動詞開始)
 
@@ -34,9 +35,11 @@ import sys
 OVERUSE_PROMPT_THRESHOLD = 200  # chars
 DESC_WORD_THRESHOLD = 3  # description が "Read foo.py" 程度 (1-3 words) なら短い
 
-# specialized 系 subagent_type は skill 条件 (d) を自動的に満たすので除外。
+# specialized 系と managed agent (investigator=(c)、 implementer=(e)) は条件を自動的に満たすので除外。
 # general-purpose / empty / 不明 のみが warn 対象。
 SPECIALIZED_AGENT_TYPES = {
+    "investigator",
+    "implementer",
     "explore",
     "code-reviewer",
     "security-review",
@@ -115,7 +118,7 @@ def _run(payload: dict) -> int:
         f"subagent-gate (warn): prompt 短い ({prompt_len}ch) + "
         f"subagent_type={st_display} で context overhead が payoff しない "
         f"可能性があります。 subagent-gate skill の 5 条件 "
-        f"(a) parallelizable / (b) large output / (c) 3+ query 探索 / "
+        f"(a) parallelizable / (b) large output / (c) 3+ query 探索 (investigator agent) / "
         f"(d) specialized agent / (e) implementer での実装・テスト のいずれが該当するか verbalize してから "
         f"proceed してください。 該当しなければ直接実行 (CodeGraph / Read / Grep / Bash) "
         f"の方が cheap です。\n"

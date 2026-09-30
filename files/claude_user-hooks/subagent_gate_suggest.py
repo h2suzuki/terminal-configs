@@ -3,10 +3,10 @@
 
 subagent-friendly pattern 検出時に hookSpecificOutput.additionalContext で
 advisory を出す。 does NOT decide for the LLM — option-space を surface する
-だけで、 4 条件 (a-d) の判定は LLM が行う。
+だけで、 5 条件 (a-e) の判定は LLM が行う。
 
 Patterns: compound 形のみ requiring (false positive 抑制目的)。
-subagent-gate skill (4 条件 a-d) の mechanical proxy。
+subagent-gate skill (5 条件 a-e) の mechanical proxy。
 
 Exit:
   0: 常に exit 0 (fail-open)。 detect 時のみ stdout に JSON 出力、 他は silent。
@@ -68,11 +68,12 @@ def _emit_advisory(matched: str) -> None:
     # context の冗長性は trim 抑止のため意図的に残す。
     context = (
         f"subagent-gate (suggest): user 要求に 「{matched}」 を検出しました。 "
-        f"subagent-gate skill 4 条件のうち (b) large output / "
+        f"subagent-gate skill 5 条件 (a-e) のうち (b) large output / "
         f"(c) 3+ query 探索 / (a) 並列実行 のいずれかに該当する可能性が "
         f"あります。 main で直接 Read / Grep を連発するよりも、 Agent tool "
-        f"で subagent (Explore / general-purpose) に delegate して結論だけ "
-        f"受け取る選択肢を verbalize してから proceed してください。 "
+        f'で `investigator` agent (`subagent_type: "investigator"`、 Sonnet 5.5、 '
+        f"`model` 指定不要) に delegate して結論だけ受け取る選択肢を "
+        f"verbalize してから proceed してください。 "
         f"単一 file / 単一 query で完結するなら subagent は不要です。"
     )
     payload = {

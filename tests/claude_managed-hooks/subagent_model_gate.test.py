@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -63,6 +64,14 @@ class ModelGateTest(unittest.TestCase):
         """Claim 4: only Task / Agent spawns are gated."""
         self.assertSilent(run_hook({"tool_name": "Bash", "tool_input": {}}))
 
+    def test_denial_names_both_managed_agents(self):
+        """Claim 1 corollary: the refusal points to investigator (investigation) and implementer (implementation), neither needing `model`."""
+        reason = json.loads(run_hook(spawn(prompt="x")).stdout)["hookSpecificOutput"][
+            "permissionDecisionReason"
+        ]
+        self.assertIn('`subagent_type: "investigator"`', reason)
+        self.assertIn('`subagent_type: "implementer"`', reason)
+
     def test_garbage_input_fails_open(self):
         """Claim 5: unreadable payloads never block."""
         self.assertSilent(run_hook("not json"))
@@ -106,6 +115,37 @@ class ImplementerDefinitionTest(unittest.TestCase):
         self.assertIn("name: implementer", front)
         self.assertIn("model: claude-sonnet-5-5", front)
         self.assertIn("effort: xhigh", front)
+
+
+class InvestigatorDefinitionTest(unittest.TestCase):
+    PATH = os.path.join(
+        os.path.dirname(HOOK), "..", "claude_managed-agents", "investigator.md"
+    )
+
+    def test_investigator_runs_sonnet_5_5_at_xhigh_and_cannot_edit(self):
+        """The managed investigator agent pins Sonnet 5.5 and xhigh effort, and denies the file-editing tools."""
+        with open(self.PATH, encoding="utf-8") as f:
+            front = f.read().split("---\n")[1].splitlines()
+        self.assertIn("name: investigator", front)
+        self.assertIn("model: claude-sonnet-5-5", front)
+        self.assertIn("effort: xhigh", front)
+        (denied,) = [line for line in front if line.startswith("disallowedTools:")]
+        for tool in ("Edit", "Write", "NotebookEdit"):
+            with self.subTest(tool=tool):
+                self.assertIn(
+                    tool, [t.strip() for t in denied.split(":", 1)[1].split(",")]
+                )
+
+    def test_investigator_spawn_needs_no_model(self):
+        """The gate reads the definition's pinned model, so the real investigator.md lets a spawn omit `model`."""
+        with tempfile.TemporaryDirectory() as cwd:
+            agents = os.path.join(cwd, ".claude", "agents")
+            os.makedirs(agents)
+            shutil.copy(self.PATH, agents)
+            proc = run_hook(
+                {**spawn(prompt="x", subagent_type="investigator"), "cwd": cwd}
+            )
+        self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
 
 
 if __name__ == "__main__":
