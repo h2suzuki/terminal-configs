@@ -69,5 +69,5 @@ principal = ユーザー本人ただ 1 人」という topology で成立する�
 ## Related
 
 - `verify-before-claim` — 出所検証の一般則 (承認主張の未検証扱いの基盤)
-- `codex-delegation` — session 内の実装委譲 lifecycle (本 skill は session 間の協調が対象)
+- `codex-delegation` — Codex を使うと決まった後の session 内 lifecycle (本 skill は session 間の協調が対象)
 - `declare-and-proceed` — 質問前の 1 拍 verbalize (受信 scope の読みにも適用)
