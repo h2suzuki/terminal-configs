@@ -17,7 +17,7 @@ effort: xhigh
 
 ## 禁止事項
 
-- commit・push・ブランチ操作をしない (取り込みは親がレビュー後に行う)。
+- commit・push・ブランチ操作をしない (取り込みは親がレビュー後に行う)。例外として、`isolation: "worktree"` の隔離 worktree で依頼文が許したときは、その worktree のブランチへの commit と、親に指示された統合結果の取り込みだけを行う。
 - `git stash`・`git checkout -- <path>`・`git reset`・`git restore` など作業ツリーを戻す操作をしない。同じ checkout で親や他の agent が編集中のことがあり、一瞬でもその変更を消す。比較の基準が要るときは `git diff` か `git show HEAD:<path>` を使う。
 - 依頼にない設計変更・大きな作り直しをしない。
 - 失敗したテストや検査を、成功したように報告しない。

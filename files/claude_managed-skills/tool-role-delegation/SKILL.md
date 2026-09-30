@@ -13,7 +13,7 @@ codegraph・investigator subagent・implementer subagent・Codex・Antigravity �
 1. **検索は codegraph を優先**: コード探索は codegraph を Grep / Read より先に使う。既知の symbol やファイルを1〜2回の問い合わせで確かめるだけなら Claude が直接行う。
 2. **調査は investigator に任せる (既定)**: 複数ファイルや複数の情報源にまたがる調査、不具合の原因の追跡、使用箇所の洗い出し、公式ドキュメント・upstream issue・配備状況の確認は `subagent_type: "investigator"` で起動する。定義で Sonnet 5.5・effort xhigh・編集不可に固定しているので `model` は渡さない。問いと調べる範囲は Claude が書き、返った所見は根拠の箇所を自分で開いて確かめてから結論に使う。
 3. **Claude が仕様・指示を書く**: 何を作るか・どう直すか・受入基準を Claude が明文化する。依頼文は目的・触ってよい範囲・完了条件・禁止事項 (commit しない等) を含める。
-4. **実装とテストは implementer に任せる (既定)**: 仕様が決まったコード変更、テストの作成と実行、lint・型検査の指摘の修正は `subagent_type: "implementer"` で起動する。定義で Sonnet 5.5・effort xhigh に固定しているので `model` は渡さない (渡すと定義の model を上書きする)。数行の自明な修正や文書だけの編集は Claude が直接行ってよい。独立した部分は複数の implementer を並列に起動し、同じファイルに触れるなら worktree で隔離する。
+4. **実装とテストは implementer に任せる (既定)**: 仕様が決まったコード変更、テストの作成と実行、lint・型検査の指摘の修正は `subagent_type: "implementer"` で起動する。定義で Sonnet 5.5・effort xhigh に固定しているので `model` は渡さない (渡すと定義の model を上書きする)。数行の自明な修正や文書だけの編集は Claude が直接行ってよい。独立した部分は複数の implementer を並列に起動する。subagent 同士の編集が衝突しそうなら、Rules の「並列 subagent の編集の統合」に従って worktree で隔離し、commit・push・merge・pull で統合する。
 5. **Claude がレビュー**: implementer が返した差分を敵対的 / 受け入れレビューし、バグ・仕様逸脱・副作用を検査する。テスト結果は報告を鵜呑みにせず、ログか再実行で確かめる。修正は依頼文に所見を書いて implementer に戻すのが既定。回帰レビューは opus subagent (依頼文のみ渡す・effort 高・実装と別 agent) を milestone (機能完成 / test 成功 / commit・PR 形成 / merge 前) で回し、毎 edit 後には回さない。実装・受け入れ・検証設計・認定を同一 agent が兼務しない (兼務は多巡 loop の再発条件)。
 6. **高リスク変更は独立レビューを足す**: auth・認可・data-loss・migration・retry・idempotency・race・rollback・cache 整合性に触れる変更は、規模を問わず opus subagent の独立レビューを追加する。クロスモデルレビューが有益だと考えたら、ユーザーに提案してよい (実行はユーザーが求めた時だけ)。
 7. **クロスモデルレビューはユーザーが求めた時だけ**: Codex と Antigravity は既定では使わない。求められたら次のどちらかで行う。
@@ -27,6 +27,7 @@ codegraph・investigator subagent・implementer subagent・Codex・Antigravity �
 - **調査の担い手 (2026-09-30 ユーザー依頼)**: 調査も Sonnet 5.5 xhigh の subagent (investigator) が既定。
 - **codegraph のツール選択**: `codegraph_explore` (自然言語 / symbol 群から関連 source)、`codegraph_search` (symbol の位置)、`codegraph_callers` / `codegraph_callees` / `codegraph_impact` (呼出元 / 呼出先 / 変更の波及)、`codegraph_node` / `codegraph_files` (個別 symbol / file)。intent に合うものを選ぶ。
 - **役割境界を守る**: 調査は investigator、実装は implementer、問い・仕様・指示・バグ出し・レビュー・結論と完了の認定は Claude。implementer の結果を Claude が書き直して取り込むのは「レビューの反映」の範囲に留め、実装のやり直しは implementer に戻す。
+- **並列 subagent の編集の統合 (2026-09-30 ユーザー指示「サブエージェント間で編集が衝突しそうなら、worktree + commit push merge pull で修正を統合すること」)**: 編集が衝突しそうな subagent には同じ checkout を共有させず、それぞれ `isolation: "worktree"` で隔離する。統合は commit を単位に行う。subagent が自分の worktree のブランチに commit し、親がレビューして統合先へ merge し、まだ動いている worktree には統合結果を取り込ませる。統合先のブランチ・push の要否と宛先・merge の方法 (直接か PR か)・ブランチ名は project の決まりに従い、決まりが読み取れなければユーザーに確認する。この環境の WorktreeCreate hook は worktree を `origin/HEAD` から切るので、基点に入れたい commit は先に共有しておく。
 - **統治原則 (2026-08-21 ユーザー明示)**: 実装 token は本当に価値ある部分に使う。既に部品があるならそれを使い、部品の再構築はよほどの理由がある時にユーザー承認を得てから行う (承認なしの再構築は理由の良し悪しに関わらず禁止)。
 
 ## Output
