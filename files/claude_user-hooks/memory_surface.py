@@ -863,11 +863,23 @@ def _counter_path(payload: dict) -> str | None:
     return os.path.join(cache, "claude-turn-counter", session_id + ".turns")
 
 
+# The harness runs UserPromptSubmit hooks for injected messages too; the payload does not say which (anthropics/claude-code#94675).
+SYNTHETIC_PROMPT_PREFIXES = (
+    "<task-notification>",
+    "This session is being continued",
+    "Another Claude session sent a message",
+    "[agent-coord",
+)
+
+
+def _is_synthetic_prompt(prompt: object) -> bool:
+    return isinstance(prompt, str) and prompt.lstrip().startswith(
+        SYNTHETIC_PROMPT_PREFIXES
+    )
+
+
 def _turn_marker(payload: dict) -> str | None:
-    # Skip synthetic re-entry prompts: a dynamic-workflow completion injects a
-    # <task-notification> through the prompt path, which is not a real turn.
-    prompt = payload.get("prompt")
-    if isinstance(prompt, str) and prompt.lstrip().startswith("<task-notification>"):
+    if _is_synthetic_prompt(payload.get("prompt")):
         return None
     # Read-only view of Stop-owned counter: file holds prev turn's (count, last-stop), so starting=count+1, idle gap=now-last-stop.
     # We never write — Stop owns count + last-stop epoch.
@@ -1015,10 +1027,7 @@ def _memory_surface(payload: dict, model: str | None = None) -> str | None:
     prompt = payload.get("prompt") or ""
     if not isinstance(prompt, str) or not prompt.strip():
         return None
-    # Skip synthetic re-entry prompts (task-notification / compaction continuation).
-    if prompt.lstrip().startswith(
-        ("<task-notification>", "This session is being continued")
-    ):
+    if _is_synthetic_prompt(prompt):
         return None
     session_id = payload.get("session_id") or ""
     cwd = payload.get("cwd") or os.getcwd()
@@ -1163,10 +1172,7 @@ def _concern_inject(payload: dict, model: str | None = None) -> str | None:
     prompt = payload.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         return None
-    # Skip synthetic re-entry prompts (task-notification / compaction continuation).
-    if prompt.lstrip().startswith(
-        ("<task-notification>", "This session is being continued")
-    ):
+    if _is_synthetic_prompt(prompt):
         return None
     hits = []
     if any(r.search(prompt) for r in _CONCERN_RES):
@@ -1217,6 +1223,8 @@ def _main_query() -> int:
         return 0
     if payload.get("hook_event_name") == "SubagentStop":
         return _main_subagent(payload)
+    if _is_synthetic_prompt(payload.get("prompt")):
+        return 0
     try:
         marker = _turn_marker(payload)
     except Exception:
@@ -1255,10 +1263,7 @@ def _main_codex() -> int:
         payload = json.loads(sys.stdin.read() or "{}")
         if not isinstance(payload, dict):
             return 0
-        prompt = payload.get("prompt")
-        if isinstance(prompt, str) and prompt.lstrip().startswith(
-            ("[agent-coord wake v1 ", "[agent-coord] ")
-        ):
+        if _is_synthetic_prompt(payload.get("prompt")):
             return 0
         model = payload.get("model")
         model = _normalize_model(model) if isinstance(model, str) and model else None
@@ -1650,9 +1655,17 @@ class TurnMarkerTest(unittest.TestCase):
             self.assertEqual(f.read(), before)
 
     def test_synthetic_prompt_skipped(self):
-        self.assertIsNone(
-            _turn_marker({"prompt": "<task-notification> x", "transcript_path": "/x"})
-        )
+        for prompt in (
+            "<task-notification> x",
+            "This session is being continued from a previous conversation.",
+            "Another Claude session sent a message:\n[agent-coord] 1 unread event(s)",
+            "[agent-coord] Delivery for your subagent cc-1 ...",
+            "  [agent-coord wake v1 7 deadbeef] Catch up",
+        ):
+            with self.subTest(prompt=prompt):
+                self.assertIsNone(
+                    _turn_marker({"prompt": prompt, "transcript_path": "/x"})
+                )
 
 
 class EmbedDbDegradationTest(unittest.TestCase):

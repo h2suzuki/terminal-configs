@@ -35,6 +35,21 @@ SPEC.loader.exec_module(ms)
 PICKS = [("/m/a.md", "reminder A", 0.9), ("/m/b.md", "reminder B", 0.8)]
 PROJECT = "proj"
 
+# Prompt strings the harness injects into a turn, not typed by a human (anthropics/claude-code#94675).
+INJECTED_PROMPTS = {
+    "task-notification": "<task-notification>\n<task-id>x</task-id>",
+    "compaction": "This session is being continued from a previous conversation.",
+    "peer-wrapper": (
+        "Another Claude session sent a message:\n"
+        "[agent-coord] 1 unread event(s) for this session (seq 1..1; from x). Read them..."
+    ),
+    "peer-wrapper-bare": "Another Claude session sent a message",
+    "coord-unread": "[agent-coord] 9 unread event(s) for this session (seq 1..9; from x)",
+    "coord-subagent": "[agent-coord] Delivery for your subagent cc-1 ...",
+    "coord-signed": "[agent-coord wake v1 7 deadbeef] Catch up",
+    "leading-whitespace": "\n  [agent-coord] 1 unread event(s) for this session",
+}
+
 
 class CapTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -297,6 +312,97 @@ class CodexHookTest(unittest.TestCase):
         )
         self.assertEqual((code, output), (0, ""))
         surface.assert_not_called()
+
+    def test_every_injected_prompt_shape_is_silent(self):
+        for name, prompt in INJECTED_PROMPTS.items():
+            with self.subTest(shape=name):
+                code, output, surface = self.run_hook(
+                    {"prompt": prompt}, "unrelated reminder"
+                )
+                self.assertEqual((code, output), (0, ""))
+                surface.assert_not_called()
+
+
+class SyntheticPromptTest(unittest.TestCase):
+    """Injected prompts (peer / subagent hand-back / coord wake / compaction) are not human turns.
+
+    Contract (each claim maps to one test):
+      S1  _main_query emits nothing and runs no channel for an injected prompt
+      S2  a human prompt still runs every channel, even when it mentions a prefix mid-text
+      S3  _turn_marker returns None for an injected prompt
+      S4  _memory_surface and _concern_inject return None before touching the DB
+      S5  the SubagentStop branch still dispatches (it carries no prompt)
+    """
+
+    def run_query(self, payload):
+        out = io.StringIO()
+        with (
+            mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))),
+            mock.patch.object(
+                ms, "_turn_marker", return_value="10:00:00 Turn #2 starting"
+            ) as marker,
+            mock.patch.object(ms, "_resolve_model", return_value=None),
+            mock.patch.object(ms, "_memory_surface", return_value=None) as surface,
+            mock.patch.object(ms, "_concern_inject", return_value=None) as concern,
+            contextlib.redirect_stdout(out),
+        ):
+            code = ms._main_query()
+        return code, out.getvalue(), (marker, surface, concern)
+
+    def test_s1_main_query_is_silent_for_every_injected_shape(self):
+        for name, prompt in INJECTED_PROMPTS.items():
+            with self.subTest(shape=name):
+                code, output, channels = self.run_query({"prompt": prompt})
+                self.assertEqual((code, output), (0, ""))
+                for channel in channels:
+                    channel.assert_not_called()
+
+    def test_s2_human_prompt_still_gets_the_marker_and_every_channel(self):
+        for prompt in (
+            "hook を直してください",
+            "please read the [agent-coord] docs",
+            "About the Another Claude session sent a message wrapper",
+        ):
+            with self.subTest(prompt=prompt):
+                code, output, channels = self.run_query({"prompt": prompt})
+                self.assertEqual(code, 0)
+                self.assertIn("Turn #2 starting", output)
+                for channel in channels:
+                    channel.assert_called_once()
+
+    def test_s3_turn_marker_is_none_for_every_injected_shape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = os.path.join(tmp, "s.jsonl")
+            for name, prompt in INJECTED_PROMPTS.items():
+                with self.subTest(shape=name):
+                    payload = {"prompt": prompt, "transcript_path": transcript}
+                    self.assertIsNone(ms._turn_marker(payload))
+            human = {"prompt": "next question", "transcript_path": transcript}
+            marker = ms._turn_marker(human)
+            assert marker is not None
+            self.assertIn("Turn #1 starting", marker)
+
+    def test_s4_surface_and_concern_skip_before_touching_the_db(self):
+        for name, prompt in INJECTED_PROMPTS.items():
+            # A concern / correction / pixel trigger inside the injected text must not fire either.
+            trigger = " 心配です 勝手に 1px ずれて"
+            payload = {"prompt": prompt + trigger, "session_id": "s"}
+            with (
+                self.subTest(shape=name),
+                mock.patch.object(ms, "_connect") as connect,
+            ):
+                self.assertIsNone(ms._memory_surface(payload))
+                self.assertIsNone(ms._concern_inject(payload))
+                connect.assert_not_called()
+
+    def test_s5_subagentstop_still_dispatches_without_a_prompt(self):
+        payload = {"hook_event_name": "SubagentStop", "last_assistant_message": "x"}
+        with (
+            mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))),
+            mock.patch.object(ms, "_main_subagent", return_value=2) as subagent,
+        ):
+            self.assertEqual(ms._main_query(), 2)
+        subagent.assert_called_once_with(payload)
 
 
 class SystemMessageTest(unittest.TestCase):

@@ -14,7 +14,8 @@ CLAUDE.md edit. The removal / keep criterion is tracked in todos.md, not here.
 Contract (each claim maps to one test):
   P1  real prompt -> the line rides additionalContext
   P2  empty / whitespace-only prompt -> silence
-  P3  synthetic <task-notification> re-entry -> silence (not a real prompt turn)
+  P3  harness-injected message (task notification, peer / subagent /
+      agent-coord delivery) -> silence (not a real prompt turn)
   P4  malformed stdin -> silence, exit 0 (fail-open)
   P5  systemMessage is never written (a model-only nudge, invisible to the user)
 
@@ -39,14 +40,19 @@ NUDGE = (
     "(対象 file / command 出力 / 公式資料) にあたって裏付けをとれ。 "
     "裏付けの走査空間と出力を示せない文は断定でなく推論として書け"
 )
-SYNTHETIC_PREFIX = "<task-notification>"
+# The harness runs UserPromptSubmit hooks for injected messages too; the payload does not say which (anthropics/claude-code#94675).
+SYNTHETIC_PREFIXES = (
+    "<task-notification>",
+    "Another Claude session sent a message",
+    "[agent-coord",
+)
 
 
 def _nudge_wanted(payload: dict) -> bool:
     prompt = payload.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         return False
-    return not prompt.lstrip().startswith(SYNTHETIC_PREFIX)
+    return not prompt.lstrip().startswith(SYNTHETIC_PREFIXES)
 
 
 def _emit_context(msg: str) -> None:
@@ -103,13 +109,27 @@ class NudgeTest(unittest.TestCase):
     def test_p2_missing_prompt_key_is_silent(self):
         self.assertEqual(self._emit({}), [])
 
-    def test_p3_synthetic_reentry_is_silent(self):
-        self.assertEqual(
-            self._emit({"prompt": SYNTHETIC_PREFIX + "\n<task-id>x</task-id>"}), []
-        )
+    INJECTED = (
+        "<task-notification>\n<task-id>x</task-id>",
+        "Another Claude session sent a message:\n[agent-coord] 1 unread event(s)",
+        "[agent-coord] Delivery for your subagent cc-1 ...",
+        "[agent-coord wake v1 7 deadbeef] Catch up",
+    )
+
+    def test_p3_injected_prompts_are_silent(self):
+        for prompt in self.INJECTED:
+            with self.subTest(prompt=prompt):
+                self.assertEqual(self._emit({"prompt": prompt}), [])
 
     def test_p3_leading_whitespace_does_not_defeat_the_prefix(self):
-        self.assertEqual(self._emit({"prompt": "\n  " + SYNTHETIC_PREFIX + " x"}), [])
+        for prompt in self.INJECTED:
+            with self.subTest(prompt=prompt):
+                self.assertEqual(self._emit({"prompt": "\n  " + prompt}), [])
+
+    def test_p3_prefix_inside_a_human_prompt_still_nudges(self):
+        self.assertEqual(
+            self._emit({"prompt": "please read the [agent-coord] docs"}), [NUDGE]
+        )
 
     def test_p5_channel_is_additional_context_only(self):
         buf: list[str] = []

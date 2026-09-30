@@ -2,7 +2,8 @@
 """Point real user prompts to the shared mytask skill; never block a turn.
 
 Only model-facing UserPromptSubmit additionalContext is emitted. Empty prompts
-and synthetic task notifications stay silent.
+and harness-injected messages (task notifications, peer / subagent /
+agent-coord deliveries) stay silent; a compaction continuation still nudges.
 
 The reminder pushes work into the ledger every prompt but nothing pushed it
 back out, so finished items piled up open. When the session holds open Tasks
@@ -34,7 +35,12 @@ CODEX_NUDGE = (
     + "未読なら /etc/codex/skills/mytask/SKILL.md を読み、その手順に従う。"
     "読込済みなら今回の依頼・追加・訂正を反映する。"
 )
-SYNTHETIC_PREFIX = "<task-notification>"
+# The harness runs UserPromptSubmit hooks for injected messages too; the payload does not say which (anthropics/claude-code#94675).
+SYNTHETIC_PREFIXES = (
+    "<task-notification>",
+    "Another Claude session sent a message",
+    "[agent-coord",
+)
 
 CLOSE_NUDGE = "mytask: 終わった項目は completed に、不要な項目は cancelled に、理由があって実施しない項目は skipped にする"
 CLOSED_STATUSES = frozenset({"completed", "cancelled", "skipped", "deleted"})
@@ -163,7 +169,7 @@ def _run(payload: object, *, codex: bool = False) -> int:
     if (
         isinstance(prompt, str)
         and prompt.strip()
-        and not prompt.lstrip().startswith(SYNTHETIC_PREFIX)
+        and not prompt.lstrip().startswith(SYNTHETIC_PREFIXES)
     ):
         message = CODEX_NUDGE if codex else NUDGE
         close = _close_block(payload)
@@ -192,13 +198,40 @@ class NudgeTest(unittest.TestCase):
                 self.assertEqual(_run({"prompt": "追加の依頼です"}, codex=codex), 0)
                 emit.assert_called_once_with(expected)
 
-    def test_empty_and_synthetic_prompts_are_silent(self):
+    def test_empty_prompts_are_silent(self):
         with mock.patch.object(sys.modules[__name__], "_emit_context") as emit:
             for codex in (False, True):
-                for prompt in (None, "", "  ", SYNTHETIC_PREFIX + "done"):
+                for prompt in (None, "", "  "):
                     _run({"prompt": prompt}, codex=codex)
                 _run([], codex=codex)
             emit.assert_not_called()
+
+    def test_injected_prompts_are_silent(self):
+        injected = (
+            "<task-notification>done",
+            "Another Claude session sent a message:\n[agent-coord] 1 unread event(s)",
+            "[agent-coord] Delivery for your subagent cc-1 ...",
+            "[agent-coord wake v1 7 deadbeef] Catch up",
+            "\n  [agent-coord] 9 unread event(s) for this session",
+        )
+        for codex in (False, True):
+            for prompt in injected:
+                with (
+                    self.subTest(codex=codex, prompt=prompt),
+                    mock.patch.object(sys.modules[__name__], "_emit_context") as emit,
+                ):
+                    self.assertEqual(_run({"prompt": prompt}, codex=codex), 0)
+                    emit.assert_not_called()
+
+    def test_prefix_inside_a_human_prompt_still_nudges(self):
+        prompt = "please read the [agent-coord] docs"
+        for codex, expected in ((False, NUDGE), (True, CODEX_NUDGE)):
+            with (
+                self.subTest(codex=codex),
+                mock.patch.object(sys.modules[__name__], "_emit_context") as emit,
+            ):
+                _run({"prompt": prompt}, codex=codex)
+                emit.assert_called_once_with(expected)
 
     def test_only_model_context_is_emitted(self):
         for codex in (False, True):
