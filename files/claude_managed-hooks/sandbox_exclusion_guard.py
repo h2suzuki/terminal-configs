@@ -335,12 +335,10 @@ def _handle_failure(payload: dict, patterns: list[str], cmd: str) -> int:
     if not lock and not SANDBOX_SYMPTOM.search(output):
         return 0
     touched = [p for p in credential_paths() if p in cmd or p in output]
+    # config-lock failures are answered every time, on the host or in the sandbox
     if lock and host_run(cmd, patterns):
-        # a real failure on the host recurs across turns, so it is answered every time
         message = _host_lock_message(_lock_paths(lock.group(1), payload.get("cwd")))
     elif lock:
-        if not claim_once(payload, "failure-config-lock"):
-            return 0
         # 文面は意図的に冗長: 「ロックされている」という誤読を、事実と次の行動で置き換えるため trim しない
         message = (
             "`could not lock config file` だけでは、誰かが `.git/config` をロックしている証拠になりません。"
@@ -780,7 +778,10 @@ class GateTest(unittest.TestCase):
                 self.assertIn("sandbox の外で走らせる", context)
                 self.assertIn("隣の session", context)
                 self.assertIn(CONFIG_LOCK_LESSON, context)
-                self.assertEqual(self._emit_for(payload), (0, "", ""))
+                again = json.loads(self._emit_for(payload)[1])["hookSpecificOutput"]
+                self.assertIn(
+                    "ロックしている証拠になりません", again["additionalContext"]
+                )
 
     def test_reading_the_error_text_does_not_spend_the_lock_answer(self):
         quoted = {

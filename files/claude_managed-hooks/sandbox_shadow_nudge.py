@@ -486,7 +486,10 @@ def _stop(payload: dict) -> int:
 
 
 CODEX_TOOLS = frozenset({"Bash", "exec_command", "shell_command"})
-CODEX_LOCK_OUTPUT_RE = re.compile(r"could not lock config file", re.IGNORECASE)
+# git's own prefix, so prose that only names the error does not answer
+CODEX_LOCK_OUTPUT_RE = re.compile(
+    r"(?:error|fatal): could not lock config file", re.IGNORECASE
+)
 # 文面は意図的に冗長: Codex では外へ出す形が Claude と違うので、確かめ方まで書き下す
 CODEX_HOW_TO_CHECK = (
     "確かめるなら、git を sandbox の外で正しく実行する: prefix rule に合う単独の呼び出しにし "
@@ -545,11 +548,7 @@ def _codex(payload: dict) -> int:
     if event == "PostToolUse":
         response = payload.get("tool_response")
         text = response if isinstance(response, str) else json.dumps(response)
-        marker = "codex-lock-output"  # once per session: the same error repeats
-        if CODEX_LOCK_OUTPUT_RE.search(text) and not _already_nudged(
-            session_id, marker
-        ):
-            _mark_nudged(session_id, marker)
+        if CODEX_LOCK_OUTPUT_RE.search(text):
             _codex_output("PostToolUse", CODEX_LOCK_MSG)
         return 0
     if event == "PreToolUse" and not _codex_runs_on_host(command):

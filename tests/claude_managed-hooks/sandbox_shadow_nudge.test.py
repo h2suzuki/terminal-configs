@@ -48,8 +48,8 @@ Contract (each claim maps to one test):
   X1  --codex PreToolUse: a sandboxed look at a covered file (Codex `cmd` or `command`) gets
       masked-probe as context and is never denied; a combined call is sandboxed even when it
       starts with an excluded command, and only a standalone excluded call is host-bound
-  X2  --codex PostToolUse: git's `could not lock config file` gets config-lock context once per
-      session; other output is silent
+  X2  --codex PostToolUse: git's `error: could not lock config file` gets config-lock context on
+      every occurrence; other output, including prose naming the error, is silent
   X3  --codex Stop: a config.lock lock-holder final message gets {"decision": "block"} once;
       stop_hook_active and correct readings are silent
   T1  Stop with a config.lock lock-holder final message -> exit 2, stderr carries the rule and the
@@ -542,7 +542,7 @@ class SandboxShadowNudgeTest(unittest.TestCase):
                 )
                 self.assertEqual(silent.stdout, "")
 
-    def test_x2_codex_config_lock_error_is_explained_once(self):
+    def test_x2_codex_config_lock_error_is_explained_every_time(self):
         def after(output: str) -> str:
             return self._codex(
                 {
@@ -554,11 +554,16 @@ class SandboxShadowNudgeTest(unittest.TestCase):
             ).stdout
 
         self.assertEqual(after("On branch main"), "")
+        self.assertEqual(
+            after("- `could not lock config file` だけでは証拠にならない"), ""
+        )
         error = "error: could not lock config file .git/config: Read-only file system"
-        context = json.loads(after(error))["hookSpecificOutput"]["additionalContext"]
-        self.assertIn("config-lock", context)
-        self.assertIn("証拠にならない", context)
-        self.assertEqual(after(error), "")
+        for _ in range(2):
+            context = json.loads(after(error))["hookSpecificOutput"][
+                "additionalContext"
+            ]
+            self.assertIn("config-lock", context)
+            self.assertIn("証拠にならない", context)
 
     def test_x3_codex_stop_restates_a_lock_claim_once(self):
         claim = ".git/config.lock がロックされているので待ちます"
