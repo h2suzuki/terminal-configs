@@ -9,7 +9,8 @@ PostToolUse (a failure hidden by `; echo` or a pipe) answer sandbox-looking
 output with the live excludedCommands roster, so a wrong calling form is not
 misread as a sandbox limit, nor git's config-lock error as a held lock. A failure on a
 credential-protected path gets a stronger answer: being unable to read one back
-is not evidence of running inside the sandbox.
+is not evidence of running inside the sandbox. Before a call that runs on the host,
+the empty mode-444 .git/config.lock a sandbox mask leaves behind is removed.
 
 A Bash call reaches the host only when every command in it is excluded, so an
 excluded command behind cd, an assignment, `command` or `git -C` gets a warning.
@@ -63,6 +64,8 @@ CONFIG_LOCK_LESSON = (
     "/var/lib/claude-rag-memory/claude-lessons-learned/project/"
     "github.com-h2suzuki-scorer/feedback_sandbox_mask_leaks_git_config_lock.md"
 )
+# bwrap が ro-bind 先として作る空ファイルの mode。git 自身の lock は書込可能で作られる。
+MASK_LEFTOVER_MODE = 0o444
 ASSIGNMENT = re.compile(r"^\w+=\S*$")
 # 照合前に剥がされない wrapper — 内側が除外コマンドでも sandbox に落ちる。
 # timeout / time / nice / nohup / stdbuf は剥がされる側 (実測) なので入れない。 env は option や代入付きの時だけ扱う。
@@ -210,8 +213,80 @@ def _lock_path(config: str, cwd: object) -> str:
     return os.path.normpath(os.path.join(base, config)) + ".lock"
 
 
+def _remove_mask_leftover(lock: str) -> bool:
+    """Delete a lock that only the sandbox mask leaves: git creates its own locks writable."""
+    try:
+        st = os.lstat(lock)
+        if not (
+            stat.S_ISREG(st.st_mode)
+            and st.st_size == 0
+            and stat.S_IMODE(st.st_mode) == MASK_LEFTOVER_MODE
+        ):
+            return False
+        os.unlink(lock)
+    except OSError:
+        return False
+    return True
+
+
+def _git_dirs(cwd: str) -> list[str]:
+    """The git dir holding the config of the repo around cwd, and its common dir for a worktree."""
+    here = os.path.abspath(cwd)
+    while not os.path.lexists(dotgit := os.path.join(here, ".git")):
+        if (parent := os.path.dirname(here)) == here:
+            return []
+        here = parent
+    gitdir = dotgit
+    if os.path.isfile(dotgit):
+        with open(dotgit, encoding="utf-8") as f:
+            pointer = f.read().strip()
+        if not pointer.startswith("gitdir:"):
+            return []
+        gitdir = os.path.join(here, pointer.removeprefix("gitdir:").strip())
+    dirs = [gitdir]
+    try:
+        with open(os.path.join(gitdir, "commondir"), encoding="utf-8") as f:
+            dirs.append(os.path.normpath(os.path.join(gitdir, f.read().strip())))
+    except OSError:
+        pass
+    return dirs
+
+
+def _clear_before_host_run(payload: dict) -> None:
+    """Remove the mask leftover a sandboxed Bash left on the host before git runs there."""
+    cwd = payload.get("cwd")
+    if not isinstance(cwd, str) or not cwd:
+        return
+    try:
+        dirs = _git_dirs(cwd)
+    except OSError:
+        return
+    removed = [
+        lock
+        for d in dirs
+        if _remove_mask_leftover(lock := os.path.join(d, "config.lock"))
+    ]
+    if removed:
+        output = {
+            "hookEventName": "PreToolUse",
+            "additionalContext": (
+                f"sandbox が host に残した `{removed[0]}` (0 byte・mode 444、git の作るロックではない) を"
+                "この hook が削除した。コマンドはそのまま実行される。"
+            ),
+        }
+        sys.stdout.write(
+            json.dumps({"hookSpecificOutput": output}, ensure_ascii=False) + "\n"
+        )
+
+
 def _host_lock_message(lock: str) -> str:
     """Answer a config-lock failure outside the sandbox with what the host really holds."""
+    if _remove_mask_leftover(lock):
+        return (
+            f"sandbox が host に残した `{lock}` (0 byte・mode 444) で git が失敗したので、"
+            "この hook が削除した。sandbox 内の Bash を挟まずに、失敗したコマンドをすぐ再実行する。"
+            f"\n教訓: {CONFIG_LOCK_LESSON}"
+        )
     try:
         st = os.lstat(lock)
     except OSError:
@@ -326,6 +401,8 @@ def _run(payload: object, patterns: list[str] | None = None) -> int:
         return _handle_failure(payload, patterns, cmd)
     decision, normalized, reason = _classify(cmd, patterns)
     if decision == "pass":
+        if host_run(cmd, patterns):
+            _clear_before_host_run(payload)
         return 0
     if decision == "sandboxed":
         if not claim_once(payload, f"sandboxed-{reason}"):
@@ -749,6 +826,56 @@ class GateTest(unittest.TestCase):
             self.assertIn("ユーザーに尋ねずに自分で削除", context)
             self.assertIn(CONFIG_LOCK_LESSON, context)
         self.assertTrue(os.path.exists(lock))
+
+    def test_host_run_lock_failure_removes_the_mask_leftover(self):
+        root, lock = self._repo_with_lock(0o444)
+        context = self._host_lock_failure(root, "host-mask")
+        self.assertIn("この hook が削除した", context)
+        self.assertFalse(os.path.lexists(lock))
+        self.assertIn("今は host に無い", self._host_lock_failure(root, "host-mask"))
+
+    def _pre_tool_use(self, cmd: str, cwd: str) -> str:
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": cmd},
+            "cwd": cwd,
+            "session_id": "pre",
+        }
+        result, stdout, stderr = self._emit_for(payload)
+        self.assertEqual((result, stderr), (0, ""))
+        return stdout
+
+    def test_host_run_call_clears_the_mask_leftover_first(self):
+        root, lock = self._repo_with_lock(0o444)
+        stdout = self._pre_tool_use("git status", os.path.join(root, "sub"))
+        self.assertFalse(os.path.lexists(lock))
+        output = json.loads(stdout)["hookSpecificOutput"]
+        self.assertIn("この hook が削除した", output["additionalContext"])
+        self.assertNotIn("permissionDecision", output)
+        self.assertEqual(self._pre_tool_use("git status", root), "")
+
+    def test_leftover_is_kept_for_sandboxed_calls_and_real_locks(self):
+        root, lock = self._repo_with_lock(0o444)
+        self.assertEqual(self._pre_tool_use("git status | head", root), "")
+        self.assertTrue(os.path.lexists(lock))
+        for mode, content in ((0o644, b""), (0o444, b"[core]\n")):
+            with self.subTest(mode=oct(mode), content=content):
+                root, lock = self._repo_with_lock(mode, content)
+                self.assertEqual(self._pre_tool_use("git status", root), "")
+                self.assertTrue(os.path.lexists(lock))
+
+    def test_worktree_call_clears_the_common_dir_leftover(self):
+        main, lock = self._repo_with_lock(0o444)
+        gitdir = os.path.join(main, ".git", "worktrees", "w")
+        os.makedirs(gitdir)
+        with open(os.path.join(gitdir, "commondir"), "w", encoding="utf-8") as f:
+            f.write("../..\n")
+        worktree = tempfile.mkdtemp(dir=self.state_dir.name)
+        with open(os.path.join(worktree, ".git"), "w", encoding="utf-8") as f:
+            f.write(f"gitdir: {gitdir}\n")
+        self._pre_tool_use("git status", worktree)
+        self.assertFalse(os.path.lexists(lock))
 
     def test_clean_zero_exit_result_is_silent(self):
         payload = {
