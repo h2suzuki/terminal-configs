@@ -207,10 +207,16 @@ def _indirect_mentions(cmd: str, patterns: list[str]) -> list[str]:
     return found
 
 
-def _lock_path(config: str, cwd: object) -> str:
-    """The lock file git names in its error, resolved against the command's directory."""
+def _lock_paths(config: str, cwd: object) -> list[str]:
+    """Where the lock git names may be: relative to cwd, or in the repo around cwd (git -C runs elsewhere)."""
     base = cwd if isinstance(cwd, str) else ""
-    return os.path.normpath(os.path.join(base, config)) + ".lock"
+    paths = [os.path.normpath(os.path.join(base, config)) + ".lock"]
+    try:
+        dirs = _git_dirs(base) if base else []
+    except OSError:
+        dirs = []
+    paths += [p for d in dirs if (p := os.path.join(d, "config.lock")) not in paths]
+    return paths
 
 
 def _remove_mask_leftover(lock: str) -> bool:
@@ -279,21 +285,24 @@ def _clear_before_host_run(payload: dict) -> None:
         )
 
 
-def _host_lock_message(lock: str) -> str:
+def _host_lock_message(locks: list[str]) -> str:
     """Answer a config-lock failure outside the sandbox with what the host really holds."""
-    if _remove_mask_leftover(lock):
+    if removed := next((p for p in locks if _remove_mask_leftover(p)), ""):
         return (
-            f"sandbox が host に残した `{lock}` (0 byte・mode 444) で git が失敗したので、"
+            f"sandbox が host に残した `{removed}` (0 byte・mode 444) で git が失敗したので、"
             "この hook が削除した。sandbox 内の Bash を挟まずに、失敗したコマンドをすぐ再実行する。"
             f"\n教訓: {CONFIG_LOCK_LESSON}"
         )
-    try:
-        st = os.lstat(lock)
-    except OSError:
+    lock = next((p for p in locks if os.path.lexists(p)), "")
+    if not lock:
         return (
-            f"sandbox の外で git が `{lock}` のロックに失敗したが、今は host に無い。"
-            "そのまま再実行する。"
+            "sandbox の外で git が config のロックに失敗したが、この hook が host で確かめた "
+            + "、".join(f"`{p}`" for p in locks)
+            + " には無い。コマンドが別の repo を操作したなら、その repo の `.git/config.lock` を確かめ、"
+            "無ければそのまま再実行する。"
+            f"\n教訓: {CONFIG_LOCK_LESSON}"
         )
+    st = os.lstat(lock)
     mtime = time.strftime("%H:%M:%S", time.localtime(st.st_mtime))
     # 文面は意図的に冗長: 確認済みの事実と、ユーザーに尋ねず片付ける手順を両方書き下すため trim しない
     return (
@@ -328,7 +337,7 @@ def _handle_failure(payload: dict, patterns: list[str], cmd: str) -> int:
     touched = [p for p in credential_paths() if p in cmd or p in output]
     if lock and host_run(cmd, patterns):
         # a real failure on the host recurs across turns, so it is answered every time
-        message = _host_lock_message(_lock_path(lock.group(1), payload.get("cwd")))
+        message = _host_lock_message(_lock_paths(lock.group(1), payload.get("cwd")))
     elif lock:
         if not claim_once(payload, "failure-config-lock"):
             return 0
@@ -832,7 +841,9 @@ class GateTest(unittest.TestCase):
         context = self._host_lock_failure(root, "host-mask")
         self.assertIn("この hook が削除した", context)
         self.assertFalse(os.path.lexists(lock))
-        self.assertIn("今は host に無い", self._host_lock_failure(root, "host-mask"))
+        context = self._host_lock_failure(root, "host-mask")
+        self.assertIn("には無い", context)
+        self.assertIn("別の repo", context)
 
     def _pre_tool_use(self, cmd: str, cwd: str) -> str:
         payload = {
@@ -865,8 +876,7 @@ class GateTest(unittest.TestCase):
                 self.assertEqual(self._pre_tool_use("git status", root), "")
                 self.assertTrue(os.path.lexists(lock))
 
-    def test_worktree_call_clears_the_common_dir_leftover(self):
-        main, lock = self._repo_with_lock(0o444)
+    def _worktree_of(self, main: str) -> str:
         gitdir = os.path.join(main, ".git", "worktrees", "w")
         os.makedirs(gitdir)
         with open(os.path.join(gitdir, "commondir"), "w", encoding="utf-8") as f:
@@ -874,8 +884,19 @@ class GateTest(unittest.TestCase):
         worktree = tempfile.mkdtemp(dir=self.state_dir.name)
         with open(os.path.join(worktree, ".git"), "w", encoding="utf-8") as f:
             f.write(f"gitdir: {gitdir}\n")
-        self._pre_tool_use("git status", worktree)
+        return worktree
+
+    def test_worktree_call_clears_the_common_dir_leftover(self):
+        main, lock = self._repo_with_lock(0o444)
+        self._pre_tool_use("git status", self._worktree_of(main))
         self.assertFalse(os.path.lexists(lock))
+
+    def test_failure_from_a_worktree_finds_the_main_repo_lock(self):
+        # git -C <main repo> names .git/config relative to the main repo, not the worktree cwd
+        main, lock = self._repo_with_lock(0o644, b"[core]\n")
+        context = self._host_lock_failure(self._worktree_of(main), "host-wt")
+        self.assertIn(f"`{lock}`", context)
+        self.assertIn("host に実在する", context)
 
     def test_clean_zero_exit_result_is_silent(self):
         payload = {
