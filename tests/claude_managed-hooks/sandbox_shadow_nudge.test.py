@@ -27,6 +27,8 @@ Contract (each claim maps to one test):
   S9  the tail read tolerates a transcript far larger than the read window without crashing and still
       finds the trailing block (partial first line is dropped, not parsed as JSON)
   S10 the hook file is executable
+  S11 `.mcp.json` with a cue word is silent: its mask leaves a real host file, not a shadow
+  S12 naming this hook or its shadow rule is not a cue word; a real cue in the same text still fires
   L1  `config.lock` with lock-holder framing ("ロックされている", "stale lock") -> config-lock fires
       with the lessons-learned path
   L2  `config.lock` text that already names the sandbox mask -> silent
@@ -345,6 +347,37 @@ class SandboxShadowNudgeTest(unittest.TestCase):
 
     def test_s10_hook_is_executable(self):
         self.assertTrue(os.access(HOOK, os.X_OK))
+
+    def test_s11_mcp_json_with_a_cue_is_silent(self):
+        # replies about a real 0-byte .mcp.json left on the host, which the rule once blocked
+        for i, text in enumerate(
+            (
+                "grep -l '/root/scorer/.mcp.json' /proc/[0-9]*/mountinfo 2>/dev/null"
+                " | cut -d/ -f3 | xargs -r ps -o pid,etime,args -p",
+                "- 既知の報告がないかも調べました。このリポジトリの issue（`.mcp.json`）、"
+                "anthropics/claude-code の issue（`mcp.json sandbox empty`、"
+                "`bwrap mount point leftover`）のどれも 0 件でした[事実]。",
+            )
+        ):
+            with self.subTest(text=text):
+                proc = self._stop(
+                    [_user_prompt(), _assistant_text(text)], session_id=f"s11-{i}"
+                )
+                self.assertEqual((proc.returncode, proc.stderr), (0, ""))
+
+    def test_s12_naming_the_rule_is_not_a_cue(self):
+        meta = (
+            "ターン末尾の shadow ルールが `.bashrc` の話を誤判定します。"
+            "sandbox-shadow の文面も見直します。"
+        )
+        proc = self._stop([_user_prompt(), _assistant_text(meta)], session_id="s12")
+        self.assertEqual((proc.returncode, proc.stderr), (0, ""))
+        real = meta + " `.bashrc` は未追跡に見えます。"
+        proc = self._stop(
+            [_user_prompt(), _assistant_text(real)], session_id="s12-real"
+        )
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("sandbox-shadow", proc.stderr)
 
     def test_l1_config_lock_with_lock_holder_framing_fires(self):
         for i, text in enumerate(

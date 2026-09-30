@@ -24,6 +24,7 @@ STATE_DIR = os.environ.get("SANDBOX_SHADOW_NUDGE_STATE_DIR") or os.path.join(
 )
 TAIL_BYTES = 256 * 1024  # transcript window read backwards for the current utterance
 
+# .mcp.json is left out: its mask leaves a real 0-byte file on the host, which needs a valid stub
 SHADOW_NAMES = (
     ".bashrc",
     ".bash_profile",
@@ -35,7 +36,6 @@ SHADOW_NAMES = (
     ".ripgreprc",
     ".idea",
     ".vscode",
-    ".mcp.json",
     ".claude/settings.json",
     ".claude/settings.local.json",
     ".claude/agents",
@@ -63,6 +63,10 @@ CUE_WORDS = (
 )
 # an immediate ~/ or /home/<user>/ prefix names a real HOME file, not the repo-root shadow
 HOME_PREFIX_RE = re.compile(r"(?:~|/home/[^/\s]+)/\Z")
+# this hook's own name is talk about the nudge, not a cue for a misreading
+SELF_NAME_RE = re.compile(
+    r"sandbox[-_]shadow(?:_nudge)?|shadow\s*(?:ルール|rule)", re.IGNORECASE
+)
 CUE_RE = re.compile("|".join(re.escape(w) for w in CUE_WORDS), re.IGNORECASE)
 
 MSG = (
@@ -170,7 +174,9 @@ def _shadow_hit(text: str) -> str | None:
 
 
 def _shadow_text(text: str) -> bool:
-    return _shadow_hit(text) is not None and bool(CUE_RE.search(text))
+    return _shadow_hit(text) is not None and bool(
+        CUE_RE.search(SELF_NAME_RE.sub("", text))
+    )
 
 
 def _shadow_command(command: str) -> bool:
