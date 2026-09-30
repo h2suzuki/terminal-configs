@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse / Stop nudge: sandbox misreadings (dotfile shadows, config.lock read as a held lock).
+"""PreToolUse / Stop nudge: sandbox misreadings (dotfile shadows, config.lock read as a held lock or left to the user).
 
 Transcript assistant text often lags the tool call, so this scans prior text blocks (past
 tool_result-only entries) and, for Bash, the command itself. Rules marked for Stop also block
@@ -82,9 +82,17 @@ LOCK_CUE_RE = re.compile(
     r"|別の\s*git|他の\s*git|git\s*プロセス|クラッシュ|異常終了",
     re.IGNORECASE,
 )
-# the text already names the sandbox mask, so it is the correct reading
+# the text already names the sandbox mask or a leftover, so it is the correct reading
 LOCK_CORRECT_RE = re.compile(
-    r"mask|マスク|/dev/null|bind|78818|ロックではな|not\s+a\s+lock", re.IGNORECASE
+    r"mask|マスク|/dev/null|bind|78818|ロックではな|not\s+a\s+lock|残骸|leftover",
+    re.IGNORECASE,
+)
+# asking the user whether to remove the lock
+LOCK_DEFER_RE = re.compile(
+    r"\[質問\]|(?:消|削除)して(?:も)?(?:よい|いい|良い|よろしい)(?:でしょう|です)?か"
+    r"|削除しますか|消しますか|どうしますか|どうしましょう|ご判断|ご指示|判断を(?:仰ぎたい|お願い|ください)"
+    r"|(?<![a-z])(?:should|shall|may|can)\s+I\s+(?:delete|remove)(?![a-z])",
+    re.IGNORECASE,
 )
 # examining the sandbox itself: its mounts, namespaces or launcher
 INTROSPECT_RE = re.compile(
@@ -134,6 +142,17 @@ CONFIG_LOCK_MSG = (
     "github.com-h2suzuki-scorer/feedback_sandbox_mask_leaks_git_config_lock.md"
 )
 
+# 文面は意図的に冗長: 尋ねる代わりに取る手順を書き下すため trim しない
+LOCK_DEFER_MSG = (
+    "config-lock-defer: `.git/config.lock` を消してよいかをユーザーに尋ねている。尋ねずに確かめて進める。"
+    "`fuser` / `lsof` に出るプロセスも、同じ repo で作業中の隣 session も居なければ残骸なので、"
+    "自分で削除し、sandbox 内の Bash を挟まずに失敗したコマンドを再実行して作業を続ける。"
+    "0 byte・mode 444 の残骸は、その repo で除外コマンド (`git status` など) を裸名で実行すれば "
+    "hook が host 側で削除する。作業中の session が居るなら、ユーザーではなくその session に確かめる。\n"
+    "教訓: /var/lib/claude-rag-memory/claude-lessons-learned/project/"
+    "github.com-h2suzuki-scorer/feedback_sandbox_mask_leaks_git_config_lock.md"
+)
+
 STOP_SUFFIX = "\n最終発言に上の誤りが含まれている。該当箇所を訂正した回答を書き直してから終了せよ。"
 
 
@@ -160,6 +179,10 @@ def _lock_text(text: str) -> bool:
         and bool(LOCK_CUE_RE.search(text))
         and not LOCK_CORRECT_RE.search(text)
     )
+
+
+def _lock_defer_text(text: str) -> bool:
+    return bool(CONFIG_LOCK_RE.search(text)) and bool(LOCK_DEFER_RE.search(text))
 
 
 def _never(_: str) -> bool:
@@ -280,6 +303,7 @@ class Rule:
 RULES = (
     Rule("shadow", _shadow_text, _shadow_command, MSG, on_stop=True),
     Rule("config-lock", _lock_text, _never, CONFIG_LOCK_MSG, on_stop=True),
+    Rule("config-lock-defer", _lock_defer_text, _never, LOCK_DEFER_MSG, on_stop=True),
 )
 
 

@@ -32,6 +32,10 @@ Contract (each claim maps to one test):
   L2  `config.lock` text that already names the sandbox mask -> silent
   L3  lock-holder framing without `config.lock`, or an English cue only inside another word
       ("blocked") -> silent
+  L4  `config.lock` named as a leftover (残骸 / leftover) with lock framing -> config-lock silent
+  D1  `config.lock` with a question to the user about removing it -> config-lock-defer fires with
+      the lessons-learned path, and Stop blocks once
+  D2  a past-tense account of having asked, or removal done without asking -> config-lock-defer silent
   P1  a sandboxed tool call that looks at a covered file or the sandbox itself (Bash naming
       config.lock in any form, /proc/self/mountinfo; Read of a credential path) gets masked-probe
       and still runs
@@ -371,6 +375,50 @@ class SandboxShadowNudgeTest(unittest.TestCase):
             with self.subTest(text=text):
                 proc = self._call([_user_prompt(), _assistant_text(text)], f"l3-{i}")
                 self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
+
+    def test_l4_config_lock_named_as_a_leftover_is_silent(self):
+        for i, text in enumerate(
+            (
+                "host に残った .git/config.lock の残骸を消しました",
+                "removed the leftover .git/config.lock; no git process holds it",
+            )
+        ):
+            with self.subTest(text=text):
+                proc = self._call([_user_prompt(), _assistant_text(text)], f"l4-{i}")
+                self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
+
+    def test_d1_asking_whether_to_remove_the_lock_fires(self):
+        for i, text in enumerate(
+            (
+                "host に .git/config.lock が残っています。消してよいですか?",
+                "🙋 [質問] .git/config.lock を削除しますか?",
+                "Should I remove .git/config.lock and retry?",
+            )
+        ):
+            with self.subTest(text=text):
+                context = self._context(
+                    self._call([_user_prompt(), _assistant_text(text)], f"d1-{i}")
+                )
+                self.assertIn("config-lock-defer", context)
+                self.assertIn("feedback_sandbox_mask_leaks_git_config_lock.md", context)
+        entries = [_user_prompt(), _assistant_text("config.lock を消してもいいですか?")]
+        first = self._stop(entries, session_id="d1-stop")
+        self.assertEqual(first.returncode, 2, first.stderr)
+        self.assertIn("config-lock-defer", first.stderr)
+        self.assertEqual(self._stop(entries, session_id="d1-stop").returncode, 0)
+
+    def test_d2_an_account_or_a_removal_without_asking_is_silent(self):
+        for i, text in enumerate(
+            (
+                "config.lock が見つからないまま、ユーザーに判断を仰ぎました",
+                "保持者が居ないので .git/config.lock を削除して worktree 作成を再実行しました",
+            )
+        ):
+            with self.subTest(text=text):
+                proc = self._stop(
+                    [_user_prompt(), _assistant_text(text)], session_id=f"d2-{i}"
+                )
+                self.assertEqual((proc.returncode, proc.stderr), (0, ""))
 
     def test_p1_looking_at_a_covered_file_is_nudged_and_still_runs(self):
         looks = (
