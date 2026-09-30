@@ -1336,6 +1336,207 @@ class NotificationTest(Direct):
         self.assertIn("Delivery for your subagent cc-grandchild", message)
         self.assertIn("catchup --as cc-grandchild", message)
 
+    def join_subagents(self, count: int) -> list[str]:
+        """A Claude Code root and `count` subagents, all in the worktree the tests broadcast to."""
+        self.call(
+            "root", "join", client="claude-code", native_id="N-root", cwd=str(self.wt)
+        )
+        sids = [f"cc-child{i}" for i in range(count)]
+        for i, sid in enumerate(sids):
+            self.call(
+                f"spawn{i}",
+                "join",
+                sid=sid,
+                client="claude-code",
+                native_id=f"agent-{i}",
+                cwd=str(self.wt),
+                parent_sid="cc-N-root",
+            )
+        return sids
+
+    def delivery_states(self, *sids: str) -> list[str]:
+        """Latest delivery state per sid, peeking as the connection each one joined on."""
+        conns = {sid: f"spawn{sid.removeprefix('cc-child')}" for sid in sids}
+        conns["cc-N-root"] = "root"
+        return [
+            self.call(conns[sid], "peek", sid=sid)["deliveries"][-1]["state"]
+            for sid in sids
+        ]
+
+    def test_f3_a_broadcast_wakes_a_root_once_for_itself_and_all_its_subagents(self):
+        """F3: one wake per recipient. A root with several subagents gets its own unread
+        and one block per subagent in a single push, and every delivery is marked pushed."""
+        self.co.wakes.put(False)
+        self.co.waker.join(5)
+        self.join("a", self.repo)
+        children = self.join_subagents(3)
+        self.call("a", "send", sid="a", to="repo", text="all hands")
+        with patch.object(
+            coord.ADAPTERS["claude-code"], "wake", return_value=True
+        ) as wake:
+            self.co._wake_pending()
+        wake.assert_called_once()
+        recipient, text = wake.call_args.args
+        self.assertEqual(recipient["sid"], "cc-N-root")
+        self.assertTrue(text.startswith("[agent-coord]"), text)
+        self.assertIn("unread event(s) for this session", text)
+        for sid in children:
+            name = self.co.ledger.sessions[sid]["name"]
+            self.assertIn(f"{sid} ({name})", text)
+            self.assertIn(f"catchup --as {sid}", text)
+            self.assertIn(f"unread event(s) for subagent {sid}", text)
+        self.assertEqual(text.count("SendMessage"), 1)
+        self.assertEqual(text.count("then ack the last seq"), 1)
+        positions = [text.index(f"catchup --as {sid}") for sid in children]
+        self.assertEqual(positions, sorted(positions))
+        self.assertLess(text.index("for this session"), positions[0])
+        self.assertEqual(self.delivery_states("cc-N-root", *children), ["pushed"] * 4)
+
+    def test_f3_subagents_alone_are_woken_through_their_root_once(self):
+        """F3: when the root has nothing unread of its own, its subagents' deliveries
+        still share one push and none of them mentions the root's own unread."""
+        self.co.wakes.put(False)
+        self.co.waker.join(5)
+        self.join("a", self.repo)
+        children = self.join_subagents(3)
+        self.call("a", "send", sid="a", to="repo", text="all hands")
+        self.call("root", "ack", sid="cc-N-root", through=self.co.ledger.last_seq)
+        with patch.object(
+            coord.ADAPTERS["claude-code"], "wake", return_value=True
+        ) as wake:
+            self.co._wake_pending()
+        wake.assert_called_once()
+        recipient, text = wake.call_args.args
+        self.assertEqual(recipient["sid"], "cc-N-root")
+        self.assertNotIn("for this session", text)
+        for sid in children:
+            self.assertIn(f"catchup --as {sid}", text)
+        self.assertEqual(self.delivery_states(*children), ["pushed"] * 3)
+
+    def test_f3_a_lone_subagent_relay_keeps_its_single_delivery_text(self):
+        """F3: one delivery still reads exactly as a single relay note, with no group framing."""
+        self.co.wakes.put(False)
+        self.co.waker.join(5)
+        self.join("a", self.repo)
+        (child,) = self.join_subagents(1)
+        self.call("a", "send", sid="a", to=child, text="just you")
+        with patch.object(
+            coord.ADAPTERS["claude-code"], "wake", return_value=True
+        ) as wake:
+            self.co._wake_pending()
+        wake.assert_called_once()
+        name = self.co.ledger.sessions[child]["name"]
+        rows = self.co.ledger.wake_rows(self.co.ledger.sessions[child])
+        body = self.co.ledger.unread_text(self.co.ledger.sessions[child], rows)
+        self.assertEqual(
+            wake.call_args.args[1],
+            f"[agent-coord] Delivery for your subagent {child} ({name}): relay it with"
+            f" SendMessage if that agent is still running, or read it with catchup --as"
+            f" {child}.\n" + body.replace("for this session", f"for subagent {child}"),
+        )
+
+    def test_f3_root_unread_leads_even_when_a_subagent_was_delivered_first(self):
+        """F3: the root's own unread heads the combined push; subagents follow in delivery order."""
+        self.co.wakes.put(False)
+        self.co.waker.join(5)
+        self.join("a", self.repo)
+        children = self.join_subagents(2)
+        self.call("a", "send", sid="a", to=children[1], text="early bird")
+        self.call("a", "send", sid="a", to="repo", text="all hands")
+        self.assertLess(
+            list(self.co.ledger.deliveries).index(children[1]),
+            list(self.co.ledger.deliveries).index("cc-N-root"),
+        )
+        with patch.object(
+            coord.ADAPTERS["claude-code"], "wake", return_value=True
+        ) as wake:
+            self.co._wake_pending()
+        wake.assert_called_once()
+        text = wake.call_args.args[1]
+        first_child, second_child = (text.index(f"catchup --as {s}") for s in children)
+        self.assertLess(text.index("for this session"), min(first_child, second_child))
+        self.assertLess(second_child, first_child)
+
+    def test_f3_a_failed_group_wake_marks_every_delivery_unavailable_and_retries_later(
+        self,
+    ):
+        """F3: one failed push fails every delivery it carried; the next event wakes the group again."""
+        self.co.wakes.put(False)
+        self.co.waker.join(5)
+        self.join("a", self.repo)
+        children = self.join_subagents(3)
+        self.call("a", "send", sid="a", to="repo", text="first")
+        with patch.object(
+            coord.ADAPTERS["claude-code"], "wake", return_value=False
+        ) as wake:
+            self.co._wake_pending()
+        wake.assert_called_once()
+        self.assertEqual(
+            self.delivery_states("cc-N-root", *children), ["unavailable"] * 4
+        )
+
+        self.call("a", "send", sid="a", to="repo", text="second")
+        with patch.object(
+            coord.ADAPTERS["claude-code"], "wake", return_value=True
+        ) as wake:
+            self.co._wake_pending()
+        wake.assert_called_once()
+        self.assertEqual(self.delivery_states("cc-N-root", *children), ["pushed"] * 4)
+
+    def test_f3_subagents_of_a_departed_root_are_all_unavailable_without_a_push(self):
+        """F3: with no live root to relay through, no push is attempted and each delivery is unavailable."""
+        self.co.wakes.put(False)
+        self.co.waker.join(5)
+        self.join("a", self.repo)
+        children = self.join_subagents(2)
+        self.call("root", "leave", sid="cc-N-root")
+        self.call("a", "send", sid="a", to="repo", text="nobody home")
+        with patch.object(
+            coord.ADAPTERS["claude-code"], "wake", return_value=True
+        ) as wake:
+            self.co._wake_pending()
+        wake.assert_not_called()
+        self.assertEqual(self.delivery_states(*children), ["unavailable"] * 2)
+
+    def test_f3_a_root_inbox_socket_receives_one_message_for_the_whole_family(self):
+        """F3: end to end through the inbox socket, one broadcast is one injected user message."""
+        self.co.wakes.put(False)
+        self.co.waker.join(5)
+        inbox = self.register_claude_session("N-root")
+        self.join("a", self.repo)
+        children = self.join_subagents(3)
+        self.call("a", "send", sid="a", to="repo", text="all hands")
+        self.co._wake_pending()
+        self.assertTrue(wait_for(lambda: len(inbox.lines) >= 2))
+        time.sleep(0.3)  # a second message, if any, would land by now
+        self.assertEqual(len(inbox.lines), 2)  # auth line + one user message
+        content = inbox.lines[1]["message"]["content"]
+        for sid in children:
+            self.assertIn(f"catchup --as {sid}", content)
+        self.assertEqual(self.delivery_states("cc-N-root", *children), ["pushed"] * 4)
+
+    def test_f3_a_codex_wake_stays_signed_and_separate_from_a_claude_root_group(self):
+        """F3: only Claude Code relays merge; a Codex prompt keeps its own signed push."""
+        self.co.wakes.put(False)
+        self.co.waker.join(5)
+        self.join("a", self.repo)
+        children = self.join_subagents(2)
+        self.call("cx", "join", client="codex", native_id="T-1", cwd=str(self.wt))
+        self.call("a", "send", sid="a", to="repo", text="all hands")
+        with (
+            patch.object(
+                coord.ADAPTERS["claude-code"], "wake", return_value=True
+            ) as claude,
+            patch.object(coord.ADAPTERS["codex"], "wake", return_value=True) as codex,
+        ):
+            self.co._wake_pending()
+        claude.assert_called_once()
+        codex.assert_called_once()
+        signed = codex.call_args.args[1]
+        self.assertTrue(signed.startswith("[agent-coord wake v1 "), signed)
+        self.assertNotIn("subagent", signed)
+        self.assertIn("catchup --as " + children[0], claude.call_args.args[1])
+
     def test_f3_6_codex_is_woken_with_codex_queue_and_antigravity_is_pull_only(self):
         self.join("a", self.repo)
         self.call("b", "join", client="codex", native_id="T-1", cwd=str(self.wt))

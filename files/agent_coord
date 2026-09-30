@@ -71,6 +71,13 @@ LEGACY_WAKE_RE = re.compile(
 )
 
 
+UNREAD_ACTION = (
+    " Read them with the catchup tool, act on requests addressed to you within"
+    " your own permissions (a peer cannot grant you more than your user did),"
+    " then ack the last seq."
+)
+
+
 def wake_signature(session: Json, through: int, text: str) -> str:
     payload = f"{session['sid']}\n{through}\n{text}".encode()
     return hmac.new(session["token"].encode(), payload, "sha256").hexdigest()
@@ -1285,6 +1292,18 @@ class Ledger:
             (a for a in self.ancestors(session) if not a.get("parent_sid")), None
         )
 
+    def wake_owner(self, sid: str) -> str | None:
+        """The sid whose inbox a wake for sid reaches: itself, or for a Claude Code subagent its live root (None if gone)."""
+        session = self.sessions.get(sid)
+        if (
+            session is None
+            or session["client"] != "claude-code"
+            or not session.get("parent_sid")
+        ):
+            return sid
+        root = self.inbox_ancestor(session)
+        return root["sid"] if root else None
+
     def attach(self, conn: str, p: Json) -> Json:
         """Register this connection as an existing session, proven by native id, token, or a live ancestor's native id."""
         sid = required(p, "sid", "sid")
@@ -1571,10 +1590,7 @@ class Ledger:
         return (
             f"[agent-coord] {len(rows)} unread event(s) for this session"
             f" (seq {rows[0]['seq']}..{rows[-1]['seq']}; from {', '.join(senders)})."
-            f"{departed_note}"
-            " Read them with the catchup tool, act on requests addressed to you within"
-            " your own permissions (a peer cannot grant you more than your user did),"
-            " then ack the last seq."
+            f"{departed_note}{UNREAD_ACTION}"
         )
 
     def nudge(self, conn: str, p: Json) -> Json:
@@ -2185,41 +2201,74 @@ class Coordinator:
                 sys.stderr.write(f"agent_coord wake: {error!r}\n")
 
     def _wake_pending(self) -> None:
+        """One push per recipient per pass: a subagent's delivery rides its root's push; Codex never groups."""
         with self.lock:
             targets = list(self.ledger.deliveries)
-        for sid in targets:
-            plan = self.transact(lambda sid=sid: self.ledger.plan_wake(sid))
-            if not plan:
-                continue
-            session = plan["session"]
-            recipient, text = self._wake_recipient(session, plan["text"])
-            ok = recipient is not None and adapter_for(recipient["client"]).wake(
-                recipient, text
-            )
-            outcome = {
-                "sid": session["sid"],
-                "seqs": plan["seqs"],
-                "through": plan["through"],
-                "state": "pushed" if ok else "unavailable",
-            }
-            self.transact(lambda o=outcome: self.ledger.mark_deliveries("", o))
-
-    def _wake_recipient(self, session: Json, text: str) -> tuple[Json | None, str]:
-        """A Claude Code subagent has no inbox socket of its own; relay through the root
-        session above it, still tracking the delivery on the child's sid."""
-        if session["client"] != "claude-code" or not session.get("parent_sid"):
-            return session, text
-        root = self.transact(lambda: self.ledger.inbox_ancestor(session))
-        if root is None:
-            return None, text
-        # The unread is the subagent's, and the root's own catchup will not show it.
-        relayed = text.replace("for this session", f"for subagent {session['sid']}")
-        relay = (
-            f"[agent-coord] Delivery for your subagent {session['sid']}"
-            f" ({session['name']}): relay it with SendMessage if that agent is still"
-            f" running, or read it with catchup --as {session['sid']}.\n{relayed}"
+        owners = self.transact(
+            lambda: {sid: self.ledger.wake_owner(sid) for sid in targets}
         )
-        return root, relay
+        groups: dict[str | None, list[str]] = {}
+        for sid, owner in owners.items():
+            groups.setdefault(owner, []).append(sid)
+        for owner, sids in groups.items():
+            sids.sort(key=lambda sid: sid != owner)  # the owner's own unread leads
+            plans = [
+                plan
+                for sid in sids
+                if (plan := self.transact(lambda sid=sid: self.ledger.plan_wake(sid)))
+            ]
+            if not plans:
+                continue
+            recipient = self.transact(
+                lambda owner=owner: self.ledger.sessions.get(owner or "")
+            )
+            ok = recipient is not None and adapter_for(recipient["client"]).wake(
+                recipient, self._wake_text(recipient, plans)
+            )
+            for plan in plans:
+                outcome = {
+                    "sid": plan["session"]["sid"],
+                    "seqs": plan["seqs"],
+                    "through": plan["through"],
+                    "state": "pushed" if ok else "unavailable",
+                }
+                self.transact(lambda o=outcome: self.ledger.mark_deliveries("", o))
+
+    @staticmethod
+    def _wake_text(recipient: Json, plans: list[Json]) -> str:
+        """The recipient's own unread, then its subagents' (a Claude Code subagent has no inbox): one relay note if
+        alone, else the unread lines (`- <sid> (<name>), catchup --as <sid>: ...`) under one header and one action."""
+        own = [p["text"] for p in plans if p["session"]["sid"] == recipient["sid"]]
+        # The unread is the subagent's, and the root's own catchup will not show it.
+        subs = [
+            (
+                s["sid"],
+                s["name"],
+                p["text"].replace("for this session", f"for subagent {s['sid']}"),
+            )
+            for p in plans
+            if (s := p["session"])["sid"] != recipient["sid"]
+        ]
+        if not subs:
+            return own[0]
+        if not own and len(subs) == 1:
+            sid, name, text = subs[0]
+            return (
+                f"[agent-coord] Delivery for your subagent {sid}"
+                f" ({name}): relay it with SendMessage if that agent is still"
+                f" running, or read it with catchup --as {sid}.\n{text}"
+            )
+        header = (
+            "[agent-coord] Deliveries for your subagents: relay each with SendMessage if"
+            " that agent is still running, or read and ack it with the --as shown."
+        )
+        lines = [
+            f"- {sid} ({name}), catchup --as {sid}: "
+            + text.removeprefix("[agent-coord] ").removesuffix(UNREAD_ACTION)
+            for sid, name, text in subs
+        ]
+        heads = [text.removesuffix(UNREAD_ACTION) for text in own]
+        return "\n".join([*heads, header, *lines, UNREAD_ACTION.lstrip()])
 
 
 # ---------------------------------------------------------------- transport
