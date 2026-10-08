@@ -1,6 +1,7 @@
 {
   "permissions": {
-    "defaultMode": "auto"
+    "defaultMode": "auto",
+    "additionalDirectories": ["/etc/claude-code", "/etc/codex", "/usr/local/bin", "/var/lib/claude-rag-memory"]
   },
   "env": {
     "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1",
