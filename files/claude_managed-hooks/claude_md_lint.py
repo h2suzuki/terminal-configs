@@ -369,7 +369,7 @@ def dispatch_miss(
         "claude", "-p",
         "--no-session-persistence",
         "--disable-slash-commands",
-        "--model", "claude-haiku-4-5-20251001",
+        "--model", "haiku",
         "--effort", "high",
         "--setting-sources", "",
         "--strict-mcp-config",
@@ -776,7 +776,7 @@ class DispatchTest(_StubBase):
         self.assertNotIn("--name", argv)
         self.assertNotIn("--permission-mode", argv)
         self.assertEqual(argv[argv.index("--tools") + 1], "Read")
-        self.assertEqual(argv[argv.index("--model") + 1], "claude-haiku-4-5-20251001")
+        self.assertEqual(argv[argv.index("--model") + 1], "haiku")
         self.assertEqual(argv[argv.index("--setting-sources") + 1], "")
         self.assertEqual(argv[argv.index("--add-dir") + 1], os.path.realpath(self.cwd))
         self.assertEqual(argv[argv.index("--append-system-prompt") + 1], "SKILL BODY")
