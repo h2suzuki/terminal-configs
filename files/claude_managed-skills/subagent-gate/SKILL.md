@@ -24,7 +24,7 @@ subagent 起動には context 切り替え / 結果統合 / token コストの o
 
 - 調査: `subagent_type: "investigator"`。 定義で `sonnet` (Claude Code が指す最新の Sonnet、 現在は Sonnet 5.5)・effort xhigh・編集不可に固定しているので `model` は不要
 - 実装・テスト: `subagent_type: "implementer"`。 定義で `sonnet`・effort xhigh に固定しているので `model` は不要
-- 対象が決まった読み取りだけの小仕事 (ファイルや symbol の場所の特定、 既知の 1〜数ファイル・ページ・ログからの抜き出し、 範囲の決まった入力の要約・分類・形式的 review): `subagent_type: "scout"`。 定義で `haiku` (現在は Haiku 5.5)・effort high・編集不可に固定しているので `model` は不要。 渡す入力は 100K token を十分下回る量に絞る (Haiku 5.5 は入力が 100K token を超えた要求の単価が 5 倍になる)。 収まらない量や判断が要る仕事は investigator に回す
+- 対象が決まった読み取りだけの小仕事 (ファイルや symbol の場所の特定、 既知の 1〜数ファイル・ページ・ログからの抜き出し、 範囲の決まった入力の要約・分類・形式的 review): `subagent_type: "scout"`。 定義で `haiku` (現在は Haiku 5.5)・effort max・編集不可に固定しているので `model` は不要。 渡す入力は 100K token を十分下回る量に絞る (Haiku 5.5 は入力が 100K token を超えた要求の単価が 5 倍になる)。 収まらない量や判断が要る仕事は investigator に回す
 - 設計判断や難しい root-cause 解析など判断が要る仕事: `opus` 以上、 検討の結果 親と同じ model を選ぶのも可 (その場合も名前を明示する)
 - fork (`subagent_type: "fork"`) は親 model 固定なので指定不要
 - built-in の Explore・general-purpose は定義に model が無く親 model を継承するので、 使うなら `model` を渡す。 検索の fan-out は scout で足りることが多い
@@ -33,7 +33,7 @@ subagent 起動には context 切り替え / 結果統合 / token コストの o
 
 - 定義に effort を書いた agent (investigator・implementer・scout) には `effort` を渡さない
 - 定義に effort の無い agent を起動するときは、 Agent tool の `effort` を渡してよい (Claude Code v2.1.292 以降)。 渡さなければ model の既定 (Opus 5.5・Sonnet 5.5・Haiku 5.5 は medium) で動く
-- Haiku は high を上限の目安にする。 xhigh・max は出力 token が high の約 2〜3 倍に増える割に正答率の上積みが小さい。 それが要る難しさなら investigator に回す
+- Haiku は xhigh か max で使う。 high 以下では使い物にならないという利用者の経験に基づく規則で、 定義に effort の無い agent を haiku で起動するときも `effort` に xhigh か max を渡す
 
 ### Keep small jobs off the advisor
 

@@ -273,14 +273,11 @@ haiku_katakanize_sync() {
   # cleaner equivalent. User-level SessionStart hooks don't fire on
   # this short-lived child, the user's effortLevel doesn't leak in,
   # and OAuth/keychain auth keeps working (unlike --bare).
-  # --effort low: a single-line katakana / 30-char summarize task
-  # doesn't benefit from a higher effort tier and pays a real latency
-  # cost. Long input + low effort still produces correct summaries —
-  # measured ~14 s for a ~1.1 KB SubagentStop message.
+  # --effort xhigh: Haiku runs at xhigh or max by user policy; latency on Haiku 5.5 is unmeasured.
   CLAUDE_NOTIFY_NESTED=1 \
     flock -w "$HAIKU_LOCK_WAIT" "$HAIKU_LOCK" timeout -k 5 "$HAIKU_TIMEOUT" claude \
     --model "$HAIKU_MODEL" \
-    --effort low \
+    --effort xhigh \
     --setting-sources "" \
     --no-session-persistence \
     --disable-slash-commands \

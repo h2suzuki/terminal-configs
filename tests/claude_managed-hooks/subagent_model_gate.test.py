@@ -153,13 +153,13 @@ class ScoutDefinitionTest(unittest.TestCase):
         os.path.dirname(HOOK), "..", "claude_managed-agents", "scout.md"
     )
 
-    def test_scout_runs_haiku_alias_at_high_and_cannot_edit(self):
-        """The managed scout agent runs the `haiku` alias (newest Haiku) at high effort, and denies the file-editing tools."""
+    def test_scout_runs_haiku_alias_at_max_and_cannot_edit(self):
+        """The managed scout agent runs the `haiku` alias (newest Haiku) at max effort (user rule: Haiku at xhigh or max), and denies the file-editing tools."""
         with open(self.PATH, encoding="utf-8") as f:
             front = f.read().split("---\n")[1].splitlines()
         self.assertIn("name: scout", front)
         self.assertIn("model: haiku", front)
-        self.assertIn("effort: high", front)
+        self.assertIn("effort: max", front)
         (denied,) = [line for line in front if line.startswith("disallowedTools:")]
         for tool in ("Edit", "Write", "NotebookEdit"):
             with self.subTest(tool=tool):

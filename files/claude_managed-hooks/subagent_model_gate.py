@@ -23,7 +23,7 @@ REASON = (
     'fork (`subagent_type: "fork"`) は親 model 固定なので対象外です。 '
     '調査は `subagent_type: "investigator"`、 実装・テストは `subagent_type: "implementer"` '
     "(どちらも定義で `sonnet`・effort xhigh に固定)、 対象が決まった検索・抜き出し・要約は "
-    '`subagent_type: "scout"` (定義で `haiku`・effort high に固定、 入力は 100K token 未満に絞る) '
+    '`subagent_type: "scout"` (定義で `haiku`・effort max に固定、 入力は 100K token 未満に絞る) '
     "を使えば `model` は不要です。"
 )
 MANAGED_AGENTS = "/etc/claude-code/.claude/agents"

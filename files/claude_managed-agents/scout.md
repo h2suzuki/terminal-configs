@@ -1,8 +1,8 @@
 ---
 name: scout
-description: Low-cost executor on the newest Haiku (the `haiku` alias, now Haiku 5.5) at high effort for narrowly scoped read-only work whose target the parent already knows. Use it to locate a file or symbol, pull specific facts out of one or a few known files / pages / logs, or summarize or classify a bounded input well under 100K tokens. It never edits. Open-ended investigation, root-cause tracing, and anything that needs judgment go to investigator instead.
+description: Low-cost executor on the newest Haiku (the `haiku` alias, now Haiku 5.5) at max effort for narrowly scoped read-only work whose target the parent already knows. Use it to locate a file or symbol, pull specific facts out of one or a few known files / pages / logs, or summarize or classify a bounded input well under 100K tokens. It never edits. Open-ended investigation, root-cause tracing, and anything that needs judgment go to investigator instead.
 model: haiku
-effort: high
+effort: max
 disallowedTools: Edit, Write, NotebookEdit
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: tool-role-delegation
-description: Route work to the right executor — quick lookups via codegraph, narrow read-only lookups via the scout subagent (`haiku` alias, high), investigation via the investigator subagent and implementation and tests via the implementer subagent (both on the `sonnet` alias at xhigh), Codex or Antigravity only when the user asks for a cross-model review — while Claude owns spec, implementation direction, bug-finding, and review of the result.
+description: Route work to the right executor — quick lookups via codegraph, narrow read-only lookups via the scout subagent (`haiku` alias, max), investigation via the investigator subagent and implementation and tests via the implementer subagent (both on the `sonnet` alias at xhigh), Codex or Antigravity only when the user asks for a cross-model review — while Claude owns spec, implementation direction, bug-finding, and review of the result.
 when_to_use: TRIGGER when about to search / explore code, investigate a bug or behavior, write or edit source, start a feature, write or run tests, when the user asks for a cross-model review ("クロスモデルレビュー" / "codex でレビュー" / "agy でレビュー"), or say "実装する" / "コードを書く" / "検索" / "探す" / "調査" / "原因を調べる". SKIP for trivial Q&A or doc-only edits.
 ---
 
@@ -10,7 +10,7 @@ codegraph・scout subagent・investigator subagent・implementer subagent・Code
 
 ## Process
 
-1. **検索は codegraph を優先**: コード探索は codegraph を Grep / Read より先に使う。既知の symbol やファイルを1〜2回の問い合わせで確かめるだけなら Claude が直接行う。対象は決まっているが結果が大きい検索・抜き出し・要約は `subagent_type: "scout"` に任せる。定義で `haiku` (現在は Haiku 5.5)・effort high・編集不可に固定しているので `model` は渡さない。渡す入力は 100K token を十分下回る量に絞る。
+1. **検索は codegraph を優先**: コード探索は codegraph を Grep / Read より先に使う。既知の symbol やファイルを1〜2回の問い合わせで確かめるだけなら Claude が直接行う。対象は決まっているが結果が大きい検索・抜き出し・要約は `subagent_type: "scout"` に任せる。定義で `haiku` (現在は Haiku 5.5)・effort max・編集不可に固定しているので `model` は渡さない。渡す入力は 100K token を十分下回る量に絞る。
 2. **調査は investigator に任せる (既定)**: 複数ファイルや複数の情報源にまたがる調査、不具合の原因の追跡、使用箇所の洗い出し、公式ドキュメント・upstream issue・配備状況の確認は `subagent_type: "investigator"` で起動する。定義で `sonnet` (Claude Code が指す最新の Sonnet、 現在は Sonnet 5.5)・effort xhigh・編集不可に固定しているので `model` は渡さない。問いと調べる範囲は Claude が書き、返った所見は根拠の箇所を自分で開いて確かめてから結論に使う。
 3. **Claude が仕様・指示を書く**: 何を作るか・どう直すか・受入基準を Claude が明文化する。依頼文は目的・触ってよい範囲・完了条件・禁止事項 (commit しない等) を含める。
 4. **実装とテストは implementer に任せる (既定)**: 仕様が決まったコード変更、テストの作成と実行、lint・型検査の指摘の修正は `subagent_type: "implementer"` で起動する。定義で `sonnet`・effort xhigh に固定しているので `model` は渡さない (渡すと定義の model を上書きする)。数行の自明な修正や文書だけの編集は Claude が直接行ってよい。独立した部分は複数の implementer を並列に起動する。subagent 同士の編集が衝突しそうなら、Rules の「並列 subagent の編集の統合」に従って worktree で隔離し、commit・push・merge・pull で統合する。

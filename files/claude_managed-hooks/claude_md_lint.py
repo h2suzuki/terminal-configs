@@ -370,7 +370,7 @@ def dispatch_miss(
         "--no-session-persistence",
         "--disable-slash-commands",
         "--model", "haiku",
-        "--effort", "high",
+        "--effort", "max",
         "--setting-sources", "",
         "--strict-mcp-config",
         "--tools", "Read",
@@ -777,6 +777,7 @@ class DispatchTest(_StubBase):
         self.assertNotIn("--permission-mode", argv)
         self.assertEqual(argv[argv.index("--tools") + 1], "Read")
         self.assertEqual(argv[argv.index("--model") + 1], "haiku")
+        self.assertIn(argv[argv.index("--effort") + 1], ("xhigh", "max"))
         self.assertEqual(argv[argv.index("--setting-sources") + 1], "")
         self.assertEqual(argv[argv.index("--add-dir") + 1], os.path.realpath(self.cwd))
         self.assertEqual(argv[argv.index("--append-system-prompt") + 1], "SKILL BODY")
