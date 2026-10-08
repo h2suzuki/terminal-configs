@@ -76,6 +76,10 @@
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/cross_session_send_gate.py" } ]
       },
       {
+        "matcher": "^mcp__mytask__TaskCreate$",
+        "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/task_record_memory_check.py" } ]
+      },
+      {
         "matcher": "^EnterWorktree$",
         "hooks": [ { "type": "command", "command": "/etc/claude-code/hooks/worktree_home.py" } ]
       },
