@@ -18,10 +18,13 @@ import sys
 REASON = (
     "subagent-model-gate: `model` が未指定です。 未指定は親 model の無検討継承になり、 "
     "search / review / 要約なら haiku か sonnet で足ります。 作業に必要な model を判断して "
-    "`model` を明示指定してから再実行してください (検討の結果 親と同じ model を選ぶのは問題ありません。 "
-    'その場合も名前を明示します)。 fork (`subagent_type: "fork"`) は親 model 固定なので対象外です。 '
+    "`model` を alias (haiku / sonnet / opus / fable) で明示指定してから再実行してください "
+    "(検討の結果 親と同じ model を選ぶのは問題ありません。 その場合も名前を明示します)。 "
+    'fork (`subagent_type: "fork"`) は親 model 固定なので対象外です。 '
     '調査は `subagent_type: "investigator"`、 実装・テストは `subagent_type: "implementer"` '
-    "(どちらも定義で `sonnet`・effort xhigh に固定) を使えば `model` は不要です。"
+    "(どちらも定義で `sonnet`・effort xhigh に固定)、 対象が決まった検索・抜き出し・要約は "
+    '`subagent_type: "scout"` (定義で `haiku`・effort high に固定、 入力は 100K token 未満に絞る) '
+    "を使えば `model` は不要です。"
 )
 MANAGED_AGENTS = "/etc/claude-code/.claude/agents"
 

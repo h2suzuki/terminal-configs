@@ -1,16 +1,16 @@
 ---
 name: tool-role-delegation
-description: Route work to the right executor — quick lookups via codegraph, investigation via the investigator subagent and implementation and tests via the implementer subagent (both on the `sonnet` alias at xhigh), Codex or Antigravity only when the user asks for a cross-model review — while Claude owns spec, implementation direction, bug-finding, and review of the result.
+description: Route work to the right executor — quick lookups via codegraph, narrow read-only lookups via the scout subagent (`haiku` alias, high), investigation via the investigator subagent and implementation and tests via the implementer subagent (both on the `sonnet` alias at xhigh), Codex or Antigravity only when the user asks for a cross-model review — while Claude owns spec, implementation direction, bug-finding, and review of the result.
 when_to_use: TRIGGER when about to search / explore code, investigate a bug or behavior, write or edit source, start a feature, write or run tests, when the user asks for a cross-model review ("クロスモデルレビュー" / "codex でレビュー" / "agy でレビュー"), or say "実装する" / "コードを書く" / "検索" / "探す" / "調査" / "原因を調べる". SKIP for trivial Q&A or doc-only edits.
 ---
 
 # Tool Role Delegation
 
-codegraph・investigator subagent・implementer subagent・Codex・Antigravity の役割分担。Codex の発注書・worktree 隔離・監視・受け入れは `codex-delegation` skill が持つので、本 skill は担い手の振り分けと往復手順に絞る。
+codegraph・scout subagent・investigator subagent・implementer subagent・Codex・Antigravity の役割分担。Codex の発注書・worktree 隔離・監視・受け入れは `codex-delegation` skill が持つので、本 skill は担い手の振り分けと往復手順に絞る。
 
 ## Process
 
-1. **検索は codegraph を優先**: コード探索は codegraph を Grep / Read より先に使う。既知の symbol やファイルを1〜2回の問い合わせで確かめるだけなら Claude が直接行う。
+1. **検索は codegraph を優先**: コード探索は codegraph を Grep / Read より先に使う。既知の symbol やファイルを1〜2回の問い合わせで確かめるだけなら Claude が直接行う。対象は決まっているが結果が大きい検索・抜き出し・要約は `subagent_type: "scout"` に任せる。定義で `haiku` (現在は Haiku 5.5)・effort high・編集不可に固定しているので `model` は渡さない。渡す入力は 100K token を十分下回る量に絞る。
 2. **調査は investigator に任せる (既定)**: 複数ファイルや複数の情報源にまたがる調査、不具合の原因の追跡、使用箇所の洗い出し、公式ドキュメント・upstream issue・配備状況の確認は `subagent_type: "investigator"` で起動する。定義で `sonnet` (Claude Code が指す最新の Sonnet、 現在は Sonnet 5.5)・effort xhigh・編集不可に固定しているので `model` は渡さない。問いと調べる範囲は Claude が書き、返った所見は根拠の箇所を自分で開いて確かめてから結論に使う。
 3. **Claude が仕様・指示を書く**: 何を作るか・どう直すか・受入基準を Claude が明文化する。依頼文は目的・触ってよい範囲・完了条件・禁止事項 (commit しない等) を含める。
 4. **実装とテストは implementer に任せる (既定)**: 仕様が決まったコード変更、テストの作成と実行、lint・型検査の指摘の修正は `subagent_type: "implementer"` で起動する。定義で `sonnet`・effort xhigh に固定しているので `model` は渡さない (渡すと定義の model を上書きする)。数行の自明な修正や文書だけの編集は Claude が直接行ってよい。独立した部分は複数の implementer を並列に起動する。subagent 同士の編集が衝突しそうなら、Rules の「並列 subagent の編集の統合」に従って worktree で隔離し、commit・push・merge・pull で統合する。
@@ -25,6 +25,7 @@ codegraph・investigator subagent・implementer subagent・Codex・Antigravity �
 
 - **担い手の決裁 (2026-09-29 ユーザー決裁)**: 実装とテストは Sonnet 5.5 xhigh の subagent が既定。Codex は基本的に使わず、ユーザーがクロスモデルレビューを求めた時だけ使い、その時は Antigravity (`agy`) でもよい。Codex は Astra high (`gpt-6-astra`、effort `high`) を使う。
 - **調査の担い手 (2026-09-30 ユーザー依頼)**: 調査も Sonnet 5.5 xhigh の subagent (investigator) が既定。
+- **小仕事の担い手 (2026-10-08 ユーザー依頼)**: 対象が決まった読み取りだけの小仕事は Haiku の subagent (scout) が既定。Haiku 5.5 は入力が 100K token を超えた要求の単価が 5 倍になるので、収まらない量は investigator に回す。model は版番号でなく alias で指定し、Claude Code の更新に合わせて最新版を使う。
 - **codegraph のツール選択**: `codegraph_explore` (自然言語 / symbol 群から関連 source)、`codegraph_search` (symbol の位置)、`codegraph_callers` / `codegraph_callees` / `codegraph_impact` (呼出元 / 呼出先 / 変更の波及)、`codegraph_node` / `codegraph_files` (個別 symbol / file)。intent に合うものを選ぶ。
 - **役割境界を守る**: 調査は investigator、実装は implementer、問い・仕様・指示・バグ出し・レビュー・結論と完了の認定は Claude。implementer の結果を Claude が書き直して取り込むのは「レビューの反映」の範囲に留め、実装のやり直しは implementer に戻す。
 - **並列 subagent の編集の統合 (2026-09-30 ユーザー指示)**: 編集が衝突しそうな subagent には同じ checkout を共有させず、それぞれ `isolation: "worktree"` で隔離する。統合は commit を単位に行う。subagent が自分の worktree のブランチに commit し、親がレビューして統合先へ merge し、まだ動いている worktree には統合結果を取り込ませる。統合の運用 (統合先のブランチ、共有と merge のやり方、ブランチ名) は project の決まりに従い、決まりが読み取れなければユーザーに確認する。この環境の WorktreeCreate hook は worktree を `origin/HEAD` から切るので、基点に入れたい commit は先に共有しておく。 統合できるよう、subagent には成果を commit してから終わらせる。gitignore 下にだけ置いた成果は「変更なし」と判定されて worktree ごと消えることがあり、subagent が終わった後も動く背景作業 (Codex への委譲を含む) は作業場所を失う。Codex への委譲には `isolation` を使わず、`codex-delegation` の手順に従う。
@@ -32,11 +33,11 @@ codegraph・investigator subagent・implementer subagent・Codex・Antigravity �
 
 ## Output
 
-小さな確認は codegraph の適切なツール、調査は investigator → Claude が根拠を確認、実装とテストは implementer → Claude レビュー、数行の自明な修正と文書編集は Claude 直接、高リスクは opus subagent の独立レビュー、クロスモデルレビューはユーザーが求めた時だけ Codex (Astra high) か Antigravity。
+小さな確認は codegraph の適切なツール、対象が決まった検索・抜き出し・要約は scout、調査は investigator → Claude が根拠を確認、実装とテストは implementer → Claude レビュー、数行の自明な修正と文書編集は Claude 直接、高リスクは opus subagent の独立レビュー、クロスモデルレビューはユーザーが求めた時だけ Codex (Astra high) か Antigravity。
 
 ## Related
 
-- `subagent-gate` — subagent を起動する条件と model の選び方。investigator は条件 (c)、implementer は条件 (e)。
+- `subagent-gate` — subagent を起動する条件と model・effort の選び方、advisor の費用。investigator は条件 (c)、implementer は条件 (e)。
 - `codex-delegation` — Codex を使うと決まった後の lifecycle (発注書・worktree 隔離・監視・受け入れ)。
 - `make-plan-before-coding` — implementer に渡す仕様の明文化はこの skill の設計合意に依拠。
 - `writing-code` — 永続ファイル汎用 rule (「No dangling-prone references in persistent files」 等)。

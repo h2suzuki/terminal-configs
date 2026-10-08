@@ -148,5 +148,41 @@ class InvestigatorDefinitionTest(unittest.TestCase):
         self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
 
 
+class ScoutDefinitionTest(unittest.TestCase):
+    PATH = os.path.join(
+        os.path.dirname(HOOK), "..", "claude_managed-agents", "scout.md"
+    )
+
+    def test_scout_runs_haiku_alias_at_high_and_cannot_edit(self):
+        """The managed scout agent runs the `haiku` alias (newest Haiku) at high effort, and denies the file-editing tools."""
+        with open(self.PATH, encoding="utf-8") as f:
+            front = f.read().split("---\n")[1].splitlines()
+        self.assertIn("name: scout", front)
+        self.assertIn("model: haiku", front)
+        self.assertIn("effort: high", front)
+        (denied,) = [line for line in front if line.startswith("disallowedTools:")]
+        for tool in ("Edit", "Write", "NotebookEdit"):
+            with self.subTest(tool=tool):
+                self.assertIn(
+                    tool, [t.strip() for t in denied.split(":", 1)[1].split(",")]
+                )
+
+    def test_scout_prompt_keeps_off_the_advisor_and_under_100k(self):
+        """No setting keeps a subagent off the inherited advisor (anthropics/claude-code#94656), and Haiku 5.5 bills a prompt over 100K tokens at 5x, so the prompt must say both."""
+        with open(self.PATH, encoding="utf-8") as f:
+            body = f.read().split("---\n", 2)[2]
+        self.assertIn("advisor", body)
+        self.assertIn("100K", body)
+
+    def test_scout_spawn_needs_no_model(self):
+        """The gate reads the definition's pinned model, so the real scout.md lets a spawn omit `model`."""
+        with tempfile.TemporaryDirectory() as cwd:
+            agents = os.path.join(cwd, ".claude", "agents")
+            os.makedirs(agents)
+            shutil.copy(self.PATH, agents)
+            proc = run_hook({**spawn(prompt="x", subagent_type="scout"), "cwd": cwd})
+        self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
