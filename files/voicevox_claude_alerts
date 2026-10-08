@@ -132,17 +132,14 @@ export VVOX_TIMEOUT="${VVOX_TIMEOUT:-30}"
 case "$VVOX_TIMEOUT" in ''|*[!0-9]*|0) VVOX_TIMEOUT=30 ;; esac  # GNU timeout 0 = no timeout; non-int breaks the ms math
 # Bounded flock wait (< VVOX_TIMEOUT) so a stuck holder drops stale utterances instead of piling detached waiters.
 export VVOX_LOCK_WAIT="${VVOX_LOCK_WAIT:-10}"
-# 60s chosen empirically: claude -p with --effort low on claude-haiku-4-5
-# regressed to 18-64s after Claude Code 2.1.140 (was 21s on 2.1.139).
-# 60s catches most successful calls while keeping the fallback path latency
-# bounded. Timeouts are visible in spoken.log as `haiku=TIMEOUT`.
+# Bounds one claude -p call so the fallback phrase still plays; overruns log as `haiku=TIMEOUT` in spoken.log.
 export HAIKU_TIMEOUT="${HAIKU_TIMEOUT:-60}"
 case "$HAIKU_TIMEOUT" in ''|*[!0-9]*|0) HAIKU_TIMEOUT=60 ;; esac
 # >= HAIKU_TIMEOUT so a queued summary waits out the in-flight claude -p instead of dropping.
 export HAIKU_LOCK_WAIT="${HAIKU_LOCK_WAIT:-70}"
 # Haiku model used for Stop / SubagentStop summarization and CLI `say`
 # katakana conversion.
-export HAIKU_MODEL="claude-haiku-4-5"
+export HAIKU_MODEL="haiku"
 # Haiku system prompt — single source of truth for the katakana-conversion
 # persona used by every claude -p call this script makes. Both Stop
 # summarization and CLI say share it; only the user prompt differs.
