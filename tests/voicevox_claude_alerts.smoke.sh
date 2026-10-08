@@ -15,7 +15,9 @@ CANONICAL="${VVOX_SCRIPT:-$(dirname "$(realpath "$0")")/../files/voicevox_claude
 
 SB="$(mktemp -d)"
 PROG_NAME="vvox_smoke_$$"
-trap 'rm -rf "$SB"; rm -f "/tmp/$PROG_NAME".*.lock 2>/dev/null' EXIT
+# Locks live in the sandbox dir: a run must not touch the real /tmp locks, and /tmp may be read-only.
+export VVOX_LOCK_DIR="$SB"
+trap 'rm -rf "$SB"' EXIT
 BIN="$SB/bin"
 mkdir -p "$BIN"
 
@@ -145,7 +147,7 @@ config_case unknown          '"some_future_kind"' "設定をリロードした�
 # queuing a detached waiter (guards the unbounded-pileup accumulation bug).
 CUR="VVOX_LOCK contended → flock -w drops utterance, no pileup"
 echo "=== $CUR ==="
-LOCK_FILE="/tmp/$PROG_NAME.voicevox.lock"
+LOCK_FILE="$VVOX_LOCK_DIR/$PROG_NAME.voicevox.lock"
 ( umask 0; : > "$LOCK_FILE" ) 2>/dev/null
 READY="$SB/holder-ready"; rm -f "$READY"
 ( exec 9>"$LOCK_FILE"; flock -x 9; : > "$READY"; sleep 3 ) &

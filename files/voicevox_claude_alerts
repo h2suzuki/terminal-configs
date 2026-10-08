@@ -59,6 +59,7 @@
 #                           below). Users should never set this manually.
 #   XDG_STATE_HOME          Base for STATE_DIR; falls back to ~/.local/state.
 #   XDG_RUNTIME_DIR         Base for RUNTIME_DIR; falls back to /tmp/<prog>-<uid>.
+#   VVOX_LOCK_DIR           Directory of the two flock files; defaults to /tmp.
 #   LC_ALL                  Forced to C.UTF-8 internally so ${#var} character
 #                           counts work in the Stop branch (any caller-set
 #                           value is overridden).
@@ -214,10 +215,11 @@ fi
 #                    produced one 15 s timeout), so without this lock the
 #                    summarizer breaks. The CLI never reaches this lock
 #                    because the CLI path doesn't invoke claude.
-VVOX_LOCK="/tmp/$PROG_NAME.voicevox.lock"
+VVOX_LOCK_DIR="${VVOX_LOCK_DIR:-/tmp}"
+VVOX_LOCK="$VVOX_LOCK_DIR/$PROG_NAME.voicevox.lock"
 # Exported so haiku_katakanize_sync can flock it from a setsid -f subshell
 # (the hook path) without having to thread it through positional args.
-export HAIKU_LOCK="/tmp/$PROG_NAME.haiku.lock"
+export HAIKU_LOCK="$VVOX_LOCK_DIR/$PROG_NAME.haiku.lock"
 
 # spoken.log is always written — it's a small TSV (~100 B per utterance) and
 # the timing/status columns are the user-facing diagnostic surface for Haiku
