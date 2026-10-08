@@ -22,8 +22,8 @@ subagent 起動には context 切り替え / 結果統合 / token コストの o
 
 起動する時は `model` を毎回明示する (定義で `model` を固定した investigator・implementer は除く)。 未指定は親 model の無検討継承 (最高コスト model で search / review を回す) になる。
 
-- 調査: `subagent_type: "investigator"`。 定義で Sonnet 5.5・effort xhigh・編集不可に固定しているので `model` は不要
-- 実装・テスト: `subagent_type: "implementer"`。 定義で Sonnet 5.5・effort xhigh に固定しているので `model` は不要 (effort は起動時に渡せず、 定義でしか決まらない)
+- 調査: `subagent_type: "investigator"`。 定義で `sonnet` (Claude Code が指す最新の Sonnet、 現在は Sonnet 5.5)・effort xhigh・編集不可に固定しているので `model` は不要
+- 実装・テスト: `subagent_type: "implementer"`。 定義で `sonnet`・effort xhigh に固定しているので `model` は不要 (effort は起動時に渡せず、 定義でしか決まらない)
 - 調査に当たらない grep 集約 / 要約 / 形式的 review: `haiku` か `sonnet`
 - 設計判断や難しい root-cause 解析など判断が要る仕事: `opus` 以上、 検討の結果 親と同じ model を選ぶのも可 (その場合も名前を明示する)
 - fork (`subagent_type: "fork"`) は親 model 固定なので指定不要

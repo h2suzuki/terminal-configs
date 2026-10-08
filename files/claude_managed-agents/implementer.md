@@ -1,7 +1,7 @@
 ---
 name: implementer
-description: Default executor for implementation and test work on Sonnet 5.5 at xhigh effort. Use it to write or change code, write tests, run tests / linters / type-checkers, and fix what they report, once the parent has fixed the spec. The parent keeps design decisions, review, and final acceptance.
-model: claude-sonnet-5-5
+description: Default executor for implementation and test work on the newest Sonnet (the `sonnet` alias, now Sonnet 5.5) at xhigh effort. Use it to write or change code, write tests, run tests / linters / type-checkers, and fix what they report, once the parent has fixed the spec. The parent keeps design decisions, review, and final acceptance.
+model: sonnet
 effort: xhigh
 ---
 

@@ -105,15 +105,15 @@ class ModelGateTest(unittest.TestCase):
 
 
 class ImplementerDefinitionTest(unittest.TestCase):
-    def test_implementer_runs_sonnet_5_5_at_xhigh(self):
-        """The managed implementer agent pins Sonnet 5.5 and xhigh effort in its frontmatter."""
+    def test_implementer_runs_sonnet_alias_at_xhigh(self):
+        """The managed implementer agent runs the `sonnet` alias (newest Sonnet) at xhigh effort in its frontmatter."""
         path = os.path.join(
             os.path.dirname(HOOK), "..", "claude_managed-agents", "implementer.md"
         )
         with open(path, encoding="utf-8") as f:
             front = f.read().split("---\n")[1].splitlines()
         self.assertIn("name: implementer", front)
-        self.assertIn("model: claude-sonnet-5-5", front)
+        self.assertIn("model: sonnet", front)
         self.assertIn("effort: xhigh", front)
 
 
@@ -122,12 +122,12 @@ class InvestigatorDefinitionTest(unittest.TestCase):
         os.path.dirname(HOOK), "..", "claude_managed-agents", "investigator.md"
     )
 
-    def test_investigator_runs_sonnet_5_5_at_xhigh_and_cannot_edit(self):
-        """The managed investigator agent pins Sonnet 5.5 and xhigh effort, and denies the file-editing tools."""
+    def test_investigator_runs_sonnet_alias_at_xhigh_and_cannot_edit(self):
+        """The managed investigator agent runs the `sonnet` alias (newest Sonnet) at xhigh effort, and denies the file-editing tools."""
         with open(self.PATH, encoding="utf-8") as f:
             front = f.read().split("---\n")[1].splitlines()
         self.assertIn("name: investigator", front)
-        self.assertIn("model: claude-sonnet-5-5", front)
+        self.assertIn("model: sonnet", front)
         self.assertIn("effort: xhigh", front)
         (denied,) = [line for line in front if line.startswith("disallowedTools:")]
         for tool in ("Edit", "Write", "NotebookEdit"):

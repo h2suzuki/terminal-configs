@@ -51,7 +51,7 @@ PRUNE_SECONDS = 24 * 3600
 # nudge 文面は意図的に冗長 (委譲先 + 役割境界 + degrade 条件を内面化させる)。 trim 禁止。
 DELEGATE_MSG = (
     "[codex-delegation] plan を終え実装に入ります。 tool-role-delegation: 実装とテストは既定で "
-    '`subagent_type: "implementer"` (定義で Sonnet 5.5・effort xhigh に固定、 `model` は渡さない) '
+    '`subagent_type: "implementer"` (定義で `sonnet`・effort xhigh に固定、 `model` は渡さない) '
     "に任せ、 数行の自明な修正と文書だけの編集は Claude が直接行います。 依頼文には目的・触ってよい"
     "範囲・完了条件・禁止事項 (commit しない等) を書きます。 Claude は仕様明文化・レビュー・バグ出し・"
     "完了の認定を担い、 返った差分を受入レビューします (テスト結果はログか再実行で確かめる)。 "

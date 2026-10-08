@@ -1,6 +1,6 @@
 ---
 name: tool-role-delegation
-description: Route work to the right executor — quick lookups via codegraph, investigation via the investigator subagent and implementation and tests via the implementer subagent (both Sonnet 5.5, xhigh), Codex or Antigravity only when the user asks for a cross-model review — while Claude owns spec, implementation direction, bug-finding, and review of the result.
+description: Route work to the right executor — quick lookups via codegraph, investigation via the investigator subagent and implementation and tests via the implementer subagent (both on the `sonnet` alias at xhigh), Codex or Antigravity only when the user asks for a cross-model review — while Claude owns spec, implementation direction, bug-finding, and review of the result.
 when_to_use: TRIGGER when about to search / explore code, investigate a bug or behavior, write or edit source, start a feature, write or run tests, when the user asks for a cross-model review ("クロスモデルレビュー" / "codex でレビュー" / "agy でレビュー"), or say "実装する" / "コードを書く" / "検索" / "探す" / "調査" / "原因を調べる". SKIP for trivial Q&A or doc-only edits.
 ---
 
@@ -11,9 +11,9 @@ codegraph・investigator subagent・implementer subagent・Codex・Antigravity �
 ## Process
 
 1. **検索は codegraph を優先**: コード探索は codegraph を Grep / Read より先に使う。既知の symbol やファイルを1〜2回の問い合わせで確かめるだけなら Claude が直接行う。
-2. **調査は investigator に任せる (既定)**: 複数ファイルや複数の情報源にまたがる調査、不具合の原因の追跡、使用箇所の洗い出し、公式ドキュメント・upstream issue・配備状況の確認は `subagent_type: "investigator"` で起動する。定義で Sonnet 5.5・effort xhigh・編集不可に固定しているので `model` は渡さない。問いと調べる範囲は Claude が書き、返った所見は根拠の箇所を自分で開いて確かめてから結論に使う。
+2. **調査は investigator に任せる (既定)**: 複数ファイルや複数の情報源にまたがる調査、不具合の原因の追跡、使用箇所の洗い出し、公式ドキュメント・upstream issue・配備状況の確認は `subagent_type: "investigator"` で起動する。定義で `sonnet` (Claude Code が指す最新の Sonnet、 現在は Sonnet 5.5)・effort xhigh・編集不可に固定しているので `model` は渡さない。問いと調べる範囲は Claude が書き、返った所見は根拠の箇所を自分で開いて確かめてから結論に使う。
 3. **Claude が仕様・指示を書く**: 何を作るか・どう直すか・受入基準を Claude が明文化する。依頼文は目的・触ってよい範囲・完了条件・禁止事項 (commit しない等) を含める。
-4. **実装とテストは implementer に任せる (既定)**: 仕様が決まったコード変更、テストの作成と実行、lint・型検査の指摘の修正は `subagent_type: "implementer"` で起動する。定義で Sonnet 5.5・effort xhigh に固定しているので `model` は渡さない (渡すと定義の model を上書きする)。数行の自明な修正や文書だけの編集は Claude が直接行ってよい。独立した部分は複数の implementer を並列に起動する。subagent 同士の編集が衝突しそうなら、Rules の「並列 subagent の編集の統合」に従って worktree で隔離し、commit・push・merge・pull で統合する。
+4. **実装とテストは implementer に任せる (既定)**: 仕様が決まったコード変更、テストの作成と実行、lint・型検査の指摘の修正は `subagent_type: "implementer"` で起動する。定義で `sonnet`・effort xhigh に固定しているので `model` は渡さない (渡すと定義の model を上書きする)。数行の自明な修正や文書だけの編集は Claude が直接行ってよい。独立した部分は複数の implementer を並列に起動する。subagent 同士の編集が衝突しそうなら、Rules の「並列 subagent の編集の統合」に従って worktree で隔離し、commit・push・merge・pull で統合する。
 5. **Claude がレビュー**: implementer が返した差分を敵対的 / 受け入れレビューし、バグ・仕様逸脱・副作用を検査する。テスト結果は報告を鵜呑みにせず、ログか再実行で確かめる。修正は依頼文に所見を書いて implementer に戻すのが既定。回帰レビューは opus subagent (依頼文のみ渡す・effort 高・実装と別 agent) を milestone (機能完成 / test 成功 / commit・PR 形成 / merge 前) で回し、毎 edit 後には回さない。実装・受け入れ・検証設計・認定を同一 agent が兼務しない (兼務は多巡 loop の再発条件)。
 6. **高リスク変更は独立レビューを足す**: auth・認可・data-loss・migration・retry・idempotency・race・rollback・cache 整合性に触れる変更は、規模を問わず opus subagent の独立レビューを追加する。クロスモデルレビューが有益だと考えたら、ユーザーに提案してよい (実行はユーザーが求めた時だけ)。
 7. **クロスモデルレビューはユーザーが求めた時だけ**: Codex と Antigravity は既定では使わない。求められたら次のどちらかで行う。

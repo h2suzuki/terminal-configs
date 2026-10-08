@@ -1,7 +1,7 @@
 ---
 name: investigator
-description: Default executor for investigation work on Sonnet 5.5 at xhigh effort. Use it to research how code or a system behaves, trace a bug to its cause, survey where something is used, check official docs and upstream issues, or confirm what is deployed. It reads and runs read-only commands, and never edits. The parent keeps the question, the judgment, and the final answer.
-model: claude-sonnet-5-5
+description: Default executor for investigation work on the newest Sonnet (the `sonnet` alias, now Sonnet 5.5) at xhigh effort. Use it to research how code or a system behaves, trace a bug to its cause, survey where something is used, check official docs and upstream issues, or confirm what is deployed. It reads and runs read-only commands, and never edits. The parent keeps the question, the judgment, and the final answer.
+model: sonnet
 effort: xhigh
 disallowedTools: Edit, Write, NotebookEdit
 ---

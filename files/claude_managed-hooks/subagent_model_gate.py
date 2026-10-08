@@ -21,7 +21,7 @@ REASON = (
     "`model` を明示指定してから再実行してください (検討の結果 親と同じ model を選ぶのは問題ありません。 "
     'その場合も名前を明示します)。 fork (`subagent_type: "fork"`) は親 model 固定なので対象外です。 '
     '調査は `subagent_type: "investigator"`、 実装・テストは `subagent_type: "implementer"` '
-    "(どちらも定義で Sonnet 5.5 xhigh に固定) を使えば `model` は不要です。"
+    "(どちらも定義で `sonnet`・effort xhigh に固定) を使えば `model` は不要です。"
 )
 MANAGED_AGENTS = "/etc/claude-code/.claude/agents"
 
