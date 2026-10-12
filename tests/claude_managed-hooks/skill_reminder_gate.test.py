@@ -8,7 +8,7 @@ shim) lives in a temp dir, so no real transcript, no real state and no real memo
 
 Contract (claims are verbatim from the draft; each maps to the tests named test_c<N>_*):
 
-    name    skill_reminder_gate.py  (mode = gate | commit-gate | record-skill)
+    name    skill_reminder_gate.py  (mode = gate | commit-gate | record-skill | lesson-gate)
     in      argv[1] = mode、stdin = Claude Code hook payload の JSON 1 個
     out     allow = stdout 空。deny = stdout に JSON 1 行 (PreToolUse deny)。exit は常に 0
     state   <root>/active/<session_id>/main.json
@@ -138,6 +138,14 @@ Contract (claims are verbatim from the draft; each maps to the tests named test_
   ので、fixture が HOME (または override) を temp dir に向ければ state 面を全て観測できる。
   test 方針: override 付き record → override 下に state、既定 root は不在、override 付き
   gate は allow・無しは deny を assert。
+
+- **C12 lesson-gate = 教訓 store の読み取りに memory 系 skill を要求**
+  入力: Read (`file_path`) / Grep (`path` `glob`) / Glob (`path` `pattern`) / Bash (`command`)。
+  対象: 値が `/var/lib/claude-rag-memory/` を含む、または cwd で解決した path がその配下。Bash は
+  segment 内の token で判定し、`claude_memory_sync` の segment は除く。
+  出力: state に memory-routing / memory-sync / memory-surface-analyzer の記録が 1 つも無ければ
+  deny (窓は無く session 内の記録で足りる)。deny 文面は 1 行で prefix と `memory-routing` を含む。
+  inv3 / inv4 と `CLAUDE_HOOK_CHILD` 設定時の allow は他 mode と同じ。
 """
 
 from __future__ import annotations
@@ -1134,6 +1142,96 @@ class GateTest(unittest.TestCase):
             if name == "main.json"
         ]
         self.assertEqual(found, [])
+
+    # -- C12: lesson-gate (教訓の読み取りは memory 系 skill の invoke 後のみ) -----------------
+    LESSON = "/var/lib/claude-rag-memory/claude-lessons-learned/org/feedback_x.md"
+
+    def read_payload(self, tool: str, **tool_input) -> dict:
+        payload = self.write_payload("", tool=tool)
+        payload["tool_input"] = tool_input
+        return payload
+
+    def test_c12_lesson_reads_without_skill_are_denied(self) -> None:
+        """C12: Read / Grep / Glob / Bash で教訓 store を読むと、skill 未 invoke なら deny。"""
+        self.seed(["writing-code"])
+        for payload in (
+            self.read_payload("Read", file_path=self.LESSON),
+            self.read_payload(
+                "Grep", pattern="sandbox", path="/var/lib/claude-rag-memory"
+            ),
+            self.read_payload("Glob", pattern="/var/lib/claude-rag-memory/**/*.md"),
+            self.bash_payload(f"cat {self.LESSON}"),
+            self.bash_payload("grep -rn sandbox /var/lib/claude-rag-memory/ | head"),
+            self.bash_payload(
+                "ls /var/lib/claude-rag-memory/claude-lessons-learned/org"
+            ),
+        ):
+            with self.subTest(payload=payload["tool_input"]):
+                reason = self.deny(payload, "lesson-gate")
+                self.assertTrue(reason.startswith(PREFIX), reason)
+                self.assertIn("memory-routing", reason)
+
+    def test_c12_relative_paths_resolve_against_cwd(self) -> None:
+        """C12: 相対 path は payload cwd で解決して判定する。"""
+        self.seed([])
+        payload = self.read_payload("Glob", pattern="org/*.md", path=".")
+        payload["cwd"] = "/var/lib/claude-rag-memory/claude-lessons-learned"
+        self.deny(payload, "lesson-gate")
+
+    def test_c12_missing_state_is_denied(self) -> None:
+        """C12 / inv4: state 未生成 (= どの skill も invoke していない) は deny。"""
+        self.deny(self.read_payload("Read", file_path=self.LESSON), "lesson-gate")
+
+    def test_c12_any_memory_skill_this_session_allows(self) -> None:
+        """C12: memory-routing / memory-sync / memory-surface-analyzer のどれかを session 内で invoke 済みなら allow (窓なし)。"""
+        for skill in ("memory-routing", "memory-sync", "memory-surface-analyzer"):
+            with self.subTest(skill=skill):
+                self.seed([skill], prompt="old-prompt", age=10 * WINDOW)
+                self.allow(
+                    self.read_payload("Read", file_path=self.LESSON), "lesson-gate"
+                )
+                self.allow(self.bash_payload(f"cat {self.LESSON}"), "lesson-gate")
+
+    def test_c12_record_skill_opens_the_gate(self) -> None:
+        """C12: record-skill で memory-routing を記録すると、deny されていた読み取りが通る。"""
+        payload = self.read_payload("Read", file_path=self.LESSON)
+        self.seed([])
+        self.deny(payload, "lesson-gate")
+        self.allow(self.record_payload("memory-routing"), "record-skill")
+        self.allow(payload, "lesson-gate")
+
+    def test_c12_non_lesson_targets_and_skill_tools_are_allowed(self) -> None:
+        """C12: 教訓 store 外の読み取り、skill 手順の検索・保存 CLI、対象外 tool は素通り。"""
+        self.seed([])
+        for payload in (
+            self.read_payload("Read", file_path=os.path.join(self.fx.repo, "a.md")),
+            self.read_payload("Grep", pattern="claude-rag-memory", path="files"),
+            self.bash_payload(
+                'python3 /etc/claude-code/skel/hooks/memory_surface.py --search "x"'
+            ),
+            self.bash_payload(
+                f"claude_memory_sync --write-from draft.md {self.LESSON}"
+            ),
+            self.bash_payload("cat files/claude_managed-hooks/memory_routing_gate.py"),
+            self.bash_payload(f'git commit -m "gate: read {self.LESSON}" -- a.py'),
+            self.write_payload(self.LESSON),
+        ):
+            with self.subTest(payload=payload["tool_input"]):
+                self.allow(payload, "lesson-gate")
+
+    def test_c12_subagent_child_and_corrupt_state_are_allowed(self) -> None:
+        """C12 / inv3 / inv4: subagent・hook 子 session・corrupt state は allow。"""
+        self.allow(
+            self.read_payload("Read", file_path=self.LESSON) | {"agent_id": "a1"},
+            "lesson-gate",
+        )
+        self.allow(
+            self.read_payload("Read", file_path=self.LESSON),
+            "lesson-gate",
+            env_extra={"CLAUDE_HOOK_CHILD": "1"},
+        )
+        self.fx.write_state("{ broken")
+        self.allow(self.read_payload("Read", file_path=self.LESSON), "lesson-gate")
 
 
 if __name__ == "__main__":

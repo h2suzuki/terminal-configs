@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Orderer-owned mutants for skill_reminder_gate.py: each must make the acceptance tests fail.
 
-The implementation must contain the four seam lines verbatim, exactly once each, so the mutants apply;
+The implementation must contain the seam lines verbatim, exactly once each, so the mutants apply;
 a missing or duplicated seam counts as a failure of the delivery, not of this script.
 """
 
@@ -40,6 +40,14 @@ MUTANTS = {
     "m4-extension-case-not-normalized": (
         "    ext = os.path.splitext(name)[1].lower()",
         "    ext = os.path.splitext(name)[1]",
+    ),
+    "m5-lesson-skills-all-required": (
+        "    if state is None or (isinstance(state, dict) and LESSON_SKILLS & set(state)):",
+        "    if state is None or (isinstance(state, dict) and LESSON_SKILLS <= set(state)):",
+    ),
+    "m6-lesson-cli-not-exempt": (
+        '        if os.path.basename(segment[0]) != "claude_memory_sync"',
+        '        if os.path.basename(segment[0]) != "claude_memory_sync_"',
     ),
 }
 

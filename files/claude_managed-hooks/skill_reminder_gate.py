@@ -395,6 +395,69 @@ def _commit_gate_reason(payload: dict) -> str | None:
     return _deny_reason(required, ", ".join(labels), payload)
 
 
+LESSONS_ANCHOR = "/var/lib/claude-rag-memory/"
+LESSON_SKILLS = frozenset({"memory-routing", "memory-sync", "memory-surface-analyzer"})
+LESSON_PATH_KEYS = {
+    "Read": ("file_path",),
+    "Grep": ("path", "glob"),
+    "Glob": ("path", "pattern"),
+}
+# 文面は意図的に冗長: 正しい読み方と sandbox エラー時の扱いを両方書き下すため trim しない
+LESSON_DENY = (
+    f"{DENY_PREFIX}教訓 (lessons learned) を直接読む前に、Skill ツールで memory-routing を invoke せよ。"
+    "教訓は skill の手順 (memory_surface.py --search で検索し、当たった entry だけを開く) で読む。"
+    "invoke 後は同じ読み取りがそのまま通る。読み取りが sandbox のエラーで失敗しても"
+    "「sandbox から教訓にアクセスできない」と断定せず、sandbox-host-recovery に従って呼び方を直せ。"
+    "hook 自身はファイルを変更していない。"
+)
+
+
+def _names_lessons(value: str, cwd: str) -> bool:
+    if LESSONS_ANCHOR in value:
+        return True
+    full = os.path.realpath(os.path.join(cwd, os.path.expanduser(value)))
+    return (full + "/").startswith(LESSONS_ANCHOR)
+
+
+def _bash_names_lessons(command: str) -> bool:
+    # path operands only (`--opt=/path` too), not prose such as a commit message naming the store
+    return any(
+        _names_lessons(operand, "/")
+        for segment in _command_segments(command)
+        if os.path.basename(segment[0]) != "claude_memory_sync"
+        for operand in (token.split("=", 1)[-1] for token in segment)
+        if operand.startswith("/")
+    )
+
+
+def _lesson_gate_reason(payload: dict) -> str | None:
+    if _has_agent(payload) or os.environ.get("CLAUDE_HOOK_CHILD"):
+        return None
+    tool = payload.get("tool_name")
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return None
+    if tool == "Bash":
+        command = tool_input.get("command")
+        hit = isinstance(command, str) and _bash_names_lessons(command)
+    else:
+        cwd = payload.get("cwd")
+        values = (tool_input.get(key) for key in LESSON_PATH_KEYS.get(str(tool), ()))
+        hit = any(
+            isinstance(value, str)
+            and bool(value)
+            and _names_lessons(value, cwd if isinstance(cwd, str) else "")
+            for value in values
+        )
+    if not hit:
+        return None
+    path = _state_path(payload)
+    state = _load_state(path) if path is not None else None
+    if state is None or (isinstance(state, dict) and LESSON_SKILLS & set(state)):
+        return None
+    return LESSON_DENY
+
+
 def _emit_deny(reason: str) -> None:
     output = {
         "hookSpecificOutput": {
@@ -411,6 +474,8 @@ def _dispatch(mode: str, payload: dict) -> str | None:
         return _gate_reason(payload)
     if mode == "commit-gate":
         return _commit_gate_reason(payload)
+    if mode == "lesson-gate":
+        return _lesson_gate_reason(payload)
     if mode == "record-skill":
         _record_skill(payload)
     return None
