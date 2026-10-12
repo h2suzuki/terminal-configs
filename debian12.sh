@@ -406,6 +406,11 @@ run rm -f /usr/local/bin/claude_codex_watch /usr/local/bin/claude_memory_rag_bui
 # Initialize our RAG memory
 run claude_rag_memory_builder /var/lib/claude-rag-memory
 
+# The sandbox masks .mcp.json in every additionalDirectories root; bwrap aborts all Bash if it cannot create one
+for dir in /etc/claude-code /etc/codex /usr/local/bin /var/lib/claude-rag-memory; do
+    copy claude_sandbox-mcp-stub.json "$dir/.mcp.json" -m 0644
+done
+
 
 
 echo -e "${COLOR_GREEN}"

@@ -436,6 +436,11 @@ if [ -d /var/lib/claude-rag-memory/claude-lessons-learned/.git ]; then
     run chmod 0755 /var/lib/claude-rag-memory/claude-lessons-learned
 fi
 
+# The sandbox masks .mcp.json in every additionalDirectories root; bwrap aborts all Bash if it cannot create one
+for dir in /etc/claude-code /etc/codex /usr/local/bin /var/lib/claude-rag-memory; do
+    copy claude_sandbox-mcp-stub.json "$dir/.mcp.json" -m 0644
+done
+
 
 
 echo -e "${COLOR_GREEN}"
