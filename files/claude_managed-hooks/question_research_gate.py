@@ -2,7 +2,8 @@
 """Require the turn's own research before a question reaches the user.
 
 PreToolUse:AskUserQuestion — deny a question whose turn searched nothing.
-Stop — block a turn whose final text asks the user something the turn never researched.
+Stop — block a turn whose final text asks the user something, or asks for their decision,
+the turn never researched; a continuation Stop blocks again until the research is done.
 
 Required channels are only the ones this host actually has: the lessons clone
 (`claude-lessons-learned`), the issue tracker (`gh` on a GitHub remote / `glab` on a GitLab
@@ -45,6 +46,10 @@ PROMPT_PREFIXES = (
 FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 QUESTION_ENDINGS = ("?", "？", "ますか", "ましょうか", "でしょうか")
 QUESTION_MARKER = "[質問]"
+DECISION_RE = re.compile(
+    r"判断が(?:必要|要り|いり)|ご判断|判断をお願い|判断して(?:ください|下さい)|"
+    r"(?:決めて|選んで|指示して|教えて|ご指示|ご指定)(?:ください|下さい|をお願い)"
+)
 
 LESSON_RE = re.compile(
     r"memory_surface\.py[^\n]{0,120}--search|claude-lessons-learned|claude-rag-memory|"
@@ -138,7 +143,7 @@ def _final_text(payload: dict, entries: list[dict]) -> str:
 
 def _asks_user(text: str) -> bool:
     body = FENCE_RE.sub("", text)
-    if QUESTION_MARKER in body:
+    if QUESTION_MARKER in body or DECISION_RE.search(body):
         return True
     for line in body.splitlines():
         stripped = line.strip().rstrip("。！!").strip()
@@ -261,8 +266,6 @@ def _ask_gate(payload: dict) -> int:
 
 
 def _stop_gate(payload: dict) -> int:
-    if payload.get("stop_hook_active"):
-        return 0  # 継続 Stop は同じ block を繰り返さない
     context = _context(payload)
     if context is None:
         return 0

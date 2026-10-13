@@ -11,9 +11,10 @@ Claims (test_q<N>_*):
   Q2 every available channel searched -> silent allow.
   Q3 a partially searched turn still denies, and the reason names only what is missing.
   Q4 an unavailable channel is exempt; with none available the gate never fires.
-  Q5 Stop whose final text asks the user something -> exit 2 with the reason on stderr.
+  Q5 Stop whose final text asks the user something, including a request for the user's decision
+     in a declarative sentence -> exit 2 with the reason on stderr.
   Q6 Stop with no question -> silent pass; a question inside a fence is not a question.
-  Q7 Stop with stop_hook_active -> pass (one block per turn, no re-block loop).
+  Q7 Stop with stop_hook_active blocks again until the research is done; no stop count lets it pass.
   Q8 fail-open: a broken payload, missing transcript or unreadable turn never blocks.
   Q9 evidence counts from any tool input in the turn (Bash, Grep, a delegated Agent prompt).
   Q10 evidence from an earlier turn does not count.
@@ -280,6 +281,9 @@ class GateTest(unittest.TestCase):
             "🔷 [質問] この方針で進めてよいですか?",
             "どの案が良いでしょうか？",
             "再開しますか",
+            "どちらも共通設定への変更なので判断が必要です。",
+            "採用する案をご判断ください。",
+            "どちらにするか決めてください。",
         ):
             with self.subTest(text=text):
                 self.assertBlocked(run_hook(self.fx, stop(self.fx, text)))
@@ -295,12 +299,20 @@ class GateTest(unittest.TestCase):
         for text in (
             "🔷 [結論] 修正を commit しました。",
             "```\nどの案にしますか?\n```\n🔷 [結論] 済みです。",
+            "ご指示通りに修正しました。\n🔷 [結論] ご指定の path に配置しました。",
+            "🔷 [結論] 差分は 2 commit です。変更内容をご確認ください。",
         ):
             with self.subTest(text=text):
                 self.assertPassed(run_hook(self.fx, stop(self.fx, text)))
 
-    def test_q7_continuation_stop_does_not_block_again(self):
+    def test_q7_continuation_stop_blocks_again_without_research(self):
         self.fx.turn(say("整理しました"))
+        self.assertBlocked(
+            run_hook(self.fx, stop(self.fx, "どの案にしますか?", active=True))
+        )
+
+    def test_q7_continuation_stop_passes_once_researched(self):
+        self.fx.turn(*ALL_SEARCHES, say("整理しました"))
         self.assertPassed(
             run_hook(self.fx, stop(self.fx, "どの案にしますか?", active=True))
         )
