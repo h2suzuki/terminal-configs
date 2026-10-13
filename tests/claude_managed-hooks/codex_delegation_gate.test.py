@@ -8,8 +8,8 @@ Contract (each claim maps to the tests named test_c<N>_*):
       {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
       "permissionDecisionReason": "codex-delegation-gate: [<id>] ..."}} with exit 0; the reason names the
       corrective action and ends with the sentence that the hook itself changes no file. The corrective
-      sentence is rule-specific: [tree] names `git worktree add` and `--cwd`, [same-root] names the
-      standalone `cd` and an absolute `--cwd` (its violation sentence also names `env -C`), [isolation]
+      sentence is rule-specific: [tree] names `EnterWorktree` and `--cwd`, [same-root] names
+      `EnterWorktree` and an absolute `--cwd` (its violation sentence also names `env -C`), [isolation]
       names removing isolation, [workflow] names the codex-delegation skill. Fail-open (exit 0, no stdout, one stderr line) for
       unreadable payload, non-dict payload, non-PreToolUse events and any internal exception.
   C2  Launch enumeration is the single funnel every rule reads from: a launch is `node|nodejs <path ending in
@@ -868,12 +868,12 @@ class GateTest(unittest.TestCase):
             self.rescue(f"{NODE} task --write drafts/o.md", cwd=self.fx.primary),
             "tree",  # dangling-ref-check: allow
         )
-        self.assertIn("git worktree add", reason)
+        self.assertIn("EnterWorktree", reason)
         self.assertIn("--cwd", reason)
         reason = self.deny(
             self.rescue(f"cd {self.fx.worktree} && {NODE} task x"), "same-root"
         )
-        self.assertIn("単独", reason)
+        self.assertIn("EnterWorktree", reason)
         reason = self.deny(self.rescue(f'{NODE} task --cwd "$WT" x'), "same-root")
         self.assertIn("絶対 path", reason)
 

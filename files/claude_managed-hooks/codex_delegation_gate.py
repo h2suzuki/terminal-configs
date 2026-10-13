@@ -63,9 +63,10 @@ CORRECTIONS = dict.fromkeys(
     ("route", "skill", "cli", "order", "flag", "cjk"), CORRECTION
 )
 CORRECTIONS |= {
-    "tree": "git worktree add で worktree を作り、単独の cd で移ってから --cwd <絶対 path> で起動してください。",
-    "same-root": "発注前に単独の cd で対象 worktree へ移り、--cwd は絶対 path で書いてください。",
-    "isolation": "isolation を外し、手動 worktree へ単独の cd で移ってから発注してください。",
+    "tree": "EnterWorktree に name を指定して ~/worktrees/<repo>/<name> の worktree を作って入り、--cwd <絶対 path> で起動してください。",
+    "same-root": "発注前に EnterWorktree の name 指定で対象 worktree に入り、--cwd は絶対 path で書いてください。"
+    " project 外の ~/worktrees へ単独の cd で移っても、次の Bash 呼び出しで harness が cwd を戻すため一致しません。",
+    "isolation": "isolation を外し、EnterWorktree の name 指定で ~/worktrees の worktree に入ってから発注してください。",
     "workflow": "生成 step を Workflow の外に出し、codex-delegation skill を invoke して rescue に発注してください。",
 }
 ENDING = "この hook 自身は file を変更しません"
