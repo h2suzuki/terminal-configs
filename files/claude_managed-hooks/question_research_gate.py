@@ -44,6 +44,8 @@ PROMPT_PREFIXES = (
 )
 
 FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+# A quoted phrase is a mention, not a request.
+QUOTED_RE = re.compile(r"「[^」\n]*」|`[^`\n]*`")
 QUESTION_ENDINGS = ("?", "？", "ますか", "ましょうか", "でしょうか")
 QUESTION_MARKER = "[質問]"
 DECISION_RE = re.compile(
@@ -143,7 +145,7 @@ def _final_text(payload: dict, entries: list[dict]) -> str:
 
 def _asks_user(text: str) -> bool:
     body = FENCE_RE.sub("", text)
-    if QUESTION_MARKER in body or DECISION_RE.search(body):
+    if QUESTION_MARKER in body or DECISION_RE.search(QUOTED_RE.sub("", body)):
         return True
     for line in body.splitlines():
         stripped = line.strip().rstrip("。！!").strip()

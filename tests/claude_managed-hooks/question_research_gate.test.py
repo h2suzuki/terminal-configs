@@ -301,6 +301,8 @@ class GateTest(unittest.TestCase):
             "```\nどの案にしますか?\n```\n🔷 [結論] 済みです。",
             "ご指示通りに修正しました。\n🔷 [結論] ご指定の path に配置しました。",
             "🔷 [結論] 差分は 2 commit です。変更内容をご確認ください。",
+            "前回の文「H.S.の判断が必要です。」を止めました。\n🔷 [結論] 修正済みです。",
+            "`ご判断ください` も判定に加えました。\n🔷 [結論] 修正済みです。",
         ):
             with self.subTest(text=text):
                 self.assertPassed(run_hook(self.fx, stop(self.fx, text)))
