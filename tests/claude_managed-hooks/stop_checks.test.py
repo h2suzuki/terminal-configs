@@ -282,8 +282,8 @@ worktree は共通 dir の config を読む、origin が無ければ cwd の `/`
 import しない)。他 project の entry は出さない。`check:` 行を持ち、`when:` の値集合 (space 区切り、小文字化) が `stop` を
 含む entry のみ候補 — 部分一致では選ばない (`stopgap` は `stop` ではない)。候補のうち `keywords:` の語句 (`,` / `、` 区切り、小文字化) が
 当該 Stop の `final_text` (NFKC・小文字化) に含まれる entry だけを選び、一致語句数が最大の 1 件だけを出す (同数なら走査順の
-先頭)。同じ entry は 1 session に 2 回まで (latch `<transcript>.turns.memo` = path → 回数の JSON、書くのは行が stdout に
-載った Stop だけ)。一致が無ければ何も出さない — 無差別に全 entry を出す形は量で無視される (2026-08-27 に 12 件が毎 Stop
+先頭)。一致した Stop では毎回出す — 回数の上限を設けない (上限があると同じ誤りを繰り返しても止まらなくなる)。
+一致が無ければ何も出さない — 無差別に全 entry を出す形は量で無視される (2026-08-27 に 12 件が毎 Stop
 出て実測)。
 出力: 選ばれた 1 件の `check:` 本文と path を additionalContext に載せ、末尾に固定文言
 「抵触するなら修正してから完了。しなければ何も書かない」を付ける。`when:` に `stop` が無い entry は出さない。
@@ -2249,17 +2249,13 @@ class MemoryReminderTest(StopChecksTest):
         proc = run_hook(self.fx, "調査を終えました。" + TAIL)
         self.assertNotWarned(proc, self.FAMILY)
 
-    def test_c16_same_entry_surfaces_at_most_twice_per_session(self):
-        """The latch counts only Stops whose line reached stdout: a blocked Stop does not consume it."""
+    def test_c16_same_entry_surfaces_on_every_matching_stop(self):
+        """No per-session cap: a repeated mistake is stopped every time."""
         self.fx.memory_entry("alpha", "証跡を確認せよ")
         self.fx.turn(say("報告します"))
-        self.assertBlocks(
-            run_hook(self.fx, "この後 調査を進めます。"), "continuation-claim"
-        )
         text = "調査を終えました。" + TAIL
-        self.assertWarnsFamily(run_hook(self.fx, text), self.FAMILY)
-        self.assertWarnsFamily(run_hook(self.fx, text), self.FAMILY)
-        self.assertNotWarned(run_hook(self.fx, text), self.FAMILY)
+        for _ in range(4):
+            self.assertWarnsFamily(run_hook(self.fx, text), self.FAMILY)
 
     def test_c16_waste_keyword_line_appears_once_per_prompt(self):
         self.fx.write([prompt("この待ち時間は無駄では?"), say("報告します")])
