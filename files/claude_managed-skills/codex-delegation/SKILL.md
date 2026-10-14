@@ -33,7 +33,7 @@ codex への委譲を「発注 → 走行監視 → 完了 / stall 判定 → �
        `out=$(mktemp -p "${TMPDIR:-/var/tmp}"); cutoff=$(date -d '-8 minutes' +%Y-%m-%dT%H:%M:%S); find <dirs> -type f -newermt "$cutoff" > "$out" || exit 1; wc -l < "$out"`
      - 当該 job record の `status` が running から変わった（record の file 直読。status 系 subcommand の直接起動も deny 対象なので使わない）
    - stall 判定（heartbeat 凍結 7 分超、詳細は Rules）:
-     - 監視は background script 内で 170 秒 × 3 回等で poll し、exit 時に re-arm して約 5-8.5 分 cadence を保つ。単発待機は bash tool の timeout 上限 600 秒以内にする
+     - 監視は `bg_watch -- codex_task_sentinel <job-id> ...` を `run_in_background` で起動する（Rules の sentinel 節）。bg_watch が 15 分ごとの途中経過と終了をこの session へ知らせるので、手書きの poll と re-arm は要らない。sentinel が exit 4 で返ったら evidence を読み、待つなら同じ形で起動し直す
 5. **走行中の並行作業規則**: 同一ツリーへの inline 編集をしない（moving-target）。同一 build dir を共有する build / test / lint を並行実行しない（ロック競合で双方が停滞）。別 path（例: backend 委譲中の frontend/、doc、発注書の次 round 準備）は並行してよい
 6. **受け入れレビュー**: 完了判定後に開始。gates 結果は codex の自己申告でなくログ file / 再実行で確認する。仕様の根拠行（契約・実データの key 文字列等）はコードと突き合わせ、判断が乗る主張は spot-check する。ユーザーが求めたクロスモデルレビューの経路は review 雛形（`codex_order_lint --new review`）の発注書を `/codex:rescue` に渡す task（報告書を書くため `--write`、code 変更は発注書で禁止、`--model gpt-6-astra --effort high`）— `/codex:adversarial-review` command はユーザー起動専用で、rescue subagent は review 系 subcommand を呼ばず task に変換する（2026-08-27 実測）。雛形の「姿勢・攻撃面・所見の基準」節が plugin 同梱 template と同等の framing を担保する
    - **表層品質 pass を別回で行う**: 内容の正誤と別に、読者体験で diff を見る — 英語文書内の日本語文 / CLI 出力・log 文字列の言語 / comment 言語と file 規約の一致 / tone・命名の一貫性。抽象的な「自然に見えるか」だけでは素通しするため、観点を列挙してレビューする。cross-model レビューを発注する場合も本観点を発注書に含める
@@ -54,7 +54,7 @@ codex への委譲を「発注 → 走行監視 → 完了 / stall 判定 → �
 - **完了 monitor は当該 task の起動登録確認後に張る**: probe file の出現または state dir に当該 task の新しい job record file が現れるまで待つ。未登録のまま監視だけが成立した実例がある（2026-07-15）
 - **running[]-empty 型 monitor を使わない**: 直前の task が終了済みで running[] が元から空だったため、起動前の空を完了と誤認して即時 false-fire した（2026-07-15）。当該 task id が running[] に現れてから消える遷移を待つ
 - **監視は集合でなく当該 job の state file を id 直指定で poll する**: `status --json` の running[] は集合ゆえ、起動登録の前後で「空」が二度現れ、待機側からは完了と区別できない。plugin data の `state/<worktree>-<hash>/jobs/<job-id>.json` の `status` が `running` から変わるのを待てば集合の状態に依存しない。running[]-empty 型で 2026-08-08 に再度 false-fire し、実際は実行中の task を「成果物ゼロ = 非起動」と誤報告した
-- **監視 loop を手書きせず `codex_task_sentinel <job-id> --artifact <path> --token <str> --estimate-seconds <見積もり>` を使う**: 判定を決定的に実装済で、job の state file を全 workspace から探すため隔離 worktree 起動でも見失わない。手書き loop は本節の rule を毎回書き直すことになり、2026-08-08 に 1 session 内で「id を JSON 全体から grep して latestFinished に永久 match」と「本線 workspace から status を引いて隔離 worktree の job を running 0 件と誤読」の 2 通りで壊れた (前者で 4 時間 24 分の空待ち)。契約の正本は `codex_task_sentinel.test.py` (C1〜C12)。呼び分けは次の通り:
+- **監視 loop を手書きせず `bg_watch -- codex_task_sentinel <job-id> --artifact <path> --token <str> --estimate-seconds <見積もり>` を `run_in_background` で起動する**: bg_watch は 15 分ごとと終了時に agent_coord でこの session を起こし、sentinel の終了コードをそのまま返す。届いた `[bg_watch]` の知らせは catchup で読んで ack する（ack しないと以後の知らせで起こされない）。sentinel は判定を決定的に実装済で、job の state file を全 workspace から探すため隔離 worktree 起動でも見失わない。手書き loop は本節の rule を毎回書き直すことになり、2026-08-08 に 1 session 内で「id を JSON 全体から grep して latestFinished に永久 match」と「本線 workspace から status を引いて隔離 worktree の job を running 0 件と誤読」の 2 通りで壊れた (前者で 4 時間 24 分の空待ち)。契約の正本は `codex_task_sentinel.test.py` (C1〜C12)。呼び分けは次の通り:
 
   | exit | 意味 | 呼び手の行動 |
   |---|---|---|
@@ -97,3 +97,4 @@ codex への委譲を「発注 → 走行監視 → 完了 / stall 判定 → �
 - `verify-before-claim` — gates 自己申告を鵜呑みにしない受け入れ姿勢の一般則
 - `writing-code` — exit status 確認・convention 準拠などの実装汎用則
 - `codex_task_sentinel` (`/usr/local/bin/codex_task_sentinel`) — 本 skill の完了 / stall / 完了後 hang 判定を決定的に実装した CLI。監視は手書きせずこれを使う
+- `bg_watch` (`/usr/local/bin/bg_watch`) — 長いコマンドを包み、15 分ごとと終了時に起動元の session を agent_coord で起こす。sentinel の起動に使う
