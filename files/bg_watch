@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+"""Run a command, tee its output to a log, and message the calling agent through agent_coord."""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import json
+import os
+import shlex
+import signal
+import subprocess
+import sys
+import threading
+import time
+from datetime import datetime
+
+NOTIFY_TIMEOUT = 15
+TAIL_LINES = 5
+TAIL_LINE_CHARS = 200
+TAIL_READ_BYTES = 64 * 1024
+DRAIN_SECONDS = 5  # how long to wait for output still held by a surviving grandchild
+SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+# agent_coord holds back every later wake until the pushed message is acked
+ACK_NOTE = "読んだら agent_coord で ack すること（しないと次の知らせで起こされない）。"
+RUNNING_FOOTER = (
+    "様子を確かめ、止まっている・異常なら原因を調べて対処すること。" + ACK_NOTE
+)
+FINISHED_FOOTER = "結果を確かめ、次の作業に進むこと。" + ACK_NOTE
+
+
+def warn(message: str) -> None:
+    print(f"bg_watch: {message}", file=sys.stderr, flush=True)
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(
+        prog="bg_watch",
+        usage="%(prog)s [options] -- CMD [ARGS...]",
+        description="Run CMD and message this agent every interval and when CMD ends.",
+    )
+    result.add_argument("--interval", type=float, default=900, metavar="SEC")
+    result.add_argument("--label", help="default: the command, cut to 80 characters")
+    result.add_argument(
+        "--log-dir", help="default: ${TMPDIR:-/tmp}/bg_watch/<time>-<pid>"
+    )
+    result.add_argument("--to", metavar="SID", help="default: this session (whoami)")
+    result.add_argument("--no-notify", action="store_true")
+    return result
+
+
+def parse(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
+    split = argv.index("--") if "--" in argv else len(argv)
+    args = parser().parse_args(argv[:split])
+    command = argv[split + 1 :]
+    if not command:
+        parser().error("a command is required after --")
+    return args, command
+
+
+def make_run_dir(log_dir: str | None) -> str:
+    run_dir = log_dir or os.path.join(
+        os.environ.get("TMPDIR") or "/tmp",
+        "bg_watch",
+        f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}",
+    )
+    os.makedirs(run_dir, exist_ok=True)
+    return run_dir
+
+
+def write_text(path: str, text: str) -> None:
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(text)
+
+
+def agent_coord(
+    *argv: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["agent_coord", *argv],
+        capture_output=True,
+        text=True,
+        timeout=NOTIFY_TIMEOUT,
+        check=False,
+        env=env,
+    )
+
+
+def sender_env() -> dict[str, str]:
+    """A per-run identity: agent_coord never wakes a session for messages it sent itself."""
+    env = {k: v for k, v in os.environ.items() if k != "AGENT_COORD_TOKEN"}
+    env["AGENT_COORD_CLIENT"] = "bg_watch"
+    env["AGENT_COORD_SID"] = f"bg_watch-{os.getpid()}-{time.time_ns()}"
+    return env
+
+
+def resolve_sid() -> str | None:
+    try:
+        done = agent_coord("--json", "whoami")
+        if done.returncode == 0:
+            sid = json.loads(done.stdout)["session"]["sid"]
+            if isinstance(sid, str) and sid:
+                return sid
+        reason = f"exit {done.returncode}"
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as e:
+        reason = type(e).__name__
+    warn(f"agent_coord whoami failed ({reason}); notifications are off")
+    return None
+
+
+def run_as(env: dict[str, str], *argv: str) -> None:
+    try:
+        done = agent_coord(*argv, env=env)
+    except (OSError, subprocess.SubprocessError) as e:
+        warn(f"{argv[0]} failed ({type(e).__name__})")
+        return
+    if done.returncode != 0:
+        detail = (done.stderr.strip().splitlines() or [""])[0][:TAIL_LINE_CHARS]
+        warn(f"{argv[0]} failed (exit {done.returncode}) {detail}".rstrip())
+
+
+class Tee:
+    """Copies the child's output to our stdout and the log, counting what it logged."""
+
+    def __init__(self, stream, log_path: str) -> None:
+        self.stream = stream
+        self.log_path = log_path
+        self.size = 0
+        self.last_write = time.time()
+        self.thread = threading.Thread(target=self.pump, daemon=True)
+
+    def pump(self) -> None:
+        to_stdout = True
+        with open(self.log_path, "wb") as log:
+            while chunk := self.stream.read1(65536):
+                log.write(chunk)
+                log.flush()
+                self.size += len(chunk)
+                self.last_write = time.time()
+                if not to_stdout:
+                    continue
+                try:
+                    sys.stdout.buffer.write(chunk)
+                    sys.stdout.buffer.flush()
+                except OSError:
+                    # a closed stdout must not stop the log or fail the final flush
+                    to_stdout = False
+                    os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+
+
+def log_tail(path: str) -> list[str]:
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - TAIL_READ_BYTES))
+            data = handle.read()
+    except OSError:
+        return []
+    if not data:
+        return []
+    lines = data.decode("utf-8", "replace").rstrip("\n").split("\n")
+    return [line[:TAIL_LINE_CHARS] for line in lines[-TAIL_LINES:]]
+
+
+def compose(header: str, log_path: str, footer: str) -> str:
+    return "\n".join([header, *log_tail(log_path), footer])
+
+
+def kill_group(child: subprocess.Popen, signum: int) -> None:
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(child.pid, signum)
+
+
+def spawn(command: list[str], received: list[int]) -> subprocess.Popen:
+    """Start the child in its own session; signals seen meanwhile are replayed to it."""
+    child = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    for signum in SIGNALS:
+        signal.signal(signum, lambda n, _frame: kill_group(child, n))
+    for signum in list(received):
+        kill_group(child, signum)
+    return child
+
+
+def watch(command: list[str], args: argparse.Namespace, run_dir: str) -> int:
+    path = {
+        name: os.path.join(run_dir, name)
+        for name in ("cmd", "log", "meta.json", "exit")
+    }
+    label = args.label or " ".join(command)[:80]
+    sid = None if args.no_notify else args.to or resolve_sid()
+    sender = sender_env()
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(path["exit"])
+    write_text(path["log"], "")
+    write_text(path["cmd"], shlex.join(command) + "\n")
+    meta = {
+        "label": label,
+        "pid": os.getpid(),
+        "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "interval": args.interval,
+        "sid": sid,
+    }
+    write_text(path["meta.json"], json.dumps(meta, ensure_ascii=False, indent=2) + "\n")
+    warn(f"log={path['log']}")
+
+    received: list[int] = []
+    for signum in SIGNALS:  # until the child exists, only remember the signal
+        signal.signal(signum, lambda n, _frame: received.append(n))
+    try:
+        child = spawn(command, received)
+    except OSError as e:
+        warn(f"cannot run {command[0]}: {e.strerror or e}")
+        code = 126 if isinstance(e, PermissionError) else 127
+        write_text(path["exit"], f"{code}\n")
+        return code
+
+    assert child.stdout is not None
+    tee = Tee(child.stdout, path["log"])
+    tee.thread.start()
+    started = time.monotonic()
+    next_at = started + args.interval
+    reported = 0
+    while True:
+        try:
+            child.wait(timeout=max(0.0, next_at - time.monotonic()))
+            break
+        except subprocess.TimeoutExpired:
+            pass
+        if sid:
+            grown, reported = tee.size - reported, tee.size
+            run_as(
+                sender,
+                "send",
+                "--to",
+                sid,
+                compose(
+                    f"[bg_watch] 実行中: {label} / 経過 {int((time.monotonic() - started) // 60)}分 / "
+                    f"ログ +{grown} bytes（最終更新 {int(time.time() - tee.last_write)}秒前）"
+                    f"/ log: {path['log']}",
+                    path["log"],
+                    RUNNING_FOOTER,
+                ),
+            )
+        while next_at <= time.monotonic():
+            next_at += args.interval
+
+    tee.thread.join(DRAIN_SECONDS)
+    code = child.returncode if child.returncode >= 0 else 128 - child.returncode
+    write_text(path["exit"], f"{code}\n")
+    if sid:
+        run_as(
+            sender,
+            "send",
+            "--to",
+            sid,
+            compose(
+                f"[bg_watch] 終了: {label} / exit={code} / "
+                f"経過 {int((time.monotonic() - started) // 60)}分 / log: {path['log']}",
+                path["log"],
+                FINISHED_FOOTER,
+            ),
+        )
+        run_as(sender, "leave")
+    return code
+
+
+def main() -> int:
+    args, command = parse(sys.argv[1:])
+    try:
+        run_dir = make_run_dir(args.log_dir)
+    except OSError as e:
+        warn(f"cannot create the run dir: {e}")
+        return 125
+    return watch(command, args, run_dir)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

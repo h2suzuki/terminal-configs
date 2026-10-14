@@ -397,6 +397,7 @@ copy agent_coord                    /usr/local/bin/agent_coord
 copy_tree shared_plugins             /usr/local/share/agent_plugins/
 copy claude_lang_lint               /usr/local/bin/claude_lang_lint
 copy codex_task_sentinel            /usr/local/bin/codex_task_sentinel
+copy bg_watch                       /usr/local/bin/bg_watch
 copy codex_order_lint               /usr/local/bin/codex_order_lint
 copy codex_broker_reap              /usr/local/bin/codex_broker_reap
 
