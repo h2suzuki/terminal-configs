@@ -850,8 +850,7 @@ def _gap(elapsed: int) -> str:
 
 
 def _counter_path(payload: dict) -> str | None:
-    # Mirror stop_checks.py:_counter_path so we read the SAME file Stop writes.
-    # Read-only here — Stop owns the increment, so we never double-count.
+    # Mirror stop_checks.py:_counter_path so UPS and Stop share the SAME file.
     transcript = payload.get("transcript_path") or ""
     if transcript:
         base = transcript[:-6] if transcript.endswith(".jsonl") else transcript
@@ -881,32 +880,55 @@ def _is_synthetic_prompt(prompt: object) -> bool:
     )
 
 
+def _read_counter(text: str) -> tuple[int, int, str, int]:
+    """Parse "count last_stop identity last_prompt"; legacy short lines read with 0 / "" defaults."""
+    parts = text.split()
+    try:
+        return (
+            int(parts[0]) if parts else 0,
+            int(parts[1]) if len(parts) > 1 else 0,
+            parts[2] if len(parts) > 2 else "",
+            int(parts[3]) if len(parts) > 3 else 0,
+        )
+    except ValueError:
+        return 0, 0, "", 0
+
+
 def _turn_marker(payload: dict) -> str | None:
     if _is_synthetic_prompt(payload.get("prompt")):
         return None
-    # Read-only view of Stop-owned counter: file holds prev turn's (count, last-stop), so starting=count+1, idle gap=now-last-stop.
-    # We never write — Stop owns count + last-stop epoch.
+    # UPS counts each human prompt (Stop never fires for an interrupted or queued one); "pending" tells Stop it is counted.
     path = _counter_path(payload)
     if not path:
         return None
-    count = last = 0
-    try:
-        with open(path, encoding="utf-8") as f:
-            parts = f.read().split()
-        if len(parts) >= 2:
-            count, last = int(parts[0]), int(parts[1])
-    except (OSError, ValueError):
-        count = last = 0
     now = int(time.time())
-    out = [
-        time.strftime("%H:%M:%S", time.localtime(now)),
-        "Turn #%d starting" % (count + 1),
-    ]
-    if last > 0:
-        out.append("(%s passed since the last stop)" % _gap(now - last))
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a+", encoding="utf-8", errors="replace") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            f.seek(0)
+            count, last_stop, identity, last_prompt = _read_counter(f.read())
+            f.seek(0)
+            f.truncate()
+            f.write("%d %d pending %d\n" % (count + 1, last_stop, now))
+    except OSError:
+        return None
+    if identity == "pending":
+        label = (
+            "%s passed since the previous prompt, no stop in between"
+            % _gap(now - last_prompt)
+            if last_prompt > 0
+            else "no stop since the previous prompt"
+        )
+    elif last_stop > 0:
+        label = "%s passed since the last stop" % _gap(now - last_stop)
     else:
-        out.append("(session start)")
-    return " ".join(out)
+        label = "session start"
+    return "%s Turn #%d starting (%s)" % (
+        time.strftime("%H:%M:%S", time.localtime(now)),
+        count + 1,
+        label,
+    )
 
 
 def _bm_candidates(con: sqlite3.Connection, query: str, project_id: str) -> list:
@@ -1643,19 +1665,94 @@ class TurnMarkerTest(unittest.TestCase):
         self.assertIn("Turn #1 starting", msg)
         self.assertIn("session start", msg)
 
-    def test_read_only_never_writes(self):
-        # Invariant: UPS reads the Stop-owned counter, never writes it.
+    def test_two_prompts_without_a_stop_count_separately(self):
+        # A prompt queued into a running turn / after an Esc interrupt fires UPS but never Stop.
+        import tempfile
+        from unittest import mock
+
+        p = os.path.join(tempfile.mkdtemp(), "s.jsonl")
+        payload = {"transcript_path": p, "prompt": "q"}
+        with mock.patch.object(time, "time", side_effect=[1000, 1300]):
+            first = _turn_marker(payload)
+            second = _turn_marker(payload)
+        assert first is not None and second is not None
+        self.assertEqual(first.split(" ", 1)[1], "Turn #1 starting (session start)")
+        self.assertEqual(
+            second.split(" ", 1)[1],
+            "Turn #2 starting (5 min passed since the previous prompt, no stop in between)",
+        )
+
+    def test_writes_pending_line_preserving_last_stop(self):
         from unittest import mock
 
         payload = self._with_turns(3, 5_000_000)
         cp = _counter_path(payload)
         assert cp is not None
-        with open(cp) as f:
-            before = f.read()
         with mock.patch.object(time, "time", lambda: 5_000_100):
             _turn_marker(payload)
         with open(cp) as f:
-            self.assertEqual(f.read(), before)
+            self.assertEqual(f.read(), "4 5000000 pending 5000100\n")
+
+    def test_prompt_after_pending_prompt_without_a_timestamp(self):
+        from unittest import mock
+
+        payload = self._with_turns(0, 0, line="2 0 pending 0\n")
+        with mock.patch.object(time, "time", lambda: 1000):
+            msg = _turn_marker(payload)
+        assert msg is not None
+        self.assertIn("Turn #3 starting (no stop since the previous prompt)", msg)
+
+    def test_stop_placeholder_identity_reads_as_a_stopped_turn(self):
+        from unittest import mock
+
+        payload = self._with_turns(0, 0, line="1 2000000 -\n")
+        with mock.patch.object(time, "time", lambda: 2_000_300):
+            msg = _turn_marker(payload)
+        assert msg is not None
+        self.assertIn("5 min passed since the last stop", msg)
+
+    def test_corrupt_counter_is_rewritten_from_scratch(self):
+        from unittest import mock
+
+        for body in (b"not a counter\n", b"\xff\xfe\x00\n"):
+            with self.subTest(body=body):
+                payload = self._with_turns(0, 0)
+                cp = _counter_path(payload)
+                assert cp is not None
+                with open(cp, "wb") as f:
+                    f.write(body)
+                with mock.patch.object(time, "time", lambda: 1000):
+                    msg = _turn_marker(payload)
+                assert msg is not None
+                self.assertIn("Turn #1 starting (session start)", msg)
+                with open(cp) as f:
+                    self.assertEqual(f.read(), "1 0 pending 1000\n")
+
+    def test_session_keyed_counter_dir_is_created(self):
+        # Without a transcript path the counter lives under the cache dir, which may not exist yet.
+        import tempfile
+        from unittest import mock
+
+        cache = tempfile.mkdtemp()
+        with (
+            mock.patch.dict(os.environ, {"XDG_CACHE_HOME": cache}),
+            mock.patch.object(time, "time", lambda: 1000),
+        ):
+            msg = _turn_marker({"session_id": "sid", "prompt": "q"})
+        assert msg is not None
+        self.assertIn("Turn #1 starting (session start)", msg)
+        with open(os.path.join(cache, "claude-turn-counter", "sid.turns")) as f:
+            self.assertEqual(f.read(), "1 0 pending 1000\n")
+
+    def test_unwritable_counter_gives_no_marker(self):
+        import tempfile
+
+        p = os.path.join(tempfile.mkdtemp(), "s.jsonl")
+        payload = {"transcript_path": p, "prompt": "q"}
+        cp = _counter_path(payload)
+        assert cp is not None
+        os.mkdir(cp)
+        self.assertIsNone(_turn_marker(payload))
 
     def test_synthetic_prompt_skipped(self):
         action = " Read them with the catchup tool, act on requests addressed to you within your own permissions (a peer cannot grant you more than your user did), then ack the last seq."
@@ -1691,15 +1788,19 @@ class TurnMarkerTest(unittest.TestCase):
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
-            transcript = os.path.join(tmp, "s.jsonl")
-            for prompt in (
-                "please read the [agent-coord] docs",
-                "why does <agent-message from= show up in the hook?",
-                "does <cross-session-message from= reach the hook?",
+            for n, prompt in enumerate(
+                (
+                    "please read the [agent-coord] docs",
+                    "why does <agent-message from= show up in the hook?",
+                    "does <cross-session-message from= reach the hook?",
+                )
             ):
                 with self.subTest(prompt=prompt):
                     marker = _turn_marker(
-                        {"prompt": prompt, "transcript_path": transcript}
+                        {
+                            "prompt": prompt,
+                            "transcript_path": os.path.join(tmp, "s%d.jsonl" % n),
+                        }
                     )
                     assert marker is not None
                     self.assertIn("Turn #1 starting", marker)

@@ -1478,14 +1478,21 @@ def _record_turn_end(payload, turn):
             stream.seek(0)
             content = stream.read().split()
             previous_count = int(content[0]) if content else 0
-            previous_epoch = int(content[1]) if len(content) > 1 else now
+            # 最初の Stop より前に UPS が書いた 0 は「前回 Stop 無し」の意味
+            previous_epoch = int(content[1]) if len(content) > 1 else 0
+            if previous_epoch <= 0:
+                previous_epoch = now
             counted = content[2] if len(content) > 2 else ""
-            # 数え済みの turn に続く継続 Stop なら、時刻だけ進めて数え直さない
+            # UPS が開始時に数え済み (pending) の turn と、数え済みの turn に続く継続 Stop は、時刻だけ進めて数え直さない
             repeat = continuation and identity and identity == counted
-            count = previous_count if repeat else previous_count + 1
+            if counted == "pending" or repeat:
+                count = previous_count
+            else:
+                count = previous_count + 1
             stream.seek(0)
             stream.truncate()
-            line = " ".join(filter(None, (str(count), str(now), identity)))
+            # 空 identity は "-" で埋め、UPS が書く 4 列目 (last_prompt) をずらさず残す
+            line = " ".join((str(count), str(now), identity or "-", *content[3:4]))
             stream.write(line + "\n")
             stream.flush()
     except (OSError, ValueError, TypeError):

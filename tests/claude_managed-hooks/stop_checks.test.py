@@ -301,8 +301,13 @@ test 方針: `when: prompt` のみの entry が出ないこと、固定文言が
 
 入力: turn が終わる Stop (warn / context の有無を問わない。block を返した Stop は turn が続くので除き、
 `stop_hook_active` の continuation Stop は turn の終わりなので含む)。
-出力: `<transcript>.turns` を `"<count> <last_stop_epoch> <prompt boundary identity>"` の 1 行で書き戻す。counter は
-continuation Stop で identity が同じ (= その turn を数え済み) の時だけ据え置き、他は 1 増やす。2 列の旧 file も読める。
+出力: `<transcript>.turns` を `"<count> <last_stop_epoch> <identity> <last_prompt_epoch>"` の 1 行で書き戻す。
+`<identity>` は prompt boundary の identity (空なら placeholder `-`)、または UserPromptSubmit が書く sentinel `pending`
+(= 人間の prompt の開始を UPS が数え済みで、まだどの Stop も消費していない)。`<last_prompt_epoch>` は UPS だけが書く列で、
+Stop は有ればそのまま残す。2・3 列の旧 file も読める。counter は、`pending` を消費する時は据え置き (UPS が既に数えた)、
+`pending` でなければ continuation Stop で identity が同じ (= その turn を数え済み) の時だけ据え置き、他は 1 増やす
+(prompt が数えていない turn、例: task-notification の turn は従来どおり Stop が数える)。
+`pending` の判定は sentinel だけで行い、epoch の比較はしない (UPS と Stop が同じ秒に着地しうるため)。
 pass 時は stdout に `systemMessage` だけを持つ JSON を 1 行出す (`additionalContext` は付けない = model には不可視)。
 warn 時は warn JSON の `systemMessage` 末尾に marker 行を足し、`additionalContext` には入れない。
 本文は `<ISO 時刻 (local timezone / offset 付き)> / Turn #<count> / Context <used>% / 経過 <N hr M min | M min | S sec>`。`<used>` は
@@ -311,6 +316,9 @@ warn 時は warn JSON の `systemMessage` 末尾に marker 行を足し、`addit
 prompt boundary の user entry の `timestamp`。読めない場合は前回 Stop の epoch (`.turns` の 2 列目) から数える。counter file が読めない場合は marker を出さず exit 0。
 test 方針: 連続 2 回の pass で `Turn #1` → `Turn #2`、warn が出た Stop でも counter が動き marker が systemMessage に載ること、
 continuation Stop では stdout も counter も動かず last_stop_epoch だけ今に進むこと、block された turn は continuation Stop で数えられること。
+`pending` は pass でも continuation でも据え置きで identity に置き換わり (last_prompt_epoch は残る)、last_prompt_epoch が
+last_stop_epoch と同じ秒でも据え置くこと。空 identity は `-` で書かれ 4 列目がずれないこと。UPS → Stop → UPS → UPS (queued) → Stop の
+一連で UPS の marker が `Turn #1` `#2` `#3`、Stop の marker が `Turn #1` `#3` になること。
 
 ### C18 決定性と純度
 
@@ -371,6 +379,7 @@ from __future__ import annotations
 
 import ast
 import datetime
+import importlib.util
 import json
 import os
 import shutil
@@ -386,6 +395,14 @@ HOOK = os.path.join(
     "files",
     "claude_managed-hooks",
     "stop_checks.py",
+)
+MEMORY_SURFACE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "..",
+    "..",
+    "files",
+    "claude_user-hooks",
+    "memory_surface.py",
 )
 SESSION = "11111111-2222-3333-4444-555555555555"
 MODEL = "claude-opus-5"
@@ -2452,6 +2469,92 @@ class TurnMarkerTest(StopChecksTest):
         self.assertEqual(count, "8")
         self.assertGreater(int(epoch), 1000)
         self.assertEqual(identity, "prompt-1")
+
+    def test_c17_pass_consumes_pending_without_bumping(self):
+        """UPS already counted this turn, so the first Stop shows that number and replaces the sentinel."""
+        self.fx.turns_file("1 0 pending 1000\n")
+        before = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        self.assertIn("Turn #1", marker(run_hook(self.fx, self.CLEAN)))
+        count, epoch, identity, asked = self.fx.read_turns().split()
+        self.assertEqual((count, identity, asked), ("1", "prompt-1", "1000"))
+        self.assertGreaterEqual(int(epoch), before)
+
+    def test_c17_continuation_stop_consumes_pending_without_bumping(self):
+        self.fx.turns_file("1 0 pending 1000\n")
+        proc = run_hook(self.fx, self.CLEAN, stop_hook_active=True)
+        self.assertEqual(proc.stdout, "")
+        count, epoch, identity, asked = self.fx.read_turns().split()
+        self.assertEqual((count, identity, asked), ("1", "prompt-1", "1000"))
+        self.assertGreater(int(epoch), 0)
+
+    def test_c17_pending_is_not_decided_by_comparing_epochs(self):
+        """UPS and Stop can land in the same second: last_prompt == last_stop must still consume, not bump."""
+        now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        self.fx.turns_file("4 %d pending %d\n" % (now, now))
+        self.assertIn("Turn #4", marker(run_hook(self.fx, self.CLEAN)))
+        self.assertEqual(self.fx.read_turns().split()[0], "4")
+
+    def test_c17_turn_no_prompt_counted_is_still_bumped_and_keeps_last_prompt(self):
+        """A turn that no UPS counted (e.g. a task-notification turn) is counted by Stop; the 4th column is kept."""
+        self.fx.turns_file("3 1000 prompt-0 555\n")
+        self.assertIn("Turn #4", marker(run_hook(self.fx, self.CLEAN)))
+        count, epoch, identity, asked = self.fx.read_turns().split()
+        self.assertEqual((count, identity, asked), ("4", "prompt-1", "555"))
+        self.assertGreater(int(epoch), 1000)
+
+    def test_c17_empty_identity_is_written_as_a_placeholder(self):
+        """A dropped empty identity would shift last_prompt into the identity column."""
+        self.fx.write([say("報告します")])
+        self.fx.turns_file("3 1000 prompt-0 555\n")
+        self.assertIn("Turn #4", marker(run_hook(self.fx, self.CLEAN)))
+        count, _, identity, asked = self.fx.read_turns().split()
+        self.assertEqual((count, identity, asked), ("4", "-", "555"))
+
+    def test_c17_empty_identity_never_counts_as_a_counted_turn(self):
+        self.fx.write([say("報告します")])
+        for seed in ("3 1000 - 555\n", "3 1000\n"):
+            with self.subTest(seed=seed):
+                self.fx.turns_file(seed)
+                proc = run_hook(self.fx, self.CLEAN, stop_hook_active=True)
+                self.assertEqual(proc.stdout, "")
+                self.assertEqual(self.fx.read_turns().split()[0], "4")
+
+    def test_c17_pending_without_a_stop_epoch_does_not_inflate_the_elapsed_time(self):
+        """An unreadable prompt timestamp falls back to the previous Stop; UPS leaves that column 0 before any Stop."""
+        self.fx.write([{**prompt(), "timestamp": None}, say("報告します")])
+        self.fx.turns_file("1 0 pending 1000\n")
+        self.assertIn("経過 0 sec", marker(run_hook(self.fx, self.CLEAN)))
+
+    def test_c17_prompt_hook_and_stop_agree_when_a_prompt_is_queued(self):
+        """A prompt queued into a running turn fires UPS but no Stop; both hooks must still number it."""
+        spec = importlib.util.spec_from_file_location(
+            "memory_surface_under_test", MEMORY_SURFACE
+        )
+        assert spec is not None and spec.loader is not None
+        surface = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(surface)
+
+        def prompt_marker(text: str) -> str:
+            result = surface._turn_marker(
+                {"transcript_path": self.fx.transcript, "prompt": text}
+            )
+            assert result is not None
+            return result.split(" ", 1)[1]
+
+        self.assertEqual(
+            prompt_marker("最初の依頼"), "Turn #1 starting (session start)"
+        )
+        self.assertIn("Turn #1", marker(run_hook(self.fx, self.CLEAN)))
+        self.fx.write([prompt("次の依頼", uid="prompt-2"), say("報告します")])
+        self.assertRegex(
+            prompt_marker("次の依頼"),
+            r"^Turn #2 starting \(.+ since the last stop\)$",
+        )
+        self.assertRegex(
+            prompt_marker("実行中に足した依頼"),
+            r"^Turn #3 starting \(.+ since the previous prompt, no stop in between\)$",
+        )
+        self.assertIn("Turn #3", marker(run_hook(self.fx, self.CLEAN)))
 
 
 class PurityTest(StopChecksTest):
