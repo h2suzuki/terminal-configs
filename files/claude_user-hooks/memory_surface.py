@@ -1665,6 +1665,17 @@ class TurnMarkerTest(unittest.TestCase):
         self.assertIn("Turn #1 starting", msg)
         self.assertIn("session start", msg)
 
+    def test_cleared_session_counts_from_one(self):
+        # /clear starts a new session id and transcript, so the kept counter of the old one must not carry over.
+        from unittest import mock
+
+        old = self._with_turns(5, 2_000_000)
+        new = os.path.join(os.path.dirname(old["transcript_path"]), "cleared.jsonl")
+        with mock.patch.object(time, "time", lambda: 2_000_300):
+            msg = _turn_marker({"transcript_path": new, "prompt": "q"})
+        assert msg is not None
+        self.assertEqual(msg.split(" ", 1)[1], "Turn #1 starting (session start)")
+
     def test_two_prompts_without_a_stop_count_separately(self):
         # A prompt queued into a running turn / after an Esc interrupt fires UPS but never Stop.
         import tempfile

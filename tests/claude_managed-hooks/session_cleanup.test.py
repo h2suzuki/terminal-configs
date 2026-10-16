@@ -7,7 +7,8 @@ Contract (each claim maps to one test):
   C2  a session id that is not UUID-shaped removes nothing (no path tricks)
   C3  a hook-spawned one-off session (CLAUDE_HOOK_CHILD) removes nothing
   C4  the ending session's turn counters (<transcript>.turns and the cache-keyed
-      <cache>/claude-turn-counter/<session id>.turns) stay, so a resumed session keeps counting
+      <cache>/claude-turn-counter/<session id>.turns) stay for every SessionEnd reason, /clear
+      included, so a resumed session keeps counting (/clear resets by starting a new transcript)
   C5  an orphan <transcript dir>/*.turns (no sibling .jsonl, mtime older than 7 days) is removed
   C6  an orphan .turns with a recent mtime stays (its transcript may not exist yet)
   C7  an old .turns whose .jsonl exists stays, and a .turns.waste file is left alone
@@ -56,11 +57,17 @@ class SessionCleanupTest(unittest.TestCase):
         return os.path.join(self.root, "-home-u-repo", session, sub)
 
     def _end(
-        self, session_id: str, transcript_path: str | None = None, **env: str
+        self,
+        session_id: str,
+        transcript_path: str | None = None,
+        reason: str | None = None,
+        **env: str,
     ) -> None:
         payload = {"hook_event_name": "SessionEnd", "session_id": session_id}
         if transcript_path:
             payload["transcript_path"] = transcript_path
+        if reason:
+            payload["reason"] = reason
         subprocess.run(
             [sys.executable, HOOK],
             input=json.dumps(payload),
@@ -111,13 +118,17 @@ class SessionCleanupTest(unittest.TestCase):
 
     def test_c4_keeps_the_ending_sessions_turn_counters(self):
         transcript = self._transcript(SESSION)
-        beside = self._touch(transcript[: -len(".jsonl")] + ".turns")
-        cache_keyed = self._touch(
-            os.path.join(self.home, "cache", "claude-turn-counter", SESSION + ".turns")
-        )
-        self._end(SESSION, transcript)
-        self.assertTrue(os.path.exists(beside))
-        self.assertTrue(os.path.exists(cache_keyed))
+        for reason in (None, "prompt_input_exit", "clear", "resume", "other"):
+            with self.subTest(reason=reason):
+                beside = self._touch(transcript[: -len(".jsonl")] + ".turns")
+                cache_keyed = self._touch(
+                    os.path.join(
+                        self.home, "cache", "claude-turn-counter", SESSION + ".turns"
+                    )
+                )
+                self._end(SESSION, transcript, reason)
+                self.assertTrue(os.path.exists(beside))
+                self.assertTrue(os.path.exists(cache_keyed))
 
     def test_c5_removes_old_orphan_turns_beside_the_transcript(self):
         transcript = self._transcript(SESSION)
