@@ -3,9 +3,9 @@
 #
 # SessionEnd hook: removes this session's per-session temp files — the
 # statusline cache (<cache>/claude-tui-statusline/<session_id>.json, written by
-# statusline.sh), the turn counter (<transcript>.turns plus session-keyed fallback
-# <cache>/claude-turn-counter/<session_id>.turns, written by stop_checks.py's turn marker),
-# and the wind-down signal/sticky state (written per session by the UserPromptSubmit hook).
+# statusline.sh) and the wind-down signal/sticky state (written per session by the UserPromptSubmit hook).
+# The turn counters (<transcript>.turns, <cache>/claude-turn-counter/<session_id>.turns) are kept so a
+# resumed session keeps counting; only orphans (no .jsonl, older than CRUFT_TTL) are swept.
 # It also drops this session's /tmp scratch: the harness scratchpad
 # (/tmp/claude-<uid>/<project>/<session_id>/scratchpad/) and the legacy
 # /tmp/claude-scratch-<session_id>/, the scratch-file-management skill's area for small temp.
@@ -49,6 +49,23 @@ def _sweep(directory, patterns):
                 pass
 
 
+def _sweep_orphan_turns(transcript):
+    # a .turns with its .jsonl is a resumable session's counter, kept at any age;
+    # the TTL spares a new session whose transcript is not written yet
+    cutoff = time.time() - CRUFT_TTL
+    for path in glob.glob(
+        os.path.join(glob.escape(os.path.dirname(transcript)), "*.turns")
+    ):
+        try:
+            if (
+                not os.path.exists(os.path.splitext(path)[0] + ".jsonl")
+                and os.stat(path).st_mtime < cutoff
+            ):
+                os.remove(path)
+        except OSError:
+            pass
+
+
 def _rmtree(path):
     try:
         shutil.rmtree(path)
@@ -90,11 +107,6 @@ def main():
     session_id = payload.get("session_id") or ""
     if session_id:
         _rm(os.path.join(sl_dir, session_id + ".json"))
-        _rm(os.path.join(tc_dir, session_id + ".turns"))
-    transcript = payload.get("transcript_path") or ""
-    if transcript:
-        base = transcript[:-6] if transcript.endswith(".jsonl") else transcript
-        _rm(base + ".turns")
 
     wd_dir = os.path.expanduser("~/.claude/hooks/state/wind_down_signal")
     if session_id:
@@ -105,6 +117,9 @@ def main():
     # (includes leftover atomic-write temps .<session_id>.XXXXXX.json).
     _sweep(sl_dir, ("*.json", ".*.json"))
     _sweep(tc_dir, ("*.turns",))
+    transcript = payload.get("transcript_path") or ""
+    if transcript:
+        _sweep_orphan_turns(transcript)
     _sweep(wd_dir, ("*",))
 
     _clean_tmp_scratch(session_id)
